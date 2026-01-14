@@ -1,0 +1,72 @@
+[workspace]
+members = [
+    "crates/rdlp-core",
+    "crates/rdlp-extractor",
+    "crates/rdlp-downloader",
+    "crates/rdlp-jsinterp",
+    "crates/rdlp-postprocess",
+    "crates/rdlp-cookies",
+    "crates/rdlp-plugin",
+    "crates/rdlp-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["rdlp contributors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "signal"] }
+async-trait = "0.1"
+
+# HTTP and networking
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "stream"] }
+url = "2.5"
+
+# HTML/JSON parsing
+scraper = "0.25"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# JavaScript engine
+boa_engine = "0.21"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "cargo"] }
+indicatif = "0.17"
+dialoguer = "0.11"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Configuration
+toml = "0.8"
+serde_yaml = "0.9"
+
+# Plugin system
+libloading = "0.8"
+inventory = "0.3"
+
+# Cookie extraction
+aes = "0.8"
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Utilities
+regex = "1.11"
+lazy_static = "1.5"
+once_cell = "1.20"
+futures = "0.3"
+bytes = "1.9"
+
+# Testing
+mockito = "1.5"
+tempfile = "3.14"

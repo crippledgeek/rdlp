@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target
+**/target
+# NOTE: Cargo.lock is NOT ignored - it should be committed for binary projects
+
+# Debug artifacts
+**/*.rs.bk
+*.pdb
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# Temporary files
+*.tmp
+*.temp
+
+# Plugin build artifacts
+plugins/*/target/
+docs/
+CLAUDE.md
+debug_tnaflix.rs
+.claude/
+
+

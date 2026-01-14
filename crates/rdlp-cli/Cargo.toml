@@ -1,0 +1,29 @@
+[package]
+name = "rdlp-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rdlp"
+path = "src/main.rs"
+
+[dependencies]
+rdlp-core = { path = "../rdlp-core" }
+rdlp-extractor = { path = "../rdlp-extractor" }
+rdlp-downloader = { path = "../rdlp-downloader" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-postprocess = { path = "../rdlp-postprocess" }
+rdlp-cookies = { path = "../rdlp-cookies" }
+rdlp-plugin = { path = "../rdlp-plugin" }
+
+tokio = { workspace = true }
+reqwest = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+indicatif = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+dialoguer = { workspace = true }

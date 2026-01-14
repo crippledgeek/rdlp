@@ -1,0 +1,12 @@
+[package]
+name = "rdlp-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rdlp-core = { path = "../rdlp-core" }
+libloading = { workspace = true }
+
+[dev-dependencies]
