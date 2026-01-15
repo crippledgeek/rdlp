@@ -56,6 +56,132 @@ impl TNAFlixExtractor {
             .map(|m| m.as_str().to_string())
     }
 
+    /// Extract cdn.php URL from MovieFap JavaScript
+    fn extract_cdn_url(&self, webpage: &str) -> Option<String> {
+        // Look for: url: 'https://www.moviefap.com/cdn.php?file=...',
+        let re = Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).ok()?;
+        re.captures(webpage)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    /// Parse EMPFlix AJAX JSON response to extract video sources
+    async fn parse_empflix_ajax(&self, video_id: &str, referer: &str, ctx: &ExtractionContext) -> Result<Vec<VideoMetadata>> {
+        // Fetch JSON from AJAX endpoint
+        let ajax_url = format!("https://www.empflix.com/ajax/video-player/{video_id}");
+
+        let response = ctx.http_client
+            .get(&ajax_url)
+            .header("Referer", referer)
+            .send()
+            .await
+            .map_err(|e| RdlpError::Network(format!("Failed to fetch EMPFlix AJAX: {e}")))?;
+
+        check_http_response(&response)?;
+
+        let json_text = response.text().await
+            .map_err(|e| RdlpError::Network(format!("Failed to read AJAX response: {e}")))?;
+
+        if ctx.config.verbose {
+            eprintln!("\n=== EMPFlix AJAX Response ===");
+            eprintln!("{}", &json_text.chars().take(500).collect::<String>());
+            eprintln!("=== END AJAX ===\n");
+        }
+
+        // Parse JSON to extract HTML field
+        let json: serde_json::Value = serde_json::from_str(&json_text)
+            .map_err(|e| RdlpError::Extraction(format!("Failed to parse AJAX JSON: {e}")))?;
+
+        let html_str = json.get("html")
+            .and_then(|h| h.as_str())
+            .ok_or_else(|| RdlpError::Extraction("No 'html' field in AJAX response".to_string()))?;
+
+        // Parse the HTML to extract <source> tags
+        let html = Html::parse_document(html_str);
+        self.parse_video_sources(&html, referer)
+    }
+
+    /// Parse MovieFap XML response to extract video sources
+    async fn parse_moviefap_xml(&self, cdn_url: &str, ctx: &ExtractionContext) -> Result<Vec<VideoMetadata>> {
+        // Fetch the XML from cdn.php
+        let response = ctx.http_client
+            .get(cdn_url)
+            .send()
+            .await
+            .map_err(|e| RdlpError::Network(format!("Failed to fetch MovieFap XML: {e}")))?;
+
+        check_http_response(&response)?;
+
+        let xml_text = response.text().await
+            .map_err(|e| RdlpError::Network(format!("Failed to read XML response: {e}")))?;
+
+        if ctx.config.verbose {
+            eprintln!("\n=== MovieFap XML Response ===");
+            eprintln!("{xml_text}");
+            eprintln!("=== END XML ===\n");
+        }
+
+        // Parse XML manually (simple parsing for this structure)
+        let mut video_data = Vec::new();
+
+        // Extract videoLink URLs from <item> tags within <quality>
+        // XML structure: <quality><item><res>720p</res><videoLink>http://...</videoLink></item></quality>
+        // Use (?s) flag to make . match newlines
+        let re = Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
+            .map_err(|e| RdlpError::Extraction(format!("Regex error: {e}")))?;
+
+        for cap in re.captures_iter(&xml_text) {
+            let quality_str = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("unknown");
+            let video_url = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+
+            if video_url.is_empty() {
+                continue;
+            }
+
+            // Decode HTML entities (&amp; -> &)
+            let video_url = video_url.replace("&amp;", "&");
+
+            // Parse quality (e.g., "720p" -> 720)
+            let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
+            let width = height.map(|h| (h * 16) / 9);
+
+            // Determine extension from URL
+            // Note: MovieFap has a quirky edge case where the cdn.php file parameter
+            // may reference .flv, but the actual videoLink URLs are .mp4 (or vice versa).
+            // We always trust the actual video URL extension, not the metadata.
+            let ext = if video_url.contains(".mp4") {
+                "mp4"
+            } else if video_url.contains(".flv") {
+                "flv"
+            } else {
+                "mp4" // default
+            }.to_string();
+
+            // Create format ID based on quality
+            let format_id = if let Some(h) = height {
+                format!("http-{h}")
+            } else {
+                "http-default".to_string()
+            };
+
+            video_data.push((
+                format_id,
+                video_url.to_string(),
+                ext,
+                height,
+                width,
+            ));
+        }
+
+        if video_data.is_empty() {
+            return Err(RdlpError::Extraction(format!(
+                "No video sources found in MovieFap XML response from: {cdn_url}"
+            )));
+        }
+
+        Ok(video_data)
+    }
+
     /// Parse video source tags from HTML and extract formats
     fn parse_video_sources(&self, html: &Html, url: &str) -> Result<Vec<VideoMetadata>> {
         let mut video_data = Vec::new();
@@ -80,7 +206,8 @@ impl TNAFlixExtractor {
             // Calculate approximate width based on 16:9 aspect ratio
             let width = height.map(|h| (h * 16) / 9);
 
-            // Determine extension from URL
+            // Determine extension from URL (not from type attribute)
+            // This handles cases where metadata may be incorrect or misleading
             let ext = if video_url.contains(".mp4") {
                 "mp4"
             } else if video_url.contains(".flv") {
@@ -105,12 +232,7 @@ impl TNAFlixExtractor {
             ));
         }
 
-        if video_data.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video source tags found in HTML. Video may be unavailable. URL: {url}"
-            )));
-        }
-
+        // Return empty vec if no sources found (caller can try fallback)
         Ok(video_data)
     }
 
@@ -262,8 +384,11 @@ impl InfoExtractor for TNAFlixExtractor {
         let video_id = self.extract_id(url)
             .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID from URL: {url}")))?;
 
+        // Check if this is MovieFap (uses different video loading mechanism)
+        let is_moviefap = url.contains("moviefap.com");
+
         // Extract all data from HTML before any async operations
-        let (title, description, uploader, thumbnail, video_data) = {
+        let (title, description, uploader, thumbnail, cdn_url_opt) = {
             let html = Html::parse_document(&webpage);
 
             // Extract metadata
@@ -276,11 +401,54 @@ impl InfoExtractor for TNAFlixExtractor {
                 .and_then(|thumb| thumb.value().attr("content"))
                 .map(|s| s.to_string());
 
-            // Parse video data from HTML (synchronous)
-            let video_data = self.parse_video_sources(&html, url)?;
+            // For MovieFap, extract cdn.php URL
+            let cdn_url_opt = if is_moviefap {
+                self.extract_cdn_url(&webpage)
+            } else {
+                None
+            };
 
-            (title, description, uploader, thumbnail, video_data)
+            (title, description, uploader, thumbnail, cdn_url_opt)
         }; // html is dropped here
+
+        // Parse video data based on site type
+        let video_data = if is_moviefap {
+            // MovieFap: fetch XML from cdn.php
+            let cdn_url = cdn_url_opt.ok_or_else(|| RdlpError::Extraction(format!(
+                "Could not find cdn.php URL in MovieFap page: {url}"
+            )))?;
+
+            if ctx.config.verbose {
+                eprintln!("MovieFap cdn.php URL: {cdn_url}");
+            }
+
+            self.parse_moviefap_xml(&cdn_url, ctx).await?
+        } else {
+            // TNAFlix/EMPFlix: try HTML <source> tags first, fallback to AJAX
+            let video_data = {
+                let html = Html::parse_document(&webpage);
+                self.parse_video_sources(&html, url)?
+            }; // html is dropped here
+
+            // EMPFlix fallback: if no sources found, try AJAX endpoint
+            let video_data = if video_data.is_empty() && url.contains("empflix.com") {
+                if ctx.config.verbose {
+                    eprintln!("No sources in HTML, trying EMPFlix AJAX endpoint...");
+                }
+                self.parse_empflix_ajax(&video_id, url, ctx).await?
+            } else {
+                video_data
+            };
+
+            // Return error if still no sources found
+            if video_data.is_empty() {
+                return Err(RdlpError::Extraction(format!(
+                    "No video source tags found in HTML. Video may be unavailable. URL: {url}"
+                )));
+            }
+
+            video_data
+        };
 
         // Build formats and fetch filesizes (asynchronous)
         let formats = self.build_formats(video_data, ctx).await;
