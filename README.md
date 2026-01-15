@@ -113,6 +113,7 @@ rdlp --list-extractors
 ```bash
 # Simple download (auto-selects best quality)
 rdlp "https://www.tnaflix.com/hd-videos/video-title/video123456"
+rdlp "https://www.empflix.com/amateur-porn/title/video3715093"
 
 # Interactive format selection (arrow keys + ESC to cancel)
 rdlp -i "https://www.tnaflix.com/video-url"
@@ -121,7 +122,7 @@ rdlp -i "https://www.tnaflix.com/video-url"
 rdlp -f best "https://www.tnaflix.com/video-url"
 
 # Custom output directory
-rdlp -o ./downloads "https://www.tnaflix.com/video-url"
+rdlp -o ./downloads "https://www.empflix.com/category/title/videoID"
 
 # Verbose mode (shows filesize detection, HEAD requests)
 rdlp -v "https://www.tnaflix.com/video-url"
@@ -235,7 +236,7 @@ Quality      | Resolution | Size         | Codecs
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Build Status** | ✅ Passing | Zero compiler warnings |
-| **Test Coverage** | 21 tests | All passing |
+| **Test Coverage** | 22 tests | All passing (7 in extractor crate) |
 | **Architecture** | 8 crates | Clean separation of concerns |
 | **Type Safety** | 100% | No unsafe code |
 | **Documentation** | Full | Inline docs + guides |
@@ -717,7 +718,7 @@ This project wouldn't be possible without these amazing open source projects:
 | **Lines of Code** | ~3,500 |
 | **Crates** | 8 (modular workspace) |
 | **Dependencies** | 15 (workspace-level) |
-| **Tests** | 21 unit tests (all passing) |
+| **Tests** | 22 unit tests (all passing) |
 | **Build Time** | ~20s (clean), ~2s (incremental) |
 | **Binary Size** | ~8 MB (release, no dependencies) |
 | **Unsafe Code** | 0% (100% safe Rust) |
@@ -731,6 +732,7 @@ This project wouldn't be possible without these amazing open source projects:
 - **TNAFlix Network** - Support for TNAFlix, EMPFlix, MovieFap
 - **Interactive CLI** - Format selection with arrow keys + ESC cancellation
 - **Smart Filesize** - HEAD/Range request detection with CDN fallback
+- **EMPFlix URL Fix (2026-01-15)** - Support for `/category/title/videoID` URL format
 
 ### 🚧 In Progress
 - **HLS/DASH Protocols** - Adaptive streaming support for more sites

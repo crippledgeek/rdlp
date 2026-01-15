@@ -28,7 +28,7 @@ impl TNAFlixExtractor {
         Self {
             name: "EMPFlix".to_string(),
             url_pattern: Regex::new(
-                r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?\d+|[^/]+/\d+)"
+                r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?(\d+)|[^/]+/[^/]+/video(\d+)|[^/]+/(\d+))"
             ).expect("Valid EMPFlix URL pattern"),
         }
     }
@@ -47,7 +47,12 @@ impl TNAFlixExtractor {
     fn extract_id(&self, url: &str) -> Option<String> {
         self.url_pattern
             .captures(url)
-            .and_then(|cap| cap.get(1))
+            .and_then(|cap| {
+                // Try each capture group in order (different URL patterns)
+                cap.get(1)
+                    .or_else(|| cap.get(2))
+                    .or_else(|| cap.get(3))
+            })
             .map(|m| m.as_str().to_string())
     }
 
@@ -318,7 +323,25 @@ mod tests {
         let extractor = TNAFlixExtractor::empflix();
         assert!(extractor.suitable("https://www.empflix.com/videos/title-123"));
         assert!(extractor.suitable("https://empflix.com/view/123"));
+        assert!(extractor.suitable("https://www.empflix.com/amateur-porn/older-medical-doc-creampie-innocent-girl/video3715093"));
         assert!(!extractor.suitable("https://tnaflix.com/video/123"));
+    }
+
+    #[test]
+    fn test_empflix_extract_id() {
+        let extractor = TNAFlixExtractor::empflix();
+
+        // Test /videos/title-ID format
+        let id1 = extractor.extract_id("https://www.empflix.com/videos/title-123");
+        assert_eq!(id1, Some("123".to_string()));
+
+        // Test /category/ID format
+        let id2 = extractor.extract_id("https://empflix.com/view/456");
+        assert_eq!(id2, Some("456".to_string()));
+
+        // Test /category/title/videoID format
+        let id3 = extractor.extract_id("https://www.empflix.com/amateur-porn/older-medical-doc-creampie-innocent-girl/video3715093");
+        assert_eq!(id3, Some("3715093".to_string()));
     }
 
     #[test]
