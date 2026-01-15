@@ -152,8 +152,13 @@ impl Downloader for HttpDownloader {
 
         // Check if server supports range requests
         if response.status().as_u16() != 206 {
-            // Server doesn't support partial content, download from beginning
-            return self.download_to_file(url, path, progress).await;
+            // Server doesn't support partial content - DO NOT overwrite partial file
+            return Err(RdlpError::Download(format!(
+                "Server does not support resume (expected HTTP 206, got {}). \
+                 Cannot continue download without overwriting existing data. \
+                 Please delete the partial file and restart the download.",
+                response.status()
+            )));
         }
 
         let content_length = response.content_length();
@@ -250,5 +255,49 @@ mod tests {
     async fn test_buffer_size_configuration() {
         let downloader = HttpDownloader::new().with_buffer_size(16384);
         assert_eq!(downloader.buffer_size, 16384);
+    }
+
+    #[tokio::test]
+    async fn test_resume_fails_when_server_returns_200() {
+        use mockito::Server;
+        use tempfile::NamedTempFile;
+
+        let mut server = Server::new_async().await;
+
+        // Mock endpoint that doesn't support Range requests (returns 200 instead of 206)
+        let mock = server.mock("GET", "/video.mp4")
+            .match_header("Range", "bytes=1000-")
+            .with_status(200)  // Server ignores Range header
+            .with_header("content-type", "video/mp4")
+            .with_body("full content from beginning")
+            .create_async()
+            .await;
+
+        let downloader = HttpDownloader::new();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        // Write some initial data to simulate a partial download
+        tokio::fs::write(path, b"partial data").await.unwrap();
+
+        // Try to resume - should fail with error, NOT overwrite the file
+        let result = downloader
+            .download_with_resume(&format!("{}/video.mp4", server.url()), path, 1000, None)
+            .await;
+
+        mock.assert_async().await;
+
+        // Should return an error
+        assert!(result.is_err());
+
+        // Verify the error message mentions resume not supported
+        let err = result.unwrap_err();
+        assert!(matches!(err, RdlpError::Download(_)));
+        assert!(err.to_string().contains("does not support resume"));
+        assert!(err.to_string().contains("206"));
+
+        // CRITICAL: Verify the partial file was NOT overwritten
+        let file_contents = tokio::fs::read(path).await.unwrap();
+        assert_eq!(file_contents, b"partial data", "Partial file should not be overwritten");
     }
 }
