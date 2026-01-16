@@ -46,6 +46,15 @@ pub struct Config {
     /// Number of retries for failed fragment downloads
     pub fragment_retries: usize,
 
+    /// Initial retry delay in milliseconds (default: 1000ms)
+    pub retry_initial_delay_ms: u64,
+
+    /// Maximum retry delay in milliseconds (default: 60000ms = 1 minute)
+    pub retry_max_delay_ms: u64,
+
+    /// Exponential backoff multiplier (default: 2.0)
+    pub retry_backoff_multiplier: f64,
+
     /// Buffer size for downloads (bytes)
     pub buffer_size: usize,
 
@@ -194,7 +203,10 @@ impl Default for Config {
             rate_limit: None,
             retries: 10,
             fragment_retries: 10,
-            buffer_size: 1024 * 1024, // 1 MB
+            retry_initial_delay_ms: 1000,      // 1 second
+            retry_max_delay_ms: 60000,         // 60 seconds
+            retry_backoff_multiplier: 2.0,     // Double delay each retry
+            buffer_size: 2 * 1024 * 1024, // 2 MB - larger buffer for faster downloads
 
             // Network options
             proxy: None,

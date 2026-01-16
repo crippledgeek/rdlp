@@ -11,6 +11,17 @@ use std::path::PathBuf;
 
 use orchestrator::Orchestrator;
 
+/// Get optimal number of worker threads for I/O-heavy workloads
+fn optimal_worker_threads() -> usize {
+    // For I/O-bound work (downloads), use 2x CPU cores
+    // This allows more concurrent I/O operations
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    (cpu_count * 2).min(32) // Cap at 32 threads
+}
+
 #[derive(Parser)]
 #[command(name = "rdlp")]
 #[command(about = "Rust Download Program - A video downloader", long_about = None)]
@@ -48,8 +59,17 @@ struct Args {
     interactive: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Create optimized multi-threaded runtime for I/O-heavy workloads
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(optimal_worker_threads())
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let args = Args::parse();
 
     // Set up tracing

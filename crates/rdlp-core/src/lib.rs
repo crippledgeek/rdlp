@@ -28,6 +28,7 @@ pub mod config;
 pub mod error;
 pub mod format;
 pub mod info_dict;
+pub mod retry;
 pub mod traits;
 
 // Re-export commonly used types
@@ -35,6 +36,7 @@ pub use config::Config;
 pub use error::{check_http_response, Result, RdlpError};
 pub use format::{Format, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
+pub use retry::{is_retryable_error, retry_with_backoff, RetryConfig};
 pub use traits::{
     CookieJar, Downloader, DownloadProgress, DownloadStats, ExtractionContext, InfoExtractor,
     JsEngine, PostProcessConfig, PostProcessResult, PostProcessor, ProgressCallback,
