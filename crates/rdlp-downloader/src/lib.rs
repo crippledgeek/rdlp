@@ -68,11 +68,32 @@ impl DownloaderRegistry {
     }
 
     /// Register a new downloader
+    ///
+    /// # Arguments
+    /// * `downloader` - Arc-wrapped downloader implementing Downloader trait
     pub fn register(&mut self, downloader: Arc<dyn Downloader>) {
         self.downloaders.push(downloader);
     }
 
     /// Find a suitable downloader for the given URL
+    ///
+    /// Returns the first downloader that supports the given URL's protocol.
+    /// Returns `None` if no downloader supports the URL.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to find a downloader for
+    ///
+    /// # Returns
+    /// An `Arc<dyn Downloader>` if a suitable downloader is found, `None` otherwise
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rdlp_downloader::DownloaderRegistry;
+    ///
+    /// let registry = DownloaderRegistry::new();
+    /// let downloader = registry.find_downloader("https://example.com/video.mp4");
+    /// assert!(downloader.is_some());
+    /// ```
     pub fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
         self.downloaders
             .iter()
@@ -80,7 +101,10 @@ impl DownloaderRegistry {
             .cloned()
     }
 
-    /// Get all registered downloaders
+    /// Get all registered downloader protocol names
+    ///
+    /// # Returns
+    /// A vector of protocol names (e.g., ["http", "hls", "dash"])
     pub fn list_downloaders(&self) -> Vec<String> {
         self.downloaders
             .iter()
@@ -108,8 +132,10 @@ mod tests {
 
     #[test]
     fn test_registry_with_custom_config() {
-        let mut config = Config::default();
-        config.buffer_size = 4 * 1024 * 1024; // 4 MB
+        let config = Config {
+            buffer_size: 4 * 1024 * 1024, // 4 MB
+            ..Default::default()
+        };
 
         let registry = DownloaderRegistry::with_config(&config);
         let downloaders = registry.list_downloaders();

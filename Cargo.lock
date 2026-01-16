@@ -1912,6 +1912,7 @@ dependencies = [
  "async-trait",
  "inventory",
  "mockito",
+ "once_cell",
  "rdlp-core",
  "regex",
  "reqwest",

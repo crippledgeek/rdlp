@@ -1,10 +1,46 @@
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use rdlp_core::{check_http_response, ExtractionContext, Format, InfoDict, InfoExtractor, Result, RdlpError};
 use regex::Regex;
 use scraper::{Html, Selector};
 
 /// Video metadata extracted from HTML: (format_id, video_url, ext, height, width)
 type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
+
+// Static CSS selectors (initialized once at first use)
+static SOURCE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector")
+});
+
+static TITLE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse(r#"input[name="title"]"#).expect("Valid CSS selector")
+});
+
+static H1_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse("h1").expect("Valid CSS selector")
+});
+
+static DESC_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse(r#"input[name="description"]"#).expect("Valid CSS selector")
+});
+
+static UPLOADER_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse(r#"input[name="username"]"#).expect("Valid CSS selector")
+});
+
+static THUMBNAIL_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+    Selector::parse(r#"meta[property="og:image"]"#).expect("Valid CSS selector")
+});
+
+// Static Regex patterns (initialized once at first use)
+static CDN_URL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).expect("Valid CDN URL regex")
+});
+
+static MOVIEFAP_XML_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
+        .expect("Valid MovieFap XML regex")
+});
 
 /// TNAFlix network extractor (supports TNAFlix, EMPFlix, MovieFap)
 pub struct TNAFlixExtractor {
@@ -59,8 +95,7 @@ impl TNAFlixExtractor {
     /// Extract cdn.php URL from MovieFap JavaScript
     fn extract_cdn_url(&self, webpage: &str) -> Option<String> {
         // Look for: url: 'https://www.moviefap.com/cdn.php?file=...',
-        let re = Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).ok()?;
-        re.captures(webpage)
+        CDN_URL_REGEX.captures(webpage)
             .and_then(|cap| cap.get(1))
             .map(|m| m.as_str().to_string())
     }
@@ -127,10 +162,7 @@ impl TNAFlixExtractor {
         // Extract videoLink URLs from <item> tags within <quality>
         // XML structure: <quality><item><res>720p</res><videoLink>http://...</videoLink></item></quality>
         // Use (?s) flag to make . match newlines
-        let re = Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
-            .map_err(|e| RdlpError::Extraction(format!("Regex error: {e}")))?;
-
-        for cap in re.captures_iter(&xml_text) {
+        for cap in MOVIEFAP_XML_REGEX.captures_iter(&xml_text) {
             let quality_str = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("unknown");
             let video_url = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
 
@@ -188,10 +220,7 @@ impl TNAFlixExtractor {
 
         // Parse <source> tags from the video player
         // Example: <source src="https://cdnl.tnaflix.com/.../video-720p.mp4" type="video/mp4" size="720">
-        let source_selector = Selector::parse("source[src][type='video/mp4']")
-            .expect("Valid CSS selector");
-
-        for source_elem in html.select(&source_selector) {
+        for source_elem in html.select(&SOURCE_SELECTOR) {
             let video_url = source_elem.value().attr("src")
                 .ok_or_else(|| RdlpError::Extraction(format!(
                     "Source tag missing src attribute. URL: {url}"
@@ -323,26 +352,17 @@ impl TNAFlixExtractor {
     /// Extract metadata from HTML
     fn extract_metadata(&self, html: &Html) -> Result<(String, Option<String>, Option<String>)> {
         // Try to extract title from input field or h1
-        let title_selector = Selector::parse(r#"input[name="title"]"#)
-            .expect("Valid CSS selector for title");
-        let h1_selector = Selector::parse("h1")
-            .expect("Valid CSS selector for h1");
-
-        let title = if let Some(input) = html.select(&title_selector).next() {
+        let title = if let Some(input) = html.select(&TITLE_SELECTOR).next() {
             input.value().attr("value").map(|s| s.to_string())
-        } else { html.select(&h1_selector).next().map(|h1| h1.text().collect::<String>().trim().to_string()) }.ok_or_else(|| RdlpError::Extraction("Could not find video title".to_string()))?;
+        } else { html.select(&H1_SELECTOR).next().map(|h1| h1.text().collect::<String>().trim().to_string()) }.ok_or_else(|| RdlpError::Extraction("Could not find video title".to_string()))?;
 
         // Try to extract description
-        let desc_selector = Selector::parse(r#"input[name="description"]"#)
-            .expect("Valid CSS selector for description");
-        let description = html.select(&desc_selector).next()
+        let description = html.select(&DESC_SELECTOR).next()
             .and_then(|input| input.value().attr("value"))
             .map(|s| s.to_string());
 
         // Try to extract uploader
-        let uploader_selector = Selector::parse(r#"input[name="username"]"#)
-            .expect("Valid CSS selector for uploader");
-        let uploader = html.select(&uploader_selector).next()
+        let uploader = html.select(&UPLOADER_SELECTOR).next()
             .and_then(|input| input.value().attr("value"))
             .map(|s| s.to_string());
 
@@ -395,9 +415,7 @@ impl InfoExtractor for TNAFlixExtractor {
             let (title, description, uploader) = self.extract_metadata(&html)?;
 
             // Extract thumbnail
-            let thumb_selector = Selector::parse(r#"meta[property="og:image"]"#)
-                .expect("Valid CSS selector for thumbnail");
-            let thumbnail = html.select(&thumb_selector).next()
+            let thumbnail = html.select(&THUMBNAIL_SELECTOR).next()
                 .and_then(|thumb| thumb.value().attr("content"))
                 .map(|s| s.to_string());
 

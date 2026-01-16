@@ -11,6 +11,48 @@ use rdlp_jsinterp::SimpleJsEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Merge interrupted parallel download chunks into a single file
+///
+/// Returns the total size of the merged file
+async fn merge_chunk_files(output_path: &std::path::Path, chunk_count: usize) -> Result<u64> {
+    use tokio::fs::File;
+    use tokio::io::{AsyncWriteExt, BufWriter};
+
+    let base_name = output_path.file_name().unwrap().to_string_lossy();
+    let parent_dir = output_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+    // Create output file
+    let file = File::create(output_path).await.context("Failed to create output file")?;
+    let mut writer = BufWriter::with_capacity(2 * 1024 * 1024, file); // 2 MB buffer
+
+    let mut total_size = 0u64;
+
+    // Merge each chunk in order
+    for i in 0..chunk_count {
+        let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+
+        if !chunk_path.exists() {
+            return Err(anyhow::anyhow!("Missing chunk file: {}", chunk_path.display()));
+        }
+
+        let mut chunk_file = File::open(&chunk_path).await
+            .context(format!("Failed to open chunk file: {}", chunk_path.display()))?;
+
+        let bytes_copied = tokio::io::copy(&mut chunk_file, &mut writer).await
+            .context(format!("Failed to copy chunk {}", i))?;
+
+        total_size += bytes_copied;
+
+        // Delete chunk file after successful merge
+        tokio::fs::remove_file(&chunk_path).await
+            .context(format!("Failed to delete chunk file: {}", chunk_path.display()))?;
+    }
+
+    writer.flush().await.context("Failed to flush output file")?;
+
+    Ok(total_size)
+}
+
 /// Main orchestrator coordinating extraction, download, and post-processing
 pub struct Orchestrator {
     extractor_registry: ExtractorRegistry,
@@ -112,7 +154,47 @@ impl Orchestrator {
                 Err(_) => 0,
             }
         } else {
-            0
+            // Check for interrupted parallel download chunks (.part0, .part1, etc.)
+            let base_name = output_path.file_name().unwrap().to_string_lossy();
+            let parent_dir = output_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+
+            // Look for .part files
+            let mut total_chunk_size = 0u64;
+            let mut chunk_count = 0;
+
+            for i in 0..10 {  // Check up to 10 chunks (concurrent_fragments is capped at 10)
+                let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+                if chunk_path.exists() {
+                    if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
+                        total_chunk_size += metadata.len();
+                        chunk_count += 1;
+                    }
+                }
+            }
+
+            if chunk_count > 0 {
+                println!("📋 Found {} interrupted chunk files ({:.1} MB), merging and resuming...",
+                    chunk_count, total_chunk_size as f64 / (1024.0 * 1024.0));
+
+                // Merge chunks into the main file
+                match merge_chunk_files(&output_path, chunk_count).await {
+                    Ok(size) => {
+                        println!("✓ Merged {} chunks into main file ({:.1} MB)", chunk_count, size as f64 / (1024.0 * 1024.0));
+                        size
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  Failed to merge chunks: {}. Starting fresh.", e);
+                        // Clean up partial chunks
+                        for i in 0..chunk_count {
+                            let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+                            let _ = tokio::fs::remove_file(&chunk_path).await;
+                        }
+                        0
+                    }
+                }
+            } else {
+                0
+            }
         };
 
         // Create progress bar

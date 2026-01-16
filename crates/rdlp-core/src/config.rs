@@ -270,11 +270,6 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Create a new configuration with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Load configuration from a TOML file
     pub fn from_toml_file(path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())?;

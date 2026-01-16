@@ -31,18 +31,21 @@ impl HttpDownloader {
     }
 
     /// Set buffer size for downloads
+    #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
         self
     }
 
     /// Set retry configuration
+    #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
     }
 
     /// Set number of concurrent fragment downloads
+    #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_concurrent_fragments(mut self, count: usize) -> Self {
         self.concurrent_fragments = count.max(1); // At least 1
         self
@@ -217,6 +220,8 @@ impl HttpDownloader {
     }
 
     /// Parallel download using multiple range requests
+    ///
+    /// Uses `futures::try_join_all` for idiomatic parallel execution with fail-fast error handling.
     async fn download_parallel(
         &self,
         url: &str,
@@ -226,6 +231,7 @@ impl HttpDownloader {
     ) -> Result<DownloadStats> {
         use std::sync::Arc;
         use tokio::sync::Mutex;
+        use futures::future::try_join_all;
 
         let start_time = Instant::now();
         let chunk_count = self.concurrent_fragments.min(10); // Max 10 connections
@@ -239,44 +245,46 @@ impl HttpDownloader {
 
         // Shared progress counter
         let downloaded = Arc::new(Mutex::new(0u64));
-        let mut tasks = vec![];
 
-        // Spawn download tasks for each chunk
-        eprintln!("🚀 Starting {} parallel downloads...", chunk_count);
-        for (i, chunk_path) in chunk_paths.iter().enumerate() {
-            let start = i as u64 * chunk_size;
-            let end = if i == chunk_count - 1 {
-                total_size - 1 // Last chunk gets remainder
-            } else {
-                (i + 1) as u64 * chunk_size - 1
-            };
+        // Create parallel download futures
+        eprintln!("🚀 Starting {chunk_count} parallel downloads...");
+        let download_futures: Vec<_> = chunk_paths
+            .iter()
+            .enumerate()
+            .map(|(i, chunk_path)| {
+                let start = i as u64 * chunk_size;
+                let end = if i == chunk_count - 1 {
+                    total_size - 1 // Last chunk gets remainder
+                } else {
+                    (i + 1) as u64 * chunk_size - 1
+                };
 
-            eprintln!("   Chunk {}: {} MB - {} MB ({} MB)",
-                i, start / 1024 / 1024, end / 1024 / 1024, (end - start + 1) / 1024 / 1024);
+                eprintln!("   Chunk {}: {} MB - {} MB ({} MB)",
+                    i, start / 1024 / 1024, end / 1024 / 1024, (end - start + 1) / 1024 / 1024);
 
-            let downloader = Self {
-                client: self.client.clone(),
-                buffer_size: self.buffer_size,
-                retry_config: self.retry_config.clone(),
-                concurrent_fragments: 1, // No recursion
-            };
-            let url = url.to_string();
-            let chunk_path = chunk_path.clone();
-            let progress_counter = Some(downloaded.clone());
-            let chunk_id = i;
+                // Clone what we need for the async block
+                let downloader = Self {
+                    client: self.client.clone(),
+                    buffer_size: self.buffer_size,
+                    retry_config: self.retry_config.clone(),
+                    concurrent_fragments: 1, // No recursion
+                };
+                let url = url.to_string();
+                let chunk_path = chunk_path.clone();
+                let progress_counter = Some(downloaded.clone());
+                let chunk_id = i;
 
-            let task = tokio::spawn(async move {
-                eprintln!("📥 Starting chunk {}...", chunk_id);
-                let result = downloader.download_range_with_progress(&url, start, end, &chunk_path, progress_counter).await;
-                match &result {
-                    Ok(_) => eprintln!("✅ Chunk {} complete", chunk_id),
-                    Err(e) => eprintln!("❌ Chunk {} failed: {}", chunk_id, e),
+                async move {
+                    eprintln!("📥 Starting chunk {chunk_id}...");
+                    let result = downloader.download_range_with_progress(&url, start, end, &chunk_path, progress_counter).await;
+                    match &result {
+                        Ok(_) => eprintln!("✅ Chunk {chunk_id} complete"),
+                        Err(e) => eprintln!("❌ Chunk {chunk_id} failed: {e}"),
+                    }
+                    result
                 }
-                result
-            });
-
-            tasks.push(task);
-        }
+            })
+            .collect();
 
         // Progress reporter task
         let progress_task = if let Some(callback) = progress {
@@ -313,29 +321,24 @@ impl HttpDownloader {
             None
         };
 
-        // Wait for all chunks to complete
-        let mut total_downloaded = 0u64;
-        for (i, task) in tasks.into_iter().enumerate() {
-            match task.await {
-                Ok(Ok(bytes)) => {
-                    total_downloaded += bytes;
-                    eprintln!("✓ Chunk {} completed ({} MB)", i, bytes / 1024 / 1024);
-                    // Progress is already updated in real-time by download_range_with_progress
+        // Wait for all downloads to complete (fail-fast on first error)
+        // try_join_all will automatically cancel remaining futures on first error
+        let chunk_results = match try_join_all(download_futures).await {
+            Ok(results) => results,
+            Err(e) => {
+                // Stop progress reporter on error
+                if let Some(task) = progress_task {
+                    task.abort();
                 }
-                Ok(Err(e)) => {
-                    eprintln!("❌ Chunk {} failed: {}", i, e);
-                    // Don't clean up - keep chunks for debugging
-                    return Err(RdlpError::Download(format!("Parallel download failed on chunk {}: {}", i, e)));
-                }
-                Err(e) => {
-                    eprintln!("❌ Chunk {} task panicked: {}", i, e);
-                    // Don't clean up - keep chunks for debugging
-                    return Err(RdlpError::Download(format!("Task {i} panicked: {e}")));
-                }
+                return Err(e);
             }
-        }
+        };
 
-        // Stop progress reporter
+        // Sum up all downloaded bytes
+        let total_downloaded: u64 = chunk_results.iter().sum();
+        eprintln!("✓ All {} chunks completed ({} MB total)", chunk_count, total_downloaded / 1024 / 1024);
+
+        // Stop progress reporter on success
         if let Some(task) = progress_task {
             task.abort();
         }
@@ -361,6 +364,167 @@ impl HttpDownloader {
 
         Ok(stats)
     }
+
+    /// Parallel resume: downloads remaining chunks in parallel and appends to existing file
+    ///
+    /// This method keeps the already-downloaded portion and parallelizes the remaining download.
+    /// Uses `futures::try_join_all` for fail-fast error handling.
+    async fn download_parallel_resume(
+        &self,
+        url: &str,
+        path: &Path,
+        resume_from: u64,
+        total_size: u64,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use futures::future::try_join_all;
+
+        let start_time = Instant::now();
+        let remaining_size = total_size - resume_from;
+        let chunk_count = self.concurrent_fragments.min(10); // Max 10 connections
+        let chunk_size = remaining_size / chunk_count as u64;
+
+        eprintln!("🔄 Parallel resume mode:");
+        eprintln!("   - Already downloaded: {} MB ({:.1}%)",
+            resume_from / 1024 / 1024,
+            (resume_from as f64 / total_size as f64) * 100.0);
+        eprintln!("   - Remaining: {} MB", remaining_size / 1024 / 1024);
+        eprintln!("   - Using {chunk_count} parallel connections for remainder");
+
+        // Create temporary directory for chunks
+        let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let chunk_paths: Vec<_> = (0..chunk_count)
+            .map(|i| temp_dir.join(format!("{}.resume{}", path.file_name().unwrap().to_string_lossy(), i)))
+            .collect();
+
+        // Shared progress counter (starts at resume_from)
+        let downloaded = Arc::new(Mutex::new(resume_from));
+
+        // Create parallel download futures for remaining chunks
+        let download_futures: Vec<_> = chunk_paths
+            .iter()
+            .enumerate()
+            .map(|(i, chunk_path)| {
+                let start = resume_from + (i as u64 * chunk_size);
+                let end = if i == chunk_count - 1 {
+                    total_size - 1 // Last chunk gets remainder
+                } else {
+                    resume_from + ((i + 1) as u64 * chunk_size) - 1
+                };
+
+                eprintln!("   Chunk {}: {} MB - {} MB ({} MB)",
+                    i, start / 1024 / 1024, end / 1024 / 1024, (end - start + 1) / 1024 / 1024);
+
+                // Clone what we need for the async block
+                let downloader = Self {
+                    client: self.client.clone(),
+                    buffer_size: self.buffer_size,
+                    retry_config: self.retry_config.clone(),
+                    concurrent_fragments: 1, // No recursion
+                };
+                let url = url.to_string();
+                let chunk_path = chunk_path.clone();
+                let progress_counter = Some(downloaded.clone());
+                let chunk_id = i;
+
+                async move {
+                    eprintln!("📥 Starting chunk {chunk_id}...");
+                    let result = downloader.download_range_with_progress(&url, start, end, &chunk_path, progress_counter).await;
+                    match &result {
+                        Ok(_) => eprintln!("✅ Chunk {chunk_id} complete"),
+                        Err(e) => eprintln!("❌ Chunk {chunk_id} failed: {e}"),
+                    }
+                    result
+                }
+            })
+            .collect();
+
+        // Progress reporter task (shows total including already downloaded)
+        let progress_task = if let Some(callback) = progress {
+            let downloaded_clone = downloaded.clone();
+            let start_time_clone = start_time;
+            Some(tokio::spawn(async move {
+                let mut last_update = Instant::now();
+                let update_interval = Duration::from_millis(100);
+
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let now = Instant::now();
+                    if now.duration_since(last_update) >= update_interval {
+                        let bytes_downloaded = *downloaded_clone.lock().await;
+                        let elapsed = now.duration_since(start_time_clone).as_secs_f64();
+                        let speed = if elapsed > 0.0 {
+                            (bytes_downloaded - resume_from) as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+
+                        let progress_info = DownloadProgress::new(bytes_downloaded, Some(total_size), speed);
+                        callback.on_progress(&progress_info);
+                        last_update = now;
+
+                        // Exit when complete
+                        if bytes_downloaded >= total_size {
+                            break;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        // Wait for all downloads to complete (fail-fast on first error)
+        let chunk_results = match try_join_all(download_futures).await {
+            Ok(results) => results,
+            Err(e) => {
+                // Stop progress reporter on error
+                if let Some(task) = progress_task {
+                    task.abort();
+                }
+                return Err(e);
+            }
+        };
+
+        // Sum up all downloaded bytes (just the new chunks)
+        let newly_downloaded: u64 = chunk_results.iter().sum();
+        eprintln!("✓ All {} chunks completed ({} MB new data)", chunk_count, newly_downloaded / 1024 / 1024);
+
+        // Stop progress reporter on success
+        if let Some(task) = progress_task {
+            task.abort();
+        }
+
+        // Append chunks to existing file
+        let file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .await
+            .map_err(RdlpError::Io)?;
+        let mut writer = BufWriter::with_capacity(self.buffer_size, file);
+
+        eprintln!("📝 Appending {chunk_count} chunks to existing file...");
+        for (i, chunk_path) in chunk_paths.iter().enumerate() {
+            let mut chunk_file = File::open(chunk_path).await.map_err(RdlpError::Io)?;
+            tokio::io::copy(&mut chunk_file, &mut writer)
+                .await
+                .map_err(RdlpError::Io)?;
+
+            // Delete chunk file after appending
+            tokio::fs::remove_file(chunk_path).await.map_err(RdlpError::Io)?;
+            eprintln!("   ✓ Appended chunk {i}");
+        }
+
+        writer.flush().await.map_err(RdlpError::Io)?;
+
+        let duration = start_time.elapsed();
+        let total_downloaded = resume_from + newly_downloaded;
+        let stats = DownloadStats::new(total_downloaded, duration, chunk_count);
+
+        Ok(stats)
+    }
 }
 
 #[async_trait]
@@ -382,7 +546,7 @@ impl Downloader for HttpDownloader {
         eprintln!("📊 Download analysis:");
         eprintln!("   - File size from HEAD: {} MB", size.map(|s| s / 1024 / 1024).unwrap_or(0));
         eprintln!("   - Concurrent fragments: {}", self.concurrent_fragments);
-        eprintln!("   - Server supports ranges: {}", supports_ranges);
+        eprintln!("   - Server supports ranges: {supports_ranges}");
 
         // If HEAD didn't return valid size, try a small Range request to get it
         let size = if (size.is_none() || size == Some(0)) && supports_ranges {
@@ -437,20 +601,17 @@ impl Downloader for HttpDownloader {
             eprintln!("🚀 Using parallel download mode ({} connections)", self.concurrent_fragments);
             return self.download_parallel(url, path, size.unwrap(), progress).await;
         } else {
-            let reason = if size.is_none() || size == Some(0) {
-                "could not detect file size"
-            } else if size.unwrap() <= 10 * 1024 * 1024 {
-                "file too small for parallel"
-            } else if self.concurrent_fragments <= 1 {
-                "concurrent_fragments <= 1"
-            } else if !supports_ranges {
-                "server doesn't support ranges"
-            } else {
-                "unknown reason"
+            // Use match with guards for cleaner Option handling (no unwrap)
+            let reason = match size {
+                None | Some(0) => "could not detect file size",
+                Some(s) if s <= 10 * 1024 * 1024 => "file too small for parallel",
+                Some(_) if self.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
+                Some(_) if !supports_ranges => "server doesn't support ranges",
+                Some(_) => "unknown reason",
             };
-            eprintln!("⚠️  Using sequential download - reason: {}", reason);
-            eprintln!("    (size: {:?} MB, fragments: {}, ranges: {})",
-                size.map(|s| s / 1024 / 1024), self.concurrent_fragments, supports_ranges);
+            eprintln!("⚠️  Using sequential download - reason: {reason}");
+            eprintln!("    (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
+                size.map(|s| s / 1024 / 1024), self.concurrent_fragments);
         }
 
         // Fallback to sequential download
@@ -532,9 +693,10 @@ impl Downloader for HttpDownloader {
             response.content_length().map(|size| size + resume_from)
         };
 
-        // Check if we should switch to parallel download
+        // Check if we should use parallel resume
         if let Some(total) = total_size {
             let progress_pct = (resume_from as f64 / total as f64) * 100.0;
+            let remaining_size = total - resume_from;
             let supports_ranges = response.headers().get("accept-ranges")
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v != "none")
@@ -542,29 +704,29 @@ impl Downloader for HttpDownloader {
 
             eprintln!("📊 Resume analysis:");
             eprintln!("   - Downloaded: {:.1}% ({} MB / {} MB)", progress_pct, resume_from / 1024 / 1024, total / 1024 / 1024);
+            eprintln!("   - Remaining: {} MB", remaining_size / 1024 / 1024);
             eprintln!("   - Concurrent fragments: {}", self.concurrent_fragments);
-            eprintln!("   - Server supports ranges: {}", supports_ranges);
+            eprintln!("   - Server supports ranges: {supports_ranges}");
 
-            let can_parallel = total > 10 * 1024 * 1024 // > 10MB for parallel to be worth it
+            let can_parallel = remaining_size > 10 * 1024 * 1024 // > 10MB remaining for parallel to be worth it
                 && self.concurrent_fragments > 1
                 && supports_ranges;
 
-            // If we can use parallel and haven't downloaded much yet (< 20%), restart with parallel
-            if can_parallel && progress_pct < 20.0 {
-                eprintln!("🚀 Switching to parallel download mode ({} connections) for faster speed...", self.concurrent_fragments);
-                eprintln!("   Discarding {} MB partial download to enable parallel mode", resume_from / 1024 / 1024);
+            // Use parallel resume if remaining size is large enough
+            if can_parallel {
+                eprintln!("🚀 Using parallel resume mode ({} connections) for faster speed...", self.concurrent_fragments);
+                eprintln!("   Keeping {} MB already downloaded, parallelizing remaining {} MB",
+                    resume_from / 1024 / 1024, remaining_size / 1024 / 1024);
 
                 // Close the current response
                 drop(response);
 
-                // Delete partial file and start fresh with parallel download
-                let _ = tokio::fs::remove_file(path).await;
-                return self.download_parallel(url, path, total, progress).await;
+                // Resume with parallel download of remaining chunks
+                return self.download_parallel_resume(url, path, resume_from, total, progress).await;
             } else if !can_parallel {
-                eprintln!("⚠️  Parallel mode not available (file size: {} MB, concurrent: {}, ranges: {})",
-                    total / 1024 / 1024, self.concurrent_fragments, supports_ranges);
-            } else {
-                eprintln!("⏩ Too much downloaded ({:.1}%), continuing with sequential resume", progress_pct);
+                eprintln!("⚠️  Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {})",
+                    remaining_size / 1024 / 1024, self.concurrent_fragments, supports_ranges);
+                eprintln!("   Continuing with sequential resume");
             }
         }
 
@@ -714,5 +876,216 @@ mod tests {
         // CRITICAL: Verify the partial file was NOT overwritten
         let file_contents = tokio::fs::read(path).await.unwrap();
         assert_eq!(file_contents, b"partial data", "Partial file should not be overwritten");
+    }
+
+    #[tokio::test]
+    async fn test_parallel_download_error_propagation() {
+        use mockito::Server;
+        use tempfile::TempDir;
+
+        let mut server = Server::new_async().await;
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create test content (20 MB to trigger parallel mode)
+        let chunk_size = 5 * 1024 * 1024; // 5 MB per chunk
+        let total_size = 20 * 1024 * 1024; // 20 MB total
+        let test_content = vec![0u8; chunk_size];
+
+        // Mock HEAD request for size detection (allow multiple calls)
+        let mock_head = server.mock("HEAD", "/test-video.mp4")
+            .with_status(200)
+            .with_header("Accept-Ranges", "bytes")
+            .with_header("Content-Length", &total_size.to_string())
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        // Mock Range request for size fallback detection
+        let _mock_size_check = server.mock("GET", "/test-video.mp4")
+            .match_header("range", "bytes=0-0")
+            .with_status(206)
+            .with_header("Content-Range", &format!("bytes 0-0/{}", total_size))
+            .expect_at_most(1)
+            .create_async()
+            .await;
+
+        // Mock successful Range requests for first 2 chunks
+        let _mock_chunk_0 = server.mock("GET", "/test-video.mp4")
+            .match_header("range", "bytes=0-5242879")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-5242879/20971520")
+            .with_body(&test_content)
+            .create_async()
+            .await;
+
+        let _mock_chunk_1 = server.mock("GET", "/test-video.mp4")
+            .match_header("range", "bytes=5242880-10485759")
+            .with_status(206)
+            .with_header("content-range", "bytes 5242880-10485759/20971520")
+            .with_body(&test_content)
+            .create_async()
+            .await;
+
+        // Mock FAILURE for chunk 2 (this should trigger fail-fast)
+        let mock_chunk_2_fail = server.mock("GET", "/test-video.mp4")
+            .match_header("range", "bytes=10485760-15728639")
+            .with_status(500)
+            .with_body("Internal Server Error")
+            .create_async()
+            .await;
+
+        // Chunk 3 should be cancelled by try_join_all after chunk 2 fails
+        // It might or might not be called depending on timing
+        let _mock_chunk_3 = server.mock("GET", "/test-video.mp4")
+            .match_header("range", "bytes=15728640-20971519")
+            .with_status(206)
+            .with_header("content-range", "bytes 15728640-20971519/20971520")
+            .with_body(&test_content)
+            .expect_at_most(1) // May not be called if cancelled early
+            .create_async()
+            .await;
+
+        // Create downloader with 4 concurrent fragments and no retries for fast test
+        use rdlp_core::RetryConfig;
+        use std::time::Duration;
+        let no_retry_config = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
+
+        let downloader = HttpDownloader::new()
+            .with_concurrent_fragments(4)
+            .with_retry_config(no_retry_config)
+            .with_buffer_size(1024 * 1024); // 1 MB buffer
+
+        let url = format!("{}/test-video.mp4", server.url());
+        let output = temp_dir.path().join("output.mp4");
+
+        // Attempt download - should fail on chunk 2
+        let result = downloader.download_to_file(&url, &output, None).await;
+
+        // Verify failure
+        assert!(result.is_err(), "Download should fail due to chunk 2 error");
+
+        let err = result.unwrap_err();
+        assert!(matches!(err, RdlpError::Network(_)), "Should be a network error");
+
+        // Verify mocks were called appropriately
+        mock_head.assert_async().await;
+
+        // Chunks 0 and 1 should have been called (they succeed)
+        // Note: The exact order depends on async scheduling, but try_join_all
+        // will stop all futures on first error
+
+        // Chunk 2 (the failing one) should definitely have been called
+        mock_chunk_2_fail.assert_async().await;
+
+        // This test demonstrates that try_join_all provides fail-fast behavior:
+        // When chunk 2 fails, the entire operation fails immediately and returns
+        // the error, rather than waiting for all chunks to complete.
+    }
+
+    #[tokio::test]
+    async fn test_parallel_resume() {
+        use mockito::Server;
+        use tempfile::TempDir;
+
+        let mut server = Server::new_async().await;
+        let temp_dir = TempDir::new().unwrap();
+
+        // Simulate a 20 MB file with 5 MB already downloaded (25%)
+        let total_size = 20 * 1024 * 1024; // 20 MB
+        let already_downloaded = 5 * 1024 * 1024; // 5 MB
+        let remaining_size = total_size - already_downloaded; // 15 MB
+
+        // Create partial file with 5 MB of data
+        let output = temp_dir.path().join("video.mp4");
+        tokio::fs::write(&output, vec![0xAA; already_downloaded as usize])
+            .await
+            .unwrap();
+
+        // Mock Range request for resume (server returns 206 with Content-Range)
+        let _mock_resume = server.mock("GET", "/video.mp4")
+            .match_header("range", "bytes=5242880-")
+            .with_status(206)
+            .with_header("Content-Range", &format!("bytes 5242880-20971519/{}", total_size))
+            .with_header("Accept-Ranges", "bytes")
+            .with_body(vec![0xBB; remaining_size as usize]) // Dummy data
+            .expect(0) // Should NOT be called - we use parallel resume instead
+            .create_async()
+            .await;
+
+        // Mock parallel resume chunks (4 chunks for 15 MB remaining)
+        // Chunk 0: 5 MB - 8.75 MB (3.75 MB)
+        let _mock_chunk_0 = server.mock("GET", "/video.mp4")
+            .match_header("range", "bytes=5242880-9175039")
+            .with_status(206)
+            .with_header("Content-Range", "bytes 5242880-9175039/20971520")
+            .with_body(vec![0xCC; (9175040 - 5242880) as usize])
+            .create_async()
+            .await;
+
+        // Chunk 1: 8.75 MB - 12.5 MB (3.75 MB)
+        let _mock_chunk_1 = server.mock("GET", "/video.mp4")
+            .match_header("range", "bytes=9175040-13107199")
+            .with_status(206)
+            .with_header("Content-Range", "bytes 9175040-13107199/20971520")
+            .with_body(vec![0xDD; (13107200 - 9175040) as usize])
+            .create_async()
+            .await;
+
+        // Chunk 2: 12.5 MB - 16.25 MB (3.75 MB)
+        let _mock_chunk_2 = server.mock("GET", "/video.mp4")
+            .match_header("range", "bytes=13107200-17039359")
+            .with_status(206)
+            .with_header("Content-Range", "bytes 13107200-17039359/20971520")
+            .with_body(vec![0xEE; (17039360 - 13107200) as usize])
+            .create_async()
+            .await;
+
+        // Chunk 3: 16.25 MB - 20 MB (3.75 MB)
+        let _mock_chunk_3 = server.mock("GET", "/video.mp4")
+            .match_header("range", "bytes=17039360-20971519")
+            .with_status(206)
+            .with_header("Content-Range", "bytes 17039360-20971519/20971520")
+            .with_body(vec![0xFF; (20971520 - 17039360) as usize])
+            .create_async()
+            .await;
+
+        // Create downloader with 4 concurrent fragments and no retries
+        use rdlp_core::RetryConfig;
+        use std::time::Duration;
+        let no_retry_config = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
+
+        let downloader = HttpDownloader::new()
+            .with_concurrent_fragments(4)
+            .with_retry_config(no_retry_config);
+
+        let url = format!("{}/video.mp4", server.url());
+
+        // Resume download - should use parallel resume
+        let result = downloader.download_with_resume(&url, &output, already_downloaded, None).await;
+
+        // Verify success
+        assert!(result.is_ok(), "Parallel resume should succeed");
+        let stats = result.unwrap();
+        assert_eq!(stats.bytes_downloaded, total_size, "Should download full file size");
+
+        // Verify file size
+        let metadata = tokio::fs::metadata(&output).await.unwrap();
+        assert_eq!(metadata.len(), total_size, "Final file should be 20 MB");
+
+        // Verify file contents structure:
+        // First 5 MB: 0xAA (already downloaded)
+        // Next 3.75 MB: 0xCC (chunk 0)
+        // Next 3.75 MB: 0xDD (chunk 1)
+        // Next 3.75 MB: 0xEE (chunk 2)
+        // Last 3.75 MB: 0xFF (chunk 3)
+        let contents = tokio::fs::read(&output).await.unwrap();
+        assert_eq!(contents.len(), total_size as usize);
+
+        // Check first 5 MB is original data (0xAA)
+        assert_eq!(contents[0], 0xAA, "First byte should be from original partial download");
+        assert_eq!(contents[already_downloaded as usize - 1], 0xAA, "Last byte of partial should be 0xAA");
+
+        // Check first byte of resumed data (chunk 0 starts with 0xCC)
+        assert_eq!(contents[already_downloaded as usize], 0xCC, "First resumed byte should be from chunk 0");
     }
 }

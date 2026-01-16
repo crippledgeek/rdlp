@@ -33,11 +33,32 @@ impl ExtractorRegistry {
     }
 
     /// Register a new extractor
+    ///
+    /// # Arguments
+    /// * `extractor` - Arc-wrapped extractor implementing InfoExtractor trait
     pub fn register(&mut self, extractor: Arc<dyn InfoExtractor>) {
         self.extractors.push(extractor);
     }
 
     /// Find a suitable extractor for the given URL
+    ///
+    /// Returns the extractor with the highest priority that reports the URL as suitable.
+    /// Returns `None` if no extractor matches the URL.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to find an extractor for
+    ///
+    /// # Returns
+    /// An `Arc<dyn InfoExtractor>` if a suitable extractor is found, `None` otherwise
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use rdlp_extractor::ExtractorRegistry;
+    ///
+    /// let registry = ExtractorRegistry::new();
+    /// let extractor = registry.find_extractor("https://www.tnaflix.com/video/123");
+    /// assert!(extractor.is_some());
+    /// ```
     pub fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>> {
         self.extractors
             .iter()
@@ -46,7 +67,10 @@ impl ExtractorRegistry {
             .cloned()
     }
 
-    /// Get all registered extractors
+    /// Get all registered extractor names
+    ///
+    /// # Returns
+    /// A vector of extractor names (e.g., ["TNAFlix", "EMPFlix", "MovieFap"])
     pub fn list_extractors(&self) -> Vec<String> {
         self.extractors
             .iter()

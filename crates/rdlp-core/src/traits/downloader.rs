@@ -204,19 +204,19 @@ impl DownloadStats {
     }
 }
 
-/// Format bytes as human-readable string
+/// Format bytes as human-readable string using binary units (1024-based)
 fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
 
     if bytes == 0 {
         return "0 B".to_string();
     }
 
     let bytes_f = bytes as f64;
-    let exponent = (bytes_f.log10() / 3.0).floor() as usize;
+    let exponent = (bytes_f.log2() / 10.0).floor() as usize;
     let exponent = exponent.min(UNITS.len() - 1);
 
-    let value = bytes_f / 1000_f64.powi(exponent as i32);
+    let value = bytes_f / 1024_f64.powi(exponent as i32);
     let unit = UNITS[exponent];
 
     format!("{value:.1} {unit}")
@@ -235,9 +235,9 @@ mod tests {
     fn test_format_bytes() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(500), "500.0 B");
-        assert_eq!(format_bytes(1500), "1.5 KB");
-        assert_eq!(format_bytes(1500000), "1.5 MB");
-        assert_eq!(format_bytes(1500000000), "1.5 GB");
+        assert_eq!(format_bytes(1536), "1.5 KiB");  // 1.5 * 1024
+        assert_eq!(format_bytes(1572864), "1.5 MiB");  // 1.5 * 1024^2
+        assert_eq!(format_bytes(1610612736), "1.5 GiB");  // 1.5 * 1024^3
     }
 
     #[test]
