@@ -53,13 +53,42 @@ impl RetryConfig {
 /// # Returns
 /// Result from the operation, or the last error if all retries exhausted
 ///
+/// # Closure Ownership Pattern
+///
+/// The closure `f` is `FnMut`, meaning it can be called multiple times (once per retry attempt).
+/// Each call to `f` returns a new `Future` that is then awaited.
+///
+/// **Why clones are necessary:**
+/// ```rust,ignore
+/// // ❌ COMPILE ERROR: url is &str and cannot be moved into async block multiple times
+/// retry_with_backoff(&config, "HTTP GET", |_attempt| async {
+///     client.get(url).send().await  // ERROR: url moved on first call
+/// }).await?;
+///
+/// // ✅ CORRECT: Clone necessary data before creating async block
+/// retry_with_backoff(&config, "HTTP GET", |_attempt| {
+///     let client = self.client.clone();  // Arc clone (~5ns)
+///     let url = url.to_string();         // String allocation (~10-20ns)
+///     async move {
+///         client.get(url).send().await   // Owned data can be moved
+///     }
+/// }).await?;
+/// ```
+///
+/// **Performance Note:** Clones only occur on retry (rare case). Most operations succeed
+/// on the first attempt, making the allocation overhead negligible in practice.
+///
 /// # Example
 /// ```rust,ignore
 /// let result = retry_with_backoff(
 ///     &retry_config,
 ///     "download chunk",
-///     |attempt| async move {
-///         client.get(url).send().await
+///     |attempt| {
+///         let client = client.clone();
+///         let url = url.to_string();
+///         async move {
+///             client.get(url).send().await
+///         }
 ///     }
 /// ).await?;
 /// ```

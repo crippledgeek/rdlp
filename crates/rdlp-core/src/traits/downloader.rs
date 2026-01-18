@@ -8,9 +8,17 @@ use crate::Result;
 ///
 /// Downloaders handle transferring video/audio content from various streaming protocols
 /// (HTTP, HLS, DASH, RTMP, etc.) to local files.
+///
+/// # Lifetime Semantics
+///
+/// - `fn protocol(&self) -> &str` - Borrows protocol name from `&self` (lifetime elided)
+/// - `fn supports(&self, url: &str)` - Input `&str` borrowed only during function execution
+/// - Async methods return owned `DownloadStats` to enable Send across async boundaries
 #[async_trait]
 pub trait Downloader: Send + Sync {
     /// Protocol name (e.g., "http", "https", "hls", "dash", "rtmp")
+    ///
+    /// **Lifetime:** Returns `&str` with lifetime tied to `&self` (elided: `<'a>`).
     fn protocol(&self) -> &str;
 
     /// Download content to a file path
@@ -22,6 +30,22 @@ pub trait Downloader: Send + Sync {
     ///
     /// # Returns
     /// Download statistics (bytes downloaded, duration, average speed)
+    ///
+    /// # Box<dyn Trait> Pattern
+    ///
+    /// The progress callback uses `Box<dyn ProgressCallback>` for:
+    /// - **Runtime polymorphism:** Different callback implementations (CLI progress bar, GUI, silent)
+    /// - **Ownership transfer:** Box moves ownership into the async function
+    /// - **Sized requirement:** Trait objects must be behind a pointer (Box, Arc, &)
+    ///
+    /// **Why Box instead of Arc?**
+    /// - Progress callbacks are typically used by a single download task
+    /// - No need for shared ownership (Arc would add unnecessary atomic overhead)
+    /// - Box is simpler and slightly cheaper than Arc for single-owner scenarios
+    ///
+    /// **Why Option<Box<...>>?**
+    /// - Allows downloads without progress tracking (headless/batch mode)
+    /// - Caller can pass `None` to skip callback overhead
     async fn download_to_file(
         &self,
         url: &str,

@@ -255,6 +255,30 @@ impl FormatSelector {
     ///
     /// Currently implements basic "best" selection.
     /// Full DSL evaluation will be implemented in Phase 6.
+    ///
+    /// # Explicit Lifetime Annotation
+    ///
+    /// This method uses explicit lifetime `'a` to document the relationship between
+    /// input and output:
+    /// ```rust,ignore
+    /// pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format>
+    /// //               ^^         ^^                         ^^
+    /// //               |          |                          |
+    /// //               Lifetime  Input references            Output references
+    /// //               parameter have lifetime 'a            have same lifetime 'a
+    /// ```
+    ///
+    /// **Why explicit here?** While lifetime elision would infer the same thing,
+    /// the explicit annotation makes it clear to API users that:
+    /// - The returned references borrow from the `formats` parameter (not from `&self`)
+    /// - The returned `Vec<&Format>` is valid only as long as the input slice exists
+    /// - The selector itself (`&self`) can be dropped; returned references don't depend on it
+    ///
+    /// **Without explicit lifetime (elision would be ambiguous):**
+    /// ```rust,ignore
+    /// // Which lifetime? From &self or from &[Format]?
+    /// pub fn select(&self, formats: &[Format]) -> Vec<&Format>
+    /// ```
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
         // Simplified implementation for now
         match self.expression.as_str() {

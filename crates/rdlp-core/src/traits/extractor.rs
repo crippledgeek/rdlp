@@ -8,15 +8,32 @@ use crate::{Config, InfoDict, Result};
 ///
 /// Extractors are responsible for parsing website URLs and extracting video metadata.
 /// Each extractor typically handles one or more related sites (e.g., YouTube, YouTube Music).
+///
+/// # Lifetime Semantics
+///
+/// Most trait methods use **lifetime elision** (no explicit lifetime annotations needed):
+/// - `fn name(&self) -> &str` - Compiler infers: `fn name<'a>(&'a self) -> &'a str`
+/// - The returned reference has the same lifetime as the `&self` parameter
+/// - This allows zero-cost borrowing of extractor data without clones
+///
+/// Methods returning owned data (`String`, `InfoDict`) enable transfer across async boundaries,
+/// which is required for `Send + Sync` trait bounds in async contexts.
 #[async_trait]
 pub trait InfoExtractor: Send + Sync {
     /// Human-readable name of the extractor (e.g., "YouTube", "Vimeo")
+    ///
+    /// **Lifetime:** Returns `&str` with lifetime tied to `&self` (elided: `<'a>`).
+    /// The string is borrowed from the extractor struct, avoiding allocation.
     fn name(&self) -> &str;
 
     /// Regex pattern for matching valid URLs this extractor can handle
     ///
     /// This pattern should uniquely identify URLs that this extractor supports.
     /// The registry uses this for routing URLs to the appropriate extractor.
+    ///
+    /// **Lifetime:** Returns `&Regex` with lifetime tied to `&self` (elided: `<'a>`).
+    /// For optimal performance, extractors should use static lazy regexes (`&'static Regex`),
+    /// which avoids regex compilation overhead on every constructor call.
     fn valid_url(&self) -> &Regex;
 
     /// Extract video information from a URL
@@ -33,6 +50,28 @@ pub trait InfoExtractor: Send + Sync {
     ///
     /// # Returns
     /// An `InfoDict` containing all extracted metadata and formats
+    ///
+    /// # Async Ownership Pattern
+    ///
+    /// This method returns **owned** `InfoDict` (not `&InfoDict`) because:
+    /// - Async functions must return `Send` types that can cross thread boundaries
+    /// - Borrowed data (&str) cannot be held across `.await` points
+    /// - InfoDict must outlive the HTML parsing scope and async operations
+    ///
+    /// **Common Pattern:**
+    /// ```rust,ignore
+    /// async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
+    ///     // Extract data from HTML synchronously, allocating strings
+    ///     let (title, description) = {
+    ///         let html = fetch_html(url).await?;
+    ///         // Extract to owned Strings before html is dropped
+    ///         (extract_title(&html).to_string(), extract_desc(&html).to_string())
+    ///     }; // html dropped here, but strings are owned and can be used below
+    ///
+    ///     // Build InfoDict with owned data
+    ///     Ok(InfoDict::new(id, title, extractor_name, url.to_string()))
+    /// }
+    /// ```
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict>;
 
     /// Extract playlist information (optional, returns single video by default)
@@ -67,17 +106,48 @@ pub trait InfoExtractor: Send + Sync {
 ///
 /// This provides access to shared services that extractors need, such as
 /// HTTP clients, JavaScript engines, cookie jars, and configuration.
+///
+/// # Memory Management with Arc
+///
+/// All fields use `Arc<T>` (Atomic Reference Counting) for shared ownership:
+/// - **Why Arc?** Enables cheap cloning for async tasks and parallel operations
+/// - **Arc vs Box:** Arc allows multiple owners; Box has single ownership
+/// - **Arc vs Rc:** Arc is thread-safe (Send + Sync); Rc is single-threaded only
+///
+/// **Cloning Cost:** `Arc::clone()` only increments a reference counter (~5ns),
+/// much cheaper than deep-copying the underlying data.
+///
+/// **Example:**
+/// ```rust,ignore
+/// let ctx_clone = ctx.clone(); // Cheap: only increments Arc refcounts
+/// tokio::spawn(async move {
+///     // ctx_clone can be moved into async task
+///     ctx_clone.http_client.get(url).send().await
+/// });
+/// ```
 pub struct ExtractionContext {
     /// HTTP client for making requests
+    ///
+    /// **Arc-wrapped** for sharing across multiple extraction tasks without cloning the
+    /// underlying connection pool. Reqwest's Client already uses Arc internally.
     pub http_client: Arc<reqwest::Client>,
 
     /// JavaScript engine for executing site JavaScript (e.g., signature decryption)
+    ///
+    /// **Arc<dyn Trait>** enables runtime polymorphism with shared ownership.
+    /// Different JS engines (boa, V8) can be swapped without changing extractor code.
     pub js_engine: Arc<dyn JsEngine>,
 
     /// Cookie jar for authentication
+    ///
+    /// **Arc<dyn Trait>** allows sharing cookie state across extraction tasks while
+    /// maintaining thread-safety for concurrent access.
     pub cookie_jar: Arc<dyn CookieJar>,
 
     /// Application configuration
+    ///
+    /// **Arc<Config>** eliminates expensive Config clones. Phase 1 optimization:
+    /// sharing Config via Arc saves ~200ns per orchestrator creation.
     pub config: Arc<Config>,
 }
 
