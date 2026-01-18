@@ -29,7 +29,7 @@ async fn merge_chunk_files(output_path: &std::path::Path, chunk_count: usize) ->
 
     // Merge each chunk in order
     for i in 0..chunk_count {
-        let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+        let chunk_path = parent_dir.join(format!("{base_name}.part{i}"));
 
         if !chunk_path.exists() {
             return Err(anyhow::anyhow!("Missing chunk file: {}", chunk_path.display()));
@@ -39,7 +39,7 @@ async fn merge_chunk_files(output_path: &std::path::Path, chunk_count: usize) ->
             .context(format!("Failed to open chunk file: {}", chunk_path.display()))?;
 
         let bytes_copied = tokio::io::copy(&mut chunk_file, &mut writer).await
-            .context(format!("Failed to copy chunk {}", i))?;
+            .context(format!("Failed to copy chunk {i}"))?;
 
         total_size += bytes_copied;
 
@@ -58,7 +58,7 @@ pub struct Orchestrator {
     extractor_registry: ExtractorRegistry,
     downloader_registry: DownloaderRegistry,
     extraction_context: Arc<ExtractionContext>,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Orchestrator {
@@ -68,11 +68,14 @@ impl Orchestrator {
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
 
+        // Wrap config in Arc once and share it
+        let config = Arc::new(config);
+
         let extraction_context = Arc::new(ExtractionContext::new(
             http_client,
             js_engine,
             cookie_jar,
-            Arc::new(config.clone()),
+            Arc::clone(&config),  // Cheap Arc clone instead of deep clone
         ));
 
         Self {
@@ -163,7 +166,7 @@ impl Orchestrator {
             let mut chunk_count = 0;
 
             for i in 0..10 {  // Check up to 10 chunks (concurrent_fragments is capped at 10)
-                let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+                let chunk_path = parent_dir.join(format!("{base_name}.part{i}"));
                 if chunk_path.exists() {
                     if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
                         total_chunk_size += metadata.len();
@@ -183,10 +186,10 @@ impl Orchestrator {
                         size
                     }
                     Err(e) => {
-                        eprintln!("⚠️  Failed to merge chunks: {}. Starting fresh.", e);
+                        eprintln!("⚠️  Failed to merge chunks: {e}. Starting fresh.");
                         // Clean up partial chunks
                         for i in 0..chunk_count {
-                            let chunk_path = parent_dir.join(format!("{}.part{}", base_name, i));
+                            let chunk_path = parent_dir.join(format!("{base_name}.part{i}"));
                             let _ = tokio::fs::remove_file(&chunk_path).await;
                         }
                         0

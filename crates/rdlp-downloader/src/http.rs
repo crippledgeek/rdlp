@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use rdlp_core::{check_http_response, retry_with_backoff, DownloadProgress, DownloadStats, Downloader, ProgressCallback, Result, RetryConfig, RdlpError};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -10,7 +11,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 pub struct HttpDownloader {
     client: reqwest::Client,
     buffer_size: usize,
-    retry_config: RetryConfig,
+    retry_config: Arc<RetryConfig>,
     concurrent_fragments: usize,
 }
 
@@ -25,7 +26,7 @@ impl HttpDownloader {
         Self {
             client,
             buffer_size: 8192, // 8KB buffer
-            retry_config: RetryConfig::default_config(),
+            retry_config: Arc::new(RetryConfig::default_config()),
             concurrent_fragments: 4, // Default to 4 parallel connections
         }
     }
@@ -40,7 +41,7 @@ impl HttpDownloader {
     /// Set retry configuration
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
-        self.retry_config = config;
+        self.retry_config = Arc::new(config);
         self
     }
 
@@ -82,7 +83,7 @@ impl HttpDownloader {
         start: u64,
         end: u64,
         chunk_path: &Path,
-        progress_counter: Option<std::sync::Arc<tokio::sync::Mutex<u64>>>,
+        progress_counter: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     ) -> Result<u64> {
         let response = retry_with_backoff(&self.retry_config, "HTTP GET (range)", |_attempt| {
             let client = self.client.clone();
@@ -115,10 +116,9 @@ impl HttpDownloader {
             writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
             downloaded += chunk.len() as u64;
 
-            // Update shared progress counter in real-time
+            // Update shared progress counter in real-time (lock-free atomic operation)
             if let Some(ref counter) = progress_counter {
-                let mut total = counter.lock().await;
-                *total += chunk.len() as u64;
+                counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -230,7 +230,7 @@ impl HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         use std::sync::Arc;
-        use tokio::sync::Mutex;
+        use std::sync::atomic::{AtomicU64, Ordering};
         use futures::future::try_join_all;
 
         let start_time = Instant::now();
@@ -243,8 +243,8 @@ impl HttpDownloader {
             .map(|i| temp_dir.join(format!("{}.part{}", path.file_name().unwrap().to_string_lossy(), i)))
             .collect();
 
-        // Shared progress counter
-        let downloaded = Arc::new(Mutex::new(0u64));
+        // Shared progress counter (lock-free atomic for better performance)
+        let downloaded = Arc::new(AtomicU64::new(0));
 
         // Create parallel download futures
         eprintln!("🚀 Starting {chunk_count} parallel downloads...");
@@ -266,7 +266,7 @@ impl HttpDownloader {
                 let downloader = Self {
                     client: self.client.clone(),
                     buffer_size: self.buffer_size,
-                    retry_config: self.retry_config.clone(),
+                    retry_config: Arc::clone(&self.retry_config),  // Cheap Arc clone
                     concurrent_fragments: 1, // No recursion
                 };
                 let url = url.to_string();
@@ -298,7 +298,7 @@ impl HttpDownloader {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let now = Instant::now();
                     if now.duration_since(last_update) >= update_interval {
-                        let bytes_downloaded = *downloaded_clone.lock().await;
+                        let bytes_downloaded = downloaded_clone.load(Ordering::Relaxed);
                         let elapsed = now.duration_since(start_time_clone).as_secs_f64();
                         let speed = if elapsed > 0.0 {
                             bytes_downloaded as f64 / elapsed
@@ -378,7 +378,7 @@ impl HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         use std::sync::Arc;
-        use tokio::sync::Mutex;
+        use std::sync::atomic::{AtomicU64, Ordering};
         use futures::future::try_join_all;
 
         let start_time = Instant::now();
@@ -399,8 +399,8 @@ impl HttpDownloader {
             .map(|i| temp_dir.join(format!("{}.resume{}", path.file_name().unwrap().to_string_lossy(), i)))
             .collect();
 
-        // Shared progress counter (starts at resume_from)
-        let downloaded = Arc::new(Mutex::new(resume_from));
+        // Shared progress counter (starts at resume_from, lock-free atomic)
+        let downloaded = Arc::new(AtomicU64::new(resume_from));
 
         // Create parallel download futures for remaining chunks
         let download_futures: Vec<_> = chunk_paths
@@ -421,7 +421,7 @@ impl HttpDownloader {
                 let downloader = Self {
                     client: self.client.clone(),
                     buffer_size: self.buffer_size,
-                    retry_config: self.retry_config.clone(),
+                    retry_config: Arc::clone(&self.retry_config),  // Cheap Arc clone
                     concurrent_fragments: 1, // No recursion
                 };
                 let url = url.to_string();
@@ -453,7 +453,7 @@ impl HttpDownloader {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let now = Instant::now();
                     if now.duration_since(last_update) >= update_interval {
-                        let bytes_downloaded = *downloaded_clone.lock().await;
+                        let bytes_downloaded = downloaded_clone.load(Ordering::Relaxed);
                         let elapsed = now.duration_since(start_time_clone).as_secs_f64();
                         let speed = if elapsed > 0.0 {
                             (bytes_downloaded - resume_from) as f64 / elapsed
