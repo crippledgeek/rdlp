@@ -1,0 +1,117 @@
+//! Download execution and progress tracking
+
+use super::{errors::*, Orchestrator};
+use indicatif::{ProgressBar, ProgressStyle};
+use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
+use std::path::Path;
+use std::sync::Arc;
+
+/// Progress callback that updates a progress bar
+struct ProgressBarCallback {
+    progress_bar: ProgressBar,
+}
+
+impl ProgressBarCallback {
+    fn new(progress_bar: ProgressBar) -> Self {
+        Self { progress_bar }
+    }
+}
+
+impl ProgressCallback for ProgressBarCallback {
+    fn on_progress(&self, progress: &DownloadProgress) {
+        if let Some(total) = progress.total_bytes {
+            self.progress_bar.set_length(total);
+        }
+        self.progress_bar.set_position(progress.bytes_downloaded);
+    }
+
+    fn on_complete(&self, _stats: &DownloadStats) {
+        // Progress bar will be finished by caller
+    }
+
+    fn on_error(&self, error: &str) {
+        self.progress_bar
+            .abandon_with_message(format!("❌ Error: {error}"));
+    }
+}
+
+impl Orchestrator {
+    /// Create a progress bar for download tracking
+    ///
+    /// # Errors
+    /// Returns an error if progress bar template is invalid
+    pub(super) fn create_progress_bar(
+        &self,
+        filesize: Option<u64>,
+        resume_from: u64,
+    ) -> Result<Option<ProgressBar>> {
+        if !self.config.progress {
+            return Ok(None);
+        }
+
+        let pb = ProgressBar::new(filesize.unwrap_or(0));
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+                )
+                .map_err(|e| OrchestratorError::ProgressBarFailed(e.into()))?
+                .progress_chars("#>-"),
+        );
+
+        if resume_from > 0 {
+            pb.set_position(resume_from);
+        }
+
+        Ok(Some(pb))
+    }
+
+    /// Execute download with Ctrl+C signal handling
+    ///
+    /// Returns Ok(Some(stats)) on success, Ok(None) if user cancelled
+    ///
+    /// # Errors
+    /// Returns an error if download fails
+    pub(super) async fn execute_download(
+        &self,
+        downloader: &Arc<dyn Downloader>,
+        url: &str,
+        output_path: &Path,
+        resume_from: u64,
+        progress_bar: &Option<ProgressBar>,
+    ) -> Result<Option<DownloadStats>> {
+        let progress_callback: Option<Box<dyn ProgressCallback>> =
+            progress_bar.as_ref().map(|pb| {
+                Box::new(ProgressBarCallback::new(pb.clone())) as Box<dyn ProgressCallback>
+            });
+
+        println!("⚠️  Press Ctrl+C to pause and save progress");
+
+        let download_future = if resume_from > 0 {
+            downloader.download_with_resume(url, output_path, resume_from, progress_callback)
+        } else {
+            downloader.download_to_file(url, output_path, progress_callback)
+        };
+
+        // Race between download and Ctrl+C signal
+        let stats = tokio::select! {
+            result = download_future => {
+                result.map_err(|e| OrchestratorError::DownloadFailed(e.into()))?
+            }
+            _ = tokio::signal::ctrl_c() => {
+                if let Some(pb) = progress_bar {
+                    pb.finish_with_message("⏸️  Download paused");
+                }
+                println!("\n⏸️  Download interrupted by user");
+                println!("💾 Progress saved. Run the same command again to resume.");
+                return Ok(None);
+            }
+        };
+
+        if let Some(pb) = progress_bar {
+            pb.finish_with_message("✓ Download complete");
+        }
+
+        Ok(Some(stats))
+    }
+}

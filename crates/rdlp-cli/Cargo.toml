@@ -32,3 +32,5 @@ dialoguer = { workspace = true }
 [dev-dependencies]
 proptest = "1.4"
 tempfile = "3.24"
+mockito = "1.7"
+wiremock = "0.6"

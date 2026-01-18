@@ -2,14 +2,11 @@
 //!
 //! Command-line interface for rdlp (Rust Download Program).
 
-mod orchestrator;
-
 use anyhow::Result;
 use clap::Parser;
+use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::path::PathBuf;
-
-use orchestrator::Orchestrator;
 
 /// Get optimal number of worker threads for I/O-heavy workloads
 fn optimal_worker_threads() -> usize {
