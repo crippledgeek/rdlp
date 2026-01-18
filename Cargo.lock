@@ -1926,6 +1926,7 @@ name = "rdlp-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "dialoguer",
  "indicatif",
@@ -1938,6 +1939,7 @@ dependencies = [
  "rdlp-jsinterp",
  "rdlp-plugin",
  "rdlp-postprocess",
+ "regex",
  "reqwest",
  "serde_json",
  "tempfile",

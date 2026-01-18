@@ -12,6 +12,15 @@ pub use extractors::{TNAFlixExtractor};
 use rdlp_core::InfoExtractor;
 use std::sync::Arc;
 
+/// Trait for extractor registries to enable mocking in tests
+pub trait ExtractorRegistryTrait: Send + Sync {
+    /// Find a suitable extractor for the given URL
+    fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>>;
+
+    /// Get all registered extractor names
+    fn list_extractors(&self) -> Vec<String>;
+}
+
 /// Registry for managing extractors
 pub struct ExtractorRegistry {
     extractors: Vec<Arc<dyn InfoExtractor>>,
@@ -82,6 +91,16 @@ impl ExtractorRegistry {
 impl Default for ExtractorRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ExtractorRegistryTrait for ExtractorRegistry {
+    fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>> {
+        self.find_extractor(url)
+    }
+
+    fn list_extractors(&self) -> Vec<String> {
+        self.list_extractors()
     }
 }
 

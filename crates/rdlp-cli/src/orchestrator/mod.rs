@@ -13,16 +13,16 @@ pub use state::{DownloadPhase, DownloadState};
 
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext};
-use rdlp_downloader::DownloaderRegistry;
-use rdlp_extractor::ExtractorRegistry;
+use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
+use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_jsinterp::SimpleJsEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Main orchestrator coordinating extraction, download, and post-processing
 pub struct Orchestrator {
-    pub(super) extractor_registry: ExtractorRegistry,
-    pub(super) downloader_registry: DownloaderRegistry,
+    pub(super) extractor_registry: Arc<dyn ExtractorRegistryTrait>,
+    pub(super) downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
 }
@@ -45,8 +45,40 @@ impl Orchestrator {
         ));
 
         Self {
-            extractor_registry: ExtractorRegistry::new(),
-            downloader_registry: DownloaderRegistry::new(),
+            extractor_registry: Arc::new(ExtractorRegistry::new()),
+            downloader_registry: Arc::new(DownloaderRegistry::new()),
+            extraction_context,
+            config,
+        }
+    }
+
+    /// Create a new orchestrator with custom registries (for testing)
+    ///
+    /// This method is primarily used for integration tests to inject mock registries.
+    /// It's public to allow integration tests to use it, but should not be used in
+    /// production code.
+    #[doc(hidden)]
+    pub fn with_registries(
+        config: Config,
+        extractor_registry: Arc<dyn ExtractorRegistryTrait>,
+        downloader_registry: Arc<dyn DownloaderRegistryTrait>,
+    ) -> Self {
+        let http_client = Arc::new(reqwest::Client::new());
+        let js_engine = Arc::new(SimpleJsEngine::new());
+        let cookie_jar = Arc::new(SimpleCookieJar::new());
+
+        let config = Arc::new(config);
+
+        let extraction_context = Arc::new(ExtractionContext::new(
+            http_client,
+            js_engine,
+            cookie_jar,
+            Arc::clone(&config),
+        ));
+
+        Self {
+            extractor_registry,
+            downloader_registry,
             extraction_context,
             config,
         }

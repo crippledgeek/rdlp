@@ -15,6 +15,15 @@ use rdlp_core::{Config, Downloader};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Trait for downloader registries to enable mocking in tests
+pub trait DownloaderRegistryTrait: Send + Sync {
+    /// Find a suitable downloader for the given URL
+    fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>>;
+
+    /// Get all registered downloader protocol names
+    fn list_downloaders(&self) -> Vec<String>;
+}
+
 /// Registry for managing downloaders
 pub struct DownloaderRegistry {
     downloaders: Vec<Arc<dyn Downloader>>,
@@ -116,6 +125,16 @@ impl DownloaderRegistry {
 impl Default for DownloaderRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl DownloaderRegistryTrait for DownloaderRegistry {
+    fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
+        self.find_downloader(url)
+    }
+
+    fn list_downloaders(&self) -> Vec<String> {
+        self.list_downloaders()
     }
 }
 
