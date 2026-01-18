@@ -46,20 +46,20 @@ impl InfoExtractor for MockExtractor {
         &self.url_regex
     }
 
-    fn suitable(&self, url: &str) -> bool {
-        url.contains(&self.url_pattern)
-    }
-
-    fn priority(&self) -> i32 {
-        100
-    }
-
     async fn extract(
         &self,
         _url: &str,
         _context: &rdlp_core::ExtractionContext,
     ) -> Result<InfoDict> {
         Ok(self.info_dict.clone())
+    }
+
+    fn suitable(&self, url: &str) -> bool {
+        url.contains(&self.url_pattern)
+    }
+
+    fn priority(&self) -> i32 {
+        100
     }
 }
 
@@ -127,14 +127,6 @@ impl Downloader for MockDownloader {
         &self.protocol
     }
 
-    fn supports(&self, url: &str) -> bool {
-        url.starts_with(&format!("{}://", self.protocol))
-    }
-
-    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
-        Ok(Some(self.download_size))
-    }
-
     async fn download_to_file(
         &self,
         _url: &str,
@@ -173,6 +165,14 @@ impl Downloader for MockDownloader {
         ))
     }
 
+    fn supports(&self, url: &str) -> bool {
+        url.starts_with(&format!("{}://", self.protocol))
+    }
+
+    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
+        Ok(Some(self.download_size))
+    }
+
     async fn download_with_resume(
         &self,
         _url: &str,
@@ -190,10 +190,7 @@ impl Downloader for MockDownloader {
         }
 
         // Read existing content or create new
-        let mut content = match tokio::fs::read(output_path).await {
-            Ok(data) => data,
-            Err(_) => Vec::new(),
-        };
+        let mut content = tokio::fs::read(output_path).await.unwrap_or_else(|_| Vec::new());
 
         // Extend content to full size
         let remaining = self.download_size.saturating_sub(resume_from);
