@@ -7,8 +7,10 @@
 //! - HLS (m3u8) - Coming soon
 //! - DASH - Coming soon
 
+pub mod chunking;
 pub mod http;
 
+pub use chunking::{calculate_chunks, chunk_size_for_file, ChunkSizeStrategy};
 pub use http::HttpDownloader;
 
 use rdlp_core::{Config, Downloader};

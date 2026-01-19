@@ -1989,6 +1989,7 @@ dependencies = [
  "futures",
  "indicatif",
  "mockito",
+ "proptest",
  "rdlp-core",
  "reqwest",
  "tempfile",
