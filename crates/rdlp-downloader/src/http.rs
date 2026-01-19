@@ -434,6 +434,7 @@ impl HttpDownloader {
         let final_file = File::create(path).await.map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.buffer_size, final_file);
 
+        let mut deleted_chunks = 0;
         for chunk_id in 0..total_chunks {
             let chunk_path = temp_dir.join(format!("{}.{}.part{}",
                 &filename, download_id, chunk_id));
@@ -444,12 +445,15 @@ impl HttpDownloader {
                 .map_err(RdlpError::Io)?;
 
             // Delete chunk file after merging
-            tokio::fs::remove_file(&chunk_path).await.map_err(RdlpError::Io)?;
+            if tokio::fs::remove_file(&chunk_path).await.is_ok() {
+                deleted_chunks += 1;
+            }
 
             if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
                 eprintln!("   ✓ Merged {}/{} chunks", chunk_id + 1, total_chunks);
             }
         }
+        eprintln!("🧹 Cleaned up {deleted_chunks} chunk files");
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
@@ -625,6 +629,7 @@ impl HttpDownloader {
         let mut writer = BufWriter::with_capacity(self.buffer_size, file);
 
         eprintln!("📝 Appending {total_chunks} chunks to existing file...");
+        let mut deleted_chunks = 0;
         for chunk_id in 0..total_chunks {
             let chunk_path = temp_dir.join(format!("{}.{}.resume{}",
                 &filename, download_id, chunk_id));
@@ -635,12 +640,15 @@ impl HttpDownloader {
                 .map_err(RdlpError::Io)?;
 
             // Delete chunk file after appending
-            tokio::fs::remove_file(&chunk_path).await.map_err(RdlpError::Io)?;
+            if tokio::fs::remove_file(&chunk_path).await.is_ok() {
+                deleted_chunks += 1;
+            }
 
             if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
                 eprintln!("   ✓ Appended {}/{} chunks", chunk_id + 1, total_chunks);
             }
         }
+        eprintln!("🧹 Cleaned up {deleted_chunks} chunk files");
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
