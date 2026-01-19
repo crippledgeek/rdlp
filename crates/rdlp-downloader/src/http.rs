@@ -3,9 +3,28 @@ use futures::StreamExt;
 use rdlp_core::{check_http_response, retry_with_backoff, DownloadProgress, DownloadStats, Downloader, ProgressCallback, Result, RetryConfig, RdlpError};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use crate::chunking::{calculate_chunks, ChunkSizeStrategy};
+
+/// Global atomic counter for generating unique download IDs
+/// This prevents chunk file collisions when multiple downloads run concurrently
+static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Cleanup chunk files on error
+async fn cleanup_chunk_files(temp_dir: &Path, filename: &str, download_id: u64, total_chunks: usize) {
+    eprintln!("🧹 Cleaning up {total_chunks} partial chunk files...");
+    let mut deleted = 0;
+    for chunk_id in 0..total_chunks {
+        let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
+        if tokio::fs::remove_file(&chunk_path).await.is_ok() {
+            deleted += 1;
+        }
+    }
+    eprintln!("   ✓ Deleted {deleted} chunk files");
+}
 
 /// HTTP/HTTPS downloader
 pub struct HttpDownloader {
@@ -13,6 +32,7 @@ pub struct HttpDownloader {
     buffer_size: usize,
     retry_config: Arc<RetryConfig>,
     concurrent_fragments: usize,
+    chunk_strategy: ChunkSizeStrategy,
 }
 
 impl HttpDownloader {
@@ -28,6 +48,7 @@ impl HttpDownloader {
             buffer_size: 8192, // 8KB buffer
             retry_config: Arc::new(RetryConfig::default_config()),
             concurrent_fragments: 4, // Default to 4 parallel connections
+            chunk_strategy: ChunkSizeStrategy::Auto, // Use automatic power-of-two chunking
         }
     }
 
@@ -49,6 +70,13 @@ impl HttpDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_concurrent_fragments(mut self, count: usize) -> Self {
         self.concurrent_fragments = count.max(1); // At least 1
+        self
+    }
+
+    /// Set chunk size strategy
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_chunk_strategy(mut self, strategy: ChunkSizeStrategy) -> Self {
+        self.chunk_strategy = strategy;
         self
     }
 
@@ -252,9 +280,10 @@ impl HttpDownloader {
         Ok(stats)
     }
 
-    /// Parallel download using multiple range requests
+    /// Parallel download using multiple range requests with fine-grained chunking
     ///
-    /// Uses `futures::try_join_all` for idiomatic parallel execution with fail-fast error handling.
+    /// Uses power-of-two chunk sizes for optimal performance and `buffer_unordered`
+    /// for automatic batch processing with concurrency limiting.
     async fn download_parallel(
         &self,
         url: &str,
@@ -264,60 +293,35 @@ impl HttpDownloader {
     ) -> Result<DownloadStats> {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicU64, Ordering};
-        use futures::future::try_join_all;
+        use futures::stream::{self, StreamExt, TryStreamExt};
 
         let start_time = Instant::now();
-        let chunk_count = self.concurrent_fragments.min(10); // Max 10 connections
-        let chunk_size = total_size / chunk_count as u64;
+
+        // Generate unique download ID to prevent chunk file collisions
+        let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Calculate optimal power-of-two chunk sizes
+        let (chunk_size, total_chunks) = calculate_chunks(total_size, self.chunk_strategy);
+
+        eprintln!("📊 Chunk analysis:");
+        eprintln!("   - Download ID: {download_id}");
+        eprintln!("   - Total size: {} MB", total_size / 1024 / 1024);
+        eprintln!("   - Chunk size: {} KB (power-of-two aligned)", chunk_size / 1024);
+        eprintln!("   - Total chunks: {total_chunks}");
+        eprintln!("   - Concurrent downloads: {}", self.concurrent_fragments);
+        eprintln!("   - Batches: {} (processing {} at a time)",
+            total_chunks.div_ceil(self.concurrent_fragments),
+            self.concurrent_fragments);
 
         // Create temporary directory for chunks
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let chunk_paths: Vec<_> = (0..chunk_count)
-            .map(|i| temp_dir.join(format!("{}.part{}", path.file_name().unwrap().to_string_lossy(), i)))
-            .collect();
+        let filename = path.file_name()
+            .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
+            .to_string_lossy()
+            .to_string();
 
         // Shared progress counter (lock-free atomic for better performance)
         let downloaded = Arc::new(AtomicU64::new(0));
-
-        // Create parallel download futures
-        eprintln!("🚀 Starting {chunk_count} parallel downloads...");
-        let download_futures: Vec<_> = chunk_paths
-            .iter()
-            .enumerate()
-            .map(|(i, chunk_path)| {
-                let start = i as u64 * chunk_size;
-                let end = if i == chunk_count - 1 {
-                    total_size - 1 // Last chunk gets remainder
-                } else {
-                    (i + 1) as u64 * chunk_size - 1
-                };
-
-                eprintln!("   Chunk {}: {} MB - {} MB ({} MB)",
-                    i, start / 1024 / 1024, end / 1024 / 1024, (end - start + 1) / 1024 / 1024);
-
-                // Clone what we need for the async block
-                let downloader = Self {
-                    client: self.client.clone(),
-                    buffer_size: self.buffer_size,
-                    retry_config: Arc::clone(&self.retry_config),  // Cheap Arc clone
-                    concurrent_fragments: 1, // No recursion
-                };
-                let url = url.to_string();
-                let chunk_path = chunk_path.clone();
-                let progress_counter = Some(downloaded.clone());
-                let chunk_id = i;
-
-                async move {
-                    eprintln!("📥 Starting chunk {chunk_id}...");
-                    let result = downloader.download_range_with_progress(&url, start, end, &chunk_path, progress_counter).await;
-                    match &result {
-                        Ok(_) => eprintln!("✅ Chunk {chunk_id} complete"),
-                        Err(e) => eprintln!("❌ Chunk {chunk_id} failed: {e}"),
-                    }
-                    result
-                }
-            })
-            .collect();
 
         // Progress reporter task
         let progress_task = if let Some(callback) = progress {
@@ -354,54 +358,117 @@ impl HttpDownloader {
             None
         };
 
-        // Wait for all downloads to complete (fail-fast on first error)
-        // try_join_all will automatically cancel remaining futures on first error
-        let chunk_results = match try_join_all(download_futures).await {
-            Ok(results) => results,
-            Err(e) => {
+        eprintln!("🚀 Starting batch download with {} concurrent connections...", self.concurrent_fragments);
+
+        // Download all chunks using buffer_unordered for automatic batch processing
+        let chunk_results: Vec<u64> = stream::iter(0..total_chunks)
+            .map(|chunk_id| {
+                let start = chunk_id as u64 * chunk_size as u64;
+                let end = if chunk_id == total_chunks - 1 {
+                    total_size - 1 // Last chunk gets remainder
+                } else {
+                    start + chunk_size as u64 - 1
+                };
+
+                let chunk_path = temp_dir.join(format!("{}.{}.part{}",
+                    &filename, download_id, chunk_id));
+
+                // Clone what we need for the async block
+                let downloader = Self {
+                    client: self.client.clone(),
+                    buffer_size: self.buffer_size,
+                    retry_config: Arc::clone(&self.retry_config),
+                    concurrent_fragments: 1, // No recursion
+                    chunk_strategy: self.chunk_strategy,
+                };
+                let url = url.to_string();
+                let progress_counter = Some(downloaded.clone());
+
+                async move {
+                    if chunk_id % 100 == 0 {
+                        eprintln!("📥 Starting chunk {}/{} ({} KB at offset {} MB)",
+                            chunk_id, total_chunks,
+                            (end - start + 1) / 1024,
+                            start / 1024 / 1024);
+                    }
+                    let result = downloader.download_range_with_progress(
+                        &url, start, end, &chunk_path, progress_counter
+                    ).await;
+                    if let Err(ref e) = result {
+                        eprintln!("❌ Chunk {chunk_id} failed: {e}");
+                    }
+                    result.map(|bytes| (chunk_id, bytes, chunk_path))
+                }
+            })
+            .buffer_unordered(self.concurrent_fragments) // Automatic batch processing!
+            .try_collect::<Vec<_>>()
+            .await
+            .inspect_err(|e| {
+                eprintln!("❌ Download failed: {e}");
                 // Stop progress reporter on error
-                if let Some(task) = progress_task {
+                if let Some(task) = &progress_task {
                     task.abort();
                 }
-                return Err(e);
-            }
-        };
+                // Cleanup partial chunk files
+                let temp_dir = temp_dir.to_path_buf();
+                let filename = filename.clone();
+                tokio::spawn(async move {
+                    cleanup_chunk_files(&temp_dir, &filename, download_id, total_chunks).await;
+                });
+            })?
+            .into_iter()
+            .map(|(_, bytes, _)| bytes)
+            .collect();
 
         // Sum up all downloaded bytes
         let total_downloaded: u64 = chunk_results.iter().sum();
-        eprintln!("✓ All {} chunks completed ({} MB total)", chunk_count, total_downloaded / 1024 / 1024);
+        eprintln!("✓ All {} chunks completed ({} MB total)", total_chunks, total_downloaded / 1024 / 1024);
 
         // Stop progress reporter on success
         if let Some(task) = progress_task {
             task.abort();
         }
 
-        // Merge chunks into final file
+        // Merge chunks into final file in correct order
+        eprintln!("📝 Merging {total_chunks} chunks into final file...");
         let final_file = File::create(path).await.map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.buffer_size, final_file);
 
-        for chunk_path in &chunk_paths {
-            let mut chunk_file = File::open(chunk_path).await.map_err(RdlpError::Io)?;
+        for chunk_id in 0..total_chunks {
+            let chunk_path = temp_dir.join(format!("{}.{}.part{}",
+                &filename, download_id, chunk_id));
+
+            let mut chunk_file = File::open(&chunk_path).await.map_err(RdlpError::Io)?;
             tokio::io::copy(&mut chunk_file, &mut writer)
                 .await
                 .map_err(RdlpError::Io)?;
 
             // Delete chunk file after merging
-            tokio::fs::remove_file(chunk_path).await.map_err(RdlpError::Io)?;
+            tokio::fs::remove_file(&chunk_path).await.map_err(RdlpError::Io)?;
+
+            if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
+                eprintln!("   ✓ Merged {}/{} chunks", chunk_id + 1, total_chunks);
+            }
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
         let duration = start_time.elapsed();
-        let stats = DownloadStats::new(total_downloaded, duration, chunk_count);
+        // Fix Issue #2: Use 0 for retry_count (we don't track retries at this level)
+        let stats = DownloadStats::new(total_downloaded, duration, 0);
+
+        eprintln!("✅ Download complete: {} MB in {:.1}s ({:.1} MB/s)",
+            total_downloaded / 1024 / 1024,
+            duration.as_secs_f64(),
+            (total_downloaded as f64 / duration.as_secs_f64()) / 1024.0 / 1024.0);
 
         Ok(stats)
     }
 
     /// Parallel resume: downloads remaining chunks in parallel and appends to existing file
     ///
-    /// This method keeps the already-downloaded portion and parallelizes the remaining download.
-    /// Uses `futures::try_join_all` for fail-fast error handling.
+    /// This method keeps the already-downloaded portion and parallelizes the remaining download
+    /// using power-of-two chunking and `buffer_unordered` for batch processing.
     async fn download_parallel_resume(
         &self,
         url: &str,
@@ -412,67 +479,36 @@ impl HttpDownloader {
     ) -> Result<DownloadStats> {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicU64, Ordering};
-        use futures::future::try_join_all;
+        use futures::stream::{self, StreamExt, TryStreamExt};
 
         let start_time = Instant::now();
         let remaining_size = total_size - resume_from;
-        let chunk_count = self.concurrent_fragments.min(10); // Max 10 connections
-        let chunk_size = remaining_size / chunk_count as u64;
+
+        // Generate unique download ID to prevent chunk file collisions
+        let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Calculate optimal power-of-two chunk sizes for remaining data
+        let (chunk_size, total_chunks) = calculate_chunks(remaining_size, self.chunk_strategy);
 
         eprintln!("🔄 Parallel resume mode:");
+        eprintln!("   - Download ID: {download_id}");
         eprintln!("   - Already downloaded: {} MB ({:.1}%)",
             resume_from / 1024 / 1024,
             (resume_from as f64 / total_size as f64) * 100.0);
         eprintln!("   - Remaining: {} MB", remaining_size / 1024 / 1024);
-        eprintln!("   - Using {chunk_count} parallel connections for remainder");
+        eprintln!("   - Chunk size: {} KB (power-of-two aligned)", chunk_size / 1024);
+        eprintln!("   - Total chunks: {total_chunks}");
+        eprintln!("   - Concurrent downloads: {}", self.concurrent_fragments);
 
         // Create temporary directory for chunks
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let chunk_paths: Vec<_> = (0..chunk_count)
-            .map(|i| temp_dir.join(format!("{}.resume{}", path.file_name().unwrap().to_string_lossy(), i)))
-            .collect();
+        let filename = path.file_name()
+            .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
+            .to_string_lossy()
+            .to_string();
 
         // Shared progress counter (starts at resume_from, lock-free atomic)
         let downloaded = Arc::new(AtomicU64::new(resume_from));
-
-        // Create parallel download futures for remaining chunks
-        let download_futures: Vec<_> = chunk_paths
-            .iter()
-            .enumerate()
-            .map(|(i, chunk_path)| {
-                let start = resume_from + (i as u64 * chunk_size);
-                let end = if i == chunk_count - 1 {
-                    total_size - 1 // Last chunk gets remainder
-                } else {
-                    resume_from + ((i + 1) as u64 * chunk_size) - 1
-                };
-
-                eprintln!("   Chunk {}: {} MB - {} MB ({} MB)",
-                    i, start / 1024 / 1024, end / 1024 / 1024, (end - start + 1) / 1024 / 1024);
-
-                // Clone what we need for the async block
-                let downloader = Self {
-                    client: self.client.clone(),
-                    buffer_size: self.buffer_size,
-                    retry_config: Arc::clone(&self.retry_config),  // Cheap Arc clone
-                    concurrent_fragments: 1, // No recursion
-                };
-                let url = url.to_string();
-                let chunk_path = chunk_path.clone();
-                let progress_counter = Some(downloaded.clone());
-                let chunk_id = i;
-
-                async move {
-                    eprintln!("📥 Starting chunk {chunk_id}...");
-                    let result = downloader.download_range_with_progress(&url, start, end, &chunk_path, progress_counter).await;
-                    match &result {
-                        Ok(_) => eprintln!("✅ Chunk {chunk_id} complete"),
-                        Err(e) => eprintln!("❌ Chunk {chunk_id} failed: {e}"),
-                    }
-                    result
-                }
-            })
-            .collect();
 
         // Progress reporter task (shows total including already downloaded)
         let progress_task = if let Some(callback) = progress {
@@ -509,28 +545,78 @@ impl HttpDownloader {
             None
         };
 
-        // Wait for all downloads to complete (fail-fast on first error)
-        let chunk_results = match try_join_all(download_futures).await {
-            Ok(results) => results,
-            Err(e) => {
+        eprintln!("🚀 Starting batch download with {} concurrent connections...", self.concurrent_fragments);
+
+        // Download remaining chunks using buffer_unordered for automatic batch processing
+        let chunk_results: Vec<u64> = stream::iter(0..total_chunks)
+            .map(|chunk_id| {
+                let start = resume_from + (chunk_id as u64 * chunk_size as u64);
+                let end = if chunk_id == total_chunks - 1 {
+                    total_size - 1 // Last chunk gets remainder
+                } else {
+                    start + chunk_size as u64 - 1
+                };
+
+                let chunk_path = temp_dir.join(format!("{}.{}.resume{}",
+                    &filename, download_id, chunk_id));
+
+                // Clone what we need for the async block
+                let downloader = Self {
+                    client: self.client.clone(),
+                    buffer_size: self.buffer_size,
+                    retry_config: Arc::clone(&self.retry_config),
+                    concurrent_fragments: 1, // No recursion
+                    chunk_strategy: self.chunk_strategy,
+                };
+                let url = url.to_string();
+                let progress_counter = Some(downloaded.clone());
+
+                async move {
+                    if chunk_id % 100 == 0 {
+                        eprintln!("📥 Resuming chunk {}/{} ({} KB at offset {} MB)",
+                            chunk_id, total_chunks,
+                            (end - start + 1) / 1024,
+                            start / 1024 / 1024);
+                    }
+                    let result = downloader.download_range_with_progress(
+                        &url, start, end, &chunk_path, progress_counter
+                    ).await;
+                    if let Err(ref e) = result {
+                        eprintln!("❌ Chunk {chunk_id} failed: {e}");
+                    }
+                    result.map(|bytes| (chunk_id, bytes, chunk_path))
+                }
+            })
+            .buffer_unordered(self.concurrent_fragments) // Automatic batch processing!
+            .try_collect::<Vec<_>>()
+            .await
+            .inspect_err(|e| {
+                eprintln!("❌ Resume failed: {e}");
                 // Stop progress reporter on error
-                if let Some(task) = progress_task {
+                if let Some(task) = &progress_task {
                     task.abort();
                 }
-                return Err(e);
-            }
-        };
+                // Cleanup partial chunk files
+                let temp_dir = temp_dir.to_path_buf();
+                let filename = filename.clone();
+                tokio::spawn(async move {
+                    cleanup_chunk_files(&temp_dir, &filename, download_id, total_chunks).await;
+                });
+            })?
+            .into_iter()
+            .map(|(_, bytes, _)| bytes)
+            .collect();
 
         // Sum up all downloaded bytes (just the new chunks)
         let newly_downloaded: u64 = chunk_results.iter().sum();
-        eprintln!("✓ All {} chunks completed ({} MB new data)", chunk_count, newly_downloaded / 1024 / 1024);
+        eprintln!("✓ All {} chunks completed ({} MB new data)", total_chunks, newly_downloaded / 1024 / 1024);
 
         // Stop progress reporter on success
         if let Some(task) = progress_task {
             task.abort();
         }
 
-        // Append chunks to existing file
+        // Append chunks to existing file in correct order
         let file = tokio::fs::OpenOptions::new()
             .append(true)
             .open(path)
@@ -538,23 +624,36 @@ impl HttpDownloader {
             .map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.buffer_size, file);
 
-        eprintln!("📝 Appending {chunk_count} chunks to existing file...");
-        for (i, chunk_path) in chunk_paths.iter().enumerate() {
-            let mut chunk_file = File::open(chunk_path).await.map_err(RdlpError::Io)?;
+        eprintln!("📝 Appending {total_chunks} chunks to existing file...");
+        for chunk_id in 0..total_chunks {
+            let chunk_path = temp_dir.join(format!("{}.{}.resume{}",
+                &filename, download_id, chunk_id));
+
+            let mut chunk_file = File::open(&chunk_path).await.map_err(RdlpError::Io)?;
             tokio::io::copy(&mut chunk_file, &mut writer)
                 .await
                 .map_err(RdlpError::Io)?;
 
             // Delete chunk file after appending
-            tokio::fs::remove_file(chunk_path).await.map_err(RdlpError::Io)?;
-            eprintln!("   ✓ Appended chunk {i}");
+            tokio::fs::remove_file(&chunk_path).await.map_err(RdlpError::Io)?;
+
+            if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
+                eprintln!("   ✓ Appended {}/{} chunks", chunk_id + 1, total_chunks);
+            }
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
-        let stats = DownloadStats::new(total_downloaded, duration, chunk_count);
+        // Fix Issue #2: Use 0 for retry_count (we don't track retries at this level)
+        let stats = DownloadStats::new(total_downloaded, duration, 0);
+
+        eprintln!("✅ Resume complete: {} MB total, {} MB new in {:.1}s ({:.1} MB/s)",
+            total_downloaded / 1024 / 1024,
+            newly_downloaded / 1024 / 1024,
+            duration.as_secs_f64(),
+            (newly_downloaded as f64 / duration.as_secs_f64()) / 1024.0 / 1024.0);
 
         Ok(stats)
     }
@@ -979,14 +1078,17 @@ mod tests {
             .await;
 
         // Create downloader with 4 concurrent fragments and no retries for fast test
+        // Use Legacy chunking strategy to maintain 4 large chunks for this test
         use rdlp_core::RetryConfig;
         use std::time::Duration;
+        use crate::chunking::ChunkSizeStrategy;
         let no_retry_config = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
 
         let downloader = HttpDownloader::new()
             .with_concurrent_fragments(4)
             .with_retry_config(no_retry_config)
-            .with_buffer_size(1024 * 1024); // 1 MB buffer
+            .with_buffer_size(1024 * 1024) // 1 MB buffer
+            .with_chunk_strategy(ChunkSizeStrategy::Legacy { chunk_count: 4 });
 
         let url = format!("{}/test-video.mp4", server.url());
         let output = temp_dir.path().join("output.mp4");
@@ -1083,13 +1185,16 @@ mod tests {
             .await;
 
         // Create downloader with 4 concurrent fragments and no retries
+        // Use Legacy chunking strategy to maintain 4 large chunks for this test
         use rdlp_core::RetryConfig;
         use std::time::Duration;
+        use crate::chunking::ChunkSizeStrategy;
         let no_retry_config = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
 
         let downloader = HttpDownloader::new()
             .with_concurrent_fragments(4)
-            .with_retry_config(no_retry_config);
+            .with_retry_config(no_retry_config)
+            .with_chunk_strategy(ChunkSizeStrategy::Legacy { chunk_count: 4 });
 
         let url = format!("{}/video.mp4", server.url());
 
