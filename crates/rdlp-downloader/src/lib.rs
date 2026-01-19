@@ -3,9 +3,37 @@
 //! Download protocol implementations for rdlp.
 //!
 //! This crate provides downloaders for various streaming protocols:
-//! - HTTP/HTTPS
+//! - HTTP/HTTPS with power-of-two chunking and parallel downloads
 //! - HLS (m3u8) - Coming soon
 //! - DASH - Coming soon
+//!
+//! ## Features
+//!
+//! - **Power-of-Two Chunking**: Intelligent chunk sizing (64 KB - 8 MB) aligned to
+//!   memory boundaries for optimal performance
+//! - **Fine-Grained Parallelism**: Downloads large files using many small chunks
+//!   processed in batches with `buffer_unordered`
+//! - **Resume Support**: Automatically detects and resumes partial downloads
+//! - **Progress Tracking**: Real-time atomic progress updates across all chunks
+//! - **Automatic Cleanup**: Graceful cleanup of temporary chunk files on both
+//!   success and failure
+//!
+//! ## Example
+//!
+//! ```rust,no_run
+//! use rdlp_downloader::{HttpDownloader, ChunkSizeStrategy};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Create downloader with automatic power-of-two chunking
+//! let downloader = HttpDownloader::new()
+//!     .with_concurrent_fragments(4)
+//!     .with_chunk_strategy(ChunkSizeStrategy::Auto);
+//!
+//! // Download will automatically use parallel mode for files > 10 MB
+//! // downloader.download_to_file(url, path, progress).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod chunking;
 pub mod http;
