@@ -7,6 +7,7 @@
 
 pub mod base;
 pub mod extractors;
+pub mod hls;
 
 pub use extractors::{RedTubeExtractor, TNAFlixExtractor};
 

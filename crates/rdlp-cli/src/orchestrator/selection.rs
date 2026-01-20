@@ -73,6 +73,9 @@ impl Orchestrator {
                     "Unknown".to_string()
                 };
 
+                // Format type (HLS, MP4, etc.)
+                let format_type = f.ext.to_uppercase();
+
                 let codecs = match (&f.vcodec, &f.acodec) {
                     (Some(v), Some(a)) => format!("{v}/{a}"),
                     (Some(v), None) => format!("{v} (video only)"),
@@ -80,16 +83,16 @@ impl Orchestrator {
                     (None, None) => "Unknown".to_string(),
                 };
 
-                format!("{quality:<12} | {resolution:<10} | {size:<12} | {codecs}")
+                format!("{quality:<12} | {resolution:<10} | {size:<12} | {format_type:<6} | {codecs}")
             })
             .collect();
 
         println!("\n📋 Available formats:");
         println!(
-            "{:<12} | {:<10} | {:<12} | Codecs",
-            "Quality", "Resolution", "Size"
+            "{:<12} | {:<10} | {:<12} | {:<6} | Codecs",
+            "Quality", "Resolution", "Size", "Type"
         );
-        println!("{}", "-".repeat(70));
+        println!("{}", "-".repeat(79));
 
         let selection = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("Select a format to download (ESC to cancel)")

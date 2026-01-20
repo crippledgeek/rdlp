@@ -116,7 +116,31 @@ impl RedTubeExtractor {
                         if let Some(obj) = sources.as_object() {
                             for (quality, url) in obj {
                                 if let Some(url_str) = url.as_str() {
-                                    let format = self.build_format(quality, url_str.to_string(), "mp4");
+                                    // Extract format type from URL path
+                                    let format_type = if let Ok(parsed_url) = url::Url::parse(url_str) {
+                                        if let Some(mut path_segments) = parsed_url.path_segments() {
+                                            if let Some(last_segment) = path_segments.next_back() {
+                                                if let Some(ext_start) = last_segment.rfind('.') {
+                                                    match &last_segment[ext_start + 1..] {
+                                                        "mp4" => "mp4",
+                                                        "m3u8" => "hls",
+                                                        "webm" => "webm",
+                                                        "mkv" => "mkv",
+                                                        _ => "unknown",
+                                                    }
+                                                } else {
+                                                    "unknown"
+                                                }
+                                            } else {
+                                                "unknown"
+                                            }
+                                        } else {
+                                            "unknown"
+                                        }
+                                    } else {
+                                        "unknown"
+                                    };
+                                    let format = self.build_format(quality, url_str.to_string(), format_type);
 
                                     if verbose {
                                         eprintln!("[RedTube] Extracted format: {} ({})",
@@ -225,14 +249,19 @@ impl RedTubeExtractor {
                                                         for media_item in more_arr {
                                                             if let Some(media_url) = media_item.get("videoUrl").and_then(|v| v.as_str()) {
                                                                 let quality_str = Self::parse_quality(media_item);
-                                                                let format = self.build_format(&quality_str, media_url.to_string(), "mp4");
+                                                                // Extract format type from JSON (hls, mp4, etc.)
+                                                                let format_type = media_item.get("format")
+                                                                    .and_then(|f| f.as_str())
+                                                                    .unwrap_or("unknown");
+                                                                let format = self.build_format(&quality_str, media_url.to_string(), format_type);
 
                                                                 if ctx.config.verbose {
-                                                                    eprintln!("[RedTube] Extracted format from JSON: {} - {} ({}x{})",
+                                                                    eprintln!("[RedTube] Extracted format from JSON: {} - {} ({}x{}) [{}]",
                                                                         format.format_id,
                                                                         format.format_note.as_deref().unwrap_or("unknown"),
                                                                         format.width.unwrap_or(0),
-                                                                        format.height.unwrap_or(0));
+                                                                        format.height.unwrap_or(0),
+                                                                        format.ext.to_uppercase());
                                                                 }
 
                                                                 formats.push(format);
@@ -390,22 +419,56 @@ impl InfoExtractor for RedTubeExtractor {
 
         // Fetch filesizes for all formats
         for format in &mut formats {
-            // Try HEAD request first
-            if let Ok(response) = ctx.http_client.head(&format.url).send().await {
-                format.filesize = response.content_length();
+            // HLS formats require special handling (parse m3u8 playlist)
+            if format.ext == "hls" || format.url.contains(".m3u8") {
+                let hls_detector = crate::hls::HlsSizeDetector::new(
+                    ctx.http_client.clone(),
+                    ctx.config.verbose,
+                );
 
-                // Fallback to Range request if HEAD returns no size
-                if format.filesize.is_none() || format.filesize == Some(0) {
-                    if let Ok(range_response) = ctx.http_client
-                        .get(&format.url)
-                        .header("Range", "bytes=0-0")
-                        .send()
-                        .await
-                    {
-                        if let Some(content_range) = range_response.headers().get("content-range") {
-                            if let Ok(range_str) = content_range.to_str() {
-                                if let Some(total) = range_str.split('/').nth(1) {
-                                    format.filesize = total.parse::<u64>().ok();
+                match hls_detector.detect_size(&format.url).await {
+                    Ok(Some(size)) => {
+                        format.filesize = Some(size);
+                        if ctx.config.verbose {
+                            eprintln!(
+                                "[RedTube] HLS {} size: {} MB",
+                                format.format_id,
+                                size / 1_000_000
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        if ctx.config.verbose {
+                            eprintln!(
+                                "[RedTube] Could not detect HLS size for {}",
+                                format.format_id
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if ctx.config.verbose {
+                            eprintln!("[RedTube] HLS size detection failed: {e}");
+                        }
+                    }
+                }
+            } else {
+                // MP4 and other direct formats: use HEAD request
+                if let Ok(response) = ctx.http_client.head(&format.url).send().await {
+                    format.filesize = response.content_length();
+
+                    // Fallback to Range request if HEAD returns no size
+                    if format.filesize.is_none() || format.filesize == Some(0) {
+                        if let Ok(range_response) = ctx.http_client
+                            .get(&format.url)
+                            .header("Range", "bytes=0-0")
+                            .send()
+                            .await
+                        {
+                            if let Some(content_range) = range_response.headers().get("content-range") {
+                                if let Ok(range_str) = content_range.to_str() {
+                                    if let Some(total) = range_str.split('/').nth(1) {
+                                        format.filesize = total.parse::<u64>().ok();
+                                    }
                                 }
                             }
                         }

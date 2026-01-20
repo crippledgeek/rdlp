@@ -812,13 +812,32 @@ impl TnaFlixNetworkBase {
             // Calculate approximate width based on 16:9 aspect ratio
             let width = height.map(|h| (h * 16) / 9);
 
-            // Determine extension from URL (not from type attribute)
-            let ext = if video_url.contains(".mp4") {
-                "mp4"
-            } else if video_url.contains(".flv") {
-                "flv"
+            // Determine extension from URL path (not from type attribute)
+            let ext = if let Ok(parsed_url) = url::Url::parse(video_url) {
+                if let Some(mut path_segments) = parsed_url.path_segments() {
+                    if let Some(last_segment) = path_segments.next_back() {
+                        // Extract extension from filename
+                        if let Some(ext_start) = last_segment.rfind('.') {
+                            let extension = &last_segment[ext_start + 1..];
+                            match extension {
+                                "mp4" => "mp4",
+                                "flv" => "flv",
+                                "m3u8" => "hls",
+                                "webm" => "webm",
+                                "mkv" => "mkv",
+                                _ => "unknown",
+                            }
+                        } else {
+                            "unknown"
+                        }
+                    } else {
+                        "unknown"
+                    }
+                } else {
+                    "unknown"
+                }
             } else {
-                "mp4" // default
+                "unknown"
             }
             .to_string();
 
@@ -994,13 +1013,32 @@ impl TnaFlixNetworkBase {
             let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
             let width = height.map(|h| (h * 16) / 9);
 
-            // Determine extension from URL
-            let ext = if video_url.contains(".mp4") {
-                "mp4"
-            } else if video_url.contains(".flv") {
-                "flv"
+            // Determine extension from URL path
+            let ext = if let Ok(parsed_url) = url::Url::parse(&video_url) {
+                if let Some(mut path_segments) = parsed_url.path_segments() {
+                    if let Some(last_segment) = path_segments.next_back() {
+                        // Extract extension from filename
+                        if let Some(ext_start) = last_segment.rfind('.') {
+                            let extension = &last_segment[ext_start + 1..];
+                            match extension {
+                                "mp4" => "mp4",
+                                "flv" => "flv",
+                                "m3u8" => "hls",
+                                "webm" => "webm",
+                                "mkv" => "mkv",
+                                _ => "unknown",
+                            }
+                        } else {
+                            "unknown"
+                        }
+                    } else {
+                        "unknown"
+                    }
+                } else {
+                    "unknown"
+                }
             } else {
-                "mp4" // default
+                "unknown"
             }
             .to_string();
 
