@@ -64,6 +64,40 @@ impl RedTubeExtractor {
             .map(|m| m.as_str().to_string())
     }
 
+    /// Extract quality string from JSON value (handles both string and number types)
+    fn parse_quality(item: &serde_json::Value) -> String {
+        item.get("quality")
+            .and_then(|q| {
+                q.as_str().map(String::from)
+                    .or_else(|| q.as_i64().map(|i| i.to_string()))
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Build Format from quality string and URL
+    fn build_format(&self, quality_str: &str, url: String, format_type: &str) -> Format {
+        let mut format = Format::new(
+            quality_str.to_string(),
+            url,
+            format_type.to_string(),
+            "https".to_string(),
+        );
+
+        if let Ok(height) = quality_str.parse::<u32>() {
+            format.height = Some(height);
+            format.quality = Some((height / 100) as i32);
+            format.format_note = Some(format!("{height}p"));
+            format.width = Some((height * 16) / 9);
+        } else {
+            format.format_note = Some(quality_str.to_string());
+        }
+
+        format.vcodec = Some("h264".to_string());
+        format.acodec = Some("aac".to_string());
+
+        format
+    }
+
     /// Extract video formats from JavaScript sources object
     ///
     /// Looks for: sources: {"720": "https://...", "1080": "https://...", ...}
@@ -77,41 +111,28 @@ impl RedTubeExtractor {
                 }
 
                 // Try to parse as JSON
-                if let Ok(sources) = serde_json::from_str::<serde_json::Value>(sources_str.as_str()) {
-                    if let Some(obj) = sources.as_object() {
-                        for (quality, url) in obj {
-                            if let Some(url_str) = url.as_str() {
-                                let mut format = Format::new(
-                                    quality.clone(),
-                                    url_str.to_string(),
-                                    "mp4".to_string(),
-                                    "https".to_string(),
-                                );
+                match serde_json::from_str::<serde_json::Value>(sources_str.as_str()) {
+                    Ok(sources) => {
+                        if let Some(obj) = sources.as_object() {
+                            for (quality, url) in obj {
+                                if let Some(url_str) = url.as_str() {
+                                    let format = self.build_format(quality, url_str.to_string(), "mp4");
 
-                                // Parse quality as height and set format_note
-                                if let Ok(height) = quality.parse::<u32>() {
-                                    format.height = Some(height);
-                                    format.quality = Some((height / 100) as i32); // 720 -> 7, 1080 -> 10
-                                    format.format_note = Some(format!("{height}p"));
+                                    if verbose {
+                                        eprintln!("[RedTube] Extracted format: {} ({})",
+                                            format.format_id,
+                                            format.format_note.as_deref().unwrap_or("unknown"));
+                                    }
 
-                                    // Calculate width assuming 16:9 aspect ratio
-                                    format.width = Some((height * 16) / 9);
-                                } else {
-                                    format.format_note = Some(quality.clone());
+                                    formats.push(format);
                                 }
-
-                                // Set codec information (MP4 typically uses h264/aac)
-                                format.vcodec = Some("h264".to_string());
-                                format.acodec = Some("aac".to_string());
-
-                                if verbose {
-                                    eprintln!("[RedTube] Extracted format: {} ({})",
-                                        format.format_id,
-                                        format.format_note.as_deref().unwrap_or("unknown"));
-                                }
-
-                                formats.push(format);
                             }
+                        }
+                    }
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("[RedTube] Failed to parse sources JSON at {}:{}: {}",
+                                e.line(), e.column(), e);
                         }
                     }
                 }
@@ -138,8 +159,14 @@ impl RedTubeExtractor {
                 }
 
                 // Try to parse as JSON
-                if let Ok(media_def) = serde_json::from_str::<serde_json::Value>(media_def_str.as_str()) {
-                    if let Some(arr) = media_def.as_array() {
+                match serde_json::from_str::<serde_json::Value>(media_def_str.as_str()) {
+                    Ok(media_def) => {
+                        let Some(arr) = media_def.as_array() else {
+                            if ctx.config.verbose {
+                                eprintln!("[RedTube] mediaDefinition is not an array");
+                            }
+                            return formats;
+                        };
                         if ctx.config.verbose {
                             eprintln!("[RedTube] Found {} media items", arr.len());
                         }
@@ -168,48 +195,37 @@ impl RedTubeExtractor {
                                         }
 
                                         // Fetch the JSON endpoint
-                                        if let Ok(response) = ctx.http_client.get(absolute_url.as_str()).send().await {
-                                            if let Ok(json_text) = response.text().await {
-                                                if ctx.config.verbose {
-                                                    eprintln!("[RedTube] Got JSON response: {}", &json_text.chars().take(500).collect::<String>());
+                                        match ctx.http_client.get(absolute_url.as_str()).send().await {
+                                            Ok(response) => {
+                                                // Validate HTTP status code
+                                                if !response.status().is_success() {
+                                                    if ctx.config.verbose {
+                                                        eprintln!("[RedTube] HTTP {} for URL: {}",
+                                                            response.status(), absolute_url);
+                                                    }
+                                                    continue; // Skip this format source
                                                 }
 
-                                                // Parse JSON array of formats
-                                                if let Ok(more_media) = serde_json::from_str::<serde_json::Value>(&json_text) {
-                                                    if let Some(more_arr) = more_media.as_array() {
+                                                match response.text().await {
+                                                    Ok(json_text) => {
+                                                        if ctx.config.verbose {
+                                                            eprintln!("[RedTube] Got JSON response: {}",
+                                                                &json_text.chars().take(500).collect::<String>());
+                                                        }
+
+                                                        // Parse JSON array of formats
+                                                        match serde_json::from_str::<serde_json::Value>(&json_text) {
+                                                            Ok(more_media) => {
+                                                                let Some(more_arr) = more_media.as_array() else {
+                                                                    if ctx.config.verbose {
+                                                                        eprintln!("[RedTube] Response is not a JSON array");
+                                                                    }
+                                                                    continue;
+                                                                };
                                                         for media_item in more_arr {
                                                             if let Some(media_url) = media_item.get("videoUrl").and_then(|v| v.as_str()) {
-                                                                let quality_str = if let Some(q) = media_item.get("quality") {
-                                                                    if let Some(s) = q.as_str() {
-                                                                        s.to_string()
-                                                                    } else if let Some(i) = q.as_i64() {
-                                                                        i.to_string()
-                                                                    } else {
-                                                                        "unknown".to_string()
-                                                                    }
-                                                                } else {
-                                                                    "unknown".to_string()
-                                                                };
-
-                                                                let mut format = Format::new(
-                                                                    quality_str.clone(),
-                                                                    media_url.to_string(),
-                                                                    "mp4".to_string(),
-                                                                    "https".to_string(),
-                                                                );
-
-                                                                // Parse quality as height and set format_note
-                                                                if let Ok(height) = quality_str.parse::<u32>() {
-                                                                    format.height = Some(height);
-                                                                    format.quality = Some((height / 100) as i32);
-                                                                    format.format_note = Some(format!("{height}p"));
-                                                                    format.width = Some((height * 16) / 9);
-                                                                } else {
-                                                                    format.format_note = Some(quality_str.clone());
-                                                                }
-
-                                                                format.vcodec = Some("h264".to_string());
-                                                                format.acodec = Some("aac".to_string());
+                                                                let quality_str = Self::parse_quality(media_item);
+                                                                let format = self.build_format(&quality_str, media_url.to_string(), "mp4");
 
                                                                 if ctx.config.verbose {
                                                                     eprintln!("[RedTube] Extracted format from JSON: {} - {} ({}x{})",
@@ -222,6 +238,30 @@ impl RedTubeExtractor {
                                                                 formats.push(format);
                                                             }
                                                         }
+                                                            }
+                                                            Err(e) => {
+                                                                if ctx.config.verbose {
+                                                                    eprintln!("[RedTube] Failed to parse formats JSON at {}:{}: {}",
+                                                                        e.line(), e.column(), e);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        if ctx.config.verbose {
+                                                            eprintln!("[RedTube] Failed to read response body: {e}");
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                if ctx.config.verbose {
+                                                    if e.is_timeout() {
+                                                        eprintln!("[RedTube] Request timed out for URL: {absolute_url}");
+                                                    } else if e.is_connect() {
+                                                        eprintln!("[RedTube] Connection failed for URL: {absolute_url}: {e}");
+                                                    } else {
+                                                        eprintln!("[RedTube] Request failed: {e}");
                                                     }
                                                 }
                                             }
@@ -229,36 +269,8 @@ impl RedTubeExtractor {
                                     }
                                 } else {
                                     // Has quality field, process directly
-                                    let quality_str = if let Some(q) = item.get("quality") {
-                                        if let Some(s) = q.as_str() {
-                                            s.to_string()
-                                        } else if let Some(i) = q.as_i64() {
-                                            i.to_string()
-                                        } else {
-                                            "unknown".to_string()
-                                        }
-                                    } else {
-                                        "unknown".to_string()
-                                    };
-
-                                    let mut format = Format::new(
-                                        quality_str.clone(),
-                                        video_url.to_string(),
-                                        format_type.to_string(),
-                                        "https".to_string(),
-                                    );
-
-                                    if let Ok(height) = quality_str.parse::<u32>() {
-                                        format.height = Some(height);
-                                        format.quality = Some((height / 100) as i32);
-                                        format.format_note = Some(format!("{height}p"));
-                                        format.width = Some((height * 16) / 9);
-                                    } else {
-                                        format.format_note = Some(quality_str.clone());
-                                    }
-
-                                    format.vcodec = Some("h264".to_string());
-                                    format.acodec = Some("aac".to_string());
+                                    let quality_str = Self::parse_quality(item);
+                                    let format = self.build_format(&quality_str, video_url.to_string(), format_type);
 
                                     if ctx.config.verbose {
                                         eprintln!("[RedTube] Extracted format: {} - {} ({}x{})",
@@ -271,6 +283,12 @@ impl RedTubeExtractor {
                                     formats.push(format);
                                 }
                             }
+                        }
+                    }
+                    Err(e) => {
+                        if ctx.config.verbose {
+                            eprintln!("[RedTube] Failed to parse mediaDefinition JSON at {}:{}: {}",
+                                e.line(), e.column(), e);
                         }
                     }
                 }
