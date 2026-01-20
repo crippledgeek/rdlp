@@ -179,9 +179,7 @@ impl InfoExtractor for TNAFlixExtractor {
 
         // Debug: print a sample of the webpage if verbose mode is enabled
         if ctx.config.verbose {
-            eprintln!("\n=== WEBPAGE SAMPLE (first 5000 chars) ===");
-            eprintln!("{}", &webpage.chars().take(5000).collect::<String>());
-            eprintln!("=== END SAMPLE ===\n");
+            crate::utils::debug_print_webpage_sample(&webpage, 5000);
         }
 
         // Get video ID
