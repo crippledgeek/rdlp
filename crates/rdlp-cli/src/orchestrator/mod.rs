@@ -30,7 +30,12 @@ pub struct Orchestrator {
 impl Orchestrator {
     /// Create a new orchestrator with default registries
     pub fn new(config: Config) -> Self {
-        let http_client = Arc::new(reqwest::Client::new());
+        let http_client = Arc::new(
+            reqwest::Client::builder()
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+                .expect("Failed to build HTTP client")
+        );
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
 
@@ -63,7 +68,12 @@ impl Orchestrator {
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     ) -> Self {
-        let http_client = Arc::new(reqwest::Client::new());
+        let http_client = Arc::new(
+            reqwest::Client::builder()
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+                .expect("Failed to build HTTP client")
+        );
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
 

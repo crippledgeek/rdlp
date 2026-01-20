@@ -5,9 +5,10 @@
 //! This crate provides the extractor registry, URL routing, and site-specific
 //! extraction implementations.
 
+pub mod base;
 pub mod extractors;
 
-pub use extractors::{TNAFlixExtractor};
+pub use extractors::{RedTubeExtractor, TNAFlixExtractor};
 
 use rdlp_core::InfoExtractor;
 use std::sync::Arc;
@@ -37,6 +38,9 @@ impl ExtractorRegistry {
         registry.register(Arc::new(TNAFlixExtractor::tnaflix()));
         registry.register(Arc::new(TNAFlixExtractor::empflix()));
         registry.register(Arc::new(TNAFlixExtractor::moviefap()));
+
+        // Register RedTube extractor
+        registry.register(Arc::new(RedTubeExtractor::new()));
 
         registry
     }
@@ -115,6 +119,7 @@ mod tests {
         assert!(extractors.contains(&"TNAFlix".to_string()));
         assert!(extractors.contains(&"EMPFlix".to_string()));
         assert!(extractors.contains(&"MovieFap".to_string()));
+        assert!(extractors.contains(&"RedTube".to_string()));
     }
 
     #[test]
@@ -128,6 +133,10 @@ mod tests {
         let empflix = registry.find_extractor("https://www.empflix.com/videos/test-123");
         assert!(empflix.is_some());
         assert_eq!(empflix.unwrap().name(), "EMPFlix");
+
+        let redtube = registry.find_extractor("https://www.redtube.com/123456");
+        assert!(redtube.is_some());
+        assert_eq!(redtube.unwrap().name(), "RedTube");
 
         let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
         assert!(unknown.is_none());

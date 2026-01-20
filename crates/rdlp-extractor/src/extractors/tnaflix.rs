@@ -1,46 +1,10 @@
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-use rdlp_core::{check_http_response, ExtractionContext, Format, InfoDict, InfoExtractor, Result, RdlpError};
+use rdlp_core::{check_http_response, ExtractionContext, InfoDict, InfoExtractor, Result, RdlpError};
 use regex::Regex;
-use scraper::{Html, Selector};
+use scraper::Html;
 
-/// Video metadata extracted from HTML: (format_id, video_url, ext, height, width)
-type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
-
-// Static CSS selectors (initialized once at first use)
-static SOURCE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector")
-});
-
-static TITLE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"input[name="title"]"#).expect("Valid CSS selector")
-});
-
-static H1_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse("h1").expect("Valid CSS selector")
-});
-
-static DESC_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"input[name="description"]"#).expect("Valid CSS selector")
-});
-
-static UPLOADER_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"input[name="username"]"#).expect("Valid CSS selector")
-});
-
-static THUMBNAIL_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"meta[property="og:image"]"#).expect("Valid CSS selector")
-});
-
-// Static Regex patterns (initialized once at first use)
-static CDN_URL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).expect("Valid CDN URL regex")
-});
-
-static MOVIEFAP_XML_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
-        .expect("Valid MovieFap XML regex")
-});
+use crate::base::tnaflix_network::{TnaFlixNetworkBase, VideoMetadata};
 
 /// Static URL pattern regexes for each site (initialized once at first use)
 ///
@@ -64,9 +28,12 @@ static MOVIEFAP_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// TNAFlix network extractor (supports TNAFlix, EMPFlix, MovieFap)
+///
+/// Uses [`TnaFlixNetworkBase`] for shared extraction logic.
 pub struct TNAFlixExtractor {
     name: String,
     url_pattern: &'static Regex,
+    base: TnaFlixNetworkBase,
 }
 
 impl TNAFlixExtractor {
@@ -75,6 +42,7 @@ impl TNAFlixExtractor {
         Self {
             name: "TNAFlix".to_string(),
             url_pattern: &TNAFLIX_URL_PATTERN,
+            base: TnaFlixNetworkBase::new(),
         }
     }
 
@@ -83,6 +51,7 @@ impl TNAFlixExtractor {
         Self {
             name: "EMPFlix".to_string(),
             url_pattern: &EMPFLIX_URL_PATTERN,
+            base: TnaFlixNetworkBase::new(),
         }
     }
 
@@ -91,6 +60,7 @@ impl TNAFlixExtractor {
         Self {
             name: "MovieFap".to_string(),
             url_pattern: &MOVIEFAP_URL_PATTERN,
+            base: TnaFlixNetworkBase::new(),
         }
     }
 
@@ -104,14 +74,6 @@ impl TNAFlixExtractor {
                     .or_else(|| cap.get(2))
                     .or_else(|| cap.get(3))
             })
-            .map(|m| m.as_str().to_string())
-    }
-
-    /// Extract cdn.php URL from MovieFap JavaScript
-    fn extract_cdn_url(&self, webpage: &str) -> Option<String> {
-        // Look for: url: 'https://www.moviefap.com/cdn.php?file=...',
-        CDN_URL_REGEX.captures(webpage)
-            .and_then(|cap| cap.get(1))
             .map(|m| m.as_str().to_string())
     }
 
@@ -146,9 +108,17 @@ impl TNAFlixExtractor {
             .and_then(|h| h.as_str())
             .ok_or_else(|| RdlpError::Extraction("No 'html' field in AJAX response".to_string()))?;
 
-        // Parse the HTML to extract <source> tags
+        // Parse the HTML to extract <source> tags using base
         let html = Html::parse_document(html_str);
-        self.parse_video_sources(&html, referer)
+        let video_data = self.base.parse_video_sources(&html);
+
+        if video_data.is_empty() {
+            return Err(RdlpError::Extraction(format!(
+                "No video sources found in EMPFlix AJAX HTML. URL: {referer}"
+            )));
+        }
+
+        Ok(video_data)
     }
 
     /// Parse MovieFap XML response to extract video sources
@@ -171,54 +141,8 @@ impl TNAFlixExtractor {
             eprintln!("=== END XML ===\n");
         }
 
-        // Parse XML manually (simple parsing for this structure)
-        let mut video_data = Vec::new();
-
-        // Extract videoLink URLs from <item> tags within <quality>
-        // XML structure: <quality><item><res>720p</res><videoLink>http://...</videoLink></item></quality>
-        // Use (?s) flag to make . match newlines
-        for cap in MOVIEFAP_XML_REGEX.captures_iter(&xml_text) {
-            let quality_str = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("unknown");
-            let video_url = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-
-            if video_url.is_empty() {
-                continue;
-            }
-
-            // Decode HTML entities (&amp; -> &)
-            let video_url = video_url.replace("&amp;", "&");
-
-            // Parse quality (e.g., "720p" -> 720)
-            let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
-            let width = height.map(|h| (h * 16) / 9);
-
-            // Determine extension from URL
-            // Note: MovieFap has a quirky edge case where the cdn.php file parameter
-            // may reference .flv, but the actual videoLink URLs are .mp4 (or vice versa).
-            // We always trust the actual video URL extension, not the metadata.
-            let ext = if video_url.contains(".mp4") {
-                "mp4"
-            } else if video_url.contains(".flv") {
-                "flv"
-            } else {
-                "mp4" // default
-            }.to_string();
-
-            // Create format ID based on quality
-            let format_id = if let Some(h) = height {
-                format!("http-{h}")
-            } else {
-                "http-default".to_string()
-            };
-
-            video_data.push((
-                format_id,
-                video_url.to_string(),
-                ext,
-                height,
-                width,
-            ));
-        }
+        // Use base to parse XML
+        let video_data = self.base.parse_moviefap_xml(&xml_text);
 
         if video_data.is_empty() {
             return Err(RdlpError::Extraction(format!(
@@ -227,161 +151,6 @@ impl TNAFlixExtractor {
         }
 
         Ok(video_data)
-    }
-
-    /// Parse video source tags from HTML and extract formats
-    fn parse_video_sources(&self, html: &Html, url: &str) -> Result<Vec<VideoMetadata>> {
-        let mut video_data = Vec::new();
-
-        // Parse <source> tags from the video player
-        // Example: <source src="https://cdnl.tnaflix.com/.../video-720p.mp4" type="video/mp4" size="720">
-        for source_elem in html.select(&SOURCE_SELECTOR) {
-            let video_url = source_elem.value().attr("src")
-                .ok_or_else(|| RdlpError::Extraction(format!(
-                    "Source tag missing src attribute. URL: {url}"
-                )))?;
-
-            // Extract quality from size attribute (e.g., "720", "480")
-            let quality_str = source_elem.value().attr("size").unwrap_or("unknown");
-
-            // Parse quality as integer height
-            let height = quality_str.parse::<u32>().ok();
-
-            // Calculate approximate width based on 16:9 aspect ratio
-            let width = height.map(|h| (h * 16) / 9);
-
-            // Determine extension from URL (not from type attribute)
-            // This handles cases where metadata may be incorrect or misleading
-            let ext = if video_url.contains(".mp4") {
-                "mp4"
-            } else if video_url.contains(".flv") {
-                "flv"
-            } else {
-                "mp4" // default
-            }.to_string();
-
-            // Create format ID based on quality
-            let format_id = if quality_str != "unknown" {
-                format!("http-{quality_str}")
-            } else {
-                "http-default".to_string()
-            };
-
-            video_data.push((
-                format_id,
-                video_url.to_string(),
-                ext,
-                height,
-                width,
-            ));
-        }
-
-        // Return empty vec if no sources found (caller can try fallback)
-        Ok(video_data)
-    }
-
-    /// Build formats from video data and fetch filesizes
-    async fn build_formats(&self, video_data: Vec<VideoMetadata>, ctx: &ExtractionContext) -> Vec<Format> {
-        let mut formats = Vec::new();
-
-        for (format_id, video_url, ext, height, width) in video_data {
-            // Create format with quality metadata
-            let mut format = Format::new(
-                format_id.clone(),
-                video_url.clone(),
-                ext.clone(),
-                "https".to_string(),
-            );
-
-            // Set quality metadata
-            format.height = height;
-            format.width = width;
-            format.format_note = height.map(|h| format!("{h}p"));
-
-            // Set video and audio codecs (assume h264/aac for mp4)
-            if ext == "mp4" {
-                format.vcodec = Some("h264".to_string());
-                format.acodec = Some("aac".to_string());
-            }
-
-            // Fetch filesize via HEAD request (or Range request if HEAD doesn't work)
-            match ctx.http_client.head(&video_url).send().await {
-                Ok(response) => {
-                    if ctx.config.verbose {
-                        eprintln!("HEAD response status: {}", response.status());
-                        eprintln!("HEAD Content-Length: {:?}", response.content_length());
-                        eprintln!("HEAD headers: {:#?}", response.headers());
-                    }
-
-                    format.filesize = response.content_length();
-
-                    // If HEAD didn't give us content-length, try a Range request
-                    if format.filesize.is_none() || format.filesize == Some(0) {
-                        if ctx.config.verbose {
-                            eprintln!("HEAD request returned no size, trying Range request...");
-                        }
-
-                        match ctx.http_client
-                            .get(&video_url)
-                            .header("Range", "bytes=0-0")
-                            .send()
-                            .await
-                        {
-                            Ok(range_response) => {
-                                if ctx.config.verbose {
-                                    eprintln!("Range response status: {}", range_response.status());
-                                    eprintln!("Range Content-Range: {:?}", range_response.headers().get("content-range"));
-                                }
-
-                                // Parse Content-Range header: "bytes 0-0/123456"
-                                if let Some(content_range) = range_response.headers().get("content-range") {
-                                    if let Ok(range_str) = content_range.to_str() {
-                                        if let Some(total) = range_str.split('/').nth(1) {
-                                            format.filesize = total.parse::<u64>().ok();
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                if ctx.config.verbose {
-                                    eprintln!("Range request also failed: {e}");
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    if ctx.config.verbose {
-                        eprintln!("Warning: HEAD request failed for {video_url}: {e}");
-                    }
-                    // Continue without filesize
-                }
-            }
-
-            formats.push(format);
-        }
-
-        formats
-    }
-
-    /// Extract metadata from HTML
-    fn extract_metadata(&self, html: &Html) -> Result<(String, Option<String>, Option<String>)> {
-        // Try to extract title from input field or h1
-        let title = if let Some(input) = html.select(&TITLE_SELECTOR).next() {
-            input.value().attr("value").map(|s| s.to_string())
-        } else { html.select(&H1_SELECTOR).next().map(|h1| h1.text().collect::<String>().trim().to_string()) }.ok_or_else(|| RdlpError::Extraction("Could not find video title".to_string()))?;
-
-        // Try to extract description
-        let description = html.select(&DESC_SELECTOR).next()
-            .and_then(|input| input.value().attr("value"))
-            .map(|s| s.to_string());
-
-        // Try to extract uploader
-        let uploader = html.select(&UPLOADER_SELECTOR).next()
-            .and_then(|input| input.value().attr("value"))
-            .map(|s| s.to_string());
-
-        Ok((title, description, uploader))
     }
 }
 
@@ -423,25 +192,20 @@ impl InfoExtractor for TNAFlixExtractor {
         let is_moviefap = url.contains("moviefap.com");
 
         // Extract all data from HTML before any async operations
-        let (title, description, uploader, thumbnail, cdn_url_opt) = {
+        let (metadata, cdn_url_opt) = {
             let html = Html::parse_document(&webpage);
 
-            // Extract metadata
-            let (title, description, uploader) = self.extract_metadata(&html)?;
+            // Extract metadata using base (includes title, description, uploader, thumbnail, and enhanced JSON-LD fields)
+            let metadata = self.base.extract_metadata(&html)?;
 
-            // Extract thumbnail
-            let thumbnail = html.select(&THUMBNAIL_SELECTOR).next()
-                .and_then(|thumb| thumb.value().attr("content"))
-                .map(|s| s.to_string());
-
-            // For MovieFap, extract cdn.php URL
+            // For MovieFap, extract cdn.php URL using base
             let cdn_url_opt = if is_moviefap {
-                self.extract_cdn_url(&webpage)
+                self.base.extract_cdn_url(&webpage)
             } else {
                 None
             };
 
-            (title, description, uploader, thumbnail, cdn_url_opt)
+            (metadata, cdn_url_opt)
         }; // html is dropped here
 
         // Parse video data based on site type
@@ -460,7 +224,7 @@ impl InfoExtractor for TNAFlixExtractor {
             // TNAFlix/EMPFlix: try HTML <source> tags first, fallback to AJAX
             let video_data = {
                 let html = Html::parse_document(&webpage);
-                self.parse_video_sources(&html, url)?
+                self.base.parse_video_sources(&html)
             }; // html is dropped here
 
             // EMPFlix fallback: if no sources found, try AJAX endpoint
@@ -483,8 +247,8 @@ impl InfoExtractor for TNAFlixExtractor {
             video_data
         };
 
-        // Build formats and fetch filesizes (asynchronous)
-        let formats = self.build_formats(video_data, ctx).await;
+        // Build formats and fetch filesizes using base (asynchronous)
+        let formats = self.base.build_formats(video_data, ctx).await;
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction(format!(
@@ -492,12 +256,18 @@ impl InfoExtractor for TNAFlixExtractor {
             )));
         }
 
-        // Build InfoDict
-        let mut info = InfoDict::new(video_id, title, self.name.clone(), url.to_string());
-        info.description = description;
-        info.uploader = uploader;
+        // Build InfoDict with all extracted metadata
+        let mut info = InfoDict::new(video_id, metadata.title, self.name.clone(), url.to_string());
+        info.description = metadata.description;
+        info.uploader = metadata.uploader;
+        info.thumbnail = metadata.thumbnail;
+        info.thumbnails = metadata.thumbnails;
+        info.duration = metadata.duration;
+        info.upload_date = metadata.upload_date;
+        info.view_count = metadata.view_count;
+        info.tags = metadata.tags;
+        info.categories = metadata.categories;
         info.formats = formats;
-        info.thumbnail = thumbnail;
 
         Ok(info)
     }
