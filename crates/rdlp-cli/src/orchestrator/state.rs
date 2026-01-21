@@ -2,6 +2,7 @@
 
 use super::{errors::*, Orchestrator};
 use rdlp_core::Format;
+use std::fmt;
 use std::path::PathBuf;
 
 /// Download state for resume logic
@@ -19,6 +20,18 @@ impl DownloadState {
         match self {
             Self::Fresh => 0,
             Self::Resume(offset) => *offset,
+        }
+    }
+}
+
+impl fmt::Display for DownloadState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fresh => write!(f, "fresh download"),
+            Self::Resume(offset) => {
+                let mb = *offset as f64 / (1024.0 * 1024.0);
+                write!(f, "resuming from {mb:.1} MB")
+            }
         }
     }
 }
@@ -54,6 +67,32 @@ pub enum DownloadPhase {
     Complete { path: PathBuf },
     /// User cancelled the operation
     Cancelled,
+}
+
+impl fmt::Display for DownloadPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Extracting { url } => {
+                let domain = url.split('/').nth(2).unwrap_or(url);
+                write!(f, "extracting from {domain}")
+            }
+            Self::SelectingFormat { .. } => write!(f, "selecting format"),
+            Self::Preparing { format, .. } => {
+                write!(f, "preparing {} download", format.format_id)
+            }
+            Self::Downloading { state, .. } => {
+                write!(f, "downloading ({state})")
+            }
+            Self::Complete { path } => {
+                let filename = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+                write!(f, "complete: {filename}")
+            }
+            Self::Cancelled => write!(f, "cancelled by user"),
+        }
+    }
 }
 
 impl DownloadPhase {
@@ -161,9 +200,7 @@ impl DownloadPhase {
                 // Report success
                 println!("\n✅ Downloaded successfully!");
                 println!("   File: {}", output_path.display());
-                println!("   Size: {}", stats.bytes_string());
-                println!("   Speed: {}", stats.speed_string());
-                println!("   Time: {:.2}s", stats.duration.as_secs_f64());
+                println!("   Stats: {stats}");
 
                 Ok(Self::Complete { path: output_path })
             }

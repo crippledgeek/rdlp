@@ -5,6 +5,8 @@
 //! - Predictable performance
 //! - Better scalability across file sizes
 
+use std::fmt;
+
 /// Strategy for determining chunk size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkSizeStrategy {
@@ -26,6 +28,24 @@ pub enum ChunkSizeStrategy {
 impl Default for ChunkSizeStrategy {
     fn default() -> Self {
         Self::Auto
+    }
+}
+
+impl fmt::Display for ChunkSizeStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Fixed(size) => {
+                if size % (1024 * 1024) == 0 {
+                    write!(f, "fixed ({}MB)", size / (1024 * 1024))
+                } else {
+                    write!(f, "fixed ({}KB)", size / 1024)
+                }
+            }
+            Self::Legacy { chunk_count } => {
+                write!(f, "legacy ({chunk_count} chunks)")
+            }
+        }
     }
 }
 
