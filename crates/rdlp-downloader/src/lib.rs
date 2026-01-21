@@ -78,18 +78,16 @@
 //!
 //! ```rust,no_run
 //! use rdlp_downloader::HttpDownloader;
+//! use rdlp_core::Downloader;
 //! use std::path::Path;
-//! use std::sync::Arc;
-//! use std::sync::atomic::AtomicU64;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let downloader = HttpDownloader::new();
-//! let progress = Arc::new(AtomicU64::new(0));
 //!
 //! downloader.download_to_file(
 //!     "https://example.com/video.mp4",
 //!     Path::new("video.mp4"),
-//!     Some(progress.clone())
+//!     None
 //! ).await?;
 //! # Ok(())
 //! # }
@@ -111,7 +109,7 @@
 //!
 //! // Legacy coarse-grained chunking (backward compatibility)
 //! let downloader = HttpDownloader::new()
-//!     .with_chunk_strategy(ChunkSizeStrategy::Legacy);
+//!     .with_chunk_strategy(ChunkSizeStrategy::Legacy { chunk_count: 4 });
 //! # Ok(())
 //! # }
 //! ```
@@ -144,29 +142,25 @@
 //!
 //! ```rust,no_run
 //! use rdlp_downloader::HttpDownloader;
-//! use std::sync::Arc;
-//! use std::sync::atomic::{AtomicU64, Ordering};
-//! use std::time::Duration;
+//! use rdlp_core::{Downloader, ProgressCallback, DownloadProgress};
+//!
+//! struct MyProgress;
+//! impl ProgressCallback for MyProgress {
+//!     fn on_progress(&self, info: &DownloadProgress) {
+//!         println!("Downloaded: {:.2} MB", info.bytes_downloaded as f64 / (1024.0 * 1024.0));
+//!     }
+//!     fn on_complete(&self, _stats: &rdlp_core::DownloadStats) {}
+//!     fn on_error(&self, _error: &str) {}
+//! }
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let downloader = HttpDownloader::new();
-//! let progress = Arc::new(AtomicU64::new(0));
-//! let progress_clone = progress.clone();
-//!
-//! // Spawn progress reporter
-//! tokio::spawn(async move {
-//!     loop {
-//!         tokio::time::sleep(Duration::from_millis(500)).await;
-//!         let bytes = progress_clone.load(Ordering::Relaxed);
-//!         println!("Downloaded: {:.2} MB", bytes as f64 / (1024.0 * 1024.0));
-//!     }
-//! });
 //!
 //! // Download with progress tracking
 //! downloader.download_to_file(
 //!     "https://example.com/video.mp4",
 //!     "video.mp4".as_ref(),
-//!     Some(progress)
+//!     Some(Box::new(MyProgress))
 //! ).await?;
 //! # Ok(())
 //! # }
@@ -178,6 +172,7 @@
 //!
 //! ```rust,no_run
 //! use rdlp_downloader::HttpDownloader;
+//! use rdlp_core::Downloader;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let downloader = HttpDownloader::new();

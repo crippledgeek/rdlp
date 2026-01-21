@@ -177,13 +177,11 @@ impl Orchestrator {
         // Priority 2: For HLS/DASH, detect from URL or default to mp4
         match format.ext.as_str() {
             "hls" | "m3u8" => {
-                // Try to detect from URL (e.g., .../segment.ts or .../segment.m4s)
+                // Try to detect from URL (e.g., .../segment.ts)
                 if format.url.contains(".ts") {
                     "ts".to_string()  // MPEG-TS segments
-                } else if format.url.contains(".m4s") || format.url.contains(".mp4") {
-                    "mp4".to_string()  // fMP4 segments
                 } else {
-                    "mp4".to_string()  // Default to MP4 for HLS
+                    "mp4".to_string()  // fMP4 segments (.m4s/.mp4) or default
                 }
             }
             "dash" | "mpd" => {

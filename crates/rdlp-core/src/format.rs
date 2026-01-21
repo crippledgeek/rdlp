@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Video/audio format information
 ///
@@ -102,6 +103,10 @@ pub struct Format {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_range: Option<String>,
 
+    /// Cached format description (lazy initialization)
+    #[serde(skip)]
+    cached_description: OnceLock<String>,
+
     /// Whether format has DRM protection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_drm: Option<bool>,
@@ -134,6 +139,7 @@ impl Format {
             http_headers: None,
             language: None,
             dynamic_range: None,
+            cached_description: OnceLock::new(),
             has_drm: None,
         }
     }
@@ -179,36 +185,41 @@ impl Format {
     }
 
     /// Get a human-readable format description
-    pub fn description(&self) -> String {
-        let mut parts = Vec::new();
+    ///
+    /// This method caches the description after first computation.
+    /// Subsequent calls return a reference to the cached value.
+    pub fn description(&self) -> &str {
+        self.cached_description.get_or_init(|| {
+            let mut parts = Vec::new();
 
-        if let Some(note) = &self.format_note {
-            parts.push(note.clone());
-        }
-
-        if let Some(res) = self.resolution_string() {
-            parts.push(res);
-        }
-
-        if let Some(fps) = self.fps {
-            parts.push(format!("{fps}fps"));
-        }
-
-        if let Some(vcodec) = &self.vcodec {
-            if vcodec != "none" {
-                parts.push(format!("vcodec:{vcodec}"));
+            if let Some(note) = &self.format_note {
+                parts.push(note.clone());
             }
-        }
 
-        if let Some(acodec) = &self.acodec {
-            if acodec != "none" {
-                parts.push(format!("acodec:{acodec}"));
+            if let Some(res) = self.resolution_string() {
+                parts.push(res);
             }
-        }
 
-        parts.push(self.ext.clone());
+            if let Some(fps) = self.fps {
+                parts.push(format!("{fps}fps"));
+            }
 
-        parts.join(" ")
+            if let Some(vcodec) = &self.vcodec {
+                if vcodec != "none" {
+                    parts.push(format!("vcodec:{vcodec}"));
+                }
+            }
+
+            if let Some(acodec) = &self.acodec {
+                if acodec != "none" {
+                    parts.push(format!("acodec:{acodec}"));
+                }
+            }
+
+            parts.push(self.ext.clone());
+
+            parts.join(" ")
+        })
     }
 }
 

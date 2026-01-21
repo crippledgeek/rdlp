@@ -35,6 +35,7 @@ use crate::http::HttpDownloader;
 ///
 /// ```rust,no_run
 /// use rdlp_downloader::HlsDownloader;
+/// use rdlp_core::Downloader;
 /// use std::path::Path;
 ///
 /// # async fn example() -> rdlp_core::Result<()> {
@@ -184,7 +185,7 @@ impl HlsDownloader {
     /// * `segment_urls` - List of segment URLs to download
     /// * `temp_dir` - Directory to save temporary segment files
     /// * `base_filename` - Base filename for temporary files
-    /// * `progress_counter` - Shared atomic counter for progress tracking
+    /// * `progress_counter` - Shared atomic counter for bytes downloaded
     ///
     /// # Returns
     /// * `Ok(Vec<PathBuf>)` - Paths to downloaded segment files (in order)
@@ -210,10 +211,6 @@ impl HlsDownloader {
                 let buffer_size = self.buffer_size;
 
                 async move {
-                    if idx % 100 == 0 {
-                        eprintln!("📥 Starting segment {}/{}", idx + 1, total_segments);
-                    }
-
                     // Download segment to temporary file
                     let response = http_client
                         .get(&url)

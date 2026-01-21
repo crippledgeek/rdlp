@@ -117,13 +117,42 @@ pub trait InfoExtractor: Send + Sync {
 /// **Cloning Cost:** `Arc::clone()` only increments a reference counter (~5ns),
 /// much cheaper than deep-copying the underlying data.
 ///
+/// ## Arc vs Box Trade-offs
+///
+/// | Criterion | Arc<T> | Box<T> |
+/// |-----------|--------|--------|
+/// | **Ownership** | Multiple owners (shared) | Single owner (unique) |
+/// | **Thread Safety** | Yes (Send + Sync) | Depends on T |
+/// | **Clone Cost** | ~5ns (atomic increment) | Deep copy entire T |
+/// | **Memory Overhead** | 16 bytes (refcount + weak count) | 0 bytes |
+/// | **Deref Cost** | 1 pointer indirection | 1 pointer indirection |
+/// | **Use Case** | Shared services, parallel tasks | Unique ownership, trait objects |
+///
+/// **When to use Arc:**
+/// - Sharing data across async tasks (tokio::spawn)
+/// - Sharing clients/connections (HTTP, database)
+/// - Caching expensive-to-create objects
+/// - Trait objects that need Clone (Arc<dyn Trait>)
+///
+/// **When to use Box:**
+/// - Single ownership with no sharing
+/// - Trait objects without cloning (Box<dyn Trait>)
+/// - Breaking recursive type cycles
+/// - Storing large values on heap to avoid stack overflow
+///
 /// **Example:**
 /// ```rust,ignore
+/// // Arc: Shared across tasks
 /// let ctx_clone = ctx.clone(); // Cheap: only increments Arc refcounts
 /// tokio::spawn(async move {
 ///     // ctx_clone can be moved into async task
 ///     ctx_clone.http_client.get(url).send().await
 /// });
+///
+/// // Box: Single owner, no sharing needed
+/// let strategy: Box<dyn FormatSelectionStrategy> = Box::new(BestQualityStrategy);
+/// let format = strategy.select(&formats);
+/// // strategy is dropped here, cannot be cloned
 /// ```
 pub struct ExtractionContext {
     /// HTTP client for making requests
