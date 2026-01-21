@@ -27,6 +27,7 @@ async fn cleanup_chunk_files(temp_dir: &Path, filename: &str, download_id: u64, 
 }
 
 /// HTTP/HTTPS downloader
+#[derive(Clone)]
 pub struct HttpDownloader {
     client: reqwest::Client,
     buffer_size: usize,
@@ -50,6 +51,11 @@ impl HttpDownloader {
             concurrent_fragments: 4, // Default to 4 parallel connections
             chunk_strategy: ChunkSizeStrategy::Auto, // Use automatic power-of-two chunking
         }
+    }
+
+    /// Get reference to the HTTP client
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     /// Set buffer size for downloads

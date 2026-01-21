@@ -137,19 +137,65 @@ impl Orchestrator {
         self.extractor_registry.list_extractors()
     }
 
+    /// List all available download protocols
+    pub fn list_downloaders(&self) -> Vec<String> {
+        self.downloader_registry.list_downloaders()
+    }
+
     /// Generate output file path
     pub(super) fn generate_output_path(
         &self,
         info: &rdlp_core::InfoDict,
         format: &rdlp_core::Format,
     ) -> Result<PathBuf> {
-        // Simple template parsing (full implementation in Phase 5)
-        let filename = format!("{}.{}", self.sanitize_filename(&info.title), format.ext);
+        // Determine the actual file extension
+        let file_ext = self.determine_file_extension(format);
+
+        let filename = format!("{}.{}", self.sanitize_filename(&info.title), file_ext);
 
         let mut path = self.config.output_directory.clone();
         path.push(filename);
 
         Ok(path)
+    }
+
+    /// Determine the actual file extension for a format
+    ///
+    /// For streaming protocols (HLS, DASH), detects the actual container format
+    /// from the format metadata or segment URLs.
+    fn determine_file_extension(&self, format: &rdlp_core::Format) -> String {
+        // Priority 1: Use container field if explicitly set
+        if let Some(ref container) = format.container {
+            // Clean up container names (e.g., "mp4_dash" -> "mp4")
+            return container
+                .split('_')
+                .next()
+                .unwrap_or(container)
+                .to_string();
+        }
+
+        // Priority 2: For HLS/DASH, detect from URL or default to mp4
+        match format.ext.as_str() {
+            "hls" | "m3u8" => {
+                // Try to detect from URL (e.g., .../segment.ts or .../segment.m4s)
+                if format.url.contains(".ts") {
+                    "ts".to_string()  // MPEG-TS segments
+                } else if format.url.contains(".m4s") || format.url.contains(".mp4") {
+                    "mp4".to_string()  // fMP4 segments
+                } else {
+                    "mp4".to_string()  // Default to MP4 for HLS
+                }
+            }
+            "dash" | "mpd" => {
+                // DASH typically uses fMP4
+                if format.url.contains(".webm") {
+                    "webm".to_string()
+                } else {
+                    "mp4".to_string()  // Default to MP4 for DASH
+                }
+            }
+            ext => ext.to_string(),  // Use extension as-is for direct formats
+        }
     }
 
     /// Sanitize filename by removing invalid characters
@@ -258,6 +304,54 @@ mod tests {
         assert_eq!(
             path.file_name().unwrap().to_str().unwrap(),
             "Invalid_Characters_In_Title__.mp4.mp4"
+        );
+    }
+
+    #[test]
+    fn test_generate_output_path_hls_extension() {
+        let orchestrator = create_test_orchestrator();
+        let mut info = rdlp_core::InfoDict::new(
+            "test123".to_string(),
+            "HLS Test Video".to_string(),
+            "test".to_string(),
+            "https://example.com/test".to_string(),
+        );
+        info.formats = vec![];
+
+        // HLS with fMP4 segments (default)
+        let mut format = create_test_format("720p", "720p", Some(1000000));
+        format.ext = "hls".to_string();
+        format.url = "https://example.com/playlist.m3u8".to_string();
+
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
+        );
+
+        // HLS with MPEG-TS segments (detected from URL)
+        format.url = "https://example.com/segment0.ts".to_string();
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.ts"
+        );
+
+        // HLS with explicit container field
+        format.url = "https://example.com/playlist.m3u8".to_string();
+        format.container = Some("mp4".to_string());
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
+        );
+
+        // HLS with container suffix (e.g., "mp4_dash")
+        format.container = Some("mp4_dash".to_string());
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
         );
     }
 

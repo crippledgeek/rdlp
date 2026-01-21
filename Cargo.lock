@@ -2023,12 +2023,14 @@ dependencies = [
  "bytes",
  "futures",
  "indicatif",
+ "m3u8-rs",
  "mockito",
  "proptest",
  "rdlp-core",
  "reqwest",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

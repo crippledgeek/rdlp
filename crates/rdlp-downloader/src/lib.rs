@@ -4,7 +4,7 @@
 //!
 //! This crate provides downloaders for various streaming protocols:
 //! - **HTTP/HTTPS**: Power-of-two chunking with fine-grained parallelism
-//! - **HLS (m3u8)**: Coming soon
+//! - **HLS (m3u8)**: Parallel segment downloads with automatic playlist parsing
 //! - **DASH**: Coming soon
 //!
 //! ## Overview
@@ -242,9 +242,11 @@
 //! - `proxy`: HTTP/HTTPS proxy URL
 
 pub mod chunking;
+pub mod hls;
 pub mod http;
 
 pub use chunking::{calculate_chunks, chunk_size_for_file, ChunkSizeStrategy};
+pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
 
 use rdlp_core::{Config, Downloader};
@@ -302,11 +304,20 @@ impl DownloaderRegistry {
 
         let client = client_builder.build().unwrap_or_else(|_| reqwest::Client::new());
 
-        // Register HTTP downloader with optimized settings
-        let http_downloader = HttpDownloader::with_client(client)
+        // Create HTTP downloader with optimized settings
+        let http_downloader = HttpDownloader::with_client(client.clone())
             .with_buffer_size(config.buffer_size)
             .with_concurrent_fragments(config.concurrent_fragments);
 
+        // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
+        let hls_downloader = HlsDownloader::new()
+            .with_http_downloader(http_downloader.clone())
+            .with_concurrent_segments(config.concurrent_fragments)
+            .with_buffer_size(config.buffer_size);
+
+        registry.register(Arc::new(hls_downloader));
+
+        // Register HTTP downloader SECOND (fallback for generic HTTP/HTTPS URLs)
         registry.register(Arc::new(http_downloader));
 
         registry
@@ -409,7 +420,21 @@ mod tests {
         assert!(http_downloader.is_some());
         assert_eq!(http_downloader.unwrap().protocol(), "http");
 
+        let hls_downloader = registry.find_downloader("https://example.com/playlist.m3u8");
+        assert!(hls_downloader.is_some());
+        assert_eq!(hls_downloader.unwrap().protocol(), "hls");
+
         let unknown = registry.find_downloader("rtmp://example.com/stream");
         assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn test_registry_lists_all_downloaders() {
+        let registry = DownloaderRegistry::new();
+        let downloaders = registry.list_downloaders();
+
+        assert!(downloaders.contains(&"http".to_string()));
+        assert!(downloaders.contains(&"hls".to_string()));
+        assert_eq!(downloaders.len(), 2);
     }
 }
