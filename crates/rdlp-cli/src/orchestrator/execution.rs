@@ -9,19 +9,29 @@ use std::sync::Arc;
 /// Progress callback that updates a progress bar
 struct ProgressBarCallback {
     progress_bar: ProgressBar,
+    /// Expected total size (used when downloader doesn't report total)
+    expected_size: Option<u64>,
 }
 
 impl ProgressBarCallback {
-    fn new(progress_bar: ProgressBar) -> Self {
-        Self { progress_bar }
+    fn new(progress_bar: ProgressBar, expected_size: Option<u64>) -> Self {
+        Self { progress_bar, expected_size }
     }
 }
 
 impl ProgressCallback for ProgressBarCallback {
     fn on_progress(&self, progress: &DownloadProgress) {
-        if let Some(total) = progress.total_bytes {
-            self.progress_bar.set_length(total);
-        }
+        // Use reported total if available, otherwise fall back to expected size
+        let total = progress.total_bytes.or(self.expected_size);
+
+        // If actual bytes exceed expected, update the total to prevent >100% display
+        let effective_total = match total {
+            Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
+            Some(t) => t,
+            None => progress.bytes_downloaded, // Unknown total - show as indeterminate
+        };
+
+        self.progress_bar.set_length(effective_total);
         self.progress_bar.set_position(progress.bytes_downloaded);
     }
 
@@ -55,7 +65,7 @@ impl Orchestrator {
                 .template(
                     "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
                 )
-                .map_err(|e| OrchestratorError::ProgressBarFailed(e.into()))?
+                .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
                 .progress_chars("#>-"),
         );
 
@@ -70,6 +80,14 @@ impl Orchestrator {
     ///
     /// Returns Ok(Some(stats)) on success, Ok(None) if user cancelled
     ///
+    /// # Arguments
+    /// * `downloader` - The downloader to use
+    /// * `url` - URL to download
+    /// * `output_path` - Path to save the file
+    /// * `resume_from` - Byte offset to resume from (0 for fresh download)
+    /// * `progress_bar` - Optional progress bar for UI
+    /// * `expected_size` - Expected file size for accurate progress (used when downloader doesn't report total)
+    ///
     /// # Errors
     /// Returns an error if download fails
     pub(super) async fn execute_download(
@@ -78,12 +96,12 @@ impl Orchestrator {
         url: &str,
         output_path: &Path,
         resume_from: u64,
-        progress_bar: &Option<ProgressBar>,
+        progress_bar: Option<&ProgressBar>,
+        expected_size: Option<u64>,
     ) -> Result<Option<DownloadStats>> {
-        let progress_callback: Option<Box<dyn ProgressCallback>> =
-            progress_bar.as_ref().map(|pb| {
-                Box::new(ProgressBarCallback::new(pb.clone())) as Box<dyn ProgressCallback>
-            });
+        let progress_callback: Option<Box<dyn ProgressCallback>> = progress_bar.map(|pb| {
+            Box::new(ProgressBarCallback::new(pb.clone(), expected_size)) as Box<dyn ProgressCallback>
+        });
 
         println!("⚠️  Press Ctrl+C to pause and save progress");
 
@@ -96,13 +114,14 @@ impl Orchestrator {
         // Race between download and Ctrl+C signal
         let stats = tokio::select! {
             result = download_future => {
-                result.map_err(|e| OrchestratorError::DownloadFailed(e.into()))?
+                result.map_err(OrchestratorError::DownloadFailed)?
             }
             _ = tokio::signal::ctrl_c() => {
                 if let Some(pb) = progress_bar {
-                    pb.finish_with_message("⏸️  Download paused");
+                    // Clear the progress bar completely to avoid stale rendering
+                    pb.finish_and_clear();
                 }
-                println!("\n⏸️  Download interrupted by user");
+                println!("⏸️  Download interrupted by user");
                 println!("💾 Progress saved. Run the same command again to resume.");
                 return Ok(None);
             }

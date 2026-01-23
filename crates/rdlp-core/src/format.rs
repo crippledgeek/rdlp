@@ -169,10 +169,15 @@ impl Format {
     }
 
     /// Format file size as human-readable string
+    /// Returns exact size if known, approximate size with ~ prefix, or "Unknown"
     pub fn filesize_string(&self) -> String {
-        self.get_filesize()
-            .map(format_bytes)
-            .unwrap_or_else(|| "Unknown".to_string())
+        if let Some(size) = self.filesize {
+            format_bytes(size)
+        } else if let Some(size) = self.filesize_approx {
+            format!("~{}", format_bytes(size))
+        } else {
+            "Unknown".to_string()
+        }
     }
 
     /// Check if this is a DASH format
@@ -237,9 +242,13 @@ impl fmt::Display for Format {
             write!(f, " {res}")?;
         }
 
+        // Show exact size or approximate size with ~ prefix
         if let Some(size) = self.filesize {
             let mb = size as f64 / (1024.0 * 1024.0);
             write!(f, " {mb:.1}MB")?;
+        } else if let Some(size) = self.filesize_approx {
+            let mb = size as f64 / (1024.0 * 1024.0);
+            write!(f, " ~{mb:.0}MB")?;
         }
 
         Ok(())
@@ -256,8 +265,11 @@ impl Format {
 
         let resolution = self.resolution_string().unwrap_or_else(|| "N/A".to_string());
 
+        // Show exact size if available, otherwise approximate size with ~ prefix
         let size = if let Some(filesize) = self.filesize {
             format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
+        } else if let Some(filesize_approx) = self.filesize_approx {
+            format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
         } else {
             "Unknown".to_string()
         };

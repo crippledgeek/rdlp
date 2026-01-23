@@ -28,7 +28,7 @@ impl Orchestrator {
             }
         } else {
             let format_selector = FormatSelector::parse(&self.config.format)
-                .map_err(|e| OrchestratorError::InvalidFormatSelector(e.into()))?;
+                .map_err(OrchestratorError::InvalidFormatSelector)?;
 
             let selected_formats = format_selector.select(formats);
             if selected_formats.is_empty() {
@@ -51,6 +51,7 @@ impl Orchestrator {
         if formats.is_empty() {
             return Err(OrchestratorError::NoFormat);
         }
+
 
         // Build menu items with format details
         let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();

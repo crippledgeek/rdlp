@@ -13,6 +13,26 @@ use crate::chunking::{calculate_chunks, ChunkSizeStrategy};
 /// This prevents chunk file collisions when multiple downloads run concurrently
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// RAII guard for progress reporter tasks
+///
+/// Ensures the progress reporter task is aborted when the guard goes out of scope,
+/// preventing task leaks on early returns or errors.
+struct ProgressGuard(Option<tokio::task::JoinHandle<()>>);
+
+impl ProgressGuard {
+    fn new(task: Option<tokio::task::JoinHandle<()>>) -> Self {
+        Self(task)
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
+
 /// Cleanup chunk files on error
 async fn cleanup_chunk_files(temp_dir: &Path, filename: &str, download_id: u64, total_chunks: usize) {
     eprintln!("🧹 Cleaning up {total_chunks} partial chunk files...");
@@ -364,8 +384,8 @@ impl HttpDownloader {
         // Shared progress counter (lock-free atomic for better performance)
         let downloaded = Arc::new(AtomicU64::new(0));
 
-        // Progress reporter task
-        let progress_task = if let Some(callback) = progress {
+        // Progress reporter task (wrapped in guard for automatic cleanup)
+        let _progress_guard = ProgressGuard::new(if let Some(callback) = progress {
             let downloaded_clone = downloaded.clone();
             let start_time_clone = start_time;
             Some(tokio::spawn(async move {
@@ -397,7 +417,7 @@ impl HttpDownloader {
             }))
         } else {
             None
-        };
+        });
 
         eprintln!("🚀 Starting batch download with {} concurrent connections...", self.config.concurrent_fragments);
 
@@ -440,10 +460,7 @@ impl HttpDownloader {
             .await
             .inspect_err(|e| {
                 eprintln!("❌ Download failed: {e}");
-                // Stop progress reporter on error
-                if let Some(task) = &progress_task {
-                    task.abort();
-                }
+                // Note: Progress reporter is automatically cleaned up by _progress_guard on drop
                 // Cleanup partial chunk files
                 let temp_dir = temp_dir.to_path_buf();
                 let filename = filename.clone();
@@ -459,10 +476,7 @@ impl HttpDownloader {
         let total_downloaded: u64 = chunk_results.iter().sum();
         eprintln!("✓ All {} chunks completed ({} MB total)", total_chunks, total_downloaded / 1024 / 1024);
 
-        // Stop progress reporter on success
-        if let Some(task) = progress_task {
-            task.abort();
-        }
+        // Note: Progress reporter is automatically cleaned up by _progress_guard on drop
 
         // Merge chunks into final file in correct order
         eprintln!("📝 Merging {total_chunks} chunks into final file...");
@@ -1073,7 +1087,7 @@ mod tests {
         let _mock_size_check = server.mock("GET", "/test-video.mp4")
             .match_header("range", "bytes=0-0")
             .with_status(206)
-            .with_header("Content-Range", &format!("bytes 0-0/{}", total_size))
+            .with_header("Content-Range", &format!("bytes 0-0/{total_size}"))
             .expect_at_most(1)
             .create_async()
             .await;
@@ -1177,7 +1191,7 @@ mod tests {
         let _mock_resume = server.mock("GET", "/video.mp4")
             .match_header("range", "bytes=5242880-")
             .with_status(206)
-            .with_header("Content-Range", &format!("bytes 5242880-20971519/{}", total_size))
+            .with_header("Content-Range", &format!("bytes 5242880-20971519/{total_size}"))
             .with_header("Accept-Ranges", "bytes")
             .with_body(vec![0xBB; remaining_size as usize]) // Dummy data
             .expect(0) // Should NOT be called - we use parallel resume instead

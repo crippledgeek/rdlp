@@ -170,9 +170,17 @@ impl DownloadPhase {
             } => {
                 let resume_from = state.offset();
 
-                // Create progress bar
+                // Create progress bar with best available size estimate
+                // For HLS streams, don't use filesize_approx - it's unreliable since the
+                // actual bitrate of the selected variant often differs from the estimate
+                let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
+                let estimated_size = if is_hls {
+                    format.filesize // Only use exact size if available (rare for HLS)
+                } else {
+                    format.filesize.or(format.filesize_approx)
+                };
                 let progress_bar =
-                    orchestrator.create_progress_bar(format.filesize, resume_from)?;
+                    orchestrator.create_progress_bar(estimated_size, resume_from)?;
 
                 // Find downloader
                 let downloader = orchestrator
@@ -189,7 +197,8 @@ impl DownloadPhase {
                         &format.url,
                         &output_path,
                         resume_from,
-                        &progress_bar,
+                        progress_bar.as_ref(),
+                        estimated_size,
                     )
                     .await?
                 {

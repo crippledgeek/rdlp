@@ -58,7 +58,7 @@ fn test_list_extractors() {
 
     // Verify expected extractors are present
     let extractor_names = extractors.join(", ");
-    println!("Registered extractors: {}", extractor_names);
+    println!("Registered extractors: {extractor_names}");
 
     // Check for known extractors (case-insensitive)
     let has_tnaflix = extractors
@@ -73,18 +73,15 @@ fn test_list_extractors() {
 
     assert!(
         has_tnaflix,
-        "TNAFlix extractor should be registered. Found: {}",
-        extractor_names
+        "TNAFlix extractor should be registered. Found: {extractor_names}"
     );
     assert!(
         has_empflix,
-        "EMPFlix extractor should be registered. Found: {}",
-        extractor_names
+        "EMPFlix extractor should be registered. Found: {extractor_names}"
     );
     assert!(
         has_moviefap,
-        "MovieFap extractor should be registered. Found: {}",
-        extractor_names
+        "MovieFap extractor should be registered. Found: {extractor_names}"
     );
 }
 

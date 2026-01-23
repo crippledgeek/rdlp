@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn test_chunk_size_small_files() {
         // Files ≤ 50 MB should get 64 KB chunks
-        assert_eq!(chunk_size_for_file(1 * 1024 * 1024), 64 * 1024);
+        assert_eq!(chunk_size_for_file(1024 * 1024), 64 * 1024);
         assert_eq!(chunk_size_for_file(5 * 1024 * 1024), 64 * 1024);
         assert_eq!(chunk_size_for_file(50 * 1024 * 1024), 64 * 1024);
     }
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_all_chunk_sizes_are_power_of_two() {
         let test_sizes = vec![
-            1 * 1024 * 1024,       // 1 MB
+            1024 * 1024,       // 1 MB
             10 * 1024 * 1024,      // 10 MB
             100 * 1024 * 1024,     // 100 MB
             500 * 1024 * 1024,     // 500 MB
