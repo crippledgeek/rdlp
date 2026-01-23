@@ -1,5 +1,15 @@
 //! Error types for orchestration operations
+//!
+//! This module provides a consistent error handling strategy for the CLI orchestrator.
+//!
+//! # Error Wrapping Strategy
+//!
+//! - Domain errors from `rdlp-core`, `rdlp-extractor`, and `rdlp-downloader` are wrapped
+//!   as `RdlpError` directly to preserve type information.
+//! - External library errors (e.g., indicatif) are wrapped in descriptive variants.
+//! - I/O errors are preserved directly via `#[from]`.
 
+use rdlp_core::RdlpError;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -10,9 +20,9 @@ pub enum OrchestratorError {
     #[error("No extractor found for URL: {url}")]
     NoExtractor { url: String },
 
-    /// Video extraction failed
+    /// Video extraction failed (wraps domain RdlpError)
     #[error("Failed to extract video information: {0}")]
-    ExtractionFailed(#[source] anyhow::Error),
+    ExtractionFailed(#[source] RdlpError),
 
     /// User cancelled the operation
     #[error("Operation cancelled by user")]
@@ -22,21 +32,21 @@ pub enum OrchestratorError {
     #[error("No suitable format found matching criteria")]
     NoFormat,
 
-    /// Format selector parsing failed
+    /// Format selector parsing failed (wraps domain RdlpError)
     #[error("Invalid format selector: {0}")]
-    InvalidFormatSelector(#[source] anyhow::Error),
+    InvalidFormatSelector(#[source] RdlpError),
 
     /// No downloader found for the URL
     #[error("No downloader found for URL: {url}")]
     NoDownloader { url: String },
 
-    /// Download failed
+    /// Download failed (wraps domain RdlpError)
     #[error("Download failed: {0}")]
-    DownloadFailed(#[source] anyhow::Error),
+    DownloadFailed(#[source] RdlpError),
 
     /// Resume detection failed
     #[error("Failed to detect resume point: {0}")]
-    ResumeDetectionFailed(#[source] anyhow::Error),
+    ResumeDetectionFailed(String),
 
     /// Missing chunk file during merge
     #[error("Missing chunk file: {path}")]
@@ -50,9 +60,13 @@ pub enum OrchestratorError {
     #[error("Failed to generate output path: {0}")]
     PathGenerationFailed(String),
 
-    /// Progress bar creation failed
+    /// Progress bar template error (external library)
     #[error("Failed to create progress bar: {0}")]
-    ProgressBarFailed(#[source] anyhow::Error),
+    ProgressBarFailed(String),
+
+    /// I/O error with custom message
+    #[error("{0}")]
+    IoError(String),
 
     /// I/O error
     #[error("I/O error: {0}")]

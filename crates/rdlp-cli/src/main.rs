@@ -47,6 +47,10 @@ struct Args {
     #[arg(long)]
     list_extractors: bool,
 
+    /// List all supported download protocols
+    #[arg(long)]
+    list_downloaders: bool,
+
     /// Simulate (don't actually download)
     #[arg(short = 's', long)]
     simulate: bool,
@@ -101,6 +105,14 @@ async fn async_main() -> Result<()> {
         println!("Available extractors:");
         for extractor in orchestrator.list_extractors() {
             println!("  - {extractor}");
+        }
+        return Ok(());
+    }
+
+    if args.list_downloaders {
+        println!("Available download protocols:");
+        for downloader in orchestrator.list_downloaders() {
+            println!("  - {downloader}");
         }
         return Ok(());
     }

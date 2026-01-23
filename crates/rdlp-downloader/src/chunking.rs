@@ -5,6 +5,8 @@
 //! - Predictable performance
 //! - Better scalability across file sizes
 
+use std::fmt;
+
 /// Strategy for determining chunk size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkSizeStrategy {
@@ -26,6 +28,24 @@ pub enum ChunkSizeStrategy {
 impl Default for ChunkSizeStrategy {
     fn default() -> Self {
         Self::Auto
+    }
+}
+
+impl fmt::Display for ChunkSizeStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Fixed(size) => {
+                if size % (1024 * 1024) == 0 {
+                    write!(f, "fixed ({}MB)", size / (1024 * 1024))
+                } else {
+                    write!(f, "fixed ({}KB)", size / 1024)
+                }
+            }
+            Self::Legacy { chunk_count } => {
+                write!(f, "legacy ({chunk_count} chunks)")
+            }
+        }
     }
 }
 
@@ -105,7 +125,7 @@ mod tests {
     #[test]
     fn test_chunk_size_small_files() {
         // Files ≤ 50 MB should get 64 KB chunks
-        assert_eq!(chunk_size_for_file(1 * 1024 * 1024), 64 * 1024);
+        assert_eq!(chunk_size_for_file(1024 * 1024), 64 * 1024);
         assert_eq!(chunk_size_for_file(5 * 1024 * 1024), 64 * 1024);
         assert_eq!(chunk_size_for_file(50 * 1024 * 1024), 64 * 1024);
     }
@@ -135,7 +155,7 @@ mod tests {
     #[test]
     fn test_all_chunk_sizes_are_power_of_two() {
         let test_sizes = vec![
-            1 * 1024 * 1024,       // 1 MB
+            1024 * 1024,       // 1 MB
             10 * 1024 * 1024,      // 10 MB
             100 * 1024 * 1024,     // 100 MB
             500 * 1024 * 1024,     // 500 MB

@@ -35,6 +35,7 @@
 //! # }
 //! ```
 
+use crate::base::common::BaseExtractor;
 use futures::stream::{self, StreamExt};
 use rdlp_core::{RdlpError, Result};
 use std::sync::Arc;
@@ -108,6 +109,9 @@ impl HlsSizeDetector {
     /// ```
     pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
         let start = std::time::Instant::now();
+
+        // Validate the input URL for security (SSRF protection)
+        BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
             eprintln!("[HLS] Detecting size for: {m3u8_url}");
@@ -230,16 +234,10 @@ impl HlsSizeDetector {
                     )));
                 }
 
-                // Validate segment URLs
+                // Validate segment URLs using BaseExtractor SSRF protection
+                // This catches: invalid URLs, bad schemes, private IPs, URL length limits
                 for url in &segments {
-                    if let Ok(parsed) = url::Url::parse(url) {
-                        let scheme = parsed.scheme();
-                        if scheme != "http" && scheme != "https" {
-                            return Err(RdlpError::Extraction(format!(
-                                "Invalid segment URL scheme: {scheme} (expected http/https)"
-                            )));
-                        }
-                    }
+                    BaseExtractor::validate_url_security(url)?;
                 }
 
                 if self.verbose {
@@ -282,6 +280,9 @@ impl HlsSizeDetector {
                         RdlpError::Extraction(format!("Failed to join media playlist URL: {e}"))
                     })?
                     .to_string();
+
+                // Validate the resolved media playlist URL (SSRF protection)
+                BaseExtractor::validate_url_security(&media_playlist_url)?;
 
                 // Recursively parse the media playlist
                 Box::pin(self.parse_playlist(&media_playlist_url)).await

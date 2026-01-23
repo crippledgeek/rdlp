@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::OnceLock;
 
 /// Video/audio format information
 ///
@@ -102,6 +104,10 @@ pub struct Format {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_range: Option<String>,
 
+    /// Cached format description (lazy initialization)
+    #[serde(skip)]
+    cached_description: OnceLock<String>,
+
     /// Whether format has DRM protection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_drm: Option<bool>,
@@ -134,6 +140,7 @@ impl Format {
             http_headers: None,
             language: None,
             dynamic_range: None,
+            cached_description: OnceLock::new(),
             has_drm: None,
         }
     }
@@ -162,10 +169,15 @@ impl Format {
     }
 
     /// Format file size as human-readable string
+    /// Returns exact size if known, approximate size with ~ prefix, or "Unknown"
     pub fn filesize_string(&self) -> String {
-        self.get_filesize()
-            .map(format_bytes)
-            .unwrap_or_else(|| "Unknown".to_string())
+        if let Some(size) = self.filesize {
+            format_bytes(size)
+        } else if let Some(size) = self.filesize_approx {
+            format!("~{}", format_bytes(size))
+        } else {
+            "Unknown".to_string()
+        }
     }
 
     /// Check if this is a DASH format
@@ -179,36 +191,99 @@ impl Format {
     }
 
     /// Get a human-readable format description
-    pub fn description(&self) -> String {
-        let mut parts = Vec::new();
+    ///
+    /// This method caches the description after first computation.
+    /// Subsequent calls return a reference to the cached value.
+    pub fn description(&self) -> &str {
+        self.cached_description.get_or_init(|| {
+            let mut parts = Vec::new();
+
+            if let Some(note) = &self.format_note {
+                parts.push(note.clone());
+            }
+
+            if let Some(res) = self.resolution_string() {
+                parts.push(res);
+            }
+
+            if let Some(fps) = self.fps {
+                parts.push(format!("{fps}fps"));
+            }
+
+            if let Some(vcodec) = &self.vcodec {
+                if vcodec != "none" {
+                    parts.push(format!("vcodec:{vcodec}"));
+                }
+            }
+
+            if let Some(acodec) = &self.acodec {
+                if acodec != "none" {
+                    parts.push(format!("acodec:{acodec}"));
+                }
+            }
+
+            parts.push(self.ext.clone());
+
+            parts.join(" ")
+        })
+    }
+}
+
+impl fmt::Display for Format {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Compact format for general use
+        write!(f, "{}", self.format_id)?;
 
         if let Some(note) = &self.format_note {
-            parts.push(note.clone());
+            write!(f, " ({note})")?;
         }
 
         if let Some(res) = self.resolution_string() {
-            parts.push(res);
+            write!(f, " {res}")?;
         }
 
-        if let Some(fps) = self.fps {
-            parts.push(format!("{fps}fps"));
+        // Show exact size or approximate size with ~ prefix
+        if let Some(size) = self.filesize {
+            let mb = size as f64 / (1024.0 * 1024.0);
+            write!(f, " {mb:.1}MB")?;
+        } else if let Some(size) = self.filesize_approx {
+            let mb = size as f64 / (1024.0 * 1024.0);
+            write!(f, " ~{mb:.0}MB")?;
         }
 
-        if let Some(vcodec) = &self.vcodec {
-            if vcodec != "none" {
-                parts.push(format!("vcodec:{vcodec}"));
-            }
-        }
+        Ok(())
+    }
+}
 
-        if let Some(acodec) = &self.acodec {
-            if acodec != "none" {
-                parts.push(format!("acodec:{acodec}"));
-            }
-        }
+impl Format {
+    /// Format as table row for interactive selection UI
+    ///
+    /// Returns a formatted string suitable for display in selection menus:
+    /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
+    pub fn table_row(&self) -> String {
+        let quality = self.format_note.as_deref().unwrap_or("unknown");
 
-        parts.push(self.ext.clone());
+        let resolution = self.resolution_string().unwrap_or_else(|| "N/A".to_string());
 
-        parts.join(" ")
+        // Show exact size if available, otherwise approximate size with ~ prefix
+        let size = if let Some(filesize) = self.filesize {
+            format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
+        } else if let Some(filesize_approx) = self.filesize_approx {
+            format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
+        } else {
+            "Unknown".to_string()
+        };
+
+        let format_type = self.ext.to_uppercase();
+
+        let codecs = match (&self.vcodec, &self.acodec) {
+            (Some(v), Some(a)) => format!("{v}/{a}"),
+            (Some(v), None) => format!("{v} (video only)"),
+            (None, Some(a)) => format!("{a} (audio only)"),
+            (None, None) => "Unknown".to_string(),
+        };
+
+        format!("{quality:<12} | {resolution:<10} | {size:<12} | {format_type:<6} | {codecs}")
     }
 }
 

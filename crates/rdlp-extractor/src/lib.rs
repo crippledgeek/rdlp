@@ -4,13 +4,40 @@
 //!
 //! This crate provides the extractor registry, URL routing, and site-specific
 //! extraction implementations.
+//!
+//! ## Architecture
+//!
+//! The extractor system uses a layered architecture:
+//!
+//! 1. **Base Utilities** (`base::common`) - Common extraction utilities
+//! 2. **Network Bases** (`base::tnaflix_network`) - Site family patterns
+//! 3. **Site Extractors** (`extractors::*`) - Individual site implementations
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
+//! use rdlp_extractor::{ExtractorRegistry, BaseExtractor};
+//!
+//! // Find an extractor for a URL
+//! let registry = ExtractorRegistry::new();
+//! let extractor = registry.find_extractor(url)?;
+//!
+//! // Use base utilities in custom extractors
+//! let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
+//! let title = BaseExtractor::extract_title_multi_strategy(&html);
+//! ```
 
 pub mod base;
 pub mod extractors;
 pub mod hls;
 pub mod utils;
 
-pub use extractors::{RedTubeExtractor, TNAFlixExtractor};
+// Re-export extractors
+pub use extractors::{PornHubExtractor, RedTubeExtractor, TNAFlixExtractor};
+
+// Re-export base utilities for convenient access
+pub use base::common::BaseExtractor;
+pub use base::tnaflix_network::TnaFlixNetworkBase;
 
 use rdlp_core::InfoExtractor;
 use std::sync::Arc;
@@ -43,6 +70,9 @@ impl ExtractorRegistry {
 
         // Register RedTube extractor
         registry.register(Arc::new(RedTubeExtractor::new()));
+
+        // Register PornHub extractor (with playlist support)
+        registry.register(Arc::new(PornHubExtractor::new()));
 
         registry
     }
@@ -122,6 +152,7 @@ mod tests {
         assert!(extractors.contains(&"EMPFlix".to_string()));
         assert!(extractors.contains(&"MovieFap".to_string()));
         assert!(extractors.contains(&"RedTube".to_string()));
+        assert!(extractors.contains(&"PornHub".to_string()));
     }
 
     #[test]

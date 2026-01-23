@@ -111,12 +111,28 @@ impl Orchestrator {
     ///
     /// At any point, user can cancel (Ctrl+C or ESC) → `Cancelled` state
     ///
+    /// **Note**: This method now auto-detects playlists! If the URL is a playlist,
+    /// it will automatically delegate to `download_playlist()` and return the first
+    /// video path (or None if playlist was empty/cancelled).
+    ///
     /// # Returns
     ///
     /// - `Ok(Some(path))` - Download completed successfully
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Error occurred during any phase
     pub async fn download(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
+        // Try playlist extraction first to check if this is a playlist
+        let infos = self.extract_playlist_info(url).await?;
+
+        // If multiple videos found, this is a playlist
+        if infos.len() > 1 {
+            return self
+                .download_playlist_internal(infos, interactive)
+                .await
+                .map(|opt| opt.and_then(|paths| paths.into_iter().next()));
+        }
+
+        // Single video - use existing state machine
         let mut phase = DownloadPhase::Extracting {
             url: url.to_string(),
         };
@@ -132,9 +148,404 @@ impl Orchestrator {
         }
     }
 
+    /// Download all videos from a playlist
+    ///
+    /// This method provides explicit playlist download functionality with:
+    /// - User confirmation prompt (interactive mode)
+    /// - Progress tracking per video
+    /// - Graceful degradation (skip failed videos)
+    /// - Summary report at end
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(paths))` - All or some downloads completed (graceful degradation)
+    /// - `Ok(None)` - User cancelled operation
+    /// - `Err` - Fatal error (no videos downloaded)
+    pub async fn download_playlist(&self, url: &str, interactive: bool) -> Result<Option<Vec<PathBuf>>> {
+        // Extract playlist
+        let infos = self.extract_playlist_info(url).await?;
+
+        // If single video, delegate to single download
+        if infos.len() == 1 {
+            return self
+                .download(url, interactive)
+                .await
+                .map(|opt| opt.map(|path| vec![path]));
+        }
+
+        self.download_playlist_internal(infos, interactive).await
+    }
+
+    /// Internal playlist download logic
+    ///
+    /// Separated from public method to allow reuse by auto-detection in `download()`
+    ///
+    /// # Resume Support
+    ///
+    /// Automatically detects already-downloaded videos in the playlist folder
+    /// and skips them, allowing interrupted downloads to be resumed.
+    async fn download_playlist_internal(
+        &self,
+        infos: Vec<rdlp_core::InfoDict>,
+        interactive: bool,
+    ) -> Result<Option<Vec<PathBuf>>> {
+        let total = infos.len();
+        let playlist_title = infos[0]
+            .playlist_title
+            .as_deref()
+            .unwrap_or("Unnamed Playlist");
+
+        // Create playlist folder
+        let playlist_folder_name = self.sanitize_filename(playlist_title);
+        let playlist_dir = self.config.output_directory.join(&playlist_folder_name);
+
+        // Check for existing files (resume detection)
+        let (existing_files, partial_count) = self.detect_existing_playlist_files(&playlist_dir, &infos);
+        let already_downloaded = existing_files.len();
+        let remaining = total - already_downloaded;
+
+        println!("\n{}", "=".repeat(60));
+        println!("📋 Playlist: {playlist_title}");
+        println!("📁 Folder: {}", playlist_dir.display());
+        println!("📊 Total videos: {total}");
+
+        if already_downloaded > 0 || partial_count > 0 {
+            if already_downloaded > 0 {
+                println!("✅ Already downloaded: {already_downloaded}");
+            }
+            if partial_count > 0 {
+                println!("🧹 Leftover segments: {partial_count} (will be cleaned up)");
+            }
+            println!("📥 Remaining: {remaining}");
+        }
+
+        println!("{}", "=".repeat(60));
+        println!();
+
+        // If all videos are already downloaded, return early
+        if remaining == 0 {
+            println!("✅ All videos already downloaded!");
+            let paths: Vec<PathBuf> = existing_files.into_values().collect();
+            return Ok(Some(paths));
+        }
+
+        // Confirm before downloading (unless non-interactive)
+        if interactive && remaining > 0 {
+            use dialoguer::Confirm;
+
+            let prompt = if already_downloaded > 0 {
+                format!("Resume downloading {remaining} remaining videos?")
+            } else {
+                format!("Download {total} videos to '{playlist_folder_name}'?")
+            };
+
+            let proceed = Confirm::new()
+                .with_prompt(prompt)
+                .default(true)
+                .interact()
+                .unwrap_or(false);
+
+            if !proceed {
+                println!("Cancelled by user");
+                return Ok(None);
+            }
+            println!();
+        }
+
+        // Create playlist directory if it doesn't exist
+        if !playlist_dir.exists() {
+            std::fs::create_dir_all(&playlist_dir).map_err(|e| {
+                OrchestratorError::IoError(format!(
+                    "Failed to create playlist folder '{}': {e}",
+                    playlist_dir.display()
+                ))
+            })?;
+            println!("📁 Created folder: {}", playlist_dir.display());
+        }
+
+        // Download each video with progress tracking
+        // Use tokio::select! to properly catch Ctrl+C during downloads
+        let mut downloaded: Vec<PathBuf> = existing_files.into_values().collect();
+        let mut failed = Vec::new();
+        let mut interrupted = false;
+
+        for (index, info) in infos.iter().enumerate() {
+            let position = index + 1;
+
+            // Check if this video is already downloaded
+            let sanitized_title = self.sanitize_filename(&info.title);
+            let already_exists = downloaded.iter().any(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name == sanitized_title)
+            });
+
+            if already_exists {
+                println!("⏭️  [{position}/{total}] Already downloaded: {}", info.title);
+                continue;
+            }
+
+            println!("\n{}", "─".repeat(60));
+            println!("📥 [{}/{}] {}", position, total, info.title);
+            println!("{}", "─".repeat(60));
+
+            // Race download against Ctrl+C signal
+            tokio::select! {
+                // Download single video to playlist folder (non-interactive)
+                result = self.download_from_info_to_dir(info, false, &playlist_dir) => {
+                    match result {
+                        Ok(Some(path)) => {
+                            println!("✅ [{}/{}] Saved: {}", position, total, path.display());
+                            downloaded.push(path);
+                        }
+                        Ok(None) => {
+                            println!("⏭️  [{position}/{total}] Skipped by user");
+                        }
+                        Err(e) => {
+                            eprintln!("❌ [{position}/{total}] Failed: {e}");
+                            failed.push((position, info.title.clone(), e.to_string()));
+                        }
+                    }
+                }
+                // Catch Ctrl+C immediately during download
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\n⏸️  Playlist download interrupted by user");
+                    println!("💾 Run the same command again to resume");
+                    interrupted = true;
+                }
+            }
+
+            if interrupted {
+                break;
+            }
+        }
+
+        // Summary report
+        let newly_downloaded = downloaded.len() - already_downloaded;
+
+        println!("\n{}", "=".repeat(60));
+        println!("📋 Playlist Download Summary");
+        println!("{}", "=".repeat(60));
+        println!("📁 Folder: {}", playlist_dir.display());
+        println!("✅ Total downloaded: {}/{}", downloaded.len(), total);
+
+        if already_downloaded > 0 {
+            println!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
+        }
+
+        if !failed.is_empty() {
+            println!("❌ Failed: {}", failed.len());
+            println!("\nFailed videos:");
+            for (pos, title, error) in &failed {
+                println!("   [{pos}] {title}");
+                println!("       Error: {error}");
+            }
+        }
+
+        if interrupted {
+            let remaining_after = total - downloaded.len();
+            println!("\n⏸️  Interrupted with {remaining_after} videos remaining");
+            println!("💡 Run the same command again to resume");
+        }
+
+        println!("{}", "=".repeat(60));
+
+        if downloaded.is_empty() {
+            Err(OrchestratorError::ExtractionFailed(
+                rdlp_core::RdlpError::Extraction("All playlist videos failed to download".to_string()),
+            ))
+        } else {
+            Ok(Some(downloaded))
+        }
+    }
+
+    /// Detect existing files in playlist folder that match video titles
+    ///
+    /// Returns a tuple of:
+    /// - HashMap of sanitized title -> file path for completed downloads
+    /// - Count of videos with leftover segment files (will be cleaned up)
+    ///
+    /// # Note on .part files
+    ///
+    /// - HTTP chunks: `filename.mp4.part0` - few large files, resumable
+    /// - HLS segments: `filename.part0` - many small files, will be cleaned up
+    ///
+    /// Since HLS segments are cleaned up before each download, we just report
+    /// the count for user information.
+    fn detect_existing_playlist_files(
+        &self,
+        playlist_dir: &std::path::Path,
+        infos: &[rdlp_core::InfoDict],
+    ) -> (std::collections::HashMap<String, PathBuf>, usize) {
+        let mut completed = std::collections::HashMap::new();
+        let mut partial_count = 0;
+
+        if !playlist_dir.exists() {
+            return (completed, partial_count);
+        }
+
+        // Get all files in the playlist directory
+        let dir_entries = match std::fs::read_dir(playlist_dir) {
+            Ok(entries) => entries,
+            Err(_) => return (completed, partial_count),
+        };
+
+        let files: Vec<PathBuf> = dir_entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+
+        // Check each video in the playlist
+        for info in infos {
+            let sanitized_title = self.sanitize_filename(&info.title);
+
+            // Look for completed file matching this title
+            let mut found_complete = false;
+            let mut found_partial = false;
+
+            for file_path in &files {
+                let filename = file_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                // Check for .part files (HLS segments or HTTP chunks)
+                // HLS segments: filename.part{n} (no extension before .part)
+                // HTTP chunks: filename.mp4.part{n} (extension before .part)
+                if filename.starts_with(&sanitized_title) && filename.contains(".part") {
+                    found_partial = true;
+                    continue;
+                }
+
+                // Check for completed file
+                if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                    if file_stem == sanitized_title {
+                        // Skip .part files
+                        if file_path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.contains("part")) {
+                            found_partial = true;
+                            continue;
+                        }
+
+                        // Check if file has reasonable size (> 1MB to avoid empty/corrupted files)
+                        if let Ok(metadata) = file_path.metadata() {
+                            if metadata.len() > 1_000_000 {
+                                completed.insert(sanitized_title.clone(), file_path.clone());
+                                found_complete = true;
+                                break;
+                            } else {
+                                // File exists but is too small - treat as partial
+                                found_partial = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !found_complete && found_partial {
+                partial_count += 1;
+            }
+        }
+
+        (completed, partial_count)
+    }
+
+    /// Download from pre-extracted InfoDict (internal helper)
+    ///
+    /// This method skips the extraction phase and starts from format selection.
+    /// Used by playlist downloads to avoid re-extracting already-fetched metadata.
+    #[allow(dead_code)]
+    async fn download_from_info(
+        &self,
+        info: &rdlp_core::InfoDict,
+        interactive: bool,
+    ) -> Result<Option<PathBuf>> {
+        self.download_from_info_to_dir(info, interactive, &self.config.output_directory)
+            .await
+    }
+
+    /// Download from pre-extracted InfoDict to a specific directory
+    ///
+    /// This method is used by playlist downloads to save files to the playlist folder.
+    async fn download_from_info_to_dir(
+        &self,
+        info: &rdlp_core::InfoDict,
+        interactive: bool,
+        output_dir: &std::path::Path,
+    ) -> Result<Option<PathBuf>> {
+        // Select format
+        let format = match self.select_format(&info.formats, interactive)? {
+            Some(format) => format,
+            None => return Ok(None),
+        };
+
+        // Generate output path in the specified directory
+        let file_ext = self.determine_file_extension(&format);
+        let sanitized_title = self.sanitize_filename(&info.title);
+        let filename = format!("{sanitized_title}.{file_ext}");
+        let output_path = output_dir.join(&filename);
+
+        // Clean up any leftover HLS segment files from interrupted downloads
+        self.cleanup_leftover_segments(output_dir, &sanitized_title).await;
+
+        println!("💾 Downloading to: {}", output_path.display());
+
+        // Detect resume point
+        let resume_offset = self
+            .detect_resume_point(&output_path, format.filesize)
+            .await?;
+
+        // Check if file is already complete
+        if let Some(expected_size) = format.filesize {
+            if resume_offset == expected_size {
+                println!("✓ File already complete, skipping");
+                return Ok(Some(output_path));
+            }
+        }
+
+        let resume_from = resume_offset;
+
+        // Create progress bar with best available size estimate
+        // For HLS streams, don't use filesize_approx - it's unreliable since the
+        // actual bitrate of the selected variant often differs from the estimate
+        let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
+        let estimated_size = if is_hls {
+            format.filesize // Only use exact size if available (rare for HLS)
+        } else {
+            format.filesize.or(format.filesize_approx)
+        };
+        let progress_bar = self.create_progress_bar(estimated_size, resume_from)?;
+
+        // Find downloader
+        let downloader = self
+            .downloader_registry
+            .find_downloader(&format.url)
+            .ok_or_else(|| OrchestratorError::NoDownloader {
+                url: format.url.clone(),
+            })?;
+
+        // Execute download
+        let stats = match self
+            .execute_download(&downloader, &format.url, &output_path, resume_from, progress_bar.as_ref(), estimated_size)
+            .await?
+        {
+            Some(stats) => stats,
+            None => return Ok(None),
+        };
+
+        // Report success
+        println!("\n✅ Downloaded successfully!");
+        println!("   File: {}", output_path.display());
+        println!("   Stats: {stats}");
+
+        Ok(Some(output_path))
+    }
+
     /// List all available extractors
     pub fn list_extractors(&self) -> Vec<String> {
         self.extractor_registry.list_extractors()
+    }
+
+    /// List all available download protocols
+    pub fn list_downloaders(&self) -> Vec<String> {
+        self.downloader_registry.list_downloaders()
     }
 
     /// Generate output file path
@@ -143,8 +554,10 @@ impl Orchestrator {
         info: &rdlp_core::InfoDict,
         format: &rdlp_core::Format,
     ) -> Result<PathBuf> {
-        // Simple template parsing (full implementation in Phase 5)
-        let filename = format!("{}.{}", self.sanitize_filename(&info.title), format.ext);
+        // Determine the actual file extension
+        let file_ext = self.determine_file_extension(format);
+
+        let filename = format!("{}.{}", self.sanitize_filename(&info.title), file_ext);
 
         let mut path = self.config.output_directory.clone();
         path.push(filename);
@@ -152,14 +565,174 @@ impl Orchestrator {
         Ok(path)
     }
 
-    /// Sanitize filename by removing invalid characters
+    /// Determine the actual file extension for a format
+    ///
+    /// For streaming protocols (HLS, DASH), detects the actual container format
+    /// from the format metadata or segment URLs.
+    fn determine_file_extension(&self, format: &rdlp_core::Format) -> String {
+        // Priority 1: Use container field if explicitly set
+        if let Some(ref container) = format.container {
+            // Clean up container names (e.g., "mp4_dash" -> "mp4")
+            return container
+                .split('_')
+                .next()
+                .unwrap_or(container)
+                .to_string();
+        }
+
+        // Priority 2: For HLS/DASH, detect from URL or default to mp4
+        match format.ext.as_str() {
+            "hls" | "m3u8" => {
+                // Try to detect from URL (e.g., .../segment.ts)
+                if format.url.contains(".ts") {
+                    "ts".to_string()  // MPEG-TS segments
+                } else {
+                    "mp4".to_string()  // fMP4 segments (.m4s/.mp4) or default
+                }
+            }
+            "dash" | "mpd" => {
+                // DASH typically uses fMP4
+                if format.url.contains(".webm") {
+                    "webm".to_string()
+                } else {
+                    "mp4".to_string()  // Default to MP4 for DASH
+                }
+            }
+            ext => ext.to_string(),  // Use extension as-is for direct formats
+        }
+    }
+
+    /// Maximum filename length (conservative limit for cross-platform compatibility)
+    const MAX_FILENAME_LENGTH: usize = 200;
+
+    /// Windows reserved filenames (case-insensitive)
+    const WINDOWS_RESERVED_NAMES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    /// Sanitize filename for safe filesystem usage
+    ///
+    /// This function provides comprehensive protection against:
+    /// - Path traversal attacks (removes `/`, `\`, `:`)
+    /// - Invalid filesystem characters (`*`, `?`, `"`, `<`, `>`, `|`)
+    /// - Null bytes and control characters
+    /// - Windows reserved filenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    /// - Leading/trailing dots and spaces
+    /// - Excessive filename length (truncated to 200 chars)
+    ///
+    /// # Security
+    ///
+    /// This function is critical for security. Never use unsanitized filenames
+    /// directly from external sources (video titles, URLs, etc.).
     pub(super) fn sanitize_filename(&self, name: &str) -> String {
-        name.chars()
-            .map(|c| match c {
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                _ => c,
+        // Step 1: Replace invalid filesystem characters and filter control characters
+        let sanitized: String = name
+            .chars()
+            .filter_map(|c| {
+                // Filter out null bytes and control characters (except space)
+                if c == '\0' || (c.is_control() && c != ' ') {
+                    return None;
+                }
+                // Replace invalid filesystem characters with underscore
+                Some(match c {
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                    _ => c,
+                })
             })
-            .collect()
+            .collect();
+
+        // Step 2: Trim leading/trailing dots and spaces (problematic on Windows)
+        let trimmed = sanitized.trim_matches(|c| c == '.' || c == ' ');
+
+        // Step 3: Check for Windows reserved names
+        let base_name = if let Some(dot_pos) = trimmed.rfind('.') {
+            &trimmed[..dot_pos]
+        } else {
+            trimmed
+        };
+
+        let result = if Self::WINDOWS_RESERVED_NAMES
+            .iter()
+            .any(|&reserved| base_name.eq_ignore_ascii_case(reserved))
+        {
+            // Prefix with underscore to avoid reserved name collision
+            format!("_{trimmed}")
+        } else {
+            trimmed.to_string()
+        };
+
+        // Step 4: Handle empty result
+        let result = if result.is_empty() {
+            "unnamed".to_string()
+        } else {
+            result
+        };
+
+        // Step 5: Truncate to maximum length (preserving extension if possible)
+        if result.len() > Self::MAX_FILENAME_LENGTH {
+            Self::truncate_filename(&result, Self::MAX_FILENAME_LENGTH)
+        } else {
+            result
+        }
+    }
+
+    /// Truncate filename while preserving extension
+    fn truncate_filename(name: &str, max_len: usize) -> String {
+        if let Some(dot_pos) = name.rfind('.') {
+            let ext = &name[dot_pos..];
+            // Only preserve extension if it's reasonable length (< 10 chars)
+            if ext.len() < 10 && dot_pos > 0 {
+                let base_max = max_len.saturating_sub(ext.len());
+                if base_max > 0 {
+                    let base = &name[..dot_pos];
+                    // Truncate at char boundary
+                    let truncated_base: String = base.chars().take(base_max).collect();
+                    return format!("{truncated_base}{ext}");
+                }
+            }
+        }
+        // Fallback: simple truncation at char boundary
+        name.chars().take(max_len).collect()
+    }
+
+    /// Clean up leftover HLS segment files from interrupted downloads
+    ///
+    /// When HLS downloads are interrupted via Ctrl+C, segment files like
+    /// `filename.part0`, `filename.part1`, etc. may be left behind.
+    /// This function removes them before starting a new download.
+    async fn cleanup_leftover_segments(&self, dir: &std::path::Path, base_name: &str) {
+        if !dir.exists() {
+            return;
+        }
+
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let mut deleted = 0;
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                // Match pattern: base_name.part{number}
+                if filename.starts_with(base_name) && filename.contains(".part") {
+                    // Verify it's a segment file (has numeric suffix after .part)
+                    if let Some(part_idx) = filename.rfind(".part") {
+                        let suffix = &filename[part_idx + 5..];
+                        if suffix.chars().all(|c| c.is_ascii_digit())
+                            && std::fs::remove_file(&path).is_ok()
+                        {
+                            deleted += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if deleted > 0 {
+            eprintln!("🧹 Cleaned up {deleted} leftover segment files");
+        }
     }
 }
 
@@ -224,6 +797,95 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_filename_null_bytes() {
+        let orchestrator = create_test_orchestrator();
+        // Null bytes should be removed
+        assert_eq!(
+            orchestrator.sanitize_filename("file\0name"),
+            "filename"
+        );
+        assert_eq!(
+            orchestrator.sanitize_filename("before\0\0after"),
+            "beforeafter"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_filename_control_characters() {
+        let orchestrator = create_test_orchestrator();
+        // Control characters should be removed (except space)
+        assert_eq!(
+            orchestrator.sanitize_filename("file\x01\x02name"),
+            "filename"
+        );
+        // Tab and newline are control chars
+        assert_eq!(
+            orchestrator.sanitize_filename("file\tname"),
+            "filename"
+        );
+        assert_eq!(
+            orchestrator.sanitize_filename("file\nname"),
+            "filename"
+        );
+        // Space is preserved
+        assert_eq!(
+            orchestrator.sanitize_filename("file name"),
+            "file name"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_filename_windows_reserved() {
+        let orchestrator = create_test_orchestrator();
+        // Windows reserved names get prefixed with underscore
+        assert_eq!(orchestrator.sanitize_filename("CON"), "_CON");
+        assert_eq!(orchestrator.sanitize_filename("con"), "_con");
+        assert_eq!(orchestrator.sanitize_filename("PRN.txt"), "_PRN.txt");
+        assert_eq!(orchestrator.sanitize_filename("AUX"), "_AUX");
+        assert_eq!(orchestrator.sanitize_filename("NUL"), "_NUL");
+        assert_eq!(orchestrator.sanitize_filename("COM1"), "_COM1");
+        assert_eq!(orchestrator.sanitize_filename("LPT9"), "_LPT9");
+        // Not reserved (has suffix that's not extension)
+        assert_eq!(orchestrator.sanitize_filename("CONX"), "CONX");
+        assert_eq!(orchestrator.sanitize_filename("CONSOLE"), "CONSOLE");
+    }
+
+    #[test]
+    fn test_sanitize_filename_leading_trailing_dots_spaces() {
+        let orchestrator = create_test_orchestrator();
+        // Leading/trailing dots and spaces are trimmed
+        assert_eq!(orchestrator.sanitize_filename("  filename  "), "filename");
+        assert_eq!(orchestrator.sanitize_filename("..filename.."), "filename");
+        assert_eq!(orchestrator.sanitize_filename(". .filename. ."), "filename");
+        // Mixed
+        assert_eq!(orchestrator.sanitize_filename(" . filename . "), "filename");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty_string() {
+        let orchestrator = create_test_orchestrator();
+        assert_eq!(orchestrator.sanitize_filename(""), "unnamed");
+        assert_eq!(orchestrator.sanitize_filename("   "), "unnamed");
+        assert_eq!(orchestrator.sanitize_filename("..."), "unnamed");
+        assert_eq!(orchestrator.sanitize_filename("\0\0"), "unnamed");
+    }
+
+    #[test]
+    fn test_sanitize_filename_length_truncation() {
+        let orchestrator = create_test_orchestrator();
+        // Create a very long filename (300 chars)
+        let long_name = "a".repeat(300);
+        let result = orchestrator.sanitize_filename(&long_name);
+        assert!(result.len() <= 200, "Filename should be truncated to 200 chars");
+
+        // With extension - extension should be preserved
+        let long_with_ext = format!("{}.mp4", "b".repeat(300));
+        let result = orchestrator.sanitize_filename(&long_with_ext);
+        assert!(result.len() <= 200);
+        assert!(result.ends_with(".mp4"), "Extension should be preserved");
+    }
+
+    #[test]
     fn test_generate_output_path() {
         let orchestrator = create_test_orchestrator();
         let mut info = rdlp_core::InfoDict::new(
@@ -258,6 +920,54 @@ mod tests {
         assert_eq!(
             path.file_name().unwrap().to_str().unwrap(),
             "Invalid_Characters_In_Title__.mp4.mp4"
+        );
+    }
+
+    #[test]
+    fn test_generate_output_path_hls_extension() {
+        let orchestrator = create_test_orchestrator();
+        let mut info = rdlp_core::InfoDict::new(
+            "test123".to_string(),
+            "HLS Test Video".to_string(),
+            "test".to_string(),
+            "https://example.com/test".to_string(),
+        );
+        info.formats = vec![];
+
+        // HLS with fMP4 segments (default)
+        let mut format = create_test_format("720p", "720p", Some(1000000));
+        format.ext = "hls".to_string();
+        format.url = "https://example.com/playlist.m3u8".to_string();
+
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
+        );
+
+        // HLS with MPEG-TS segments (detected from URL)
+        format.url = "https://example.com/segment0.ts".to_string();
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.ts"
+        );
+
+        // HLS with explicit container field
+        format.url = "https://example.com/playlist.m3u8".to_string();
+        format.container = Some("mp4".to_string());
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
+        );
+
+        // HLS with container suffix (e.g., "mp4_dash")
+        format.container = Some("mp4_dash".to_string());
+        let path = orchestrator.generate_output_path(&info, &format).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "HLS Test Video.mp4"
         );
     }
 
@@ -349,8 +1059,7 @@ mod tests {
             extractors.contains(&"TNAFlix".to_string())
                 || extractors.contains(&"EMPFlix".to_string())
                 || extractors.contains(&"MovieFap".to_string()),
-            "Expected to find at least one TNAFlix network extractor, found: {:?}",
-            extractors
+            "Expected to find at least one TNAFlix network extractor, found: {extractors:?}"
         );
     }
 
@@ -381,7 +1090,7 @@ mod tests {
         let phase = DownloadPhase::Extracting {
             url: "https://example.com/video".to_string(),
         };
-        let debug_str = format!("{:?}", phase);
+        let debug_str = format!("{phase:?}");
         assert!(debug_str.contains("Extracting"));
         assert!(debug_str.contains("https://example.com/video"));
     }
@@ -433,13 +1142,6 @@ mod tests {
 
         let result = orchestrator.sanitize_filename("Видео на русском.mp4");
         assert!(result.contains("Видео на русском"));
-    }
-
-    #[test]
-    fn test_sanitize_filename_empty_string() {
-        let orchestrator = create_test_orchestrator();
-
-        assert_eq!(orchestrator.sanitize_filename(""), "");
     }
 
     #[tokio::test]
@@ -519,7 +1221,7 @@ mod tests {
             OrchestratorError::MissingChunk { path } => {
                 assert!(path.to_string_lossy().contains("video.mp4.part2"));
             }
-            _ => panic!("Expected MissingChunk error, got {:?}", err),
+            _ => panic!("Expected MissingChunk error, got {err:?}"),
         }
     }
 
@@ -634,7 +1336,7 @@ mod tests {
             for i in 0..5 {
                 assert!(!temp_dir
                     .path()
-                    .join(format!("video.mp4.0.part{}", i))
+                    .join(format!("video.mp4.0.part{i}"))
                     .exists());
             }
         }
@@ -659,7 +1361,7 @@ mod tests {
             // Create new-style chunks (5 chunks, 1280 bytes total, more recent)
             for i in 0..5 {
                 tokio::fs::write(
-                    temp_dir.path().join(format!("video.mp4.0.part{}", i)),
+                    temp_dir.path().join(format!("video.mp4.0.part{i}")),
                     &[((i + 10) as u8); 256],
                 )
                 .await
@@ -685,7 +1387,7 @@ mod tests {
             for i in 0..5 {
                 assert!(!temp_dir
                     .path()
-                    .join(format!("video.mp4.0.part{}", i))
+                    .join(format!("video.mp4.0.part{i}"))
                     .exists());
             }
 
@@ -738,7 +1440,7 @@ mod tests {
             for i in 0..3 {
                 assert!(!temp_dir
                     .path()
-                    .join(format!("video.mp4.2.part{}", i))
+                    .join(format!("video.mp4.2.part{i}"))
                     .exists());
             }
 
@@ -791,7 +1493,7 @@ mod tests {
             // Create 100 small chunks (simulating 1 MB chunks for a 100 MB file)
             for i in 0..100 {
                 tokio::fs::write(
-                    temp_dir.path().join(format!("video.mp4.0.part{}", i)),
+                    temp_dir.path().join(format!("video.mp4.0.part{i}")),
                     &[(i % 256) as u8; 128],
                 )
                 .await
@@ -812,7 +1514,7 @@ mod tests {
             for i in 0..100 {
                 assert!(!temp_dir
                     .path()
-                    .join(format!("video.mp4.0.part{}", i))
+                    .join(format!("video.mp4.0.part{i}"))
                     .exists());
             }
         }
@@ -842,17 +1544,41 @@ mod property_tests {
             prop_assert!(!sanitized.contains('<'));
             prop_assert!(!sanitized.contains('>'));
             prop_assert!(!sanitized.contains('|'));
+            prop_assert!(!sanitized.contains('\0'));
+
+            // No leading/trailing dots or spaces
+            if !sanitized.is_empty() && sanitized != "unnamed" {
+                let first = sanitized.chars().next().unwrap();
+                let last = sanitized.chars().last().unwrap();
+                prop_assert!(first != '.' && first != ' ', "Should not start with dot or space");
+                prop_assert!(last != '.' && last != ' ', "Should not end with dot or space");
+            }
+
+            // Length should be within limit
+            prop_assert!(sanitized.len() <= 200, "Filename should not exceed 200 chars");
         }
 
         #[test]
-        fn test_sanitize_filename_preserves_length_roughly(
-            filename in "[a-zA-Z0-9 ]{1,100}"
+        fn test_sanitize_filename_never_empty(
+            filename in ".{0,50}"  // Any string up to 50 chars
         ) {
             let orchestrator = create_test_orchestrator();
             let sanitized = orchestrator.sanitize_filename(&filename);
 
-            // Length should be the same (no invalid chars to replace in this input)
-            prop_assert_eq!(sanitized.len(), filename.len());
+            // Result should never be empty
+            prop_assert!(!sanitized.is_empty(), "Sanitized filename should never be empty");
+        }
+
+        #[test]
+        fn test_sanitize_filename_preserves_alphanumeric_content(
+            // Generate filenames with only alphanumeric chars and underscore (no edge cases)
+            filename in "[a-zA-Z][a-zA-Z0-9_]{0,50}"
+        ) {
+            let orchestrator = create_test_orchestrator();
+            let sanitized = orchestrator.sanitize_filename(&filename);
+
+            // For simple alphanumeric filenames, content should be preserved
+            prop_assert_eq!(sanitized, filename, "Simple alphanumeric filenames should be unchanged");
         }
     }
 }

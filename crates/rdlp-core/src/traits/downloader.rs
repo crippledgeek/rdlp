@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -174,6 +175,21 @@ impl DownloadProgress {
     }
 }
 
+impl fmt::Display for DownloadProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(pct) = self.percentage {
+            write!(
+                f,
+                "{pct:.1}% ({} / {})",
+                self.bytes_string(),
+                self.total_string()
+            )
+        } else {
+            write!(f, "{} downloaded", self.bytes_string())
+        }
+    }
+}
+
 /// Download statistics after completion
 #[derive(Debug, Clone)]
 pub struct DownloadStats {
@@ -225,6 +241,18 @@ impl DownloadStats {
     /// Format bytes downloaded as human-readable string
     pub fn bytes_string(&self) -> String {
         format_bytes(self.bytes_downloaded)
+    }
+}
+
+impl fmt::Display for DownloadStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} in {:.1}s ({}/s)",
+            self.bytes_string(),
+            self.duration.as_secs_f64(),
+            self.speed_string()
+        )
     }
 }
 

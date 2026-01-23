@@ -28,7 +28,7 @@ impl Orchestrator {
             }
         } else {
             let format_selector = FormatSelector::parse(&self.config.format)
-                .map_err(|e| OrchestratorError::InvalidFormatSelector(e.into()))?;
+                .map_err(OrchestratorError::InvalidFormatSelector)?;
 
             let selected_formats = format_selector.select(formats);
             if selected_formats.is_empty() {
@@ -38,11 +38,7 @@ impl Orchestrator {
             selected_formats[0].clone()
         };
 
-        println!(
-            "✓ Selected format: {} ({})",
-            format.format_id,
-            format.format_note.as_deref().unwrap_or("unknown")
-        );
+        println!("✓ Selected format: {format}");
         Ok(Some(format))
     }
 
@@ -56,36 +52,9 @@ impl Orchestrator {
             return Err(OrchestratorError::NoFormat);
         }
 
+
         // Build menu items with format details
-        let items: Vec<String> = formats
-            .iter()
-            .map(|f| {
-                let quality = f.format_note.as_deref().unwrap_or("unknown");
-                let resolution = if let (Some(w), Some(h)) = (f.width, f.height) {
-                    format!("{w}x{h}")
-                } else {
-                    "N/A".to_string()
-                };
-
-                let size = if let Some(filesize) = f.filesize {
-                    format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
-                } else {
-                    "Unknown".to_string()
-                };
-
-                // Format type (HLS, MP4, etc.)
-                let format_type = f.ext.to_uppercase();
-
-                let codecs = match (&f.vcodec, &f.acodec) {
-                    (Some(v), Some(a)) => format!("{v}/{a}"),
-                    (Some(v), None) => format!("{v} (video only)"),
-                    (None, Some(a)) => format!("{a} (audio only)"),
-                    (None, None) => "Unknown".to_string(),
-                };
-
-                format!("{quality:<12} | {resolution:<10} | {size:<12} | {format_type:<6} | {codecs}")
-            })
-            .collect();
+        let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();
 
         println!("\n📋 Available formats:");
         println!(

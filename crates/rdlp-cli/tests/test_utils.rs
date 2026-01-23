@@ -25,7 +25,7 @@ impl MockExtractor {
         // Create a simple regex that matches if the URL contains the pattern
         // Escape special regex characters
         let escaped = url_pattern_str.replace(".", "\\.");
-        let url_regex = Regex::new(&format!(".*{}.*", escaped)).unwrap();
+        let url_regex = Regex::new(&format!(".*{escaped}.*")).unwrap();
 
         Self {
             name: name.into(),
@@ -66,6 +66,12 @@ impl InfoExtractor for MockExtractor {
 /// Mock extractor registry for testing
 pub struct MockExtractorRegistry {
     extractors: Vec<Arc<dyn InfoExtractor>>,
+}
+
+impl Default for MockExtractorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockExtractorRegistry {
@@ -220,6 +226,12 @@ impl Downloader for MockDownloader {
 /// Mock downloader registry for testing
 pub struct MockDownloaderRegistry {
     downloaders: Vec<Arc<dyn Downloader>>,
+}
+
+impl Default for MockDownloaderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockDownloaderRegistry {
