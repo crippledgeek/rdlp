@@ -19,6 +19,7 @@ use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext, PostProcessConfig};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
+use rdlp_http::HttpClientFactory;
 use rdlp_jsinterp::SimpleJsEngine;
 use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
 use std::path::{Path, PathBuf};
@@ -33,25 +34,10 @@ pub struct Orchestrator {
     pub(super) config: Arc<Config>,
 }
 
-/// Default user agent for HTTP requests
-const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-/// Create a configured HTTP client for extraction
-fn create_http_client() -> Arc<reqwest::Client> {
-    Arc::new(
-        reqwest::Client::builder()
-            .user_agent(DEFAULT_USER_AGENT)
-            .timeout(std::time::Duration::from_secs(60))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to build HTTP client"),
-    )
-}
-
 impl Orchestrator {
     /// Create a new orchestrator with default registries
     pub fn new(config: Config) -> Self {
-        let http_client = create_http_client();
+        let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
 
@@ -111,7 +97,7 @@ impl Orchestrator {
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     ) -> Self {
-        let http_client = create_http_client();
+        let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
 

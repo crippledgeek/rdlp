@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
+rdlp-http = { path = "../rdlp-http" }
 rdlp-extractor = { path = "../rdlp-extractor" }
 rdlp-downloader = { path = "../rdlp-downloader" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }

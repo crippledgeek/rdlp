@@ -1,0 +1,11 @@
+[package]
+name = "rdlp-http"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rdlp-types = { path = "../rdlp-types" }
+reqwest = { workspace = true }
+tokio = { workspace = true }

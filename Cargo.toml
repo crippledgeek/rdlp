@@ -2,6 +2,7 @@
 members = [
     "crates/rdlp-types",
     "crates/rdlp-core",
+    "crates/rdlp-http",
     "crates/rdlp-security",
     "crates/rdlp-extractor",
     "crates/rdlp-downloader",
