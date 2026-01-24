@@ -5,6 +5,8 @@
 //! This crate provides JavaScript execution capabilities using boa_engine,
 //! primarily for YouTube signature decryption.
 
+#![warn(missing_docs)]
+
 use async_trait::async_trait;
 use rdlp_core::{JsEngine, Result, RdlpError};
 
@@ -14,6 +16,7 @@ pub struct SimpleJsEngine {
 }
 
 impl SimpleJsEngine {
+    /// Create a new JavaScript engine instance
     pub fn new() -> Self {
         Self {}
     }

@@ -46,6 +46,8 @@
 //! 3. **Private IP blocking** - Prevents SSRF to internal networks
 //! 4. **Pattern-based sanitization** - Redacts common sensitive patterns
 
+#![warn(missing_docs)]
+
 use regex::Regex;
 use std::net::IpAddr;
 use thiserror::Error;
@@ -64,7 +66,7 @@ pub const MAX_URL_LENGTH: usize = 8192;
 /// Security-related errors
 #[derive(Debug, Error)]
 pub enum SecurityError {
-    /// URL exceeds maximum allowed length
+    /// URL exceeds the maximum allowed length
     #[error("URL too long: {0} bytes (max: {MAX_URL_LENGTH})")]
     UrlTooLong(usize),
 

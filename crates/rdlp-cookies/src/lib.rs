@@ -7,6 +7,8 @@
 //! - Firefox
 //! - Safari (macOS)
 
+#![warn(missing_docs)]
+
 use async_trait::async_trait;
 use rdlp_core::{CookieJar, Result};
 
@@ -16,6 +18,7 @@ pub struct SimpleCookieJar {
 }
 
 impl SimpleCookieJar {
+    /// Create a new empty cookie jar
     pub fn new() -> Self {
         Self {}
     }

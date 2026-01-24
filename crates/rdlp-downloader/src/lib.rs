@@ -236,8 +236,13 @@
 //! - `user_agent`: Custom User-Agent header
 //! - `proxy`: HTTP/HTTPS proxy URL
 
+#![warn(missing_docs)]
+
+/// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
+/// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
+/// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
 
 pub use chunking::{calculate_chunks, chunk_size_for_file, ChunkSizeStrategy};
@@ -245,8 +250,8 @@ pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
 
 use rdlp_core::{Config, Downloader};
+use rdlp_http::HttpClientFactory;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Trait for downloader registries to enable mocking in tests
 pub trait DownloaderRegistryTrait: Send + Sync {
@@ -274,30 +279,8 @@ impl DownloaderRegistry {
             downloaders: Vec::new(),
         };
 
-        // Create optimized HTTP client
-        let mut client_builder = reqwest::Client::builder()
-            .pool_max_idle_per_host(10) // Keep 10 connections alive per host
-            .pool_idle_timeout(Duration::from_secs(90)) // Keep connections for 90s
-            .tcp_keepalive(Duration::from_secs(60)) // TCP keepalive every 60s
-            .tcp_nodelay(true) // Disable Nagle's algorithm for lower latency
-            .connect_timeout(Duration::from_secs(30)) // 30s to establish connection
-            .read_timeout(Duration::from_secs(60)); // 60s idle timeout (not total)
-
-        if let Some(timeout) = config.socket_timeout {
-            client_builder = client_builder.connect_timeout(Duration::from_secs(timeout));
-        }
-
-        if let Some(ref user_agent) = config.user_agent {
-            client_builder = client_builder.user_agent(user_agent);
-        }
-
-        if let Some(ref proxy) = config.proxy {
-            if let Ok(proxy_obj) = reqwest::Proxy::all(proxy) {
-                client_builder = client_builder.proxy(proxy_obj);
-            }
-        }
-
-        let client = client_builder.build().unwrap_or_else(|_| reqwest::Client::new());
+        // Create optimized HTTP client using shared factory
+        let client = HttpClientFactory::from_rdlp_config(config).build();
 
         // Create HTTP downloader with optimized settings
         let http_downloader = HttpDownloader::with_client(client.clone())

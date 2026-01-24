@@ -7,4 +7,6 @@
 //! - Plugin ABI definitions
 //! - Plugin lifecycle management
 
+#![warn(missing_docs)]
+
 // Module structure will be implemented in Phase 9

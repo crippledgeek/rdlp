@@ -22,7 +22,10 @@ pub enum ChunkSizeStrategy {
     ///
     /// **Warning**: This mode does NOT guarantee power-of-two chunk sizes.
     /// Use only for backward compatibility with existing code.
-    Legacy { chunk_count: usize },
+    Legacy {
+        /// Number of chunks to divide the file into
+        chunk_count: usize,
+    },
 }
 
 impl Default for ChunkSizeStrategy {
@@ -114,7 +117,8 @@ pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, 
 
 /// Check if a number is a power of two
 #[inline]
-pub const fn is_power_of_two(n: usize) -> bool {
+#[allow(dead_code)] // Used in tests and property tests
+pub(crate) const fn is_power_of_two(n: usize) -> bool {
     n != 0 && (n & (n - 1)) == 0
 }
 

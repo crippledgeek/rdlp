@@ -50,22 +50,36 @@ impl fmt::Display for DownloadState {
 #[derive(Debug)]
 pub enum DownloadPhase {
     /// Extracting video information from URL
-    Extracting { url: String },
+    Extracting {
+        /// The URL to extract from
+        url: String,
+    },
     /// Selecting format (interactive or automatic)
-    SelectingFormat { info: Box<rdlp_core::InfoDict> },
+    SelectingFormat {
+        /// Extracted video metadata
+        info: Box<rdlp_core::InfoDict>,
+    },
     /// Preparing download (checking for resume state)
     Preparing {
+        /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
+        /// Selected format for download
         format: Box<Format>,
     },
     /// Downloading with progress tracking
     Downloading {
+        /// Path where the file will be saved
         output_path: PathBuf,
+        /// Selected format being downloaded
         format: Box<Format>,
+        /// Resume state (fresh or resuming from offset)
         state: DownloadState,
     },
     /// Download completed successfully
-    Complete { path: PathBuf },
+    Complete {
+        /// Path to the downloaded file
+        path: PathBuf,
+    },
     /// User cancelled the operation
     Cancelled,
 }

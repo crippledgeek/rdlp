@@ -18,7 +18,10 @@ use thiserror::Error;
 pub enum OrchestratorError {
     /// No extractor found for the given URL
     #[error("No extractor found for URL: {url}")]
-    NoExtractor { url: String },
+    NoExtractor {
+        /// The URL that no extractor was found for
+        url: String,
+    },
 
     /// Video extraction failed (wraps domain RdlpError)
     #[error("Failed to extract video information: {0}")]
@@ -32,13 +35,16 @@ pub enum OrchestratorError {
     #[error("No suitable format found matching criteria")]
     NoFormat,
 
-    /// Format selector parsing failed (wraps domain RdlpError)
+    /// Format selector parsing failed
     #[error("Invalid format selector: {0}")]
-    InvalidFormatSelector(#[source] RdlpError),
+    InvalidFormatSelector(String),
 
     /// No downloader found for the URL
     #[error("No downloader found for URL: {url}")]
-    NoDownloader { url: String },
+    NoDownloader {
+        /// The URL that no downloader was found for
+        url: String,
+    },
 
     /// Download failed (wraps domain RdlpError)
     #[error("Download failed: {0}")]
@@ -50,7 +56,10 @@ pub enum OrchestratorError {
 
     /// Missing chunk file during merge
     #[error("Missing chunk file: {path}")]
-    MissingChunk { path: PathBuf },
+    MissingChunk {
+        /// Path to the missing chunk file
+        path: PathBuf,
+    },
 
     /// Chunk merge failed
     #[error("Failed to merge chunk files: {0}")]

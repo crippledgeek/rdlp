@@ -539,8 +539,6 @@ fn test_parse_iso8601_date_invalid() {
 
 #[test]
 fn test_extract_view_count_single() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -557,14 +555,12 @@ fn test_extract_view_count_single() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    assert_eq!(base.extract_view_count(&json_ld), Some(12345));
+    let json_ld = extract_json_ld(&html).unwrap();
+    assert_eq!(extract_view_count(&json_ld), Some(12345));
 }
 
 #[test]
 fn test_extract_view_count_multiple() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -588,15 +584,13 @@ fn test_extract_view_count_multiple() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
     // Should extract WatchAction count, not LikeAction
-    assert_eq!(base.extract_view_count(&json_ld), Some(98765));
+    assert_eq!(extract_view_count(&json_ld), Some(98765));
 }
 
 #[test]
 fn test_extract_tags_from_string() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -609,15 +603,13 @@ fn test_extract_tags_from_string() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    let tags = base.extract_tags(&json_ld).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
+    let tags = extract_tags(&json_ld).unwrap();
     assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
 }
 
 #[test]
 fn test_extract_tags_from_array() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -630,15 +622,13 @@ fn test_extract_tags_from_array() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    let tags = base.extract_tags(&json_ld).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
+    let tags = extract_tags(&json_ld).unwrap();
     assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
 }
 
 #[test]
 fn test_extract_categories_from_string() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -651,15 +641,13 @@ fn test_extract_categories_from_string() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    let categories = base.extract_categories(&json_ld).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
+    let categories = extract_categories(&json_ld).unwrap();
     assert_eq!(categories, vec!["Action"]);
 }
 
 #[test]
 fn test_extract_categories_from_array() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -672,15 +660,13 @@ fn test_extract_categories_from_array() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    let categories = base.extract_categories(&json_ld).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
+    let categories = extract_categories(&json_ld).unwrap();
     assert_eq!(categories, vec!["Action", "Adventure", "Comedy"]);
 }
 
 #[test]
 fn test_extract_thumbnails_creates_thumbnail_list() {
-    let base = TnaFlixNetworkBase::new();
-
     let html = Html::parse_document(
         r#"
         <script type="application/ld+json">
@@ -697,8 +683,8 @@ fn test_extract_thumbnails_creates_thumbnail_list() {
         "#,
     );
 
-    let json_ld = base.extract_json_ld(&html).unwrap();
-    let thumbnails = base.extract_thumbnails(&json_ld).unwrap();
+    let json_ld = extract_json_ld(&html).unwrap();
+    let thumbnails = extract_thumbnails(&json_ld).unwrap();
 
     assert_eq!(thumbnails.len(), 3);
     assert_eq!(thumbnails[0].url, "https://example.com/thumb1.jpg");

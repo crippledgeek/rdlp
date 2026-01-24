@@ -1,3 +1,5 @@
+//! InfoDict and related types for video metadata
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -6,7 +8,7 @@ use crate::Format;
 /// Central metadata structure flowing through the pipeline
 ///
 /// This structure contains all information about a video/audio that has been extracted.
-/// It flows through the extraction → download → post-processing pipeline, with each
+/// It flows through the extraction -> download -> post-processing pipeline, with each
 /// stage potentially adding or modifying information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfoDict {
@@ -208,9 +210,14 @@ impl InfoDict {
             .filter(|f| f.has_video() && f.has_audio())
             .max_by(|a, b| {
                 // Compare by quality, then resolution, then bitrate
-                a.quality.cmp(&b.quality)
+                a.quality
+                    .cmp(&b.quality)
                     .then(a.height.cmp(&b.height))
-                    .then(a.tbr.partial_cmp(&b.tbr).unwrap_or(std::cmp::Ordering::Equal))
+                    .then(
+                        a.tbr
+                            .partial_cmp(&b.tbr)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
             })
     }
 
@@ -220,9 +227,11 @@ impl InfoDict {
             .iter()
             .filter(|f| f.has_video())
             .max_by(|a, b| {
-                a.quality.cmp(&b.quality)
-                    .then(a.height.cmp(&b.height))
-                    .then(a.vbr.partial_cmp(&b.vbr).unwrap_or(std::cmp::Ordering::Equal))
+                a.quality.cmp(&b.quality).then(a.height.cmp(&b.height)).then(
+                    a.vbr
+                        .partial_cmp(&b.vbr)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
             })
     }
 
@@ -232,7 +241,9 @@ impl InfoDict {
             .iter()
             .filter(|f| f.has_audio())
             .max_by(|a, b| {
-                a.abr.partial_cmp(&b.abr).unwrap_or(std::cmp::Ordering::Equal)
+                a.abr
+                    .partial_cmp(&b.abr)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 }
