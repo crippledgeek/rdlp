@@ -4,13 +4,22 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Post-processing pipeline for rdlp (FFmpeg operations, metadata embedding, etc.)"
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
 async-trait = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+
+# For finding executables in PATH
+which = "7.0"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

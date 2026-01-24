@@ -171,16 +171,18 @@ impl DownloadPhase {
                 let resume_from = state.offset();
 
                 // Create progress bar with best available size estimate
-                // For HLS streams, don't use filesize_approx - it's unreliable since the
-                // actual bitrate of the selected variant often differs from the estimate
+                // For HLS streams, use segment-based progress bar (not byte-based)
                 let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
                 let estimated_size = if is_hls {
-                    format.filesize // Only use exact size if available (rare for HLS)
+                    None // HLS uses segment-based progress, not byte-based
                 } else {
                     format.filesize.or(format.filesize_approx)
                 };
-                let progress_bar =
-                    orchestrator.create_progress_bar(estimated_size, resume_from)?;
+                let progress_bar = if is_hls {
+                    orchestrator.create_hls_progress_bar()?
+                } else {
+                    orchestrator.create_progress_bar(estimated_size, resume_from)?
+                };
 
                 // Find downloader
                 let downloader = orchestrator
@@ -211,7 +213,12 @@ impl DownloadPhase {
                 println!("   File: {}", output_path.display());
                 println!("   Stats: {stats}");
 
-                Ok(Self::Complete { path: output_path })
+                // Run post-processing (automatic for HLS, optional for others)
+                let final_path = orchestrator
+                    .run_postprocessing_for_state_machine(&output_path, is_hls)
+                    .await?;
+
+                Ok(Self::Complete { path: final_path })
             }
 
             Self::Complete { .. } | Self::Cancelled => {

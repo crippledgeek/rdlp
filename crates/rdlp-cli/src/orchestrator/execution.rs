@@ -21,18 +21,39 @@ impl ProgressBarCallback {
 
 impl ProgressCallback for ProgressBarCallback {
     fn on_progress(&self, progress: &DownloadProgress) {
-        // Use reported total if available, otherwise fall back to expected size
-        let total = progress.total_bytes.or(self.expected_size);
+        // Check if this is segment-based progress (HLS downloads)
+        if progress.is_segmented() {
+            // For HLS: progress bar tracks segments, message shows bytes
+            if let (Some(completed), Some(total)) = (progress.segments_downloaded, progress.total_segments) {
+                self.progress_bar.set_length(total);
+                self.progress_bar.set_position(completed);
 
-        // If actual bytes exceed expected, update the total to prevent >100% display
-        let effective_total = match total {
-            Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
-            Some(t) => t,
-            None => progress.bytes_downloaded, // Unknown total - show as indeterminate
-        };
+                // Update message with byte info
+                let bytes_str = progress.bytes_string();
+                let speed_str = progress.speed_string();
+                let eta_str = progress.eta
+                    .map(|d| format!("~{}s", d.as_secs()))
+                    .unwrap_or_else(|| "calculating...".to_string());
 
-        self.progress_bar.set_length(effective_total);
-        self.progress_bar.set_position(progress.bytes_downloaded);
+                self.progress_bar.set_message(format!(
+                    "{completed}/{total} segments ({bytes_str}, {speed_str}, {eta_str})"
+                ));
+            }
+        } else {
+            // For HTTP: progress bar tracks bytes
+            // Use reported total if available, otherwise fall back to expected size
+            let total = progress.total_bytes.or(self.expected_size);
+
+            // If actual bytes exceed expected, update the total to prevent >100% display
+            let effective_total = match total {
+                Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
+                Some(t) => t,
+                None => progress.bytes_downloaded, // Unknown total - show as indeterminate
+            };
+
+            self.progress_bar.set_length(effective_total);
+            self.progress_bar.set_position(progress.bytes_downloaded);
+        }
     }
 
     fn on_complete(&self, _stats: &DownloadStats) {
@@ -72,6 +93,33 @@ impl Orchestrator {
         if resume_from > 0 {
             pb.set_position(resume_from);
         }
+
+        Ok(Some(pb))
+    }
+
+    /// Create a segment-based progress bar for HLS downloads
+    ///
+    /// Unlike byte-based progress bars, this tracks segment completion.
+    /// The message shows bytes and speed, while the bar shows segment progress.
+    ///
+    /// # Errors
+    /// Returns an error if progress bar template is invalid
+    pub(super) fn create_hls_progress_bar(&self) -> Result<Option<ProgressBar>> {
+        if !self.config.progress {
+            return Ok(None);
+        }
+
+        let pb = ProgressBar::new(0); // Will be set when we know total segments
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
+                )
+                .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
+                .progress_chars("#>-"),
+        );
+
+        pb.set_message("Downloading segments...");
 
         Ok(Some(pb))
     }

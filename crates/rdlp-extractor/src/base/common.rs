@@ -650,6 +650,45 @@ impl BaseExtractor {
         None
     }
 
+    /// Detect file size using a provided HTTP client
+    ///
+    /// This variant is useful for parallel detection where you need to pass
+    /// the client directly instead of the full context.
+    pub async fn detect_file_size_with_client(
+        url: &str,
+        http_client: &std::sync::Arc<reqwest::Client>,
+    ) -> Option<u64> {
+        // Strategy 1: HEAD request
+        if let Ok(response) = http_client.head(url).send().await {
+            if let Some(size) = response.content_length() {
+                if size > 0 {
+                    return Some(size);
+                }
+            }
+        }
+
+        // Strategy 2: Range request fallback
+        if let Ok(response) = http_client
+            .get(url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .await
+        {
+            if let Some(content_range) = response.headers().get("content-range") {
+                if let Ok(range_str) = content_range.to_str() {
+                    // Parse "bytes 0-0/123456"
+                    if let Some(total) = range_str.split('/').nth(1) {
+                        if let Ok(size) = total.parse::<u64>() {
+                            return Some(size);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Detect file size with verbose logging prefix
     ///
     /// Same as `detect_file_size` but with a custom log prefix for clarity.

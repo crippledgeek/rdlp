@@ -311,6 +311,7 @@ impl HlsDownloader {
     /// * `temp_dir` - Directory to save temporary segment files
     /// * `base_filename` - Base filename for temporary files
     /// * `progress_counter` - Shared atomic counter for bytes downloaded
+    /// * `segments_counter` - Shared atomic counter for segments completed
     ///
     /// # Returns
     /// * `Ok(Vec<PathBuf>)` - Paths to downloaded segment files (in order)
@@ -321,6 +322,7 @@ impl HlsDownloader {
         temp_dir: &Path,
         base_filename: &str,
         progress_counter: Arc<AtomicU64>,
+        segments_counter: Arc<AtomicU64>,
     ) -> Result<Vec<PathBuf>> {
         let total_segments = segment_urls.len();
 
@@ -334,10 +336,16 @@ impl HlsDownloader {
                 let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
                 let downloader = downloader.clone();
                 let progress = progress_counter.clone();
+                let segments = segments_counter.clone();
 
                 async move {
                     // Download segment with retry logic
-                    downloader.download_segment_with_retry(idx, url, segment_path, progress).await
+                    let result = downloader.download_segment_with_retry(idx, url, segment_path, progress).await;
+                    // Increment segment counter on success
+                    if result.is_ok() {
+                        segments.fetch_add(1, Ordering::Relaxed);
+                    }
+                    result
                 }
             })
             .buffer_unordered(self.concurrent_segments)
@@ -489,12 +497,14 @@ impl Downloader for HlsDownloader {
 
         // Step 2: Setup progress tracking
         let downloaded = Arc::new(AtomicU64::new(0));
+        let segments_completed = Arc::new(AtomicU64::new(0));
+        let total_segments = segment_urls.len() as u64;
 
-        // Spawn progress reporter task
+        // Spawn progress reporter task with segment-based progress
         let progress_task = if let Some(callback) = progress {
             let downloaded_clone = downloaded.clone();
+            let segments_clone = segments_completed.clone();
             let start_time_clone = start_time;
-            let expected_size = self.expected_size;
             Some(tokio::spawn(async move {
                 let mut last_update = Instant::now();
                 let update_interval = Duration::from_millis(100);
@@ -504,6 +514,7 @@ impl Downloader for HlsDownloader {
                     let now = Instant::now();
                     if now.duration_since(last_update) >= update_interval {
                         let bytes = downloaded_clone.load(Ordering::Relaxed);
+                        let segments = segments_clone.load(Ordering::Relaxed);
                         let elapsed = now.duration_since(start_time_clone).as_secs_f64();
                         let speed = if elapsed > 0.0 {
                             bytes as f64 / elapsed
@@ -511,8 +522,13 @@ impl Downloader for HlsDownloader {
                             0.0
                         };
 
-                        // Use expected_size for accurate progress reporting
-                        let progress_info = DownloadProgress::new(bytes, expected_size, speed);
+                        // Use segment-based progress for HLS
+                        let progress_info = DownloadProgress::new_with_segments(
+                            bytes,
+                            speed,
+                            segments,
+                            total_segments,
+                        );
                         callback.on_progress(&progress_info);
                         last_update = now;
                     }
@@ -533,6 +549,7 @@ impl Downloader for HlsDownloader {
             temp_dir,
             base_filename,
             downloaded.clone(),
+            segments_completed.clone(),
         ).await {
             Ok(paths) => paths,
             Err(e) => {

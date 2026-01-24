@@ -23,12 +23,13 @@ mod playlist;
 mod utils;
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, Format, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{ExtractionContext, Format, Fragment, InfoDict, InfoExtractor, RdlpError, Result};
 use scraper::Html;
 use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::base::common::BaseExtractor;
+use crate::hls::HlsSizeDetector;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
@@ -133,52 +134,84 @@ impl InfoExtractor for PornHubExtractor {
     }
 }
 
-/// Detect file sizes for formats using BaseExtractor utilities
+/// Detect file sizes and segment counts for formats using parallel requests
+///
+/// All formats are detected concurrently using `join_all` for maximum speed.
+/// HLS formats use fast segment counting (no size fetching - just parses m3u8).
 async fn detect_sizes(formats: Vec<Format>, ctx: &ExtractionContext) -> Vec<Format> {
+    use futures::future::join_all;
+
     let verbose = ctx.config.verbose;
-    let mut formats_with_size = Vec::with_capacity(formats.len());
+    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+    let http_client = ctx.http_client.clone();
 
-    for mut format in formats {
-        let url = &format.url;
-        let is_hls = url.contains(".m3u8") || url.contains("/hls/");
+    // Create detection tasks for all formats in parallel
+    let detection_futures: Vec<_> = formats
+        .into_iter()
+        .map(|format| {
+            let hls_detector = hls_detector.clone();
+            let http_client = http_client.clone();
 
-        if is_hls {
-            // Estimate from bitrate in URL
-            if let Some(size) = utils::estimate_hls_size_from_url(url, verbose) {
-                format.filesize_approx = Some(size);
+            async move {
+                let mut format = format;
+                let url = format.url.clone();
+                let is_hls = url.contains(".m3u8") || url.contains("/hls/");
+
+                if is_hls {
+                    // Fast segment count only (no size fetching) - just parses m3u8
+                    let result = timeout(
+                        Duration::from_secs(5), // Fast - only 1-2 HTTP requests
+                        hls_detector.count_segments(&url),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(Some(segment_count))) => {
+                            // Store segment count in fragments field
+                            format.fragments = Some(
+                                (0..segment_count)
+                                    .map(|_| Fragment {
+                                        url: String::new(),
+                                        duration: None,
+                                        filesize: None,
+                                    })
+                                    .collect(),
+                            );
+                            if verbose {
+                                eprintln!(
+                                    "[PornHub] HLS {}: {} segments",
+                                    format.format_note.as_deref().unwrap_or("unknown"),
+                                    segment_count
+                                );
+                            }
+                        }
+                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                            // Fallback - no segment count available
+                            if verbose {
+                                eprintln!("[PornHub] Could not count segments for: {url}");
+                            }
+                        }
+                    }
+                } else {
+                    // Use BaseExtractor size detection with timeout for non-HLS
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
+                    )
+                    .await;
+
+                    if let Ok(Some(size)) = result {
+                        format.filesize = Some(size);
+                    }
+                }
+
+                format
             }
-        } else {
-            // Use BaseExtractor size detection with timeout
-            if let Some(size) = fetch_file_size_with_timeout(url, ctx).await {
-                format.filesize = Some(size);
-            }
-        }
+        })
+        .collect();
 
-        formats_with_size.push(format);
-    }
-
-    formats_with_size
-}
-
-/// Fetch file size via BaseExtractor with timeout
-async fn fetch_file_size_with_timeout(url: &str, ctx: &ExtractionContext) -> Option<u64> {
-    let result = timeout(
-        Duration::from_secs(5),
-        BaseExtractor::detect_file_size(url, ctx),
-    )
-    .await;
-
-    match result {
-        Ok(size) => size,
-        Err(_) => {
-            BaseExtractor::log_if_verbose(
-                ctx,
-                "PornHub",
-                &format!("Size detection timed out for: {url}"),
-            );
-            None
-        }
-    }
+    // Execute all detection tasks in parallel
+    join_all(detection_futures).await
 }
 
 #[cfg(test)]

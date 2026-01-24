@@ -46,6 +46,15 @@ const MAX_SEGMENTS: usize = 10_000;
 /// Default number of concurrent HTTP requests
 const DEFAULT_CONCURRENCY: usize = 8;
 
+/// Information about an HLS stream
+#[derive(Debug, Clone)]
+pub struct HlsInfo {
+    /// Total size in bytes (sum of all segment sizes) - None if not detected
+    pub total_size: Option<u64>,
+    /// Number of segments in the playlist
+    pub segment_count: usize,
+}
+
 /// HLS playlist size detector
 #[derive(Clone)]
 pub struct HlsSizeDetector {
@@ -108,6 +117,57 @@ impl HlsSizeDetector {
     /// # }
     /// ```
     pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
+        // Use detect_info and extract just the size
+        Ok(self.detect_info(m3u8_url).await?.and_then(|info| info.total_size))
+    }
+
+    /// Fast segment count detection (no size fetching)
+    ///
+    /// Only parses the m3u8 playlist to count segments. This is much faster
+    /// than `detect_info` because it doesn't make HEAD requests to each segment.
+    ///
+    /// # Performance
+    /// - 1-2 HTTP requests (master + media playlist)
+    /// - Typical time: 100-500ms
+    pub async fn count_segments(&self, m3u8_url: &str) -> Result<Option<usize>> {
+        // Validate the input URL for security (SSRF protection)
+        BaseExtractor::validate_url_security(m3u8_url)?;
+
+        if self.verbose {
+            eprintln!("[HLS] Counting segments for: {m3u8_url}");
+        }
+
+        // Parse playlist to extract segment URLs
+        match self.parse_playlist(m3u8_url).await {
+            Ok(urls) => {
+                let count = urls.len();
+                if self.verbose {
+                    eprintln!("[HLS] Found {count} segments");
+                }
+                Ok(Some(count))
+            }
+            Err(e) => {
+                if self.verbose {
+                    eprintln!("[HLS] Failed to parse playlist: {e}");
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Detect the total size and segment count of an HLS stream
+    ///
+    /// This method fetches the playlist, parses it, and calculates both the total size
+    /// and segment count. Use this when you need both pieces of information.
+    ///
+    /// # Arguments
+    /// * `m3u8_url` - URL of the HLS m3u8 playlist
+    ///
+    /// # Returns
+    /// * `Ok(Some(HlsInfo))` - Total size and segment count
+    /// * `Ok(None)` - Info could not be determined (non-fatal)
+    /// * `Err(_)` - Fatal error (network failure, invalid playlist, etc.)
+    pub async fn detect_info(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
         let start = std::time::Instant::now();
 
         // Validate the input URL for security (SSRF protection)
@@ -135,6 +195,8 @@ impl HlsSizeDetector {
             return Ok(None);
         }
 
+        let segment_count = segment_urls.len();
+
         // Step 2: Calculate total size from all segments
         let total_size = match self.sum_segment_sizes(segment_urls).await {
             Ok(size) => size,
@@ -149,12 +211,15 @@ impl HlsSizeDetector {
         if self.verbose {
             let duration = start.elapsed();
             eprintln!(
-                "[HLS] Detection completed in {duration:?}: {} MB ({total_size} bytes)",
+                "[HLS] Detection completed in {duration:?}: {} MB ({total_size} bytes), {segment_count} segments",
                 total_size / 1_000_000
             );
         }
 
-        Ok(Some(total_size))
+        Ok(Some(HlsInfo {
+            total_size: Some(total_size),
+            segment_count,
+        }))
     }
 
     /// Parse m3u8 playlist and extract segment URLs
