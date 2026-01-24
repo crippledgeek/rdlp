@@ -46,6 +46,15 @@ const MAX_SEGMENTS: usize = 10_000;
 /// Default number of concurrent HTTP requests
 const DEFAULT_CONCURRENCY: usize = 8;
 
+/// Information about an HLS stream
+#[derive(Debug, Clone)]
+pub struct HlsInfo {
+    /// Total size in bytes (sum of all segment sizes) - None if not detected
+    pub total_size: Option<u64>,
+    /// Number of segments in the playlist
+    pub segment_count: usize,
+}
+
 /// HLS playlist size detector
 #[derive(Clone)]
 pub struct HlsSizeDetector {
@@ -108,6 +117,57 @@ impl HlsSizeDetector {
     /// # }
     /// ```
     pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
+        // Use detect_info and extract just the size
+        Ok(self.detect_info(m3u8_url).await?.and_then(|info| info.total_size))
+    }
+
+    /// Fast segment count detection (no size fetching)
+    ///
+    /// Only parses the m3u8 playlist to count segments. This is much faster
+    /// than `detect_info` because it doesn't make HEAD requests to each segment.
+    ///
+    /// # Performance
+    /// - 1-2 HTTP requests (master + media playlist)
+    /// - Typical time: 100-500ms
+    pub async fn count_segments(&self, m3u8_url: &str) -> Result<Option<usize>> {
+        // Validate the input URL for security (SSRF protection)
+        BaseExtractor::validate_url_security(m3u8_url)?;
+
+        if self.verbose {
+            eprintln!("[HLS] Counting segments for: {m3u8_url}");
+        }
+
+        // Parse playlist to extract segment URLs
+        match self.parse_playlist(m3u8_url).await {
+            Ok(urls) => {
+                let count = urls.len();
+                if self.verbose {
+                    eprintln!("[HLS] Found {count} segments");
+                }
+                Ok(Some(count))
+            }
+            Err(e) => {
+                if self.verbose {
+                    eprintln!("[HLS] Failed to parse playlist: {e}");
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Detect the total size and segment count of an HLS stream
+    ///
+    /// This method fetches the playlist, parses it, and calculates both the total size
+    /// and segment count. Use this when you need both pieces of information.
+    ///
+    /// # Arguments
+    /// * `m3u8_url` - URL of the HLS m3u8 playlist
+    ///
+    /// # Returns
+    /// * `Ok(Some(HlsInfo))` - Total size and segment count
+    /// * `Ok(None)` - Info could not be determined (non-fatal)
+    /// * `Err(_)` - Fatal error (network failure, invalid playlist, etc.)
+    pub async fn detect_info(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
         let start = std::time::Instant::now();
 
         // Validate the input URL for security (SSRF protection)
@@ -135,6 +195,8 @@ impl HlsSizeDetector {
             return Ok(None);
         }
 
+        let segment_count = segment_urls.len();
+
         // Step 2: Calculate total size from all segments
         let total_size = match self.sum_segment_sizes(segment_urls).await {
             Ok(size) => size,
@@ -149,12 +211,15 @@ impl HlsSizeDetector {
         if self.verbose {
             let duration = start.elapsed();
             eprintln!(
-                "[HLS] Detection completed in {duration:?}: {} MB ({total_size} bytes)",
+                "[HLS] Detection completed in {duration:?}: {} MB ({total_size} bytes), {segment_count} segments",
                 total_size / 1_000_000
             );
         }
 
-        Ok(Some(total_size))
+        Ok(Some(HlsInfo {
+            total_size: Some(total_size),
+            segment_count,
+        }))
     }
 
     /// Parse m3u8 playlist and extract segment URLs
@@ -447,6 +512,99 @@ impl HlsSizeDetector {
 
         Ok(total_size)
     }
+}
+
+/// Detect file sizes and segment counts for all formats in parallel
+///
+/// This is a shared utility function used by multiple extractors to avoid code duplication.
+/// HLS formats get fast segment counting (no size fetching), while other formats get
+/// file size detection via HEAD requests.
+///
+/// # Arguments
+/// * `formats` - Vector of formats to detect sizes for
+/// * `ctx` - Extraction context with HTTP client and config
+/// * `extractor_name` - Name of the extractor for logging (e.g., "PornHub", "RedTube")
+///
+/// # Returns
+/// Vector of formats with sizes/segment counts populated
+pub async fn detect_format_sizes(
+    formats: Vec<rdlp_core::Format>,
+    ctx: &rdlp_core::ExtractionContext,
+    extractor_name: &str,
+) -> Vec<rdlp_core::Format> {
+    use futures::future::join_all;
+    use rdlp_core::Fragment;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let verbose = ctx.config.verbose;
+    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+    let http_client = ctx.http_client.clone();
+    let extractor_name = extractor_name.to_string();
+
+    let detection_futures: Vec<_> = formats
+        .into_iter()
+        .map(|format| {
+            let hls_detector = hls_detector.clone();
+            let http_client = http_client.clone();
+            let extractor_name = extractor_name.clone();
+
+            async move {
+                let mut format = format;
+                let url = format.url.clone();
+                let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
+
+                if is_hls {
+                    // Fast segment count only (parses m3u8, no size fetching)
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        hls_detector.count_segments(&url),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(Some(segment_count))) => {
+                            format.fragments = Some(
+                                (0..segment_count)
+                                    .map(|_| Fragment {
+                                        url: String::new(),
+                                        duration: None,
+                                        filesize: None,
+                                    })
+                                    .collect(),
+                            );
+                            if verbose {
+                                eprintln!(
+                                    "[{extractor_name}] HLS {}: {segment_count} segments",
+                                    format.format_note.as_deref().unwrap_or(&format.format_id),
+                                );
+                            }
+                        }
+                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                            if verbose {
+                                eprintln!("[{extractor_name}] Could not count segments for: {url}");
+                            }
+                        }
+                    }
+                } else {
+                    // Non-HLS: HEAD request for file size
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
+                    )
+                    .await;
+
+                    if let Ok(Some(size)) = result {
+                        format.filesize = Some(size);
+                    }
+                }
+
+                format
+            }
+        })
+        .collect();
+
+    join_all(detection_futures).await
 }
 
 #[cfg(test)]

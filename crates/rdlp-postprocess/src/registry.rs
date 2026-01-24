@@ -1,0 +1,264 @@
+//! PostProcessor registry for managing and executing post-processors.
+//!
+//! The registry manages a collection of post-processors and executes them
+//! in priority order. It handles the full post-processing pipeline including
+//! cleanup of temporary files.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait, processors::*};
+//! use rdlp_core::{InfoDict, PostProcessConfig};
+//! use std::path::PathBuf;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let mut registry = PostProcessorRegistry::new()?;
+//!
+//! // Optionally register additional processors
+//! // registry.register(Box::new(MyCustomProcessor::new()));
+//!
+//! let info = InfoDict::new(
+//!     "test123".to_string(),
+//!     "Test Video".to_string(),
+//!     "Test".to_string(),
+//!     "https://example.com".to_string(),
+//! );
+//!
+//! let config = PostProcessConfig::default();
+//! let files = vec![PathBuf::from("video.mp4")];
+//!
+//! let result = registry.process(&info, files, &config).await?;
+//! println!("Output files: {:?}", result.files);
+//! # Ok(())
+//! # }
+//! ```
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
+use tracing::{debug, info, warn};
+
+use crate::error::Result;
+use crate::ffmpeg::FFmpegRunner;
+use crate::processors::*;
+
+/// Trait for post-processor registry operations.
+#[async_trait]
+pub trait PostProcessorRegistryTrait: Send + Sync {
+    /// Process files through all applicable post-processors.
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> anyhow::Result<PostProcessResult>;
+
+    /// List all registered post-processors.
+    fn list_processors(&self) -> Vec<String>;
+
+    /// Get a post-processor by name.
+    fn get_processor(&self, name: &str) -> Option<Arc<dyn PostProcessor>>;
+}
+
+/// Registry for managing post-processors.
+pub struct PostProcessorRegistry {
+    /// Registered post-processors
+    processors: Vec<Arc<dyn PostProcessor>>,
+    /// Shared FFmpeg runner
+    ffmpeg: Arc<FFmpegRunner>,
+}
+
+impl PostProcessorRegistry {
+    /// Create a new registry with default processors.
+    ///
+    /// This will auto-detect FFmpeg and register all built-in processors.
+    pub fn new() -> Result<Self> {
+        Self::with_ffmpeg_location(None)
+    }
+
+    /// Create a new registry with a custom FFmpeg location.
+    pub fn with_ffmpeg_location(location: Option<&std::path::Path>) -> Result<Self> {
+        let ffmpeg = Arc::new(FFmpegRunner::with_location(location)?);
+        let mut registry = Self {
+            processors: Vec::new(),
+            ffmpeg,
+        };
+
+        // Register default processors in priority order
+        registry.register_defaults();
+
+        Ok(registry)
+    }
+
+    /// Create a registry without FFmpeg (for testing or non-FFmpeg operations).
+    pub fn without_ffmpeg() -> Self {
+        Self {
+            processors: Vec::new(),
+            ffmpeg: Arc::new(FFmpegRunner::new().unwrap_or_else(|_| {
+                // Create a dummy runner that will fail if used
+                FFmpegRunner::with_location(Some(std::path::Path::new("/nonexistent")))
+                    .unwrap_or_else(|_| panic!("Cannot create FFmpeg runner"))
+            })),
+        }
+    }
+
+    /// Register default post-processors.
+    fn register_defaults(&mut self) {
+        // Register in reverse priority order (highest priority first)
+        // Priority 100: Merge video+audio streams
+        self.register(Arc::new(FFmpegMerger::new(self.ffmpeg.clone())));
+
+        // Priority 50: Extract audio
+        self.register(Arc::new(FFmpegExtractAudio::new(self.ffmpeg.clone())));
+
+        // Priority 40: Video conversion/remuxing
+        self.register(Arc::new(FFmpegVideoConvertor::new(self.ffmpeg.clone())));
+
+        // Priority 30: Metadata embedding
+        self.register(Arc::new(FFmpegMetadata::new(self.ffmpeg.clone())));
+
+        // Priority 20: Thumbnail embedding
+        self.register(Arc::new(EmbedThumbnail::new(self.ffmpeg.clone())));
+    }
+
+    /// Register a post-processor.
+    pub fn register(&mut self, processor: Arc<dyn PostProcessor>) {
+        debug!("Registering post-processor: {}", processor.name());
+        self.processors.push(processor);
+    }
+
+    /// Get the FFmpeg runner.
+    pub fn ffmpeg(&self) -> &Arc<FFmpegRunner> {
+        &self.ffmpeg
+    }
+
+    /// Sort processors by priority (highest first).
+    fn sorted_processors(&self) -> Vec<Arc<dyn PostProcessor>> {
+        let mut sorted = self.processors.clone();
+        sorted.sort_by_key(|p| std::cmp::Reverse(p.priority()));
+        sorted
+    }
+}
+
+#[async_trait]
+impl PostProcessorRegistryTrait for PostProcessorRegistry {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> anyhow::Result<PostProcessResult> {
+        let mut current_info = info.clone();
+        let mut current_files = files;
+        let mut all_temp_files = Vec::new();
+
+        let processors = self.sorted_processors();
+
+        for processor in &processors {
+            if !processor.should_run(&current_info, config) {
+                debug!(
+                    "Skipping post-processor {} (should_run returned false)",
+                    processor.name()
+                );
+                continue;
+            }
+
+            info!("Running post-processor: {}", processor.name());
+
+            match processor.process(&current_info, current_files.clone()).await {
+                Ok(result) => {
+                    current_info = result.info;
+                    current_files = result.files;
+                    all_temp_files.extend(result.temp_files);
+
+                    debug!(
+                        "Post-processor {} completed, {} output files",
+                        processor.name(),
+                        current_files.len()
+                    );
+                }
+                Err(e) => {
+                    warn!("Post-processor {} failed: {}", processor.name(), e);
+                    // Continue with other processors on non-fatal errors
+                    // Fatal errors should be propagated
+                    if is_fatal_error(&e) {
+                        return Err(e.into());
+                    }
+                }
+            }
+        }
+
+        // Cleanup temporary files
+        for temp_file in &all_temp_files {
+            if temp_file.exists() {
+                if let Err(e) = tokio::fs::remove_file(temp_file).await {
+                    warn!("Failed to remove temp file {}: {}", temp_file.display(), e);
+                } else {
+                    debug!("Removed temp file: {}", temp_file.display());
+                }
+            }
+        }
+
+        Ok(PostProcessResult {
+            info: current_info,
+            files: current_files,
+            temp_files: Vec::new(), // Already cleaned up
+        })
+    }
+
+    fn list_processors(&self) -> Vec<String> {
+        self.processors
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect()
+    }
+
+    fn get_processor(&self, name: &str) -> Option<Arc<dyn PostProcessor>> {
+        self.processors
+            .iter()
+            .find(|p| p.name().eq_ignore_ascii_case(name))
+            .cloned()
+    }
+}
+
+/// Check if an error is fatal and should stop processing.
+fn is_fatal_error(error: &rdlp_core::RdlpError) -> bool {
+    // Check for fatal error types
+    matches!(
+        error,
+        rdlp_core::RdlpError::FFmpeg(msg) if msg.contains("not found"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_registry_creation() {
+        // This test only works if FFmpeg is installed
+        if which::which("ffmpeg").is_ok() {
+            let registry = PostProcessorRegistry::new().unwrap();
+            let processors = registry.list_processors();
+            assert!(!processors.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_processor_priority_order() {
+        if which::which("ffmpeg").is_ok() {
+            let registry = PostProcessorRegistry::new().unwrap();
+            let sorted = registry.sorted_processors();
+
+            // Verify processors are sorted by priority (highest first)
+            for i in 1..sorted.len() {
+                assert!(
+                    sorted[i - 1].priority() >= sorted[i].priority(),
+                    "Processors not sorted by priority"
+                );
+            }
+        }
+    }
+}

@@ -1,10 +1,11 @@
 //! Download execution and progress tracking
 
 use super::{errors::*, Orchestrator};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Progress callback that updates a progress bar
 struct ProgressBarCallback {
@@ -21,18 +22,39 @@ impl ProgressBarCallback {
 
 impl ProgressCallback for ProgressBarCallback {
     fn on_progress(&self, progress: &DownloadProgress) {
-        // Use reported total if available, otherwise fall back to expected size
-        let total = progress.total_bytes.or(self.expected_size);
+        // Check if this is segment-based progress (HLS downloads)
+        if progress.is_segmented() {
+            // For HLS: progress bar tracks segments, message shows bytes
+            if let (Some(completed), Some(total)) = (progress.segments_downloaded, progress.total_segments) {
+                self.progress_bar.set_length(total);
+                self.progress_bar.set_position(completed);
 
-        // If actual bytes exceed expected, update the total to prevent >100% display
-        let effective_total = match total {
-            Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
-            Some(t) => t,
-            None => progress.bytes_downloaded, // Unknown total - show as indeterminate
-        };
+                // Update message with byte info
+                let bytes_str = progress.bytes_string();
+                let speed_str = progress.speed_string();
+                let eta_str = progress.eta
+                    .map(|d| format!("~{}s", d.as_secs()))
+                    .unwrap_or_else(|| "calculating...".to_string());
 
-        self.progress_bar.set_length(effective_total);
-        self.progress_bar.set_position(progress.bytes_downloaded);
+                self.progress_bar.set_message(format!(
+                    "{completed}/{total} segments ({bytes_str}, {speed_str}, {eta_str})"
+                ));
+            }
+        } else {
+            // For HTTP: progress bar tracks bytes
+            // Use reported total if available, otherwise fall back to expected size
+            let total = progress.total_bytes.or(self.expected_size);
+
+            // If actual bytes exceed expected, update the total to prevent >100% display
+            let effective_total = match total {
+                Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
+                Some(t) => t,
+                None => progress.bytes_downloaded, // Unknown total - show as indeterminate
+            };
+
+            self.progress_bar.set_length(effective_total);
+            self.progress_bar.set_position(progress.bytes_downloaded);
+        }
     }
 
     fn on_complete(&self, _stats: &DownloadStats) {
@@ -48,6 +70,8 @@ impl ProgressCallback for ProgressBarCallback {
 impl Orchestrator {
     /// Create a progress bar for download tracking
     ///
+    /// Uses steady tick for smooth animation regardless of download speed.
+    ///
     /// # Errors
     /// Returns an error if progress bar template is invalid
     pub(super) fn create_progress_bar(
@@ -59,7 +83,11 @@ impl Orchestrator {
             return Ok(None);
         }
 
-        let pb = ProgressBar::new(filesize.unwrap_or(0));
+        // Use higher refresh rate (30 fps) for smoother animation
+        let pb = ProgressBar::with_draw_target(
+            filesize,
+            ProgressDrawTarget::stderr_with_hz(30),
+        );
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(
@@ -69,9 +97,48 @@ impl Orchestrator {
                 .progress_chars("#>-"),
         );
 
+        // Enable steady tick for smooth spinner animation (10 fps)
+        pb.enable_steady_tick(Duration::from_millis(100));
+
         if resume_from > 0 {
             pb.set_position(resume_from);
         }
+
+        Ok(Some(pb))
+    }
+
+    /// Create a segment-based progress bar for HLS downloads
+    ///
+    /// Unlike byte-based progress bars, this tracks segment completion.
+    /// The message shows bytes and speed, while the bar shows segment progress.
+    /// Uses steady tick for smooth animation between segment completions.
+    ///
+    /// # Errors
+    /// Returns an error if progress bar template is invalid
+    pub(super) fn create_hls_progress_bar(&self) -> Result<Option<ProgressBar>> {
+        if !self.config.progress {
+            return Ok(None);
+        }
+
+        // Use higher refresh rate (30 fps) for smoother animation
+        let pb = ProgressBar::with_draw_target(
+            Some(0), // Will be set when we know total segments
+            ProgressDrawTarget::stderr_with_hz(30),
+        );
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
+                )
+                .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
+                .progress_chars("#>-"),
+        );
+
+        // Enable steady tick for smooth spinner animation (10 fps)
+        // This keeps the spinner moving even when waiting for segments
+        pb.enable_steady_tick(Duration::from_millis(100));
+
+        pb.set_message("Downloading segments...");
 
         Ok(Some(pb))
     }

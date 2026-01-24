@@ -160,6 +160,8 @@ impl Downloader for MockDownloader {
                 speed: 0.0,
                 eta: None,
                 percentage: Some(100.0),
+                segments_downloaded: None,
+                total_segments: None,
             };
             callback.on_progress(&progress);
         }
@@ -211,6 +213,8 @@ impl Downloader for MockDownloader {
                 speed: 0.0,
                 eta: None,
                 percentage: Some(100.0),
+                segments_downloaded: None,
+                total_segments: None,
             };
             callback.on_progress(&progress);
         }

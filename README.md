@@ -36,11 +36,12 @@
 | Category | Features |
 |----------|----------|
 | **Performance** | 37x faster • 10.5 MB/s downloads • Power-of-two chunking • Fine-grained parallelism |
-| **Protocols** | HTTP/HTTPS • HLS size detection • DASH (planned) |
+| **Protocols** | HTTP/HTTPS • HLS streaming with segment progress • DASH (planned) |
 | **Reliability** | Auto-resume • Ctrl+C interrupt handling • Backward-compatible chunks |
-| **Site Support** | 4 sites • TNAFlix • EMPFlix • MovieFap • RedTube |
-| **User Experience** | Interactive format selection • Real-time progress bars • Verbose mode |
-| **Code Quality** | 100% Rust • 61 tests • 0 unsafe code • 0 compiler warnings |
+| **Site Support** | 5 sites • TNAFlix • EMPFlix • MovieFap • RedTube • PornHub (with playlists) |
+| **User Experience** | Interactive format selection • Segment-based progress bars • Verbose mode |
+| **Post-Processing** | FFmpeg integration • Audio extraction • Metadata embedding • Thumbnail embedding |
+| **Code Quality** | 100% Rust • 213+ tests • 0 unsafe code • 0 compiler warnings |
 
 ### ⚙️ Current Status
 
@@ -55,32 +56,33 @@
 | Resume Support | ✅ Production | Auto-resume interrupted downloads (Ctrl+C) |
 | Interactive Selection | ✅ Production | Arrow keys + ESC to choose format |
 | Filesize Detection | ✅ Production | HEAD/Range requests with CDN fallback |
-| **HLS Size Detection** | ✅ Production | M3U8 playlist parsing with parallel fetching |
+| **HLS Streaming** | ✅ Production | Full HLS downloads with segment-based progress |
+| **FFmpeg Post-Processing** | ✅ Production | Remux, audio extraction, metadata embedding |
+| **Playlist Support** | ✅ Production | Batch downloads with pagination (PornHub) |
 | TNAFlix/EMPFlix/MovieFap | ✅ Production | Multi-quality extraction (144p-720p) |
-| RedTube | ✅ Production | HLS + MP4 formats with size detection |
-| Progress Bars | ✅ Production | Real-time speed, ETA, and progress |
+| RedTube | ✅ Production | HLS + MP4 formats with segment counting |
+| PornHub | ✅ Production | HLS streaming with playlist support |
+| Progress Bars | ✅ Production | Segment-based for HLS, bytes for HTTP |
 | Format Selection | ✅ Production | "best", "bestvideo", etc. |
 | Config Files | ✅ Production | TOML/YAML support |
-| HLS Downloader | 🚧 Next Up | Actual HLS video downloads |
 | More Site Support | 🚧 Planned | Vimeo, Dailymotion, Archive.org |
-| FFmpeg Integration | 🚧 Planned | Format conversion and merging |
 | Plugin System | 🚧 Planned | Dynamic extractor loading |
 
 ### 🎬 Supported Sites
 
-Currently supporting **4 adult content sites** with **permissive Terms of Service**:
+Currently supporting **5 adult content sites** with **permissive Terms of Service**:
 
-| Site | Formats | Resolutions | Size Detection | Status |
-|------|---------|-------------|----------------|--------|
-| **TNAFlix** | MP4 | 144p - 720p | HEAD + Range fallback | ✅ Stable |
-| **EMPFlix** | MP4 | 144p - 720p | HEAD + Range fallback | ✅ Stable |
-| **MovieFap** | MP4 | 144p - 720p | HEAD + Range fallback | ✅ Stable |
-| **RedTube** | HLS + MP4 | Multiple variants | M3U8 playlist parsing | ✅ Stable |
+| Site | Formats | Resolutions | Size Detection | Features | Status |
+|------|---------|-------------|----------------|----------|--------|
+| **TNAFlix** | MP4 | 144p - 720p | HEAD + Range fallback | - | ✅ Stable |
+| **EMPFlix** | MP4 | 144p - 720p | HEAD + Range fallback | - | ✅ Stable |
+| **MovieFap** | MP4 | 144p - 720p | HEAD + Range fallback | - | ✅ Stable |
+| **RedTube** | HLS + MP4 | Multiple variants | Fast segment counting | Segment progress | ✅ Stable |
+| **PornHub** | HLS | Multiple variants | Fast segment counting | **Playlist support** | ✅ Stable |
 
 **Extractors in Development**: None currently
 
 **Roadmap** (Sites with permissive ToS):
-- 🚧 **Next**: HLS downloader implementation (for RedTube HLS formats)
 - 📅 **Planned**: Vimeo, Dailymotion, Archive.org
 - 🔌 **Future**: Plugin system for community-contributed extractors
 
@@ -164,8 +166,50 @@ Supported extractors:
   - EMPFlix: https://www.empflix.com/*
   - MovieFap: https://www.moviefap.com/*
   - RedTube: https://www.redtube.com/*
+  - PornHub: https://www.pornhub.com/*
 
-Total: 4 extractors
+Total: 5 extractors
+```
+
+### 📋 Playlist Downloads
+
+```bash
+# Download entire playlist (auto-detected by URL)
+rdlp "https://www.pornhub.com/playlist/123456"
+
+# Playlist with interactive confirmation
+rdlp -i "https://www.pornhub.com/playlist/123456"
+```
+
+**Output:**
+```
+🔍 Finding extractor for URL...
+✓ Using PornHub extractor
+📊 Extracting playlist information...
+✓ Playlist: Best Videos Collection
+✓ Found 36 videos
+
+============================================================
+📋 Playlist: Best Videos Collection
+📊 Total videos: 36
+============================================================
+
+? This will download 36 videos. Continue? (y/n) › yes
+
+────────────────────────────────────────────────────────────
+📥 [1/36] Video Title One
+────────────────────────────────────────────────────────────
+⠏ [195/198 segments] (125.3 MB, 2.5 MB/s, 00:12)
+✅ [1/36] Saved: Video Title One.mp4
+
+[... continues for all videos ...]
+
+============================================================
+📋 Playlist Download Summary
+============================================================
+✅ Downloaded: 34/36
+❌ Failed: 2
+============================================================
 ```
 
 ### ⏸️ Interrupt & Resume
@@ -236,15 +280,15 @@ Quality      | Resolution | Size         | Codecs       | Protocol
   ...
 ```
 
-**Example: RedTube (HLS + MP4 formats)**
+**Example: RedTube/PornHub (HLS formats with segment counting)**
 ```
 📋 Available formats:
-Quality      | Resolution | Size         | Codecs       | Protocol
+Quality      | Resolution | Size            | Type | Codecs
 -------------------------------------------------------------------------
-hls-720      | 1280x720   | 568.0 MB     | h264/aac     | HLS
-hls-480      | 854x480    | 310.0 MB     | h264/aac     | HLS
-http-720     | 1280x720   | 590.2 MB     | h264/aac     | HTTP
-http-480     | 854x480    | 245.3 MB     | h264/aac     | HTTP
+1080p        | 1920x1080  | 754 segments    | HLS  | h264/aac
+720p         | 1280x720   | 612 segments    | HLS  | h264/aac
+480p         | 854x480    | 398 segments    | HLS  | h264/aac
+240p         | 426x240    | 198 segments    | HLS  | h264/aac
 ```
 
 **Controls:**
@@ -252,7 +296,7 @@ http-480     | 854x480    | 245.3 MB     | h264/aac     | HTTP
 - `Enter` - Select and download
 - `ESC` - Cancel selection (exits cleanly, no error)
 
-> **Note**: HLS formats currently show size only (download support coming in Phase 5)
+> **Note**: HLS formats show segment count instead of size (fast detection). Progress bar shows segment completion during download.
 
 ## ✨ Features
 
@@ -263,13 +307,16 @@ http-480     | 854x480    | 245.3 MB     | h264/aac     | HTTP
 | **Power-of-Two Chunking** | Memory-aligned chunks (64 KB - 8 MB) targeting ~1024 chunks | ✅ |
 | **Fine-Grained Parallelism** | Up to 591 concurrent chunks processed 4 at a time | ✅ |
 | **37x Faster Downloads** | 590 MB in 56.4s (10.5 MB/s) with 7-layer optimization stack | ✅ |
-| **HLS Size Detection** | M3U8 playlist parsing with parallel segment fetching | ✅ |
-| **Multi-Quality** | Automatic detection of 144p to 720p formats | ✅ |
+| **HLS Streaming** | Full HLS downloads with segment-based progress tracking | ✅ |
+| **Fast Segment Counting** | M3U8 parsing in ~100-500ms (no size fetching) | ✅ |
+| **Playlist Support** | Batch downloads with pagination and progress tracking | ✅ |
+| **Multi-Quality** | Automatic detection of 144p to 1080p formats | ✅ |
 | **Smart Filesize** | HEAD/Range requests with CDN fallback | ✅ |
 | **Streaming** | Constant memory usage (~13MB) regardless of video size | ✅ |
 | **Resume Support** | Ctrl+C to pause, auto-resume on restart (backward-compatible) | ✅ |
-| **Progress Bars** | Real-time speed, ETA, bytes downloaded/total | ✅ |
+| **Progress Bars** | Segment-based for HLS, bytes-based for HTTP | ✅ |
 | **Format Selection** | `-f best`, `-f bestvideo`, or interactive menu | ✅ |
+| **FFmpeg Post-Processing** | Remux HLS to MP4, extract audio, embed metadata | ✅ |
 
 ### 🖥️ CLI Features
 
@@ -288,11 +335,11 @@ http-480     | 854x480    | 245.3 MB     | h264/aac     | HTTP
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Build Status** | ✅ Passing | Zero compiler warnings (release builds) |
-| **Test Coverage** | 61 tests | All passing (unit tests) |
+| **Test Coverage** | 213+ tests | All passing (unit + integration tests) |
 | **Architecture** | 8 crates | Clean separation of concerns |
 | **Type Safety** | 100% | No unsafe code |
 | **Documentation** | Full | Inline docs + comprehensive guides |
-| **Rust Files** | 36 files | Pure Rust (2024 Edition) |
+| **Rust Files** | 50+ files | Pure Rust (2024 Edition) |
 
 ## Architecture
 
@@ -336,11 +383,12 @@ URL → Extraction → Download → Post-Processing → Video File
 - Support resume via HTTP Range requests
 - Calculate download statistics
 
-**Post-Processing Stage (Future):**
-- Merge video and audio streams
-- Convert formats with FFmpeg
-- Embed metadata and thumbnails
-- Clean up temporary files
+**Post-Processing Stage:**
+- Remux HLS segments to MP4 container (automatic for HLS downloads)
+- Extract audio to MP3/AAC/Opus/FLAC/WAV
+- Embed metadata (title, artist, date, chapters)
+- Embed thumbnail as cover art (MP4/MKV/MP3/FLAC)
+- Priority-based processor pipeline (100→50→40→30→20)
 
 ### Key Design Decisions
 
@@ -467,20 +515,48 @@ cargo doc --no-deps --open
 - [x] RedTube extractor integration
 - [x] 3 unit tests + real-world validation
 - [x] **Performance**: 2-5s per HLS format (300-800 segments)
-- [x] **Status**: Production-ready, 59/59 tests passing
+- [x] **Status**: Production-ready
 
-### Phase 5: HLS Downloader 🚧 NEXT UP
-- [ ] HLS fragment downloader
-- [ ] M3U8 playlist fetching and parsing
-- [ ] Segment download with progress tracking
-- [ ] Resume support for HLS streams
-- [ ] AES-128 decryption support
+### Phase 5: PornHub Playlist Support ✅ COMPLETE (2026-01-22)
+- [x] PornHub video extractor with HLS support
+- [x] Playlist extraction with pagination (AJAX endpoint)
+- [x] Page calculation formula from yt-dlp
+- [x] Rate limiting (500ms between pages)
+- [x] Video deduplication with HashSet
+- [x] Graceful degradation (skip failed videos)
+- [x] **Status**: Production-ready, full playlist support
 
-### Phases 6-10: Future
+### Phase 6: CLI Playlist Integration ✅ COMPLETE (2026-01-22)
+- [x] Auto-detection of playlists vs single videos
+- [x] Batch download workflow with confirmation
+- [x] Per-video progress tracking [N/total]
+- [x] Summary report with success/failure counts
+- [x] Ctrl+C interrupt handling
+- [x] **Status**: Production-ready
+
+### Phase 6.5: HLS Progress & Segment Counting ✅ COMPLETE (2026-01-24)
+- [x] Segment-based progress tracking (195/198 segments)
+- [x] Fast segment counting (~100-500ms, no size fetching)
+- [x] Format table shows segment count for HLS formats
+- [x] Dynamic progress bar adjustment
+- [x] Leftover segment cleanup before downloads
+- [x] All extractors updated (PornHub, RedTube)
+- [x] **Status**: Production-ready, 213 tests passing
+
+### Phase 7: Post-Processing Pipeline ✅ COMPLETE (2026-01-23)
+- [x] FFmpegRunner with auto-detection
+- [x] FFmpegMerger - Remux HLS to MP4
+- [x] FFmpegExtractAudio - Audio extraction with quality settings
+- [x] FFmpegVideoConvertor - Remux or transcode
+- [x] FFmpegMetadata - Embed title, artist, chapters
+- [x] EmbedThumbnail - Cover art for MP4/MKV/MP3
+- [x] Priority-based processor registry
+- [x] **Status**: Production-ready, 25 tests passing
+
+### Phases 8-10: Future
 - Additional site extractors (Vimeo, Dailymotion, Archive.org)
 - Enhanced CLI features
 - Format selection DSL parser
-- FFmpeg post-processing
 - Browser cookie extraction
 - Plugin system
 - Polish and release
@@ -586,9 +662,11 @@ Tested on Windows 11, Intel Core i7, 1 Gbps connection:
 |-----------|------|-------|
 | URL Pattern Matching | < 1ms | Compiled regex |
 | Extraction (HTML parse) | 50-100ms | Network dependent |
-| HLS Size Detection | 2-5s | 300-800 segments, 8 concurrent |
+| **Fast Segment Counting** | 100-500ms | Parses m3u8 only (no size fetching) |
+| HLS Full Size Detection | 2-5s | 300-800 segments, 8 concurrent HEAD requests |
 | Format Selection | < 1ms | In-memory comparison |
 | Chunk Cleanup | ~100ms | 591 files removed automatically |
+| FFmpeg Remux (HLS→MP4) | 1-5s | Copy streams, no re-encoding |
 
 ### Memory Usage
 
@@ -632,14 +710,13 @@ Perfect for newcomers to the Rust ecosystem:
 
 | Area | Difficulty | Crate(s) | Description | Examples |
 |------|------------|----------|-------------|----------|
-| **Extractors** | 🟢 Easy | `rdlp-extractor` | Add support for new sites | See `tnaflix.rs`, `redtube.rs` as templates |
+| **Extractors** | 🟢 Easy | `rdlp-extractor` | Add support for new sites | See `tnaflix.rs`, `pornhub.rs` as templates |
 | **Testing** | 🟢 Easy | All crates | Write unit/integration tests | Add tests for edge cases, error handling |
 | **Documentation** | 🟢 Easy | All crates | Examples, guides, API docs | Inline docs, CLAUDE.md updates, tutorials |
 | **CLI UX** | 🟡 Medium | `rdlp-cli` | Better error messages, progress display | Colored output, better help text |
 | **Performance** | 🟡 Medium | `rdlp-downloader` | Benchmarking, profiling, optimizations | Criterion benchmarks, flamegraphs |
-| **HLS Downloader** | 🟡 Medium | `rdlp-downloader` | Implement HLS video downloads | Segment fetching, AES-128 decryption |
+| **AES-128 Decryption** | 🟡 Medium | `rdlp-downloader` | Encrypted HLS stream support | Key fetching, segment decryption |
 | **DASH Protocol** | 🔴 Hard | `rdlp-downloader` | Adaptive streaming (DASH MPD) | MPD parsing, segment selection |
-| **FFmpeg Integration** | 🔴 Hard | `rdlp-postprocess` | Format conversion, stream merging | FFmpeg command building, process management |
 | **Plugin System** | 🔴 Hard | `rdlp-plugin` | Dynamic extractor loading | libloading, safe FFI, versioning |
 
 ### 🔧 How to Add a New Extractor
@@ -746,31 +823,34 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 | **Memory Usage** | ~13 MB (constant streaming) | Varies (can be high) |
 | **Download Speed** | 10.5 MB/s (37x optimized) | Varies by implementation |
 | **Startup Time** | Instant | ~1-2s (Python import) |
-| **Supported Sites** | 4 (growing) | 1800+ |
+| **Supported Sites** | 5 (growing) | 1800+ |
 | **Resume Support** | ✅ Native (Range requests) | ✅ Native |
 | **Parallel Downloads** | ✅ Power-of-two chunking | ✅ Fragment-based |
-| **HLS Support** | 🚧 Size detection (download coming) | ✅ Full support |
+| **HLS Support** | ✅ Full (with segment progress) | ✅ Full support |
+| **Playlist Support** | ✅ PornHub (pagination) | ✅ Many sites |
 | **DASH Support** | ❌ Planned | ✅ Full support |
+| **FFmpeg Integration** | ✅ Remux, audio, metadata | ✅ Full support |
 | **Plugin System** | 🚧 Planned | ✅ Native (Python imports) |
 | **ToS Compliance** | ✅ Focus on permissive sites | ⚠️ Supports all sites |
 | **Type Safety** | ✅ 100% (Rust compiler) | ⚠️ Optional (type hints) |
-| **Maturity** | Alpha (stable for 4 sites) | Production (battle-tested) |
+| **Maturity** | Alpha (stable for 5 sites) | Production (battle-tested) |
 
 **When to choose rdlp:**
 - ✅ You need maximum performance (37x faster downloads)
 - ✅ You want minimal memory footprint (~13 MB constant)
 - ✅ You prefer type-safe, compiled binaries
 - ✅ You care about ToS compliance
-- ✅ You're downloading from supported sites (TNAFlix, RedTube, etc.)
+- ✅ You're downloading from supported sites (TNAFlix, RedTube, PornHub, etc.)
+- ✅ You want segment-based progress for HLS streams
 
 **When to choose yt-dlp:**
 - ✅ You need broad site support (1800+ sites)
 - ✅ You need mature, battle-tested software
-- ✅ You need full HLS/DASH support right now
+- ✅ You need DASH support right now
 - ✅ You prefer Python extensibility
-- ✅ You need features like subtitle extraction, post-processing, etc.
+- ✅ You need features like subtitle extraction, browser cookies, etc.
 
-**Bottom Line**: rdlp is faster and more memory-efficient with stronger type safety, but yt-dlp has far more site support and maturity. Choose based on your needs!
+**Bottom Line**: rdlp is faster and more memory-efficient with stronger type safety. It now has full HLS support with FFmpeg post-processing. yt-dlp has far more site support and maturity. Choose based on your needs!
 
 ### Why Rust?
 
@@ -782,7 +862,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Can I use rdlp in production?
 
-**Yes, for supported sites!** The current version is production-ready for TNAFlix, EMPFlix, and MovieFap. Features like resume, progress tracking, and format selection are stable and well-tested.
+**Yes, for supported sites!** The current version is production-ready for TNAFlix, EMPFlix, MovieFap, RedTube, and PornHub. Features like resume, progress tracking, format selection, HLS streaming, and FFmpeg post-processing are stable and well-tested.
 
 **Note on site support**: rdlp prioritizes sites with permissive Terms of Service. We're expanding to Vimeo, Dailymotion, Archive.org, and other platforms that explicitly allow or don't prohibit downloading.
 
@@ -828,17 +908,20 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Does rdlp support HLS/DASH?
 
-**Partial HLS support**:
-- ✅ **HLS Size Detection** - M3U8 playlist parsing with parallel segment size fetching (Phase 4, completed)
-- 🚧 **HLS Downloader** - Actual HLS video downloads (Phase 5, in development)
+**Full HLS support**:
+- ✅ **HLS Streaming** - Complete download with segment-based progress (Phase 5-6.5)
+- ✅ **Fast Segment Counting** - M3U8 parsing in ~100-500ms (no size fetching)
+- ✅ **FFmpeg Remux** - Automatic HLS→MP4 conversion (Phase 7)
 - ❌ **DASH** - Not yet supported (planned for future phases)
 
 **Current capabilities:**
-- RedTube extractor detects HLS formats and shows accurate file sizes
-- Can parse master playlists and media playlists
-- Parallel segment size fetching (8 concurrent requests)
+- RedTube and PornHub extractors with full HLS download support
+- Segment-based progress tracking (195/198 segments)
+- Format table shows segment count for HLS formats
+- Automatic FFmpeg remux to MP4 container after download
+- Fast detection (~100-500ms per format)
 
-**Coming soon:** Full HLS download support with segment merging and AES-128 decryption
+**Coming soon:** DASH/MPD support, AES-128 decryption
 
 ### Can I cancel a download without losing progress?
 
@@ -904,6 +987,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed legal guidelines.
 | **Dailymotion** | ✅ Planned | Allows downloading where creators enable it |
 | **TNAFlix Network** | ✅ Supported | Permissive ToS, adult content hosting |
 | **RedTube** | ✅ Supported | Permissive ToS, adult content hosting |
+| **PornHub** | ✅ Supported | Permissive ToS, adult content hosting (with playlists) |
 | **YouTube** | ❌ Deferred | Explicit ToS prohibition against downloading (Section 4.B) |
 | **Netflix/Disney+** | ❌ Never | DRM-protected, explicit ToS violations |
 
@@ -964,41 +1048,43 @@ This project wouldn't be possible without these amazing open source projects:
 | Metric | Value |
 |--------|-------|
 | **Language** | 100% Rust (2024 Edition) |
-| **Rust Files** | 36 source files |
+| **Rust Files** | 50+ source files |
 | **Crates** | 8 (modular workspace) |
-| **Dependencies** | 24 (workspace-level, including m3u8-rs) |
-| **Tests** | 61 unit tests (all passing) |
+| **Dependencies** | 26 (workspace-level, including m3u8-rs, futures) |
+| **Tests** | 213+ tests (all passing) |
 | **Build Time** | ~10s (clean release), ~2s (incremental) |
 | **Binary Size** | ~8 MB (release, no runtime dependencies) |
 | **Unsafe Code** | 0% (100% safe Rust) |
 | **Download Speed** | 10.5 MB/s (37x faster than baseline) |
-| **Status** | Alpha (Production-ready for 4 sites) |
+| **Status** | Alpha (Production-ready for 5 sites) |
 
 ## 🗺️ Roadmap
 
-### ✅ Completed (2026-01-20)
+### ✅ Completed (2026-01-24)
 - **Phase 1: Foundation** - Core traits, error handling, 8-crate workspace architecture
 - **Phase 2: TNAFlix Support** - HTTP downloader, streaming, resume, progress tracking
 - **Phase 2.5: Power-of-Two Chunking** - 37x faster downloads with memory-aligned chunks
 - **Phase 3: Resume Compatibility** - Backward-compatible with old chunk format
 - **Phase 4: HLS Size Detection** - M3U8 playlist parsing with parallel segment fetching
+- **Phase 5: PornHub Playlist Support** - Full playlist extraction with pagination
+- **Phase 6: CLI Playlist Integration** - Batch downloads with [N/total] progress
+- **Phase 6.5: HLS Progress & Segment Counting** - Fast segment counting, segment-based progress
+- **Phase 7: Post-Processing Pipeline** - FFmpeg integration (remux, audio, metadata, thumbnails)
 - **TNAFlix Network** - Support for TNAFlix, EMPFlix, MovieFap (MP4 downloads)
-- **RedTube Support** - HLS + MP4 formats with intelligent size detection
+- **RedTube Support** - HLS + MP4 formats with segment counting
+- **PornHub Support** - HLS streaming with full playlist support
 - **Interactive CLI** - Format selection with arrow keys + ESC cancellation
 - **Smart Filesize** - HEAD/Range request detection with CDN fallback
 - **Performance Optimizations** - 7-layer optimization stack (10.5 MB/s downloads)
-
-### 🚧 In Progress
-- **Phase 5: HLS Downloader** - Actual HLS video downloads with segment merging
+- **FFmpeg Post-Processing** - Remux HLS→MP4, audio extraction, metadata embedding
 
 ### 📅 Planned
 - **More Extractors** - Vimeo, Dailymotion, Archive.org, and more
 - **Enhanced CLI** - Better format selection DSL, improved UX
-- **FFmpeg Integration** - Format conversion and stream merging
 - **Browser Cookies** - Extract cookies for authenticated downloads
 - **Plugin System** - Dynamic loading of custom extractors
 - **Subtitle Support** - Download and embed subtitles/captions
-- **Playlist Support** - Batch download from playlists
+- **AES-128 Decryption** - Encrypted HLS stream support
 - **v1.0.0 Release** - Stable API, comprehensive docs, binary releases
 
 See [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for detailed technical roadmap.
@@ -1017,7 +1103,7 @@ If you find rdlp useful, please consider starring the repository! It helps other
 
 Made with ❤️ and 🦀 by the rdlp contributors
 
-**Status**: Alpha (Production-Ready for 4 Sites) | **License**: MIT OR Apache-2.0 | **Rust**: 2024 Edition | **Performance**: 37x Faster
+**Status**: Alpha (Production-Ready for 5 Sites) | **License**: MIT OR Apache-2.0 | **Rust**: 2024 Edition | **Performance**: 37x Faster
 
 [Report Bug](https://github.com/yourusername/rdlp/issues) · [Request Feature](https://github.com/yourusername/rdlp/issues) · [Discussions](https://github.com/yourusername/rdlp/discussions)
 

@@ -23,12 +23,11 @@ mod playlist;
 mod utils;
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, Format, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
 use scraper::Html;
-use std::time::Duration;
-use tokio::time::timeout;
 
 use crate::base::common::BaseExtractor;
+use crate::hls::detect_format_sizes;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
@@ -72,14 +71,6 @@ impl InfoExtractor for PornHubExtractor {
         &PORNHUB_VIDEO_URL_PATTERN
     }
 
-    fn suitable(&self, url: &str) -> bool {
-        patterns::is_suitable(url)
-    }
-
-    fn priority(&self) -> i32 {
-        0
-    }
-
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let host = utils::extract_host(url);
 
@@ -113,8 +104,8 @@ impl InfoExtractor for PornHubExtractor {
             )));
         }
 
-        // Detect file sizes
-        let formats_with_size = detect_sizes(formats, ctx).await;
+        // Detect file sizes and segment counts
+        let formats_with_size = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict
         let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
@@ -131,53 +122,13 @@ impl InfoExtractor for PornHubExtractor {
 
         playlist::extract_playlist(self, url, ctx).await
     }
-}
 
-/// Detect file sizes for formats using BaseExtractor utilities
-async fn detect_sizes(formats: Vec<Format>, ctx: &ExtractionContext) -> Vec<Format> {
-    let verbose = ctx.config.verbose;
-    let mut formats_with_size = Vec::with_capacity(formats.len());
-
-    for mut format in formats {
-        let url = &format.url;
-        let is_hls = url.contains(".m3u8") || url.contains("/hls/");
-
-        if is_hls {
-            // Estimate from bitrate in URL
-            if let Some(size) = utils::estimate_hls_size_from_url(url, verbose) {
-                format.filesize_approx = Some(size);
-            }
-        } else {
-            // Use BaseExtractor size detection with timeout
-            if let Some(size) = fetch_file_size_with_timeout(url, ctx).await {
-                format.filesize = Some(size);
-            }
-        }
-
-        formats_with_size.push(format);
+    fn suitable(&self, url: &str) -> bool {
+        patterns::is_suitable(url)
     }
 
-    formats_with_size
-}
-
-/// Fetch file size via BaseExtractor with timeout
-async fn fetch_file_size_with_timeout(url: &str, ctx: &ExtractionContext) -> Option<u64> {
-    let result = timeout(
-        Duration::from_secs(5),
-        BaseExtractor::detect_file_size(url, ctx),
-    )
-    .await;
-
-    match result {
-        Ok(size) => size,
-        Err(_) => {
-            BaseExtractor::log_if_verbose(
-                ctx,
-                "PornHub",
-                &format!("Size detection timed out for: {url}"),
-            );
-            None
-        }
+    fn priority(&self) -> i32 {
+        0
     }
 }
 

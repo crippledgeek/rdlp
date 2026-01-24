@@ -7,8 +7,6 @@ use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
 use scraper::{Html, Selector};
 
-use super::patterns::BITRATE_PATTERN;
-
 /// Age verification cookies required by PornHub
 const AGE_COOKIES: &[&str] = &[
     "age_verified=1",
@@ -170,27 +168,6 @@ fn extract_element_text(html: &Html, selector_str: &str) -> Option<String> {
     }
 }
 
-/// Estimate HLS file size from bitrate in URL
-///
-/// PornHub URLs include patterns like "1080P_4000K" (4000 kbps)
-pub fn estimate_hls_size_from_url(url: &str, verbose: bool) -> Option<u64> {
-    let caps = BITRATE_PATTERN.captures(url)?;
-    let bitrate_kbps: u64 = caps.get(2)?.as_str().parse().ok()?;
-
-    // Estimate: 10 minutes average duration
-    const ESTIMATED_DURATION_SECS: u64 = 600;
-    let size_bytes = (bitrate_kbps * 1000 / 8) * ESTIMATED_DURATION_SECS;
-
-    if verbose {
-        eprintln!(
-            "[PornHub] Bitrate: {bitrate_kbps} kbps → ~{} MB estimated",
-            size_bytes / (1024 * 1024)
-        );
-    }
-
-    Some(size_bytes)
-}
-
 /// Build width from height assuming 16:9 aspect ratio
 pub fn width_from_height(height: u32) -> u32 {
     match height {
@@ -236,16 +213,6 @@ mod tests {
         // Normal video
         let html = r#"<div class="video">Normal content</div>"#;
         assert!(detect_video_unavailable(html).is_none());
-    }
-
-    #[test]
-    fn test_estimate_hls_size() {
-        let url = "https://example.com/1080P_4000K_video.mp4/master.m3u8";
-        let size = estimate_hls_size_from_url(url, false);
-        assert!(size.is_some());
-        // 4000 kbps * 600s / 8 = 300 MB
-        let size = size.unwrap();
-        assert!(size > 200_000_000 && size < 400_000_000);
     }
 
     #[test]

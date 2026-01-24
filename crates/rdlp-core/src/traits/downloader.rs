@@ -128,6 +128,12 @@ pub struct DownloadProgress {
 
     /// Progress percentage (0.0 to 100.0) if total size is known
     pub percentage: Option<f64>,
+
+    /// Segments completed (for HLS/segmented downloads)
+    pub segments_downloaded: Option<u64>,
+
+    /// Total segments (for HLS/segmented downloads)
+    pub total_segments: Option<u64>,
 }
 
 impl DownloadProgress {
@@ -156,7 +162,52 @@ impl DownloadProgress {
             speed,
             eta,
             percentage,
+            segments_downloaded: None,
+            total_segments: None,
         }
+    }
+
+    /// Create a new segment-based progress update (for HLS downloads)
+    pub fn new_with_segments(
+        bytes_downloaded: u64,
+        speed: f64,
+        segments_downloaded: u64,
+        total_segments: u64,
+    ) -> Self {
+        let percentage = if total_segments > 0 {
+            Some((segments_downloaded as f64 / total_segments as f64) * 100.0)
+        } else {
+            None
+        };
+
+        let eta = if speed > 0.0 && total_segments > 0 {
+            // Estimate based on segments remaining and current speed
+            let remaining_segments = total_segments.saturating_sub(segments_downloaded);
+            let avg_segment_size = if segments_downloaded > 0 {
+                bytes_downloaded / segments_downloaded
+            } else {
+                2 * 1024 * 1024 // Default 2MB estimate
+            };
+            let remaining_bytes = remaining_segments * avg_segment_size;
+            Some(Duration::from_secs_f64(remaining_bytes as f64 / speed))
+        } else {
+            None
+        };
+
+        Self {
+            bytes_downloaded,
+            total_bytes: None, // Unknown for HLS
+            speed,
+            eta,
+            percentage,
+            segments_downloaded: Some(segments_downloaded),
+            total_segments: Some(total_segments),
+        }
+    }
+
+    /// Check if this is a segment-based progress (HLS)
+    pub fn is_segmented(&self) -> bool {
+        self.total_segments.is_some()
     }
 
     /// Format speed as human-readable string (e.g., "1.5 MB/s")

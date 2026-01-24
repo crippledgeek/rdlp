@@ -23,6 +23,7 @@ use scraper::Html;
 
 use crate::base::common::BaseExtractor;
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
+use crate::hls::detect_format_sizes;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
 
@@ -110,43 +111,8 @@ impl InfoExtractor for RedTubeExtractor {
             }
         }
 
-        // Fetch filesizes for all formats using BaseExtractor utilities
-        for format in &mut formats {
-            // HLS formats require special handling (parse m3u8 playlist)
-            if format.ext == "hls" || format.url.contains(".m3u8") {
-                let hls_detector =
-                    crate::hls::HlsSizeDetector::new(ctx.http_client.clone(), ctx.config.verbose);
-
-                match hls_detector.detect_size(&format.url).await {
-                    Ok(Some(size)) => {
-                        format.filesize = Some(size);
-                        BaseExtractor::log_if_verbose(
-                            ctx,
-                            "RedTube",
-                            &format!("HLS {} size: {} MB", format.format_id, size / 1_000_000),
-                        );
-                    }
-                    Ok(None) => {
-                        BaseExtractor::log_if_verbose(
-                            ctx,
-                            "RedTube",
-                            &format!("Could not detect HLS size for {}", format.format_id),
-                        );
-                    }
-                    Err(e) => {
-                        BaseExtractor::log_if_verbose(
-                            ctx,
-                            "RedTube",
-                            &format!("HLS size detection failed: {e}"),
-                        );
-                    }
-                }
-            } else {
-                // MP4 and other direct formats: use BaseExtractor size detection
-                format.filesize =
-                    BaseExtractor::detect_file_size_verbose(&format.url, ctx, "RedTube").await;
-            }
-        }
+        // Fetch sizes/segments for all formats in parallel
+        formats = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all extracted metadata
         let mut info =

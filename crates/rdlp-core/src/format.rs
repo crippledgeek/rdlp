@@ -265,8 +265,18 @@ impl Format {
 
         let resolution = self.resolution_string().unwrap_or_else(|| "N/A".to_string());
 
-        // Show exact size if available, otherwise approximate size with ~ prefix
-        let size = if let Some(filesize) = self.filesize {
+        // Check if this is an HLS format (also check URL for .m3u8)
+        let is_hls = self.is_hls() || self.url.contains(".m3u8");
+
+        // For HLS: show segment count if available, otherwise "HLS stream"
+        // For non-HLS: show exact size if available, otherwise approximate size with ~ prefix
+        let size = if is_hls {
+            if let Some(ref fragments) = self.fragments {
+                format!("{} segments", fragments.len())
+            } else {
+                "HLS stream".to_string()
+            }
+        } else if let Some(filesize) = self.filesize {
             format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
         } else if let Some(filesize_approx) = self.filesize_approx {
             format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
@@ -274,7 +284,12 @@ impl Format {
             "Unknown".to_string()
         };
 
-        let format_type = self.ext.to_uppercase();
+        // For HLS, show "HLS" as the format type instead of the extension
+        let format_type = if is_hls {
+            "HLS".to_string()
+        } else {
+            self.ext.to_uppercase()
+        };
 
         let codecs = match (&self.vcodec, &self.acodec) {
             (Some(v), Some(a)) => format!("{v}/{a}"),

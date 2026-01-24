@@ -58,6 +58,40 @@ struct Args {
     /// Interactive format selection
     #[arg(short = 'i', long)]
     interactive: bool,
+
+    // === Post-processing options ===
+
+    /// Extract audio only (requires FFmpeg)
+    #[arg(short = 'x', long)]
+    extract_audio: bool,
+
+    /// Audio format for extraction (mp3, m4a, opus, flac, wav)
+    #[arg(long, default_value = "mp3")]
+    audio_format: String,
+
+    /// Audio quality (VBR level 0-9 or bitrate like "192K")
+    #[arg(long)]
+    audio_quality: Option<String>,
+
+    /// Embed metadata (title, artist, etc.) in the file
+    #[arg(long)]
+    embed_metadata: bool,
+
+    /// Embed thumbnail in the file (requires FFmpeg)
+    #[arg(long)]
+    embed_thumbnail: bool,
+
+    /// Convert video to specified format (mp4, mkv, webm)
+    #[arg(long)]
+    recode_video: Option<String>,
+
+    /// Keep original video file after post-processing
+    #[arg(long)]
+    keep_video: bool,
+
+    /// Path to FFmpeg executable (if not in PATH)
+    #[arg(long)]
+    ffmpeg_location: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -92,6 +126,15 @@ async fn async_main() -> Result<()> {
         verbose: args.verbose,
         simulate: args.simulate,
         progress: !args.quiet,
+        // Post-processing options
+        extract_audio: args.extract_audio,
+        audio_format: if args.extract_audio { Some(args.audio_format) } else { None },
+        audio_quality: args.audio_quality,
+        embed_metadata: args.embed_metadata,
+        embed_thumbnail: args.embed_thumbnail,
+        recode_video: args.recode_video,
+        keep_video: args.keep_video,
+        ffmpeg_location: args.ffmpeg_location,
         ..Default::default()
     };
 
