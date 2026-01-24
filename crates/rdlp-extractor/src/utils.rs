@@ -15,6 +15,7 @@
 //! - **URL Handling**: `extract_extension_from_url`, `make_absolute_url`
 //! - **Format Helpers**: `format_filesize`, `format_duration`
 
+use log::trace;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -65,9 +66,9 @@ static WHITESPACE_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// === END SAMPLE ===
 /// ```
 pub fn debug_print_webpage_sample(webpage: &str, sample_size: usize) {
-    eprintln!("\n=== WEBPAGE SAMPLE (first {sample_size} chars) ===");
-    eprintln!("{}", &webpage.chars().take(sample_size).collect::<String>());
-    eprintln!("=== END SAMPLE ===\n");
+    trace!("=== WEBPAGE SAMPLE (first {sample_size} chars) ===");
+    trace!("{}", &webpage.chars().take(sample_size).collect::<String>());
+    trace!("=== END SAMPLE ===");
 }
 
 /// Print formatted JSON for debugging purposes
@@ -77,18 +78,18 @@ pub fn debug_print_webpage_sample(webpage: &str, sample_size: usize) {
 /// * `json` - JSON value to print
 /// * `max_length` - Maximum characters to print (0 for unlimited)
 pub fn debug_print_json(label: &str, json: &serde_json::Value, max_length: usize) {
-    eprintln!("\n=== {label} ===");
+    trace!("=== {label} ===");
     if let Ok(formatted) = serde_json::to_string_pretty(json) {
         if max_length > 0 && formatted.len() > max_length {
-            eprintln!("{}", &formatted.chars().take(max_length).collect::<String>());
-            eprintln!("... (truncated, {} total chars)", formatted.len());
+            trace!("{}", &formatted.chars().take(max_length).collect::<String>());
+            trace!("... (truncated, {} total chars)", formatted.len());
         } else {
-            eprintln!("{formatted}");
+            trace!("{formatted}");
         }
     } else {
-        eprintln!("{json:?}");
+        trace!("{json:?}");
     }
-    eprintln!("=== END ===\n");
+    trace!("=== END ===");
 }
 
 // ============================================================================

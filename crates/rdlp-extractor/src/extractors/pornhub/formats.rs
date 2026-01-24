@@ -2,6 +2,7 @@
 //!
 //! Extracts video formats from various sources in the page.
 
+use log::debug;
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use serde_json::Value;
 
@@ -21,7 +22,6 @@ use std::collections::HashSet;
 pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Result<Vec<Format>> {
     let mut all_formats = Vec::new();
     let mut seen_urls = HashSet::new();
-    let verbose = ctx.config.verbose;
 
     // Strategy 1: flashvars (primary)
     if let Ok(formats) = extract_from_flashvars(webpage, ctx).await {
@@ -30,20 +30,20 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
                 all_formats.push(format);
             }
         }
-        if verbose && !all_formats.is_empty() {
-            eprintln!("[PornHub] Extracted {} formats from flashvars", all_formats.len());
+        if !all_formats.is_empty() {
+            debug!("[PornHub] Extracted {} formats from flashvars", all_formats.len());
         }
     }
 
     // Strategy 2: JavaScript variables
-    for format in extract_from_js_vars(webpage, verbose) {
+    for format in extract_from_js_vars(webpage) {
         if seen_urls.insert(format.url.clone()) {
             all_formats.push(format);
         }
     }
 
     // Strategy 3: Download buttons
-    for format in extract_from_download_buttons(webpage, verbose) {
+    for format in extract_from_download_buttons(webpage) {
         if seen_urls.insert(format.url.clone()) {
             all_formats.push(format);
         }
@@ -55,9 +55,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
         ));
     }
 
-    if verbose {
-        eprintln!("[PornHub] Total unique formats: {}", all_formats.len());
-    }
+    debug!("[PornHub] Total unique formats: {}", all_formats.len());
 
     Ok(all_formats)
 }
@@ -113,16 +111,12 @@ async fn fetch_media_formats(
     idx: usize,
     ctx: &ExtractionContext,
 ) -> Option<Vec<Format>> {
-    if ctx.config.verbose {
-        eprintln!("[PornHub] Fetching formats from get_media endpoint...");
-    }
+    debug!("[PornHub] Fetching formats from get_media endpoint...");
 
     let response = ctx.http_client.get(url).send().await.ok()?;
 
     if !response.status().is_success() {
-        if ctx.config.verbose {
-            eprintln!("[PornHub] get_media returned HTTP {}", response.status());
-        }
+        debug!("[PornHub] get_media returned HTTP {}", response.status());
         return None;
     }
 
@@ -137,9 +131,7 @@ async fn fetch_media_formats(
 
         let format = build_format(real_url, quality, idx);
 
-        if ctx.config.verbose {
-            eprintln!("[PornHub] Found format: {}", format.format_id);
-        }
+        debug!("[PornHub] Found format: {}", format.format_id);
 
         formats.push(format);
     }
@@ -200,7 +192,7 @@ fn parse_quality_from_url(url: &str) -> Option<u64> {
 }
 
 /// Extract formats from JavaScript variables
-fn extract_from_js_vars(webpage: &str, verbose: bool) -> Vec<Format> {
+fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
     // Strategy 1: qualityItems_* JSON arrays
@@ -216,9 +208,7 @@ fn extract_from_js_vars(webpage: &str, verbose: bool) -> Vec<Format> {
                             let format = build_format(url, quality.parse().ok(), 0);
                             formats.push(format);
 
-                            if verbose {
-                                eprintln!("[PornHub] Found format from qualityItems: {quality}");
-                            }
+                            debug!("[PornHub] Found format from qualityItems: {quality}");
                         }
                     }
                 }
@@ -239,9 +229,7 @@ fn extract_from_js_vars(webpage: &str, verbose: bool) -> Vec<Format> {
 
             let format = build_format(url_str, quality, 0);
 
-            if verbose {
-                eprintln!("[PornHub] Found format from JS var: {quality_name}");
-            }
+            debug!("[PornHub] Found format from JS var: {quality_name}");
 
             formats.push(format);
         }
@@ -251,7 +239,7 @@ fn extract_from_js_vars(webpage: &str, verbose: bool) -> Vec<Format> {
 }
 
 /// Extract formats from download buttons
-fn extract_from_download_buttons(webpage: &str, verbose: bool) -> Vec<Format> {
+fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
     for caps in DOWNLOAD_BTN_PATTERN.captures_iter(webpage) {
@@ -274,9 +262,7 @@ fn extract_from_download_buttons(webpage: &str, verbose: bool) -> Vec<Format> {
                 format.height = Some(q as u32);
             }
 
-            if verbose {
-                eprintln!("[PornHub] Found format from download button: {format_id}");
-            }
+            debug!("[PornHub] Found format from download button: {format_id}");
 
             formats.push(format);
         }
@@ -296,7 +282,7 @@ mod tests {
             var media_1080 = "https://example.com/1080.mp4";
         "#;
 
-        let formats = extract_from_js_vars(webpage, false);
+        let formats = extract_from_js_vars(webpage);
         assert!(formats.len() >= 2);
         assert!(formats.iter().any(|f| f.url.contains("720")));
         assert!(formats.iter().any(|f| f.url.contains("1080")));
@@ -309,7 +295,7 @@ mod tests {
             <a class="downloadBtn" href="https://example.com/1080p_2000k.mp4">1080p</a>
         "#;
 
-        let formats = extract_from_download_buttons(webpage, false);
+        let formats = extract_from_download_buttons(webpage);
         assert_eq!(formats.len(), 2);
     }
 

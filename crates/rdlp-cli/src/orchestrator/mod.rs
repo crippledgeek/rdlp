@@ -14,6 +14,7 @@ mod tests;
 pub use errors::{OrchestratorError, Result};
 pub use state::{DownloadPhase, DownloadState};
 
+use log::{debug, error, info, warn};
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext, PostProcessConfig};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
@@ -80,13 +81,12 @@ impl Orchestrator {
 
         match registry_result {
             Ok(registry) => {
-                // Always print FFmpeg status for debugging
-                eprintln!("[PostProcess] FFmpeg initialized successfully");
+                debug!("[PostProcess] FFmpeg initialized successfully");
                 Some(Arc::new(registry))
             }
             Err(e) => {
-                // Always warn about FFmpeg not being found (needed for HLS fixup)
-                eprintln!("[PostProcess] FFmpeg NOT found: {e}");
+                // Warn about FFmpeg not being found (needed for HLS fixup)
+                warn!("[PostProcess] FFmpeg NOT found: {e}");
                 None
             }
         }
@@ -242,18 +242,18 @@ impl Orchestrator {
         let remaining = total - already_downloaded;
 
         println!("\n{}", "=".repeat(60));
-        println!("📋 Playlist: {playlist_title}");
-        println!("📁 Folder: {}", playlist_dir.display());
-        println!("📊 Total videos: {total}");
+        info!("Playlist: {playlist_title}");
+        info!("Folder: {}", playlist_dir.display());
+        info!("Total videos: {total}");
 
         if already_downloaded > 0 || partial_count > 0 {
             if already_downloaded > 0 {
-                println!("✅ Already downloaded: {already_downloaded}");
+                info!("Already downloaded: {already_downloaded}");
             }
             if partial_count > 0 {
-                println!("🧹 Leftover segments: {partial_count} (will be cleaned up)");
+                info!("Leftover segments: {partial_count} (will be cleaned up)");
             }
-            println!("📥 Remaining: {remaining}");
+            info!("Remaining: {remaining}");
         }
 
         println!("{}", "=".repeat(60));
@@ -261,7 +261,7 @@ impl Orchestrator {
 
         // If all videos are already downloaded, return early
         if remaining == 0 {
-            println!("✅ All videos already downloaded!");
+            info!("All videos already downloaded!");
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
         }
@@ -297,7 +297,7 @@ impl Orchestrator {
                     playlist_dir.display()
                 ))
             })?;
-            println!("📁 Created folder: {}", playlist_dir.display());
+            info!("Created folder: {}", playlist_dir.display());
         }
 
         // Download each video with progress tracking
@@ -318,12 +318,12 @@ impl Orchestrator {
             });
 
             if already_exists {
-                println!("⏭️  [{position}/{total}] Already downloaded: {}", info.title);
+                info!("[{position}/{total}] Already downloaded: {}", info.title);
                 continue;
             }
 
             println!("\n{}", "─".repeat(60));
-            println!("📥 [{}/{}] {}", position, total, info.title);
+            info!("[{}/{}] Downloading: {}", position, total, info.title);
             println!("{}", "─".repeat(60));
 
             // Race download against Ctrl+C signal
@@ -332,22 +332,22 @@ impl Orchestrator {
                 result = self.download_from_info_to_dir(info, false, &playlist_dir) => {
                     match result {
                         Ok(Some(path)) => {
-                            println!("✅ [{}/{}] Saved: {}", position, total, path.display());
+                            info!("[{}/{}] Saved: {}", position, total, path.display());
                             downloaded.push(path);
                         }
                         Ok(None) => {
-                            println!("⏭️  [{position}/{total}] Skipped by user");
+                            info!("[{position}/{total}] Skipped by user");
                         }
                         Err(e) => {
-                            eprintln!("❌ [{position}/{total}] Failed: {e}");
+                            error!("[{position}/{total}] Failed: {e}");
                             failed.push((position, info.title.clone(), e.to_string()));
                         }
                     }
                 }
                 // Catch Ctrl+C immediately during download
                 _ = tokio::signal::ctrl_c() => {
-                    println!("\n⏸️  Playlist download interrupted by user");
-                    println!("💾 Run the same command again to resume");
+                    info!("Playlist download interrupted by user");
+                    info!("Run the same command again to resume");
                     interrupted = true;
                 }
             }
@@ -360,29 +360,30 @@ impl Orchestrator {
         // Summary report
         let newly_downloaded = downloaded.len() - already_downloaded;
 
-        println!("\n{}", "=".repeat(60));
-        println!("📋 Playlist Download Summary");
-        println!("{}", "=".repeat(60));
-        println!("📁 Folder: {}", playlist_dir.display());
-        println!("✅ Total downloaded: {}/{}", downloaded.len(), total);
+        info!("");
+        info!("{}", "=".repeat(60));
+        info!("Playlist Download Summary");
+        info!("{}", "=".repeat(60));
+        info!("Folder: {}", playlist_dir.display());
+        info!("Total downloaded: {}/{}", downloaded.len(), total);
 
         if already_downloaded > 0 {
             println!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
         }
 
         if !failed.is_empty() {
-            println!("❌ Failed: {}", failed.len());
-            println!("\nFailed videos:");
-            for (pos, title, error) in &failed {
-                println!("   [{pos}] {title}");
-                println!("       Error: {error}");
+            error!("Failed: {}", failed.len());
+            error!("Failed videos:");
+            for (pos, title, err) in &failed {
+                error!("   [{pos}] {title}");
+                error!("       Error: {err}");
             }
         }
 
         if interrupted {
             let remaining_after = total - downloaded.len();
-            println!("\n⏸️  Interrupted with {remaining_after} videos remaining");
-            println!("💡 Run the same command again to resume");
+            info!("Interrupted with {remaining_after} videos remaining");
+            info!("Run the same command again to resume");
         }
 
         println!("{}", "=".repeat(60));
@@ -522,7 +523,7 @@ impl Orchestrator {
         // Clean up any leftover HLS segment files from interrupted downloads
         self.cleanup_leftover_segments(output_dir, &sanitized_title).await;
 
-        println!("💾 Downloading to: {}", output_path.display());
+        info!("Downloading to: {}", output_path.display());
 
         // Detect resume point
         let resume_offset = self
@@ -532,7 +533,7 @@ impl Orchestrator {
         // Check if file is already complete
         if let Some(expected_size) = format.filesize {
             if resume_offset == expected_size {
-                println!("✓ File already complete, skipping");
+                info!("File already complete, skipping");
                 return Ok(Some(output_path));
             }
         }
@@ -568,9 +569,9 @@ impl Orchestrator {
         };
 
         // Report success
-        println!("\n✅ Downloaded successfully!");
-        println!("   File: {}", output_path.display());
-        println!("   Stats: {stats}");
+        info!("Downloaded successfully!");
+        info!("   File: {}", output_path.display());
+        info!("   Stats: {stats}");
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self.run_postprocessing(info, vec![output_path.clone()], is_hls).await?;
@@ -778,17 +779,16 @@ impl Orchestrator {
         files: Vec<PathBuf>,
         is_hls: bool,
     ) -> Result<Vec<PathBuf>> {
-        // Debug: ALWAYS print to confirm function is called
-        eprintln!("[PostProcess] Called: is_hls={is_hls}, registry={}", self.postprocessor_registry.is_some());
+        debug!("[PostProcess] Called: is_hls={is_hls}, registry={}", self.postprocessor_registry.is_some());
 
         let registry = match &self.postprocessor_registry {
             Some(r) => r,
             None => {
                 // No post-processor available - return files unchanged
                 if self.needs_postprocessing() || is_hls {
-                    eprintln!("⚠️  Post-processing unavailable (FFmpeg not found)");
+                    warn!("Post-processing unavailable (FFmpeg not found)");
                     if is_hls {
-                        eprintln!("   HLS downloads may have container issues without FFmpeg remux");
+                        warn!("HLS downloads may have container issues without FFmpeg remux");
                     }
                 }
                 return Ok(files);
@@ -810,20 +810,17 @@ impl Orchestrator {
             pp_config.merge_output_format = Some("mp4".to_string());
         }
 
-        if is_hls {
-            println!("🔧 Running FFmpeg fixup for HLS download...");
-        } else {
-            println!("🔧 Running post-processing pipeline...");
-        }
+        info!("Running post-processing pipeline...");
 
         if self.config.verbose {
             let processors = registry.list_processors();
             println!("   Available processors: {}", processors.join(", "));
         }
 
-        // For HLS, run a simple FFmpeg remux to fix the container
-        let result_files = if is_hls && !self.config.extract_audio {
-            self.ffmpeg_remux_hls(&files).await.unwrap_or(files.clone())
+        // Run FFmpeg remux to fix container (faststart, timestamps)
+        // Applied to both HLS and HTTP downloads for consistent output
+        let result_files = if !self.config.extract_audio {
+            self.ffmpeg_remux(&files).await.unwrap_or(files.clone())
         } else {
             files.clone()
         };
@@ -832,30 +829,32 @@ impl Orchestrator {
         match registry.process(info, result_files.clone(), &pp_config).await {
             Ok(result) => {
                 if result.files != files {
-                    println!("✓ Post-processing complete");
+                    info!("Post-processing complete");
                     if self.config.verbose {
                         for file in &result.files {
-                            println!("   Output: {}", file.display());
+                            debug!("Output: {}", file.display());
                         }
                     }
                 }
                 Ok(result.files)
             }
             Err(e) => {
-                eprintln!("⚠️  Post-processing failed: {e}");
+                warn!("Post-processing failed: {e}");
                 // Return remuxed files on failure (or original if remux failed)
                 Ok(result_files)
             }
         }
     }
 
-    /// Run FFmpeg remux on HLS downloaded files to fix container format
+    /// Run FFmpeg remux on downloaded files to fix container format
     ///
     /// This performs a stream copy (no re-encoding) to:
     /// - Move moov atom to beginning of file (faststart)
     /// - Fix timestamps
     /// - Ensure proper MP4 container structure
-    async fn ffmpeg_remux_hls(&self, files: &[PathBuf]) -> Option<Vec<PathBuf>> {
+    ///
+    /// Applied to both HLS and HTTP downloads for consistent output quality.
+    async fn ffmpeg_remux(&self, files: &[PathBuf]) -> Option<Vec<PathBuf>> {
         let registry = self.postprocessor_registry.as_ref()?;
         let ffmpeg = registry.list_processors(); // Just to verify FFmpeg is available
         if ffmpeg.is_empty() {
@@ -887,29 +886,25 @@ impl Orchestrator {
                 Ok(output) if output.status.success() => {
                     // Replace original with fixed file
                     if let Err(e) = tokio::fs::remove_file(file).await {
-                        eprintln!("   Warning: Could not remove original file: {e}");
+                        warn!("Could not remove original file: {e}");
                     }
                     if let Err(e) = tokio::fs::rename(&temp_path, file).await {
-                        eprintln!("   Warning: Could not rename fixed file: {e}");
+                        warn!("Could not rename fixed file: {e}");
                         output_files.push(temp_path);
                     } else {
-                        println!("   ✓ Container fixed: {}", file.display());
+                        info!("Post-processed: faststart enabled, container fixed");
                         output_files.push(file.clone());
                     }
                 }
                 Ok(output) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    if self.config.verbose {
-                        eprintln!("   FFmpeg remux failed: {stderr}");
-                    }
+                    debug!("FFmpeg remux failed: {stderr}");
                     // Clean up temp file
                     let _ = tokio::fs::remove_file(&temp_path).await;
                     output_files.push(file.clone());
                 }
                 Err(e) => {
-                    if self.config.verbose {
-                        eprintln!("   FFmpeg not available: {e}");
-                    }
+                    debug!("FFmpeg not available: {e}");
                     output_files.push(file.clone());
                 }
             }
@@ -920,23 +915,43 @@ impl Orchestrator {
 
     /// Run post-processing for state machine downloads (single videos)
     ///
-    /// Simplified version that doesn't require InfoDict - only runs HLS fixup
-    /// and user-requested post-processing.
+    /// Runs FFmpeg remux on all downloads for consistent output quality:
+    /// - Faststart (moov atom at beginning)
+    /// - Fixed timestamps
+    /// - Proper MP4 container structure
+    ///
+    /// Also runs user-requested post-processing (extract audio, embed metadata, etc.)
     pub(super) async fn run_postprocessing_for_state_machine(
         &self,
         output_path: &Path,
         is_hls: bool,
     ) -> Result<PathBuf> {
-        // For HLS downloads, run FFmpeg remux to fix container
-        if is_hls {
-            if let Some(fixed_files) = self.ffmpeg_remux_hls(&[output_path.to_path_buf()]).await {
-                if let Some(fixed_path) = fixed_files.into_iter().next() {
-                    return Ok(fixed_path);
+        // Run FFmpeg remux on all downloads (both HLS and HTTP) for consistent output
+        // This moves moov atom to start (faststart), fixes timestamps, ensures proper container
+        if let Some(fixed_files) = self.ffmpeg_remux(&[output_path.to_path_buf()]).await {
+            if let Some(fixed_path) = fixed_files.into_iter().next() {
+                // If user also requested additional post-processing, run it
+                if self.needs_postprocessing() {
+                    let info = rdlp_core::InfoDict::new(
+                        "unknown".to_string(),
+                        fixed_path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("Unknown")
+                            .to_string(),
+                        "unknown".to_string(),
+                        "unknown".to_string(),
+                    );
+
+                    let result = self.run_postprocessing(&info, vec![fixed_path.clone()], is_hls).await?;
+                    if let Some(path) = result.into_iter().next() {
+                        return Ok(path);
+                    }
                 }
+                return Ok(fixed_path);
             }
         }
 
-        // For non-HLS or if HLS fixup failed, check if user requested any post-processing
+        // If FFmpeg remux failed, check if user requested any post-processing
         if self.needs_postprocessing() {
             // Create a minimal InfoDict for post-processing
             let info = rdlp_core::InfoDict::new(
@@ -993,7 +1008,7 @@ impl Orchestrator {
         }
 
         if deleted > 0 {
-            eprintln!("🧹 Cleaned up {deleted} leftover segment files");
+            info!("Cleaned up {deleted} leftover segment files");
         }
     }
 }

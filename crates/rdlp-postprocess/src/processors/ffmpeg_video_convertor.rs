@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
-use tracing::{debug, info};
+use log::{debug, info};
 
 use crate::error::PostProcessError;
 use crate::ffmpeg::FFmpegRunner;

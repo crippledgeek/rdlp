@@ -2,6 +2,7 @@
 
 use super::{errors::*, Orchestrator};
 use dialoguer::{theme::ColorfulTheme, Select};
+use log::info;
 use rdlp_core::{Format, FormatSelector};
 
 impl Orchestrator {
@@ -22,7 +23,7 @@ impl Orchestrator {
             match self.select_format_interactive(formats)? {
                 Some(format) => format,
                 None => {
-                    println!("\n❌ Selection cancelled by user");
+                    info!("Selection cancelled by user");
                     return Ok(None);
                 }
             }
@@ -38,7 +39,7 @@ impl Orchestrator {
             selected_formats[0].clone()
         };
 
-        println!("✓ Selected format: {format}");
+        info!("Selected format: {format}");
         Ok(Some(format))
     }
 
@@ -56,7 +57,7 @@ impl Orchestrator {
         // Build menu items with format details
         let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();
 
-        println!("\n📋 Available formats:");
+        info!("Available formats:");
         println!(
             "{:<12} | {:<10} | {:<12} | {:<6} | Codecs",
             "Quality", "Resolution", "Size", "Type"

@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use log::{error, info};
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::path::PathBuf;
@@ -107,14 +108,17 @@ fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     let args = Args::parse();
 
-    // Set up tracing
+    // Initialize logging
+    // Use RUST_LOG environment variable or default based on verbose/quiet flags
     if !args.quiet {
-        tracing_subscriber::fmt()
-            .with_env_filter(if args.verbose {
-                "rdlp=debug"
-            } else {
-                "rdlp=info"
-            })
+        let log_level = if args.verbose {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        };
+
+        env_logger::Builder::from_default_env()
+            .filter_level(log_level)
             .init();
     }
 
@@ -167,15 +171,15 @@ async fn async_main() -> Result<()> {
 
     // Download the video
     if args.simulate {
-        println!("🔍 Simulating download (no actual download will occur)");
-        println!("URL: {url}");
+        info!("[Simulate] No actual download will occur");
+        info!("URL: {url}");
         return Ok(());
     }
 
     match orchestrator.download(&url, interactive).await {
         Ok(Some(path)) => {
             if !args.quiet {
-                println!("\n🎉 Success! Video saved to: {}", path.display());
+                info!("Success! Video saved to: {}", path.display());
             }
             Ok(())
         }
@@ -184,10 +188,9 @@ async fn async_main() -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            eprintln!("\n❌ Error: {e}");
+            error!("Error: {e}");
             if args.verbose {
-                eprintln!("\nDebug info:");
-                eprintln!("{e:?}");
+                error!("Debug info: {e:?}");
             }
             std::process::exit(1);
         }

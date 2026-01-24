@@ -10,6 +10,7 @@
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
+use log::{debug, info, warn};
 use rdlp_core::{check_http_response, ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
 use scraper::{Html, Selector};
 use std::collections::HashSet;
@@ -52,9 +53,7 @@ pub async fn extract_playlist(
     // Set age verification cookies
     set_age_cookies(&host, ctx).await?;
 
-    if ctx.config.verbose {
-        eprintln!("[PornHub] Extracting playlist: {playlist_id}");
-    }
+    debug!("[PornHub] Extracting playlist: {playlist_id}");
 
     // Fetch first page
     let response = ctx
@@ -77,19 +76,17 @@ pub async fn extract_playlist(
 
         let title = extract_playlist_title(&html, &playlist_id);
         let pagination = extract_pagination_info(&webpage, &playlist_id);
-        let videos = extract_video_urls(&webpage, &host, ctx.config.verbose);
+        let videos = extract_video_urls(&webpage, &host);
 
         (title, pagination, videos)
     };
 
-    if ctx.config.verbose {
-        eprintln!("[PornHub] Playlist: {playlist_title}");
-        eprintln!(
-            "[PornHub] Videos: {:?}, has_token: {}",
-            pagination_info.video_count,
-            pagination_info.token.is_some()
-        );
-    }
+    info!("[PornHub] Playlist: {playlist_title}");
+    debug!(
+        "[PornHub] Videos: {:?}, has_token: {}",
+        pagination_info.video_count,
+        pagination_info.token.is_some()
+    );
 
     if all_video_urls.is_empty() {
         return Err(RdlpError::Extraction(format!(
@@ -101,26 +98,22 @@ pub async fn extract_playlist(
     if let Some(video_count) = pagination_info.video_count {
         let page_count = calculate_page_count(video_count);
 
-        if ctx.config.verbose {
-            eprintln!("[PornHub] {video_count} videos across {page_count} pages");
-        }
+        debug!("[PornHub] {video_count} videos across {page_count} pages");
 
         // Fetch remaining pages
         for page_num in 2..=page_count {
-            if ctx.config.verbose {
-                eprintln!("[PornHub] Fetching page {page_num}...");
-            }
+            debug!("[PornHub] Fetching page {page_num}...");
 
             match download_page(page_num, &pagination_info, &host, ctx).await {
                 Ok(page_html) => {
-                    let page_videos = extract_video_urls(&page_html, &host, ctx.config.verbose);
+                    let page_videos = extract_video_urls(&page_html, &host);
                     if page_videos.is_empty() {
                         break;
                     }
                     all_video_urls.extend(page_videos);
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Failed to fetch page {page_num}: {e}");
+                    warn!("Failed to fetch page {page_num}: {e}");
                     break;
                 }
             }
@@ -131,9 +124,7 @@ pub async fn extract_playlist(
     }
 
     let total = all_video_urls.len();
-    if ctx.config.verbose {
-        eprintln!("[PornHub] Found {total} videos in playlist");
-    }
+    info!("[PornHub] Found {total} videos in playlist");
 
     // Security check: limit playlist size to prevent memory exhaustion
     if total > MAX_PLAYLIST_SIZE {
@@ -143,11 +134,9 @@ pub async fn extract_playlist(
     }
 
     // Extract videos in parallel using buffer_unordered for concurrent processing
-    if ctx.config.verbose {
-        eprintln!(
-            "[PornHub] Extracting {total} videos ({CONCURRENT_EXTRACTIONS} concurrent)..."
-        );
-    }
+    debug!(
+        "[PornHub] Extracting {total} videos ({CONCURRENT_EXTRACTIONS} concurrent)..."
+    );
 
     // Progress counter for verbose logging
     let completed = Arc::new(AtomicUsize::new(0));
@@ -161,7 +150,6 @@ pub async fn extract_playlist(
             let playlist_title = playlist_title.clone();
             let playlist_id = playlist_id.clone();
             let completed = Arc::clone(&completed);
-            let verbose = ctx.config.verbose;
 
             async move {
                 // Use timeout to prevent hanging on slow/unresponsive servers
@@ -178,21 +166,19 @@ pub async fn extract_playlist(
                         info.playlist_index = Some(position);
                         info.playlist_count = Some(total);
 
-                        if verbose {
-                            eprintln!("[PornHub] ✓ Extracted {done}/{total}: {video_title_hint}");
-                        }
+                        debug!("[PornHub] Extracted {done}/{total}: {video_title_hint}");
 
                         Some((position, info))
                     }
                     Ok(Err(e)) => {
-                        eprintln!(
-                            "⚠️  Failed to extract video {position}/{total} ({video_title_hint}): {e}"
+                        warn!(
+                            "Failed to extract video {position}/{total} ({video_title_hint}): {e}"
                         );
                         None
                     }
                     Err(_) => {
-                        eprintln!(
-                            "⚠️  Timed out extracting video {position}/{total} ({video_title_hint})"
+                        warn!(
+                            "Timed out extracting video {position}/{total} ({video_title_hint})"
                         );
                         None
                     }
@@ -221,9 +207,7 @@ pub async fn extract_playlist(
         )));
     }
 
-    if ctx.config.verbose {
-        eprintln!("[PornHub] Successfully extracted {}/{total} videos", results.len());
-    }
+    info!("[PornHub] Successfully extracted {}/{total} videos", results.len());
 
     Ok(results)
 }
@@ -256,7 +240,7 @@ fn extract_playlist_title(html: &Html, playlist_id: &str) -> String {
 }
 
 /// Extract video URLs from page HTML
-fn extract_video_urls(webpage: &str, host: &str, verbose: bool) -> Vec<(String, String)> {
+fn extract_video_urls(webpage: &str, host: &str) -> Vec<(String, String)> {
     let mut videos = Vec::new();
     let mut seen = HashSet::new();
 
@@ -278,9 +262,7 @@ fn extract_video_urls(webpage: &str, host: &str, verbose: bool) -> Vec<(String, 
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("Video {}", video_id.as_str()));
 
-            if verbose {
-                eprintln!("[PornHub] Found: {} - {}", video_id.as_str(), title);
-            }
+            debug!("[PornHub] Found: {} - {}", video_id.as_str(), title);
 
             videos.push((video_url, title));
         }

@@ -78,7 +78,7 @@ impl InfoExtractor for RedTubeExtractor {
         }; // html is dropped here
 
         // Try to extract video formats from JavaScript sources
-        let mut formats = formats::extract_from_sources(&webpage, ctx.config.verbose);
+        let mut formats = formats::extract_from_sources(&webpage);
 
         // If sources didn't work, try mediaDefinition
         if formats.is_empty() {

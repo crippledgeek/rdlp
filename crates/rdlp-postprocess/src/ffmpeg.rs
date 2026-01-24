@@ -31,7 +31,7 @@ use std::process::Output;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tracing::{debug, trace};
+use log::{debug, trace};
 
 use crate::error::{PostProcessError, Result};
 

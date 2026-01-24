@@ -1,0 +1,341 @@
+//! Security utilities for rdlp
+//!
+//! This crate provides security-focused utilities including:
+//! - SSRF (Server-Side Request Forgery) protection via URL validation
+//! - Sensitive data sanitization for safe logging
+//! - Private/internal host detection
+//!
+//! # Features
+//!
+//! ## SSRF Protection
+//!
+//! Prevents requests to private/internal networks that could be exploited:
+//!
+//! ```rust
+//! use rdlp_security::validate_url_security;
+//!
+//! // Public URL - OK
+//! assert!(validate_url_security("https://example.com/video.mp4").is_ok());
+//!
+//! // Private IP - Blocked
+//! assert!(validate_url_security("http://192.168.1.1/secret").is_err());
+//!
+//! // Localhost - Blocked
+//! assert!(validate_url_security("http://localhost/admin").is_err());
+//! ```
+//!
+//! ## Safe Logging
+//!
+//! Redacts sensitive data from strings before logging:
+//!
+//! ```rust
+//! use rdlp_security::sanitize_for_logging;
+//!
+//! let url = "https://api.example.com?token=secret123&key=abc456";
+//! let safe = sanitize_for_logging(url);
+//! assert_eq!(safe, "https://api.example.com?token=***&key=***");
+//! ```
+//!
+//! # Architecture
+//!
+//! This crate is dependency-minimal and can be used standalone or integrated
+//! into larger applications. It follows defense-in-depth principles:
+//!
+//! 1. **URL scheme validation** - Only http/https allowed
+//! 2. **Length limits** - Prevents memory exhaustion attacks
+//! 3. **Private IP blocking** - Prevents SSRF to internal networks
+//! 4. **Pattern-based sanitization** - Redacts common sensitive patterns
+
+use regex::Regex;
+use std::net::IpAddr;
+use thiserror::Error;
+
+// ============================================================================
+// Security Constants
+// ============================================================================
+
+/// Maximum URL length to prevent memory exhaustion attacks
+pub const MAX_URL_LENGTH: usize = 8192;
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+/// Security-related errors
+#[derive(Debug, Error)]
+pub enum SecurityError {
+    /// URL exceeds maximum allowed length
+    #[error("URL too long: {0} bytes (max: {MAX_URL_LENGTH})")]
+    UrlTooLong(usize),
+
+    /// URL parsing failed
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+
+    /// URL uses an unsupported scheme (not http/https)
+    #[error("Invalid URL scheme: {0} (expected http or https)")]
+    InvalidScheme(String),
+
+    /// URL points to a private/internal host (SSRF protection)
+    #[error("URL points to private/internal host: {0}")]
+    PrivateHost(String),
+}
+
+/// Result type for security operations
+pub type Result<T> = std::result::Result<T, SecurityError>;
+
+// ============================================================================
+// URL Validation (SSRF Protection)
+// ============================================================================
+
+/// Validate a URL for security concerns (SSRF protection)
+///
+/// This function performs multiple security checks:
+/// 1. Validates URL length to prevent memory exhaustion
+/// 2. Ensures the URL uses http or https scheme only
+/// 3. Blocks requests to private/internal IP addresses
+///
+/// # Arguments
+/// * `url` - The URL to validate
+///
+/// # Returns
+/// `Ok(())` if the URL is safe, otherwise a `SecurityError`
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::validate_url_security;
+///
+/// // Valid public URL
+/// assert!(validate_url_security("https://example.com/video.mp4").is_ok());
+///
+/// // Invalid: private IP
+/// assert!(validate_url_security("http://192.168.1.1/file").is_err());
+///
+/// // Invalid: localhost
+/// assert!(validate_url_security("http://localhost/admin").is_err());
+///
+/// // Invalid: non-HTTP scheme
+/// assert!(validate_url_security("ftp://example.com/file").is_err());
+/// ```
+pub fn validate_url_security(url: &str) -> Result<()> {
+    // Length check
+    if url.len() > MAX_URL_LENGTH {
+        return Err(SecurityError::UrlTooLong(url.len()));
+    }
+
+    // Parse URL
+    let parsed = url::Url::parse(url)?;
+
+    // Scheme check
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(SecurityError::InvalidScheme(scheme.to_string()));
+    }
+
+    // Host check for private IPs (SSRF protection)
+    if let Some(host) = parsed.host_str() {
+        if is_private_host(host) {
+            return Err(SecurityError::PrivateHost(host.to_string()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if a host is a private/internal address
+///
+/// This function detects various private/internal address patterns:
+/// - Localhost variants: `localhost`, `127.0.0.1`, `::1`
+/// - Internal hostnames: `*.local`, `*.internal`
+/// - Private IPv4 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+/// - Loopback and link-local addresses
+///
+/// # Arguments
+/// * `host` - The hostname or IP address to check
+///
+/// # Returns
+/// `true` if the host is private/internal, `false` otherwise
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::is_private_host;
+///
+/// // Private hosts
+/// assert!(is_private_host("localhost"));
+/// assert!(is_private_host("127.0.0.1"));
+/// assert!(is_private_host("192.168.1.1"));
+/// assert!(is_private_host("10.0.0.1"));
+/// assert!(is_private_host("myhost.local"));
+///
+/// // Public hosts
+/// assert!(!is_private_host("example.com"));
+/// assert!(!is_private_host("8.8.8.8"));
+/// ```
+pub fn is_private_host(host: &str) -> bool {
+    // Check for localhost variants
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        return true;
+    }
+
+    // Check for common internal hostnames
+    if host.ends_with(".local") || host.ends_with(".internal") {
+        return true;
+    }
+
+    // Try to parse as IP address
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ipv4) => {
+                ipv4.is_loopback()           // 127.0.0.0/8
+                    || ipv4.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                    || ipv4.is_link_local()  // 169.254.0.0/16
+                    || ipv4.is_unspecified() // 0.0.0.0
+            }
+            IpAddr::V6(ipv6) => {
+                ipv6.is_loopback()           // ::1
+                    || ipv6.is_unspecified() // ::
+            }
+        };
+    }
+
+    false
+}
+
+// ============================================================================
+// Sanitization for Safe Logging
+// ============================================================================
+
+/// Sanitize a string for safe logging by redacting sensitive data
+///
+/// This function uses pattern matching to redact common sensitive parameters:
+/// - `token=...` → `token=***`
+/// - `key=...` → `key=***`
+/// - `password=...` → `password=***`
+/// - `secret=...` → `secret=***`
+/// - `api_key=...` → `api_key=***`
+///
+/// # Arguments
+/// * `s` - The string to sanitize
+///
+/// # Returns
+/// A sanitized string with sensitive data replaced by `***`
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::sanitize_for_logging;
+///
+/// let url = "https://api.example.com?token=secret123&other=value";
+/// let safe = sanitize_for_logging(url);
+/// assert_eq!(safe, "https://api.example.com?token=***&other=value");
+///
+/// let multi = "url?key=abc&password=xyz";
+/// let safe = sanitize_for_logging(multi);
+/// assert_eq!(safe, "url?key=***&password=***");
+/// ```
+pub fn sanitize_for_logging(s: &str) -> String {
+    // Common patterns to redact
+    let patterns = [
+        (r"token=[^&\s]+", "token=***"),
+        (r"key=[^&\s]+", "key=***"),
+        (r"password=[^&\s]+", "password=***"),
+        (r"secret=[^&\s]+", "secret=***"),
+        (r"api_key=[^&\s]+", "api_key=***"),
+    ];
+
+    let mut result = s.to_string();
+    for (pattern, replacement) in patterns {
+        if let Ok(re) = Regex::new(pattern) {
+            result = re.replace_all(&result, replacement).to_string();
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // URL Security Tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_url_security_valid() {
+        assert!(validate_url_security("https://example.com/video.mp4").is_ok());
+        assert!(validate_url_security("http://cdn.example.com/file").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_security_invalid_scheme() {
+        assert!(validate_url_security("ftp://example.com/file").is_err());
+        assert!(validate_url_security("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_security_private_ip() {
+        assert!(validate_url_security("http://localhost/file").is_err());
+        assert!(validate_url_security("http://127.0.0.1/file").is_err());
+        assert!(validate_url_security("http://192.168.1.1/file").is_err());
+        assert!(validate_url_security("http://10.0.0.1/file").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_security_length_limit() {
+        let long_url = format!("https://example.com/{}", "a".repeat(MAX_URL_LENGTH));
+        assert!(validate_url_security(&long_url).is_err());
+    }
+
+    #[test]
+    fn test_is_private_host() {
+        // Private hosts
+        assert!(is_private_host("localhost"));
+        assert!(is_private_host("127.0.0.1"));
+        assert!(is_private_host("192.168.1.1"));
+        assert!(is_private_host("10.0.0.1"));
+        assert!(is_private_host("172.16.0.1"));
+        assert!(is_private_host("::1"));
+        assert!(is_private_host("myhost.local"));
+        assert!(is_private_host("server.internal"));
+
+        // Public hosts
+        assert!(!is_private_host("example.com"));
+        assert!(!is_private_host("8.8.8.8"));
+        assert!(!is_private_host("cdn.example.com"));
+    }
+
+    // ========================================================================
+    // Sanitization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_sanitize_for_logging() {
+        assert_eq!(
+            sanitize_for_logging("url?token=secret123&other=value"),
+            "url?token=***&other=value"
+        );
+        assert_eq!(
+            sanitize_for_logging("url?key=abc&password=xyz"),
+            "url?key=***&password=***"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_multiple_patterns() {
+        let input = "api?token=tok123&api_key=key456&secret=sec789&normal=value";
+        let output = sanitize_for_logging(input);
+        assert!(output.contains("token=***"));
+        assert!(output.contains("api_key=***"));
+        assert!(output.contains("secret=***"));
+        assert!(output.contains("normal=value"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_non_sensitive_data() {
+        let input = "https://example.com/video?id=12345&quality=720p";
+        let output = sanitize_for_logging(input);
+        assert_eq!(output, input); // No changes expected
+    }
+}

@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 
 use crate::error::Result;
 use crate::ffmpeg::FFmpegRunner;

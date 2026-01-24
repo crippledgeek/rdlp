@@ -36,18 +36,22 @@
 #[cfg(test)]
 mod tests;
 
+use log::{debug, trace};
 use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format, Result, RdlpError};
 use regex::Regex;
 use scraper::{Html, Selector};
-use std::net::IpAddr;
+
+// Re-export security functions from rdlp-security
+pub use rdlp_security::{is_private_host, sanitize_for_logging, validate_url_security, MAX_URL_LENGTH as SECURITY_MAX_URL_LENGTH};
 
 // ============================================================================
 // Security Constants
 // ============================================================================
 
 /// Maximum URL length to prevent memory exhaustion attacks
-pub const MAX_URL_LENGTH: usize = 8192;
+/// Re-exported from rdlp-security for backward compatibility
+pub use rdlp_security::MAX_URL_LENGTH;
 
 /// Maximum title length for extracted metadata
 pub const MAX_TITLE_LENGTH: usize = 500;
@@ -309,8 +313,13 @@ impl BaseExtractor {
     // ========================================================================
     // URL Validation (Security)
     // ========================================================================
+    // Note: These functions have been moved to rdlp-security crate
+    // Wrappers provided here for backward compatibility
 
     /// Validate a URL for security concerns (SSRF protection)
+    ///
+    /// **Note**: This function delegates to [`rdlp_security::validate_url_security`].
+    /// It wraps the SecurityError into RdlpError for backward compatibility.
     ///
     /// Checks that the URL:
     /// 1. Uses http or https scheme
@@ -329,67 +338,8 @@ impl BaseExtractor {
     /// BaseExtractor::validate_url_security(segment_url)?;
     /// ```
     pub fn validate_url_security(url: &str) -> Result<()> {
-        // Length check
-        if url.len() > MAX_URL_LENGTH {
-            return Err(RdlpError::Extraction(format!(
-                "URL too long: {} bytes (max: {MAX_URL_LENGTH})",
-                url.len()
-            )));
-        }
-
-        // Parse URL
-        let parsed = url::Url::parse(url)
-            .map_err(|e| RdlpError::Extraction(format!("Invalid URL: {e}")))?;
-
-        // Scheme check
-        let scheme = parsed.scheme();
-        if scheme != "http" && scheme != "https" {
-            return Err(RdlpError::Extraction(format!(
-                "Invalid URL scheme: {scheme} (expected http or https)"
-            )));
-        }
-
-        // Host check for private IPs (SSRF protection)
-        if let Some(host) = parsed.host_str() {
-            if Self::is_private_host(host) {
-                return Err(RdlpError::Extraction(format!(
-                    "URL points to private/internal host: {host}"
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check if a host is a private/internal address
-    pub(crate) fn is_private_host(host: &str) -> bool {
-        // Check for localhost variants
-        if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-            return true;
-        }
-
-        // Check for common internal hostnames
-        if host.ends_with(".local") || host.ends_with(".internal") {
-            return true;
-        }
-
-        // Try to parse as IP address
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            return match ip {
-                IpAddr::V4(ipv4) => {
-                    ipv4.is_loopback()           // 127.0.0.0/8
-                        || ipv4.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-                        || ipv4.is_link_local()  // 169.254.0.0/16
-                        || ipv4.is_unspecified() // 0.0.0.0
-                }
-                IpAddr::V6(ipv6) => {
-                    ipv6.is_loopback()           // ::1
-                        || ipv6.is_unspecified() // ::
-                }
-            };
-        }
-
-        false
+        rdlp_security::validate_url_security(url)
+            .map_err(|e| RdlpError::Extraction(e.to_string()))
     }
 
     // ========================================================================
@@ -619,9 +569,7 @@ impl BaseExtractor {
         if let Ok(response) = ctx.http_client.head(url).send().await {
             if let Some(size) = response.content_length() {
                 if size > 0 {
-                    if ctx.config.verbose {
-                        eprintln!("[BaseExtractor] HEAD Content-Length: {size}");
-                    }
+                    debug!("[BaseExtractor] HEAD Content-Length: {size}");
                     return Some(size);
                 }
             }
@@ -640,9 +588,7 @@ impl BaseExtractor {
                     // Parse "bytes 0-0/123456"
                     if let Some(total) = range_str.split('/').nth(1) {
                         if let Ok(size) = total.parse::<u64>() {
-                            if ctx.config.verbose {
-                                eprintln!("[BaseExtractor] Range Content-Range: {size}");
-                            }
+                            debug!("[BaseExtractor] Range Content-Range: {size}");
                             return Some(size);
                         }
                     }
@@ -704,9 +650,7 @@ impl BaseExtractor {
         if let Ok(response) = ctx.http_client.head(url).send().await {
             if let Some(size) = response.content_length() {
                 if size > 0 {
-                    if ctx.config.verbose {
-                        eprintln!("[{log_prefix}] HEAD Content-Length: {size}");
-                    }
+                    debug!("[{log_prefix}] HEAD Content-Length: {size}");
                     return Some(size);
                 }
             }
@@ -724,9 +668,7 @@ impl BaseExtractor {
                 if let Ok(range_str) = content_range.to_str() {
                     if let Some(total) = range_str.split('/').nth(1) {
                         if let Ok(size) = total.parse::<u64>() {
-                            if ctx.config.verbose {
-                                eprintln!("[{log_prefix}] Range Content-Range: {size}");
-                            }
+                            debug!("[{log_prefix}] Range Content-Range: {size}");
                             return Some(size);
                         }
                     }
@@ -829,18 +771,20 @@ impl BaseExtractor {
 
     /// Log a message if verbose mode is enabled
     ///
+    /// **Note**: Now uses the `log` crate. Set `RUST_LOG=debug` to see these messages.
+    ///
     /// # Arguments
     /// * `ctx` - Extraction context
     /// * `prefix` - Log prefix (e.g., extractor name)
     /// * `message` - Message to log
     #[inline]
-    pub fn log_if_verbose(ctx: &ExtractionContext, prefix: &str, message: &str) {
-        if ctx.config.verbose {
-            eprintln!("[{prefix}] {message}");
-        }
+    pub fn log_if_verbose(_ctx: &ExtractionContext, prefix: &str, message: &str) {
+        debug!("[{prefix}] {message}");
     }
 
     /// Log content with truncation if verbose mode is enabled
+    ///
+    /// **Note**: Now uses the `log` crate with `trace` level. Set `RUST_LOG=trace` to see these messages.
     ///
     /// # Arguments
     /// * `ctx` - Extraction context
@@ -849,20 +793,18 @@ impl BaseExtractor {
     /// * `content` - Content to log (will be truncated)
     /// * `max_length` - Maximum characters to show
     pub fn log_content_if_verbose(
-        ctx: &ExtractionContext,
+        _ctx: &ExtractionContext,
         prefix: &str,
         label: &str,
         content: &str,
         max_length: usize,
     ) {
-        if ctx.config.verbose {
-            eprintln!("\n=== [{prefix}] {label} ===");
-            eprintln!("{}", &content.chars().take(max_length).collect::<String>());
-            if content.len() > max_length {
-                eprintln!("... (truncated, {} total chars)", content.len());
-            }
-            eprintln!("=== END ===\n");
+        trace!("\n=== [{prefix}] {label} ===");
+        trace!("{}", &content.chars().take(max_length).collect::<String>());
+        if content.len() > max_length {
+            trace!("... (truncated, {} total chars)", content.len());
         }
+        trace!("=== END ===\n");
     }
 
     // ========================================================================
@@ -889,6 +831,8 @@ impl BaseExtractor {
 
     /// Sanitize a string for safe logging (redact sensitive data)
     ///
+    /// **Note**: This function delegates to [`rdlp_security::sanitize_for_logging`].
+    ///
     /// Redacts common sensitive patterns like tokens, keys, passwords.
     ///
     /// # Arguments
@@ -897,22 +841,7 @@ impl BaseExtractor {
     /// # Returns
     /// Sanitized string with sensitive data redacted
     pub fn sanitize_for_logging(s: &str) -> String {
-        // Common patterns to redact
-        let patterns = [
-            (r"token=[^&\s]+", "token=***"),
-            (r"key=[^&\s]+", "key=***"),
-            (r"password=[^&\s]+", "password=***"),
-            (r"secret=[^&\s]+", "secret=***"),
-            (r"api_key=[^&\s]+", "api_key=***"),
-        ];
-
-        let mut result = s.to_string();
-        for (pattern, replacement) in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                result = re.replace_all(&result, replacement).to_string();
-            }
-        }
-        result
+        rdlp_security::sanitize_for_logging(s)
     }
 
     // ========================================================================

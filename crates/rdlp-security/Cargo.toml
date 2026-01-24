@@ -1,0 +1,12 @@
+[package]
+name = "rdlp-security"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+regex = "1.11"
+url = "2.5"
+thiserror = "2.0"
+log = { workspace = true }
+
+[dev-dependencies]
