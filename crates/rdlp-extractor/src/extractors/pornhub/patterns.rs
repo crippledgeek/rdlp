@@ -78,11 +78,6 @@ pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(\d+)[pP]").expect("Valid quality pattern")
 });
 
-/// Pattern to extract bitrate from URL for size estimation
-pub static BITRATE_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(\d+)P_(\d+)K").expect("Valid bitrate pattern")
-});
-
 /// Pattern to extract qualityItems JSON arrays
 pub static QUALITY_ITEMS_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"var\s+qualityItems_\w+\s*=\s*(\[.+?])\s*;"#).expect("Valid qualityItems pattern")

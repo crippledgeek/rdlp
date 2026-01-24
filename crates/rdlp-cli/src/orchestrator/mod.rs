@@ -1261,8 +1261,10 @@ mod tests {
 
     #[test]
     fn test_create_progress_bar_disabled() {
-        let mut config = Config::default();
-        config.progress = false;
+        let config = Config {
+            progress: false,
+            ..Default::default()
+        };
         let orchestrator = Orchestrator::new(config);
 
         let result = orchestrator.create_progress_bar(Some(1000000), 0);
@@ -1272,8 +1274,10 @@ mod tests {
 
     #[test]
     fn test_create_progress_bar_enabled() {
-        let mut config = Config::default();
-        config.progress = true;
+        let config = Config {
+            progress: true,
+            ..Default::default()
+        };
         let orchestrator = Orchestrator::new(config);
 
         let result = orchestrator.create_progress_bar(Some(1000000), 0);
@@ -1283,8 +1287,10 @@ mod tests {
 
     #[test]
     fn test_create_progress_bar_with_resume() {
-        let mut config = Config::default();
-        config.progress = true;
+        let config = Config {
+            progress: true,
+            ..Default::default()
+        };
         let orchestrator = Orchestrator::new(config);
 
         let result = orchestrator.create_progress_bar(Some(1000000), 500000);

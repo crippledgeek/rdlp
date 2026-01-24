@@ -50,13 +50,12 @@ impl FFmpegMerger {
             }
         }
 
-        // Determine based on codecs
+        // Determine based on file extensions
         match (video_ext, audio_ext) {
-            // WebM container for VP8/VP9 + Opus/Vorbis
-            (Some("webm"), _) | (_, Some("webm")) => "mkv", // MKV is more compatible
-            (Some("vp9"), _) | (Some("vp8"), _) => "mkv",
+            // WebM files (VP8/VP9 + Opus/Vorbis) - use MKV for better compatibility
+            (Some("webm"), _) | (_, Some("webm")) => "mkv",
 
-            // Default to MP4 for most content
+            // Default to MP4 for most content (h264/h265 + aac)
             _ => "mp4",
         }
     }
@@ -201,8 +200,10 @@ mod tests {
             assert_eq!(merger.determine_output_format(&config, Some("webm"), Some("opus")), "mp4");
 
             // Without explicit format, uses codec-based detection
-            let mut config_no_format = PostProcessConfig::default();
-            config_no_format.merge_output_format = None;
+            let config_no_format = PostProcessConfig {
+                merge_output_format: None,
+                ..Default::default()
+            };
             assert_eq!(merger.determine_output_format(&config_no_format, Some("webm"), Some("opus")), "mkv");
         }
     }
