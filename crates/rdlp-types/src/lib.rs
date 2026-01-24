@@ -21,6 +21,8 @@
 //!
 //! No async runtime, HTTP client, or I/O operations are included.
 
+#![warn(missing_docs)]
+
 pub mod config;
 pub mod format;
 pub mod info_dict;

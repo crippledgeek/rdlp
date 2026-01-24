@@ -27,9 +27,15 @@
 //! let title = BaseExtractor::extract_title_multi_strategy(&html);
 //! ```
 
+#![warn(missing_docs)]
+
+/// Base extraction utilities and network-specific base extractors
 pub mod base;
+/// Site-specific extractor implementations
 pub mod extractors;
+/// HLS size detection and playlist parsing
 pub mod hls;
+/// Utility functions for extraction
 pub mod utils;
 
 // Re-export extractors

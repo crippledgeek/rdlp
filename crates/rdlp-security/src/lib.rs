@@ -46,6 +46,8 @@
 //! 3. **Private IP blocking** - Prevents SSRF to internal networks
 //! 4. **Pattern-based sanitization** - Redacts common sensitive patterns
 
+#![warn(missing_docs)]
+
 use regex::Regex;
 use std::net::IpAddr;
 use thiserror::Error;

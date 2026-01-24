@@ -24,9 +24,15 @@
 //! let config = Config::default();
 //! ```
 
+#![warn(missing_docs)]
+
+/// Configuration file I/O utilities
 pub mod config_io;
+/// Error types and result aliases
 pub mod error;
+/// Retry logic with exponential backoff
 pub mod retry;
+/// Core traits for extractors, downloaders, and post-processors
 pub mod traits;
 
 // Re-export types from rdlp-types for convenience

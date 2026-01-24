@@ -22,6 +22,8 @@
 //! let client = HttpClientFactory::from_config(&config).build();
 //! ```
 
+#![warn(missing_docs)]
+
 mod client;
 mod config;
 

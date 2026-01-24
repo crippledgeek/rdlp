@@ -236,8 +236,13 @@
 //! - `user_agent`: Custom User-Agent header
 //! - `proxy`: HTTP/HTTPS proxy URL
 
+#![warn(missing_docs)]
+
+/// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
+/// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
+/// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
 
 pub use chunking::{calculate_chunks, chunk_size_for_file, ChunkSizeStrategy};
