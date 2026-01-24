@@ -10,7 +10,7 @@ use regex::Regex;
 use scraper::{Html, Selector};
 
 /// Video metadata extracted from HTML: (format_id, video_url, ext, height, width)
-pub type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
+pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
 
 // ============================================================================
 // Static Selectors and Patterns
@@ -33,6 +33,7 @@ pub(crate) static MOVIEFAP_XML_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Regex patterns for extracting config URLs (multiple fallback strategies)
+#[allow(dead_code)] // Used by extract_config_url which is tested
 pub(crate) static CONFIG_URL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         Regex::new(r#"flashvars\.config\s*=\s*escape\("([^"]+)""#).expect("Valid config pattern 1"),
@@ -76,6 +77,7 @@ pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
 }
 
 /// Extract config URL from HTML using multiple fallback patterns
+#[allow(dead_code)] // Tested but not used by current extractors
 pub(crate) fn extract_config_url(html_text: &str) -> Option<String> {
     for pattern in CONFIG_URL_PATTERNS.iter() {
         if let Some(caps) = pattern.captures(html_text) {

@@ -114,7 +114,8 @@ pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, 
 
 /// Check if a number is a power of two
 #[inline]
-pub const fn is_power_of_two(n: usize) -> bool {
+#[allow(dead_code)] // Used in tests and property tests
+pub(crate) const fn is_power_of_two(n: usize) -> bool {
     n != 0 && (n & (n - 1)) == 0
 }
 

@@ -13,8 +13,8 @@ use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format, Result, RdlpError};
 use scraper::{Html, Selector};
 
-// Re-export VideoMetadata type for external use
-pub use formats::VideoMetadata;
+// Re-export VideoMetadata type for crate-internal use
+pub(crate) use formats::VideoMetadata;
 
 // Re-export internal functions for testing
 #[cfg(test)]
@@ -85,7 +85,7 @@ static LINK_IMAGE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
 
 /// Container for all extracted metadata from HTML/JSON-LD
 #[derive(Debug, Clone)]
-pub struct ExtractedMetadata {
+pub(crate) struct ExtractedMetadata {
     pub title: String,
     pub description: Option<String>,
     pub uploader: Option<String>,
@@ -122,7 +122,7 @@ impl TnaFlixNetworkBase {
     // ========================================================================
 
     /// Extract video title from HTML using multiple strategies
-    pub fn extract_title(&self, html: &Html) -> Option<String> {
+    pub(crate) fn extract_title(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD
         if let Some(json_ld) = json_ld::extract_json_ld(html) {
             if let Some(name) = json_ld.name {
@@ -164,7 +164,7 @@ impl TnaFlixNetworkBase {
     }
 
     /// Extract video description from HTML using multiple strategies
-    pub fn extract_description(&self, html: &Html) -> Option<String> {
+    pub(crate) fn extract_description(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD
         if let Some(json_ld) = json_ld::extract_json_ld(html) {
             if let Some(desc) = json_ld.description {
@@ -197,7 +197,7 @@ impl TnaFlixNetworkBase {
     }
 
     /// Extract uploader username from HTML
-    pub fn extract_uploader(&self, html: &Html) -> Option<String> {
+    pub(crate) fn extract_uploader(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD author
         if let Some(json_ld) = json_ld::extract_json_ld(html) {
             if let Some(author) = json_ld.author {
@@ -218,7 +218,7 @@ impl TnaFlixNetworkBase {
     }
 
     /// Extract thumbnail URL from HTML using multiple strategies
-    pub fn extract_thumbnail(&self, html: &Html) -> Option<String> {
+    pub(crate) fn extract_thumbnail(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD thumbnailUrl
         if let Some(json_ld) = json_ld::extract_json_ld(html) {
             if let Some(url) = json_ld::get_thumbnail_url(&json_ld) {
@@ -249,7 +249,7 @@ impl TnaFlixNetworkBase {
     }
 
     /// Extract all metadata from HTML
-    pub fn extract_metadata(&self, html: &Html) -> Result<ExtractedMetadata> {
+    pub(crate) fn extract_metadata(&self, html: &Html) -> Result<ExtractedMetadata> {
         let title = self
             .extract_title(html)
             .ok_or_else(|| RdlpError::Extraction("Could not find video title".to_string()))?;
@@ -386,27 +386,28 @@ impl TnaFlixNetworkBase {
     // ========================================================================
 
     /// Parse video source tags from HTML
-    pub fn parse_video_sources(&self, html: &Html) -> Vec<VideoMetadata> {
+    pub(crate) fn parse_video_sources(&self, html: &Html) -> Vec<VideoMetadata> {
         formats::parse_video_sources(html)
     }
 
     /// Extract config URL from HTML
-    pub fn extract_config_url(&self, html_text: &str) -> Option<String> {
+    #[allow(dead_code)] // Tested but not used by current extractors
+    pub(crate) fn extract_config_url(&self, html_text: &str) -> Option<String> {
         formats::extract_config_url(html_text)
     }
 
     /// Extract cdn.php URL from MovieFap JavaScript
-    pub fn extract_cdn_url(&self, webpage: &str) -> Option<String> {
+    pub(crate) fn extract_cdn_url(&self, webpage: &str) -> Option<String> {
         formats::extract_cdn_url(webpage)
     }
 
     /// Parse MovieFap XML response to extract video sources
-    pub fn parse_moviefap_xml(&self, xml_text: &str) -> Vec<VideoMetadata> {
+    pub(crate) fn parse_moviefap_xml(&self, xml_text: &str) -> Vec<VideoMetadata> {
         formats::parse_moviefap_xml(xml_text)
     }
 
     /// Build format list from video metadata and fetch filesizes
-    pub async fn build_formats(
+    pub(crate) async fn build_formats(
         &self,
         video_data: Vec<VideoMetadata>,
         ctx: &ExtractionContext,
