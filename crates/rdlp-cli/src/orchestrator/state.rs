@@ -1,6 +1,7 @@
 //! State machine types for the download workflow
 
 use super::{errors::*, Orchestrator};
+use log::info;
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
@@ -136,7 +137,7 @@ impl DownloadPhase {
 
             Self::Preparing { info, format } => {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
-                println!("💾 Downloading to: {}", output_path.display());
+                info!("Downloading to: {}", output_path.display());
 
                 let resume_offset = orchestrator
                     .detect_resume_point(&output_path, format.filesize)
@@ -209,9 +210,9 @@ impl DownloadPhase {
                 };
 
                 // Report success
-                println!("\n✅ Downloaded successfully!");
-                println!("   File: {}", output_path.display());
-                println!("   Stats: {stats}");
+                info!("Downloaded successfully!");
+                info!("   File: {}", output_path.display());
+                info!("   Stats: {stats}");
 
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_path = orchestrator

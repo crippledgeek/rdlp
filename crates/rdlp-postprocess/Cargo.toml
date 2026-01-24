@@ -15,7 +15,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
-tracing = { workspace = true }
+log = { workspace = true }
 
 # For finding executables in PATH
 which = "8.0.0"

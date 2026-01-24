@@ -6,6 +6,7 @@
 #[cfg(test)]
 mod tests;
 
+use log::{debug, warn};
 use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format, Result, RdlpError};
 use regex::Regex;
@@ -910,18 +911,14 @@ impl TnaFlixNetworkBase {
             // Fetch filesize via HEAD request
             match ctx.http_client.head(&video_url).send().await {
                 Ok(response) => {
-                    if ctx.config.verbose {
-                        eprintln!("HEAD response status: {}", response.status());
-                        eprintln!("HEAD Content-Length: {:?}", response.content_length());
-                    }
+                    debug!("HEAD response status: {}", response.status());
+                    debug!("HEAD Content-Length: {:?}", response.content_length());
 
                     format.filesize = response.content_length();
 
                     // Fallback: If HEAD didn't give us content-length, try Range request
                     if format.filesize.is_none() || format.filesize == Some(0) {
-                        if ctx.config.verbose {
-                            eprintln!("HEAD request returned no size, trying Range request...");
-                        }
+                        debug!("HEAD request returned no size, trying Range request...");
 
                         if let Ok(range_response) = ctx
                             .http_client
@@ -930,9 +927,7 @@ impl TnaFlixNetworkBase {
                             .send()
                             .await
                         {
-                            if ctx.config.verbose {
-                                eprintln!("Range response status: {}", range_response.status());
-                            }
+                            debug!("Range response status: {}", range_response.status());
 
                             // Parse Content-Range header: "bytes 0-0/123456"
                             if let Some(content_range) =
@@ -948,9 +943,7 @@ impl TnaFlixNetworkBase {
                     }
                 }
                 Err(e) => {
-                    if ctx.config.verbose {
-                        eprintln!("Warning: HEAD request failed for {video_url}: {e}");
-                    }
+                    warn!("HEAD request failed for {video_url}: {e}");
                     // Continue without filesize
                 }
             }

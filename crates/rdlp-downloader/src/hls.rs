@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt, TryStreamExt};
+use log::{debug, info, warn};
 use rdlp_core::{
     Downloader, DownloadProgress, DownloadStats, ProgressCallback,
     Result, RetryConfig, RdlpError,
@@ -145,9 +146,7 @@ impl HlsDownloader {
                     }
 
                     // Log retry
-                    eprintln!(
-                        "⚠️  Segment {idx} failed (attempt {attempt}/{max_attempts}): {e} - Retrying in {delay:?}..."
-                    );
+                    warn!("Segment {idx} failed (attempt {attempt}/{max_attempts}): {e} - Retrying in {delay:?}...");
 
                     // Wait before retry
                     tokio::time::sleep(delay).await;
@@ -292,7 +291,7 @@ impl HlsDownloader {
                     .map_err(|e| RdlpError::Extraction(format!("Failed to join URL: {e}")))?
                     .to_string();
 
-                eprintln!("[HLS] Master playlist detected, selecting variant: {} (bandwidth: {} bps)",
+                debug!("[HLS] Master playlist detected, selecting variant: {} (bandwidth: {} bps)",
                     variant.uri, variant.bandwidth);
 
                 // Recursively parse media playlist
@@ -326,8 +325,7 @@ impl HlsDownloader {
     ) -> Result<Vec<PathBuf>> {
         let total_segments = segment_urls.len();
 
-        eprintln!("📥 Downloading {} segments ({} concurrent)...",
-            total_segments, self.concurrent_segments);
+        info!("Downloading {} segments ({} concurrent)", total_segments, self.concurrent_segments);
 
         // Download all segments using buffer_unordered for batch processing with retry logic
         let downloader = self.clone();
@@ -362,14 +360,14 @@ impl HlsDownloader {
             .enumerate()
             .map(|(count, (idx, path, _bytes))| {
                 if (count + 1) % 100 == 0 || count == total_segments - 1 {
-                    eprintln!("   ✓ Completed {}/{} segments", count + 1, total_segments);
+                    debug!("Completed {}/{} segments", count + 1, total_segments);
                 }
                 (idx, path)
             })
             .map(|(_, path)| path)
             .collect();
 
-        eprintln!("✓ All {total_segments} segments downloaded");
+        info!("All {total_segments} segments downloaded");
         Ok(segment_paths)
     }
 
@@ -390,7 +388,7 @@ impl HlsDownloader {
         segment_paths: Vec<PathBuf>,
         output_path: &Path,
     ) -> Result<u64> {
-        eprintln!("📝 Merging {} segments into final file...", segment_paths.len());
+        info!("Merging {} segments into final file...", segment_paths.len());
 
         let final_file = File::create(output_path)
             .await
@@ -411,13 +409,13 @@ impl HlsDownloader {
             total_bytes += bytes;
 
             if (idx + 1) % 100 == 0 || idx == segment_paths.len() - 1 {
-                eprintln!("   ✓ Merged {}/{} segments ({} MB total)",
+                debug!("Merged {}/{} segments ({} MB total)",
                     idx + 1, segment_paths.len(), total_bytes / (1024 * 1024));
             }
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
-        eprintln!("✓ Merge complete: {} MB", total_bytes / (1024 * 1024));
+        info!("Merge complete: {} MB", total_bytes / (1024 * 1024));
 
         Ok(total_bytes)
     }
@@ -430,7 +428,7 @@ impl HlsDownloader {
     /// # Arguments
     /// * `segment_paths` - Paths to segment files to delete
     async fn cleanup_segments(&self, segment_paths: Vec<PathBuf>) {
-        eprintln!("🧹 Cleaning up {} segment files...", segment_paths.len());
+        debug!("Cleaning up {} segment files...", segment_paths.len());
 
         let mut deleted = 0;
         for path in segment_paths {
@@ -439,14 +437,14 @@ impl HlsDownloader {
             }
         }
 
-        eprintln!("   ✓ Deleted {deleted} files");
+        debug!("Deleted {deleted} segment files");
     }
 
     /// Clean up segments on error
     ///
     /// Called when download fails to remove partial segment files.
     async fn cleanup_segments_on_error(&self, temp_dir: &Path, base_filename: &str, total_segments: usize) {
-        eprintln!("🧹 Cleaning up partial segment files...");
+        debug!("Cleaning up partial segment files...");
 
         let mut deleted = 0;
         for idx in 0..total_segments {
@@ -457,7 +455,7 @@ impl HlsDownloader {
         }
 
         if deleted > 0 {
-            eprintln!("   ✓ Deleted {deleted} partial files");
+            debug!("Deleted {deleted} partial files");
         }
     }
 }
@@ -493,7 +491,7 @@ impl Downloader for HlsDownloader {
 
         // Step 1: Parse playlist
         let segment_urls = self.parse_playlist(url).await?;
-        eprintln!("📋 Found {} segments in playlist", segment_urls.len());
+        info!("Found {} segments in playlist", segment_urls.len());
 
         // Step 2: Setup progress tracking
         let downloaded = Arc::new(AtomicU64::new(0));
@@ -578,7 +576,7 @@ impl Downloader for HlsDownloader {
         let stats = DownloadStats::new(total_bytes, duration, 0)
             .with_fragments(segment_urls.len());
 
-        eprintln!("✅ HLS download complete: {} MB in {:.1}s ({:.1} MB/s)",
+        info!("HLS download complete: {} MB in {:.1}s ({:.1} MB/s)",
             total_bytes / (1024 * 1024),
             duration.as_secs_f64(),
             (total_bytes as f64 / duration.as_secs_f64()) / (1024.0 * 1024.0));

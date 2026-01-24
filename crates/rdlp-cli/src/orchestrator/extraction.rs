@@ -1,6 +1,7 @@
 //! Video information extraction
 
 use super::{errors::*, Orchestrator};
+use log::info;
 
 impl Orchestrator {
     /// Extract video information from URL
@@ -13,7 +14,7 @@ impl Orchestrator {
     /// - No extractor is found for the URL
     /// - Extraction fails
     pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_core::InfoDict> {
-        println!("🔍 Finding extractor for URL...");
+        info!("Finding extractor for URL...");
 
         let extractor = self
             .extractor_registry
@@ -22,16 +23,16 @@ impl Orchestrator {
                 url: url.to_string(),
             })?;
 
-        println!("✓ Using {} extractor", extractor.name());
-        println!("📊 Extracting video information...");
+        info!("Using {} extractor", extractor.name());
+        info!("Extracting video information...");
 
         let info = extractor
             .extract(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
-        println!("✓ Title: {}", info.title);
-        println!("✓ Found {} formats", info.formats.len());
+        info!("Title: {}", info.title);
+        info!("Found {} formats", info.formats.len());
 
         Ok(info)
     }
@@ -50,7 +51,7 @@ impl Orchestrator {
     /// - No extractor is found for the URL
     /// - Extraction fails
     pub(super) async fn extract_playlist_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
-        println!("🔍 Finding extractor for URL...");
+        info!("Finding extractor for URL...");
 
         let extractor = self
             .extractor_registry
@@ -59,8 +60,8 @@ impl Orchestrator {
                 url: url.to_string(),
             })?;
 
-        println!("✓ Using {} extractor", extractor.name());
-        println!("📊 Extracting playlist information...");
+        info!("Using {} extractor", extractor.name());
+        info!("Extracting playlist information...");
 
         let infos = extractor
             .extract_playlist(url, &self.extraction_context)
@@ -68,14 +69,14 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         if infos.len() == 1 {
-            println!("✓ Single video: {}", infos[0].title);
+            info!("Single video: {}", infos[0].title);
         } else {
             let playlist_title = infos[0]
                 .playlist_title
                 .as_deref()
                 .unwrap_or("Unnamed Playlist");
-            println!("✓ Playlist: {playlist_title}");
-            println!("✓ Found {} videos", infos.len());
+            info!("Playlist: {playlist_title}");
+            info!("Found {} videos", infos.len());
         }
 
         Ok(infos)

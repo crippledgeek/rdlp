@@ -1,4 +1,5 @@
 use crate::{Result, RdlpError};
+use log::warn;
 use std::future::Future;
 use std::time::Duration;
 
@@ -112,8 +113,8 @@ where
                 // Don't retry on the last attempt
                 if attempt < config.max_retries {
                     let delay = config.calculate_delay(attempt);
-                    eprintln!(
-                        "⚠️  {} failed (attempt {}/{}), retrying in {:.1}s...",
+                    warn!(
+                        "{} failed (attempt {}/{}), retrying in {:.1}s...",
                         operation_name,
                         attempt + 1,
                         config.max_retries + 1,

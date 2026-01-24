@@ -2,6 +2,7 @@
 //!
 //! Extracts video formats from JavaScript sources and mediaDefinition arrays.
 
+use log::{debug, warn};
 use rdlp_core::{ExtractionContext, Format};
 use serde_json::Value;
 
@@ -61,14 +62,12 @@ fn get_format_type_from_url(url_str: &str) -> &'static str {
 /// Extract video formats from JavaScript sources object
 ///
 /// Looks for: sources: {"720": "https://...", "1080": "https://...", ...}
-pub fn extract_from_sources(webpage: &str, verbose: bool) -> Vec<Format> {
+pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
     if let Some(caps) = SOURCES_PATTERN.captures(webpage) {
         if let Some(sources_str) = caps.get(1) {
-            if verbose {
-                eprintln!("[RedTube] Found sources object: {}", sources_str.as_str());
-            }
+            debug!("[RedTube] Found sources object: {}", sources_str.as_str());
 
             // Try to parse as JSON
             match serde_json::from_str::<Value>(sources_str.as_str()) {
@@ -79,13 +78,11 @@ pub fn extract_from_sources(webpage: &str, verbose: bool) -> Vec<Format> {
                                 let format_type = get_format_type_from_url(url_str);
                                 let format = build_format(quality, url_str.to_string(), format_type);
 
-                                if verbose {
-                                    eprintln!(
-                                        "[RedTube] Extracted format: {} ({})",
-                                        format.format_id,
-                                        format.format_note.as_deref().unwrap_or("unknown")
-                                    );
-                                }
+                                debug!(
+                                    "[RedTube] Extracted format: {} ({})",
+                                    format.format_id,
+                                    format.format_note.as_deref().unwrap_or("unknown")
+                                );
 
                                 formats.push(format);
                             }
@@ -93,14 +90,12 @@ pub fn extract_from_sources(webpage: &str, verbose: bool) -> Vec<Format> {
                     }
                 }
                 Err(e) => {
-                    if verbose {
-                        eprintln!(
-                            "[RedTube] Failed to parse sources JSON at {}:{}: {}",
-                            e.line(),
-                            e.column(),
-                            e
-                        );
-                    }
+                    debug!(
+                        "[RedTube] Failed to parse sources JSON at {}:{}: {}",
+                        e.line(),
+                        e.column(),
+                        e
+                    );
                 }
             }
         }
@@ -224,14 +219,12 @@ async fn fetch_formats_from_endpoint(
     let response = match ctx.http_client.get(&absolute_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            if ctx.config.verbose {
-                if e.is_timeout() {
-                    eprintln!("[RedTube] Request timed out for URL: {absolute_url}");
-                } else if e.is_connect() {
-                    eprintln!("[RedTube] Connection failed for URL: {absolute_url}: {e}");
-                } else {
-                    eprintln!("[RedTube] Request failed: {e}");
-                }
+            if e.is_timeout() {
+                warn!("[RedTube] Request timed out for URL: {absolute_url}");
+            } else if e.is_connect() {
+                warn!("[RedTube] Connection failed for URL: {absolute_url}: {e}");
+            } else {
+                warn!("[RedTube] Request failed: {e}");
             }
             return None;
         }
@@ -325,7 +318,7 @@ mod tests {
             };
         "#;
 
-        let formats = extract_from_sources(webpage, false);
+        let formats = extract_from_sources(webpage);
         assert_eq!(formats.len(), 2);
 
         // Check that we got both formats

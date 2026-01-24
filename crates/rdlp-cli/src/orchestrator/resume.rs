@@ -1,6 +1,7 @@
 //! Resume detection and chunk merging functionality
 
 use super::{errors::*, Orchestrator};
+use log::{info, warn};
 use std::path::{Path, PathBuf};
 
 /// Information about detected chunk files
@@ -111,7 +112,7 @@ pub(crate) async fn merge_chunk_files(
         "old-style".to_string()
     };
 
-    eprintln!("📝 Merging {chunk_count} {chunk_type} chunks...");
+    info!("Merging {chunk_count} {chunk_type} chunks...");
 
     // Create output file
     let file = File::create(output_path)
@@ -139,7 +140,7 @@ pub(crate) async fn merge_chunk_files(
 
         // Progress update every 100 chunks
         if (idx + 1) % 100 == 0 || idx == chunk_count - 1 {
-            eprintln!("   ✓ Merged {}/{} chunks", idx + 1, chunk_count);
+            info!("   Merged {}/{} chunks", idx + 1, chunk_count);
         }
 
         // Delete chunk file after successful merge
@@ -153,7 +154,7 @@ pub(crate) async fn merge_chunk_files(
         .await
         .map_err(OrchestratorError::ChunkMergeFailed)?;
 
-    eprintln!("🧹 Cleaned up {chunk_count} chunk files");
+    info!("Cleaned up {chunk_count} chunk files");
 
     Ok(total_size)
 }
@@ -175,7 +176,7 @@ async fn cleanup_old_chunks(output_path: &Path) {
     }
 
     if deleted > 0 {
-        eprintln!("🧹 Cleaned up {deleted} old-style chunk files");
+        info!("Cleaned up {deleted} old-style chunk files");
     }
 }
 
@@ -205,16 +206,16 @@ impl Orchestrator {
                     // Check if file is already complete
                     if let Some(expected) = expected_size {
                         if size == expected {
-                            println!(
-                                "✓ File already downloaded ({:.1} MB), skipping...",
+                            info!(
+                                "File already downloaded ({:.1} MB), skipping...",
                                 size as f64 / (1024.0 * 1024.0)
                             );
                             // Clean up any orphaned chunks
                             cleanup_old_chunks(output_path).await;
                             return Ok(size);
                         } else if size > expected {
-                            println!(
-                                "⚠️  Partial file is larger than expected ({:.1} MB > {:.1} MB), starting fresh...",
+                            warn!(
+                                "Partial file is larger than expected ({:.1} MB > {:.1} MB), starting fresh...",
                                 size as f64 / (1024.0 * 1024.0),
                                 expected as f64 / (1024.0 * 1024.0)
                             );
@@ -223,8 +224,8 @@ impl Orchestrator {
                             return Ok(0);
                         }
                     }
-                    println!(
-                        "📋 Found partial download ({:.1} MB), resuming...",
+                    info!(
+                        "Found partial download ({:.1} MB), resuming...",
                         size as f64 / (1024.0 * 1024.0)
                     );
                     // Clean up any orphaned chunks from failed parallel attempts
@@ -242,8 +243,8 @@ impl Orchestrator {
                 "old-style".to_string()
             };
 
-            println!(
-                "📋 Found {} interrupted {} chunk files ({:.1} MB), merging and resuming...",
+            info!(
+                "Found {} interrupted {} chunk files ({:.1} MB), merging and resuming...",
                 chunk_info.chunk_paths.len(),
                 chunk_type,
                 chunk_info.total_size as f64 / (1024.0 * 1024.0)
@@ -257,15 +258,15 @@ impl Orchestrator {
             // Merge chunks into the main file
             match merge_chunk_files(output_path, &chunk_info).await {
                 Ok(size) => {
-                    println!(
-                        "✓ Merged {} chunks into main file ({:.1} MB)",
+                    info!(
+                        "Merged {} chunks into main file ({:.1} MB)",
                         chunk_info.chunk_paths.len(),
                         size as f64 / (1024.0 * 1024.0)
                     );
                     Ok(size)
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Failed to merge chunks: {e}. Starting fresh.");
+                    warn!("Failed to merge chunks: {e}. Starting fresh.");
                     // Clean up partial chunks
                     for chunk_path in &chunk_info.chunk_paths {
                         let _ = tokio::fs::remove_file(chunk_path).await;

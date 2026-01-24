@@ -99,18 +99,18 @@ fn test_validate_url_security_private_ip() {
 #[test]
 fn test_is_private_host() {
     // Private hosts
-    assert!(BaseExtractor::is_private_host("localhost"));
-    assert!(BaseExtractor::is_private_host("127.0.0.1"));
-    assert!(BaseExtractor::is_private_host("192.168.1.1"));
-    assert!(BaseExtractor::is_private_host("10.0.0.1"));
-    assert!(BaseExtractor::is_private_host("172.16.0.1"));
-    assert!(BaseExtractor::is_private_host("::1"));
-    assert!(BaseExtractor::is_private_host("myhost.local"));
+    assert!(is_private_host("localhost"));
+    assert!(is_private_host("127.0.0.1"));
+    assert!(is_private_host("192.168.1.1"));
+    assert!(is_private_host("10.0.0.1"));
+    assert!(is_private_host("172.16.0.1"));
+    assert!(is_private_host("::1"));
+    assert!(is_private_host("myhost.local"));
 
     // Public hosts
-    assert!(!BaseExtractor::is_private_host("example.com"));
-    assert!(!BaseExtractor::is_private_host("8.8.8.8"));
-    assert!(!BaseExtractor::is_private_host("cdn.example.com"));
+    assert!(!is_private_host("example.com"));
+    assert!(!is_private_host("8.8.8.8"));
+    assert!(!is_private_host("cdn.example.com"));
 }
 
 // ========================================================================

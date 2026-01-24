@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures::StreamExt;
+use log::{debug, error, info, warn};
 use rdlp_core::{check_http_response, retry_with_backoff, DownloadProgress, DownloadStats, Downloader, ProgressCallback, Result, RetryConfig, RdlpError};
 use std::path::Path;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ impl Drop for ProgressGuard {
 
 /// Cleanup chunk files on error
 async fn cleanup_chunk_files(temp_dir: &Path, filename: &str, download_id: u64, total_chunks: usize) {
-    eprintln!("🧹 Cleaning up {total_chunks} partial chunk files...");
+    info!("Cleaning up {total_chunks} partial chunk files...");
     let mut deleted = 0;
     for chunk_id in 0..total_chunks {
         let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
@@ -46,7 +47,7 @@ async fn cleanup_chunk_files(temp_dir: &Path, filename: &str, download_id: u64, 
             deleted += 1;
         }
     }
-    eprintln!("   ✓ Deleted {deleted} chunk files");
+    debug!("Deleted {deleted} chunk files");
 }
 
 /// Downloader configuration (shared across clones via Arc)
@@ -367,15 +368,11 @@ impl HttpDownloader {
         // Calculate optimal power-of-two chunk sizes
         let (chunk_size, total_chunks) = calculate_chunks(total_size, self.config.chunk_strategy);
 
-        eprintln!("📊 Chunk analysis:");
-        eprintln!("   - Download ID: {download_id}");
-        eprintln!("   - Total size: {} MB", total_size / 1024 / 1024);
-        eprintln!("   - Chunk size: {} KB (power-of-two aligned)", chunk_size / 1024);
-        eprintln!("   - Total chunks: {total_chunks}");
-        eprintln!("   - Concurrent downloads: {}", self.config.concurrent_fragments);
-        eprintln!("   - Batches: {} (processing {} at a time)",
-            total_chunks.div_ceil(self.config.concurrent_fragments),
-            self.config.concurrent_fragments);
+        debug!("Chunk analysis: download_id={download_id}, size={} MB, chunk_size={} KB, chunks={total_chunks}, concurrent={}, batches={}",
+            total_size / 1024 / 1024,
+            chunk_size / 1024,
+            self.config.concurrent_fragments,
+            total_chunks.div_ceil(self.config.concurrent_fragments));
 
         // Create temporary directory for chunks
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -422,7 +419,7 @@ impl HttpDownloader {
             None
         });
 
-        eprintln!("🚀 Starting batch download with {} concurrent connections...", self.config.concurrent_fragments);
+        info!("Starting parallel download with {} concurrent connections", self.config.concurrent_fragments);
 
         // Arc<str> optimization: Share URL across all chunks (saves ~59 KB for 591 chunks)
         let url_shared: Arc<str> = Arc::from(url);
@@ -453,7 +450,7 @@ impl HttpDownloader {
                         &url, start, end, &chunk_path, progress_counter
                     ).await;
                     if let Err(ref e) = result {
-                        eprintln!("\n❌ Chunk {chunk_id} failed: {e}");
+                        error!("Chunk {chunk_id} failed: {e}");
                     }
                     result.map(|bytes| (chunk_id, bytes, chunk_path))
                 }
@@ -462,7 +459,7 @@ impl HttpDownloader {
             .try_collect::<Vec<_>>()
             .await
             .inspect_err(|e| {
-                eprintln!("❌ Download failed: {e}");
+                error!("Download failed: {e}");
                 // Note: Progress reporter is automatically cleaned up by _progress_guard on drop
                 // Cleanup partial chunk files
                 let temp_dir = temp_dir.to_path_buf();
@@ -477,12 +474,12 @@ impl HttpDownloader {
 
         // Sum up all downloaded bytes
         let total_downloaded: u64 = chunk_results.iter().sum();
-        eprintln!("✓ All {} chunks completed ({} MB total)", total_chunks, total_downloaded / 1024 / 1024);
+        info!("All {} chunks completed ({} MB total)", total_chunks, total_downloaded / 1024 / 1024);
 
         // Note: Progress reporter is automatically cleaned up by _progress_guard on drop
 
         // Merge chunks into final file in correct order
-        eprintln!("📝 Merging {total_chunks} chunks into final file...");
+        info!("Merging {total_chunks} chunks into final file...");
         let final_file = File::create(path).await.map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, final_file);
 
@@ -502,10 +499,10 @@ impl HttpDownloader {
             }
 
             if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-                eprintln!("   ✓ Merged {}/{} chunks", chunk_id + 1, total_chunks);
+                debug!("Merged {}/{} chunks", chunk_id + 1, total_chunks);
             }
         }
-        eprintln!("🧹 Cleaned up {deleted_chunks} chunk files");
+        debug!("Cleaned up {deleted_chunks} chunk files");
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
@@ -513,7 +510,7 @@ impl HttpDownloader {
         // Fix Issue #2: Use 0 for retry_count (we don't track retries at this level)
         let stats = DownloadStats::new(total_downloaded, duration, 0);
 
-        eprintln!("✅ Download complete: {} MB in {:.1}s ({:.1} MB/s)",
+        info!("Download complete: {} MB in {:.1}s ({:.1} MB/s)",
             total_downloaded / 1024 / 1024,
             duration.as_secs_f64(),
             (total_downloaded as f64 / duration.as_secs_f64()) / 1024.0 / 1024.0);
@@ -546,15 +543,12 @@ impl HttpDownloader {
         // Calculate optimal power-of-two chunk sizes for remaining data
         let (chunk_size, total_chunks) = calculate_chunks(remaining_size, self.config.chunk_strategy);
 
-        eprintln!("🔄 Parallel resume mode:");
-        eprintln!("   - Download ID: {download_id}");
-        eprintln!("   - Already downloaded: {} MB ({:.1}%)",
+        debug!("Parallel resume: download_id={download_id}, already={} MB ({:.1}%), remaining={} MB, chunk_size={} KB, chunks={total_chunks}, concurrent={}",
             resume_from / 1024 / 1024,
-            (resume_from as f64 / total_size as f64) * 100.0);
-        eprintln!("   - Remaining: {} MB", remaining_size / 1024 / 1024);
-        eprintln!("   - Chunk size: {} KB (power-of-two aligned)", chunk_size / 1024);
-        eprintln!("   - Total chunks: {total_chunks}");
-        eprintln!("   - Concurrent downloads: {}", self.config.concurrent_fragments);
+            (resume_from as f64 / total_size as f64) * 100.0,
+            remaining_size / 1024 / 1024,
+            chunk_size / 1024,
+            self.config.concurrent_fragments);
 
         // Create temporary directory for chunks
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -601,7 +595,7 @@ impl HttpDownloader {
             None
         };
 
-        eprintln!("🚀 Starting batch download with {} concurrent connections...", self.config.concurrent_fragments);
+        info!("Starting parallel download with {} concurrent connections", self.config.concurrent_fragments);
 
         // Arc<str> optimization: Share URL across all chunks (saves ~59 KB for 591 chunks)
         let url_shared: Arc<str> = Arc::from(url);
@@ -632,7 +626,7 @@ impl HttpDownloader {
                         &url, start, end, &chunk_path, progress_counter
                     ).await;
                     if let Err(ref e) = result {
-                        eprintln!("\n❌ Chunk {chunk_id} failed: {e}");
+                        error!("Chunk {chunk_id} failed: {e}");
                     }
                     result.map(|bytes| (chunk_id, bytes, chunk_path))
                 }
@@ -641,7 +635,7 @@ impl HttpDownloader {
             .try_collect::<Vec<_>>()
             .await
             .inspect_err(|e| {
-                eprintln!("❌ Resume failed: {e}");
+                error!("Resume failed: {e}");
                 // Stop progress reporter on error
                 if let Some(task) = &progress_task {
                     task.abort();
@@ -659,7 +653,7 @@ impl HttpDownloader {
 
         // Sum up all downloaded bytes (just the new chunks)
         let newly_downloaded: u64 = chunk_results.iter().sum();
-        eprintln!("✓ All {} chunks completed ({} MB new data)", total_chunks, newly_downloaded / 1024 / 1024);
+        info!("All {} chunks completed ({} MB new data)", total_chunks, newly_downloaded / 1024 / 1024);
 
         // Stop progress reporter on success
         if let Some(task) = progress_task {
@@ -674,7 +668,7 @@ impl HttpDownloader {
             .map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
-        eprintln!("📝 Appending {total_chunks} chunks to existing file...");
+        info!("Appending {total_chunks} chunks to existing file...");
         let mut deleted_chunks = 0;
         for chunk_id in 0..total_chunks {
             let chunk_path = temp_dir.join(format!("{}.{}.resume{}",
@@ -691,10 +685,10 @@ impl HttpDownloader {
             }
 
             if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-                eprintln!("   ✓ Appended {}/{} chunks", chunk_id + 1, total_chunks);
+                debug!("Appended {}/{} chunks", chunk_id + 1, total_chunks);
             }
         }
-        eprintln!("🧹 Cleaned up {deleted_chunks} chunk files");
+        debug!("Cleaned up {deleted_chunks} chunk files");
 
         writer.flush().await.map_err(RdlpError::Io)?;
 
@@ -703,7 +697,7 @@ impl HttpDownloader {
         // Fix Issue #2: Use 0 for retry_count (we don't track retries at this level)
         let stats = DownloadStats::new(total_downloaded, duration, 0);
 
-        eprintln!("✅ Resume complete: {} MB total, {} MB new in {:.1}s ({:.1} MB/s)",
+        info!("Resume complete: {} MB total, {} MB new in {:.1}s ({:.1} MB/s)",
             total_downloaded / 1024 / 1024,
             newly_downloaded / 1024 / 1024,
             duration.as_secs_f64(),
@@ -729,14 +723,14 @@ impl Downloader for HttpDownloader {
         let size = self.get_size(url).await.ok().flatten();
         let supports_ranges = self.supports_ranges(url).await.unwrap_or(false);
 
-        eprintln!("📊 Download analysis:");
-        eprintln!("   - File size from HEAD: {} MB", size.map(|s| s / 1024 / 1024).unwrap_or(0));
-        eprintln!("   - Concurrent fragments: {}", self.config.concurrent_fragments);
-        eprintln!("   - Server supports ranges: {supports_ranges}");
+        debug!("Download analysis: size={} MB, concurrent={}, ranges={}",
+            size.map(|s| s / 1024 / 1024).unwrap_or(0),
+            self.config.concurrent_fragments,
+            supports_ranges);
 
         // If HEAD didn't return valid size, try a small Range request to get it
         let size = if (size.is_none() || size == Some(0)) && supports_ranges {
-            eprintln!("   - HEAD didn't return valid size, trying Range request...");
+            debug!("HEAD didn't return valid size, trying Range request...");
             match retry_with_backoff(&self.config.retry_config, "HTTP GET (size check)", |_attempt| {
                 let client = self.client.clone();
                 let url = url.to_string();
@@ -757,7 +751,7 @@ impl Downloader for HttpDownloader {
                         if let Ok(range_str) = content_range.to_str() {
                             if let Some(total_str) = range_str.split('/').nth(1) {
                                 let detected_size = total_str.parse::<u64>().ok();
-                                eprintln!("   - Detected size from Range: {} MB", detected_size.map(|s| s / 1024 / 1024).unwrap_or(0));
+                                debug!("Detected size from Range: {} MB", detected_size.map(|s| s / 1024 / 1024).unwrap_or(0));
                                 detected_size
                             } else {
                                 None
@@ -784,7 +778,7 @@ impl Downloader for HttpDownloader {
         };
 
         if use_parallel {
-            eprintln!("🚀 Using parallel download mode ({} connections)", self.config.concurrent_fragments);
+            info!("Using parallel download mode ({} connections)", self.config.concurrent_fragments);
             return self.download_parallel(url, path, size.unwrap(), progress).await;
         } else {
             // Use match with guards for cleaner Option handling (no unwrap)
@@ -795,8 +789,7 @@ impl Downloader for HttpDownloader {
                 Some(_) if !supports_ranges => "server doesn't support ranges",
                 Some(_) => "unknown reason",
             };
-            eprintln!("⚠️  Using sequential download - reason: {reason}");
-            eprintln!("    (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
+            warn!("Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
                 size.map(|s| s / 1024 / 1024), self.config.concurrent_fragments);
         }
 
@@ -888,11 +881,11 @@ impl Downloader for HttpDownloader {
                 .map(|v| v != "none")
                 .unwrap_or(true); // Assume true if we got 206
 
-            eprintln!("📊 Resume analysis:");
-            eprintln!("   - Downloaded: {:.1}% ({} MB / {} MB)", progress_pct, resume_from / 1024 / 1024, total / 1024 / 1024);
-            eprintln!("   - Remaining: {} MB", remaining_size / 1024 / 1024);
-            eprintln!("   - Concurrent fragments: {}", self.config.concurrent_fragments);
-            eprintln!("   - Server supports ranges: {supports_ranges}");
+            debug!("Resume analysis: {:.1}% ({} MB / {} MB), remaining={} MB, concurrent={}, ranges={}",
+                progress_pct, resume_from / 1024 / 1024, total / 1024 / 1024,
+                remaining_size / 1024 / 1024,
+                self.config.concurrent_fragments,
+                supports_ranges);
 
             let can_parallel = remaining_size > 10 * 1024 * 1024 // > 10MB remaining for parallel to be worth it
                 && self.config.concurrent_fragments > 1
@@ -900,8 +893,8 @@ impl Downloader for HttpDownloader {
 
             // Use parallel resume if remaining size is large enough
             if can_parallel {
-                eprintln!("🚀 Using parallel resume mode ({} connections) for faster speed...", self.config.concurrent_fragments);
-                eprintln!("   Keeping {} MB already downloaded, parallelizing remaining {} MB",
+                info!("Using parallel resume mode ({} connections), keeping {} MB, parallelizing {} MB",
+                    self.config.concurrent_fragments,
                     resume_from / 1024 / 1024, remaining_size / 1024 / 1024);
 
                 // Close the current response
@@ -910,9 +903,8 @@ impl Downloader for HttpDownloader {
                 // Resume with parallel download of remaining chunks
                 return self.download_parallel_resume(url, path, resume_from, total, progress).await;
             } else if !can_parallel {
-                eprintln!("⚠️  Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {})",
+                warn!("Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
                     remaining_size / 1024 / 1024, self.config.concurrent_fragments, supports_ranges);
-                eprintln!("   Continuing with sequential resume");
             }
         }
 

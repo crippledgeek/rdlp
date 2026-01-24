@@ -2,6 +2,7 @@
 
 use super::{errors::*, Orchestrator};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use log::info;
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ impl ProgressCallback for ProgressBarCallback {
 
     fn on_error(&self, error: &str) {
         self.progress_bar
-            .abandon_with_message(format!("❌ Error: {error}"));
+            .abandon_with_message(format!("Error: {error}"));
     }
 }
 
@@ -170,7 +171,7 @@ impl Orchestrator {
             Box::new(ProgressBarCallback::new(pb.clone(), expected_size)) as Box<dyn ProgressCallback>
         });
 
-        println!("⚠️  Press Ctrl+C to pause and save progress");
+        info!("Press Ctrl+C to pause and save progress");
 
         let download_future = if resume_from > 0 {
             downloader.download_with_resume(url, output_path, resume_from, progress_callback)
@@ -188,14 +189,14 @@ impl Orchestrator {
                     // Clear the progress bar completely to avoid stale rendering
                     pb.finish_and_clear();
                 }
-                println!("⏸️  Download interrupted by user");
-                println!("💾 Progress saved. Run the same command again to resume.");
+                info!("Download interrupted by user");
+                info!("Progress saved. Run the same command again to resume.");
                 return Ok(None);
             }
         };
 
         if let Some(pb) = progress_bar {
-            pb.finish_with_message("✓ Download complete");
+            pb.finish_with_message("Download complete");
         }
 
         Ok(Some(stats))

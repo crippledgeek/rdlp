@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
-use tracing::{debug, info, warn};
+use log::{debug, info, warn};
 
 use crate::ffmpeg::FFmpegRunner;
 
@@ -184,10 +184,7 @@ impl PostProcessor for EmbedThumbnail {
 
         // Check if container supports thumbnails
         if !Self::supports_thumbnail(extension) {
-            debug!(
-                "Container {} does not support thumbnail embedding",
-                extension
-            );
+            debug!("Container {extension} does not support thumbnail embedding");
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
@@ -227,7 +224,7 @@ impl PostProcessor for EmbedThumbnail {
                 })
             }
             Err(e) => {
-                warn!("Failed to embed thumbnail: {}", e);
+                warn!("Failed to embed thumbnail: {e}");
                 // Clean up temp file if it exists
                 let _ = tokio::fs::remove_file(&temp_output).await;
 
