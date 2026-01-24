@@ -17,16 +17,13 @@ mod formats;
 mod patterns;
 
 use async_trait::async_trait;
-use futures::future::join_all;
-use rdlp_core::{ExtractionContext, Format, Fragment, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
 use regex::Regex;
 use scraper::Html;
-use std::time::Duration;
-use tokio::time::timeout;
 
 use crate::base::common::BaseExtractor;
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
-use crate::hls::HlsSizeDetector;
+use crate::hls::detect_format_sizes;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
 
@@ -115,7 +112,7 @@ impl InfoExtractor for RedTubeExtractor {
         }
 
         // Fetch sizes/segments for all formats in parallel
-        formats = detect_format_info(formats, ctx).await;
+        formats = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all extracted metadata
         let mut info =
@@ -138,73 +135,6 @@ impl InfoExtractor for RedTubeExtractor {
     fn priority(&self) -> i32 {
         0
     }
-}
-
-/// Detect sizes/segments for all formats in parallel
-///
-/// HLS formats: fast segment count (parses m3u8 only)
-/// MP4 formats: HEAD request for file size
-async fn detect_format_info(formats: Vec<Format>, ctx: &ExtractionContext) -> Vec<Format> {
-    let verbose = ctx.config.verbose;
-    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
-    let http_client = ctx.http_client.clone();
-
-    let detection_futures: Vec<_> = formats
-        .into_iter()
-        .map(|format| {
-            let hls_detector = hls_detector.clone();
-            let http_client = http_client.clone();
-
-            async move {
-                let mut format = format;
-                let url = format.url.clone();
-                let is_hls = format.ext == "hls" || url.contains(".m3u8");
-
-                if is_hls {
-                    // Fast segment count only (parses m3u8, no size fetching)
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        hls_detector.count_segments(&url),
-                    )
-                    .await;
-
-                    if let Ok(Ok(Some(segment_count))) = result {
-                        format.fragments = Some(
-                            (0..segment_count)
-                                .map(|_| Fragment {
-                                    url: String::new(),
-                                    duration: None,
-                                    filesize: None,
-                                })
-                                .collect(),
-                        );
-                        if verbose {
-                            eprintln!(
-                                "[RedTube] HLS {}: {} segments",
-                                format.format_note.as_deref().unwrap_or(&format.format_id),
-                                segment_count
-                            );
-                        }
-                    }
-                } else {
-                    // MP4: HEAD request for file size
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
-                    )
-                    .await;
-
-                    if let Ok(Some(size)) = result {
-                        format.filesize = Some(size);
-                    }
-                }
-
-                format
-            }
-        })
-        .collect();
-
-    join_all(detection_futures).await
 }
 
 #[cfg(test)]

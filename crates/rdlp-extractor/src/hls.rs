@@ -514,6 +514,99 @@ impl HlsSizeDetector {
     }
 }
 
+/// Detect file sizes and segment counts for all formats in parallel
+///
+/// This is a shared utility function used by multiple extractors to avoid code duplication.
+/// HLS formats get fast segment counting (no size fetching), while other formats get
+/// file size detection via HEAD requests.
+///
+/// # Arguments
+/// * `formats` - Vector of formats to detect sizes for
+/// * `ctx` - Extraction context with HTTP client and config
+/// * `extractor_name` - Name of the extractor for logging (e.g., "PornHub", "RedTube")
+///
+/// # Returns
+/// Vector of formats with sizes/segment counts populated
+pub async fn detect_format_sizes(
+    formats: Vec<rdlp_core::Format>,
+    ctx: &rdlp_core::ExtractionContext,
+    extractor_name: &str,
+) -> Vec<rdlp_core::Format> {
+    use futures::future::join_all;
+    use rdlp_core::Fragment;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let verbose = ctx.config.verbose;
+    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+    let http_client = ctx.http_client.clone();
+    let extractor_name = extractor_name.to_string();
+
+    let detection_futures: Vec<_> = formats
+        .into_iter()
+        .map(|format| {
+            let hls_detector = hls_detector.clone();
+            let http_client = http_client.clone();
+            let extractor_name = extractor_name.clone();
+
+            async move {
+                let mut format = format;
+                let url = format.url.clone();
+                let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
+
+                if is_hls {
+                    // Fast segment count only (parses m3u8, no size fetching)
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        hls_detector.count_segments(&url),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(Some(segment_count))) => {
+                            format.fragments = Some(
+                                (0..segment_count)
+                                    .map(|_| Fragment {
+                                        url: String::new(),
+                                        duration: None,
+                                        filesize: None,
+                                    })
+                                    .collect(),
+                            );
+                            if verbose {
+                                eprintln!(
+                                    "[{extractor_name}] HLS {}: {segment_count} segments",
+                                    format.format_note.as_deref().unwrap_or(&format.format_id),
+                                );
+                            }
+                        }
+                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                            if verbose {
+                                eprintln!("[{extractor_name}] Could not count segments for: {url}");
+                            }
+                        }
+                    }
+                } else {
+                    // Non-HLS: HEAD request for file size
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
+                    )
+                    .await;
+
+                    if let Ok(Some(size)) = result {
+                        format.filesize = Some(size);
+                    }
+                }
+
+                format
+            }
+        })
+        .collect();
+
+    join_all(detection_futures).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

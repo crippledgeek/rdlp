@@ -23,13 +23,11 @@ mod playlist;
 mod utils;
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, Format, Fragment, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
 use scraper::Html;
-use std::time::Duration;
-use tokio::time::timeout;
 
 use crate::base::common::BaseExtractor;
-use crate::hls::HlsSizeDetector;
+use crate::hls::detect_format_sizes;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
@@ -73,14 +71,6 @@ impl InfoExtractor for PornHubExtractor {
         &PORNHUB_VIDEO_URL_PATTERN
     }
 
-    fn suitable(&self, url: &str) -> bool {
-        patterns::is_suitable(url)
-    }
-
-    fn priority(&self) -> i32 {
-        0
-    }
-
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let host = utils::extract_host(url);
 
@@ -114,8 +104,8 @@ impl InfoExtractor for PornHubExtractor {
             )));
         }
 
-        // Detect file sizes
-        let formats_with_size = detect_sizes(formats, ctx).await;
+        // Detect file sizes and segment counts
+        let formats_with_size = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict
         let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
@@ -132,86 +122,14 @@ impl InfoExtractor for PornHubExtractor {
 
         playlist::extract_playlist(self, url, ctx).await
     }
-}
 
-/// Detect file sizes and segment counts for formats using parallel requests
-///
-/// All formats are detected concurrently using `join_all` for maximum speed.
-/// HLS formats use fast segment counting (no size fetching - just parses m3u8).
-async fn detect_sizes(formats: Vec<Format>, ctx: &ExtractionContext) -> Vec<Format> {
-    use futures::future::join_all;
+    fn suitable(&self, url: &str) -> bool {
+        patterns::is_suitable(url)
+    }
 
-    let verbose = ctx.config.verbose;
-    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
-    let http_client = ctx.http_client.clone();
-
-    // Create detection tasks for all formats in parallel
-    let detection_futures: Vec<_> = formats
-        .into_iter()
-        .map(|format| {
-            let hls_detector = hls_detector.clone();
-            let http_client = http_client.clone();
-
-            async move {
-                let mut format = format;
-                let url = format.url.clone();
-                let is_hls = url.contains(".m3u8") || url.contains("/hls/");
-
-                if is_hls {
-                    // Fast segment count only (no size fetching) - just parses m3u8
-                    let result = timeout(
-                        Duration::from_secs(5), // Fast - only 1-2 HTTP requests
-                        hls_detector.count_segments(&url),
-                    )
-                    .await;
-
-                    match result {
-                        Ok(Ok(Some(segment_count))) => {
-                            // Store segment count in fragments field
-                            format.fragments = Some(
-                                (0..segment_count)
-                                    .map(|_| Fragment {
-                                        url: String::new(),
-                                        duration: None,
-                                        filesize: None,
-                                    })
-                                    .collect(),
-                            );
-                            if verbose {
-                                eprintln!(
-                                    "[PornHub] HLS {}: {} segments",
-                                    format.format_note.as_deref().unwrap_or("unknown"),
-                                    segment_count
-                                );
-                            }
-                        }
-                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
-                            // Fallback - no segment count available
-                            if verbose {
-                                eprintln!("[PornHub] Could not count segments for: {url}");
-                            }
-                        }
-                    }
-                } else {
-                    // Use BaseExtractor size detection with timeout for non-HLS
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
-                    )
-                    .await;
-
-                    if let Ok(Some(size)) = result {
-                        format.filesize = Some(size);
-                    }
-                }
-
-                format
-            }
-        })
-        .collect();
-
-    // Execute all detection tasks in parallel
-    join_all(detection_futures).await
+    fn priority(&self) -> i32 {
+        0
+    }
 }
 
 #[cfg(test)]
