@@ -2069,6 +2069,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "log",
+ "rdlp-types",
  "regex",
  "reqwest",
  "serde",
@@ -2164,6 +2165,16 @@ dependencies = [
  "log",
  "regex",
  "thiserror",
+ "url",
+]
+
+[[package]]
+name = "rdlp-types"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
  "url",
 ]
 

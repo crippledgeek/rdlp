@@ -32,9 +32,9 @@ pub enum OrchestratorError {
     #[error("No suitable format found matching criteria")]
     NoFormat,
 
-    /// Format selector parsing failed (wraps domain RdlpError)
+    /// Format selector parsing failed
     #[error("Invalid format selector: {0}")]
-    InvalidFormatSelector(#[source] RdlpError),
+    InvalidFormatSelector(String),
 
     /// No downloader found for the URL
     #[error("No downloader found for URL: {url}")]

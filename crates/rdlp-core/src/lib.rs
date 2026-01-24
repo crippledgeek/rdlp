@@ -4,7 +4,7 @@
 //!
 //! This crate provides the foundational building blocks for the rdlp video downloader:
 //! - **Traits**: `InfoExtractor`, `Downloader`, `PostProcessor`, `JsEngine`, `CookieJar`
-//! - **Data Structures**: `InfoDict`, `Format`, `Config`
+//! - **Data Structures**: `InfoDict`, `Format`, `Config` (re-exported from `rdlp-types`)
 //! - **Error Types**: `RdlpError` and `Result`
 //!
 //! ## Example
@@ -24,20 +24,24 @@
 //! let config = Config::default();
 //! ```
 
-pub mod config;
+pub mod config_io;
 pub mod error;
-pub mod format;
-pub mod info_dict;
 pub mod retry;
 pub mod traits;
 
-// Re-export commonly used types
-pub use config::Config;
+// Re-export types from rdlp-types for convenience
+pub use rdlp_types::{
+    Chapter, Config, Format, FormatSelector, Fragment, InfoDict, Subtitle, Thumbnail,
+};
+
+// Re-export error types and utilities
 pub use error::{check_http_response, Result, RdlpError};
-pub use format::{Format, FormatSelector, Fragment};
-pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
+
+// Re-export retry utilities
 pub use retry::{is_retryable_error, retry_with_backoff, RetryConfig};
+
+// Re-export traits
 pub use traits::{
-    CookieJar, Downloader, DownloadProgress, DownloadStats, ExtractionContext, InfoExtractor,
+    CookieJar, DownloadProgress, DownloadStats, Downloader, ExtractionContext, InfoExtractor,
     JsEngine, PostProcessConfig, PostProcessResult, PostProcessor, ProgressCallback,
 };

@@ -1,0 +1,15 @@
+[package]
+name = "rdlp-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure domain types for rdlp (no I/O dependencies)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]

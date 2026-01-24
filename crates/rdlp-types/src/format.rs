@@ -1,3 +1,5 @@
+//! Format types for video/audio streams
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -182,7 +184,11 @@ impl Format {
 
     /// Check if this is a DASH format
     pub fn is_dash(&self) -> bool {
-        self.protocol.contains("dash") || self.container.as_ref().is_some_and(|c| c.contains("dash"))
+        self.protocol.contains("dash")
+            || self
+                .container
+                .as_ref()
+                .is_some_and(|c| c.contains("dash"))
     }
 
     /// Check if this is an HLS format
@@ -227,35 +233,7 @@ impl Format {
             parts.join(" ")
         })
     }
-}
 
-impl fmt::Display for Format {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Compact format for general use
-        write!(f, "{}", self.format_id)?;
-
-        if let Some(note) = &self.format_note {
-            write!(f, " ({note})")?;
-        }
-
-        if let Some(res) = self.resolution_string() {
-            write!(f, " {res}")?;
-        }
-
-        // Show exact size or approximate size with ~ prefix
-        if let Some(size) = self.filesize {
-            let mb = size as f64 / (1024.0 * 1024.0);
-            write!(f, " {mb:.1}MB")?;
-        } else if let Some(size) = self.filesize_approx {
-            let mb = size as f64 / (1024.0 * 1024.0);
-            write!(f, " ~{mb:.0}MB")?;
-        }
-
-        Ok(())
-    }
-}
-
-impl Format {
     /// Format as table row for interactive selection UI
     ///
     /// Returns a formatted string suitable for display in selection menus:
@@ -263,7 +241,9 @@ impl Format {
     pub fn table_row(&self) -> String {
         let quality = self.format_note.as_deref().unwrap_or("unknown");
 
-        let resolution = self.resolution_string().unwrap_or_else(|| "N/A".to_string());
+        let resolution = self
+            .resolution_string()
+            .unwrap_or_else(|| "N/A".to_string());
 
         // Check if this is an HLS format (also check URL for .m3u8)
         let is_hls = self.is_hls() || self.url.contains(".m3u8");
@@ -302,6 +282,32 @@ impl Format {
     }
 }
 
+impl fmt::Display for Format {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Compact format for general use
+        write!(f, "{}", self.format_id)?;
+
+        if let Some(note) = &self.format_note {
+            write!(f, " ({note})")?;
+        }
+
+        if let Some(res) = self.resolution_string() {
+            write!(f, " {res}")?;
+        }
+
+        // Show exact size or approximate size with ~ prefix
+        if let Some(size) = self.filesize {
+            let mb = size as f64 / (1024.0 * 1024.0);
+            write!(f, " {mb:.1}MB")?;
+        } else if let Some(size) = self.filesize_approx {
+            let mb = size as f64 / (1024.0 * 1024.0);
+            write!(f, " ~{mb:.0}MB")?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Fragment of a segmented download
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fragment {
@@ -325,8 +331,6 @@ pub struct Fragment {
 /// - "bestvideo+bestaudio" - merge best video and audio
 /// - "bestvideo[height<=1080]" - filters
 /// - "bestvideo*" - prefer but fallback if not available
-///
-/// TODO: Full DSL parser implementation (Phase 6)
 pub struct FormatSelector {
     expression: String,
 }
@@ -335,42 +339,22 @@ impl FormatSelector {
     /// Parse a format selection expression
     ///
     /// Currently returns a placeholder. Full implementation in Phase 6.
-    pub fn parse(expression: &str) -> crate::Result<Self> {
+    pub fn parse(expression: &str) -> Result<Self, String> {
         Ok(Self {
             expression: expression.to_string(),
         })
+    }
+
+    /// Get the expression string
+    pub fn expression(&self) -> &str {
+        &self.expression
     }
 
     /// Select formats from available list
     ///
     /// Currently implements basic "best" selection.
     /// Full DSL evaluation will be implemented in Phase 6.
-    ///
-    /// # Explicit Lifetime Annotation
-    ///
-    /// This method uses explicit lifetime `'a` to document the relationship between
-    /// input and output:
-    /// ```rust,ignore
-    /// pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format>
-    /// //               ^^         ^^                         ^^
-    /// //               |          |                          |
-    /// //               Lifetime  Input references            Output references
-    /// //               parameter have lifetime 'a            have same lifetime 'a
-    /// ```
-    ///
-    /// **Why explicit here?** While lifetime elision would infer the same thing,
-    /// the explicit annotation makes it clear to API users that:
-    /// - The returned references borrow from the `formats` parameter (not from `&self`)
-    /// - The returned `Vec<&Format>` is valid only as long as the input slice exists
-    /// - The selector itself (`&self`) can be dropped; returned references don't depend on it
-    ///
-    /// **Without explicit lifetime (elision would be ambiguous):**
-    /// ```rust,ignore
-    /// // Which lifetime? From &self or from &[Format]?
-    /// pub fn select(&self, formats: &[Format]) -> Vec<&Format>
-    /// ```
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
-        // Simplified implementation for now
         match self.expression.as_str() {
             "best" => {
                 // Find best format with both video and audio
@@ -378,9 +362,14 @@ impl FormatSelector {
                     .iter()
                     .filter(|f| f.has_video() && f.has_audio())
                     .max_by(|a, b| {
-                        a.quality.cmp(&b.quality)
+                        a.quality
+                            .cmp(&b.quality)
                             .then(a.height.cmp(&b.height))
-                            .then(a.tbr.partial_cmp(&b.tbr).unwrap_or(std::cmp::Ordering::Equal))
+                            .then(
+                                a.tbr
+                                    .partial_cmp(&b.tbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
                     })
                 {
                     vec![best]
@@ -393,8 +382,11 @@ impl FormatSelector {
                     .iter()
                     .filter(|f| f.has_video())
                     .max_by(|a, b| {
-                        a.height.cmp(&b.height)
-                            .then(a.vbr.partial_cmp(&b.vbr).unwrap_or(std::cmp::Ordering::Equal))
+                        a.height.cmp(&b.height).then(
+                            a.vbr
+                                .partial_cmp(&b.vbr)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
                     })
                 {
                     vec![best]
@@ -407,7 +399,9 @@ impl FormatSelector {
                     .iter()
                     .filter(|f| f.has_audio())
                     .max_by(|a, b| {
-                        a.abr.partial_cmp(&b.abr).unwrap_or(std::cmp::Ordering::Equal)
+                        a.abr
+                            .partial_cmp(&b.abr)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
                 {
                     vec![best]
@@ -417,14 +411,13 @@ impl FormatSelector {
             }
             _ => {
                 // Default: return best format
-                if let Some(best) = formats
-                    .iter()
-                    .max_by(|a, b| {
-                        a.quality.cmp(&b.quality)
-                            .then(a.height.cmp(&b.height))
-                            .then(a.tbr.partial_cmp(&b.tbr).unwrap_or(std::cmp::Ordering::Equal))
-                    })
-                {
+                if let Some(best) = formats.iter().max_by(|a, b| {
+                    a.quality.cmp(&b.quality).then(a.height.cmp(&b.height)).then(
+                        a.tbr
+                            .partial_cmp(&b.tbr)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
+                }) {
                     vec![best]
                 } else {
                     Vec::new()
@@ -492,7 +485,12 @@ mod tests {
     fn test_format_selector_best() {
         let formats = vec![
             {
-                let mut f = Format::new("1".to_string(), "url1".to_string(), "mp4".to_string(), "https".to_string());
+                let mut f = Format::new(
+                    "1".to_string(),
+                    "url1".to_string(),
+                    "mp4".to_string(),
+                    "https".to_string(),
+                );
                 f.quality = Some(1);
                 f.height = Some(720);
                 f.vcodec = Some("h264".to_string());
@@ -500,7 +498,12 @@ mod tests {
                 f
             },
             {
-                let mut f = Format::new("2".to_string(), "url2".to_string(), "mp4".to_string(), "https".to_string());
+                let mut f = Format::new(
+                    "2".to_string(),
+                    "url2".to_string(),
+                    "mp4".to_string(),
+                    "https".to_string(),
+                );
                 f.quality = Some(2);
                 f.height = Some(1080);
                 f.vcodec = Some("h264".to_string());

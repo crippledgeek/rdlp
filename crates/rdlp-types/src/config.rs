@@ -1,3 +1,5 @@
+//! Application configuration types
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -5,6 +7,9 @@ use std::path::PathBuf;
 ///
 /// This structure holds all configuration options for rdlp, including
 /// output settings, format selection, download options, post-processing, etc.
+///
+/// For file I/O operations (loading from TOML/YAML), use the extension
+/// functions in `rdlp_core::config_io`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // === Output options ===
@@ -212,7 +217,9 @@ impl Default for Config {
             proxy: None,
             socket_timeout: Some(30),
             source_address: None,
-            user_agent: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string()),
+            user_agent: Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
+            ),
             http_headers: Vec::new(),
 
             // Post-processing
@@ -270,67 +277,29 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load configuration from a TOML file
-    pub fn from_toml_file(path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())?;
-        let config: Self = toml::from_str(&content)
-            .map_err(|e| crate::RdlpError::Config(format!("Failed to parse TOML: {e}")))?;
-        Ok(config)
-    }
-
-    /// Load configuration from a YAML file
-    pub fn from_yaml_file(path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())?;
-        let config: Self = serde_yaml::from_str(&content)
-            .map_err(|e| crate::RdlpError::Config(format!("Failed to parse YAML: {e}")))?;
-        Ok(config)
-    }
-
-    /// Save configuration to a TOML file
-    pub fn to_toml_file(&self, path: impl AsRef<std::path::Path>) -> crate::Result<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| crate::RdlpError::Config(format!("Failed to serialize TOML: {e}")))?;
-        std::fs::write(path.as_ref(), content)?;
-        Ok(())
-    }
-
-    /// Save configuration to a YAML file
-    pub fn to_yaml_file(&self, path: impl AsRef<std::path::Path>) -> crate::Result<()> {
-        let content = serde_yaml::to_string(self)
-            .map_err(|e| crate::RdlpError::Config(format!("Failed to serialize YAML: {e}")))?;
-        std::fs::write(path.as_ref(), content)?;
-        Ok(())
-    }
-
     /// Validate configuration and return errors if invalid
-    pub fn validate(&self) -> crate::Result<()> {
+    ///
+    /// Returns Ok(()) if valid, Err with description if invalid.
+    pub fn validate(&self) -> Result<(), String> {
         // Validate concurrent_fragments
         if self.concurrent_fragments == 0 {
-            return Err(crate::RdlpError::Config(
-                "concurrent_fragments must be at least 1".to_string(),
-            ));
+            return Err("concurrent_fragments must be at least 1".to_string());
         }
 
         // Validate buffer_size
         if self.buffer_size == 0 {
-            return Err(crate::RdlpError::Config(
-                "buffer_size must be at least 1".to_string(),
-            ));
+            return Err("buffer_size must be at least 1".to_string());
         }
 
         // Validate playlist_start
         if self.playlist_start == 0 {
-            return Err(crate::RdlpError::Config(
-                "playlist_start must be at least 1".to_string(),
-            ));
+            return Err("playlist_start must be at least 1".to_string());
         }
 
         // Validate playlist_end
         if let Some(end) = self.playlist_end {
             if end < self.playlist_start {
-                return Err(crate::RdlpError::Config(
-                    "playlist_end must be >= playlist_start".to_string(),
-                ));
+                return Err("playlist_end must be >= playlist_start".to_string());
             }
         }
 

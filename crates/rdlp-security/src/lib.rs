@@ -64,7 +64,7 @@ pub const MAX_URL_LENGTH: usize = 8192;
 /// Security-related errors
 #[derive(Debug, Error)]
 pub enum SecurityError {
-    /// URL exceeds maximum allowed length
+    /// URL exceeds the maximum allowed length
     #[error("URL too long: {0} bytes (max: {MAX_URL_LENGTH})")]
     UrlTooLong(usize),
 
