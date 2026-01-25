@@ -257,8 +257,8 @@ impl FFmpegRunner {
                 .ok_or(PostProcessError::FFprobeNotFound)?
         };
 
-        debug!("Found FFmpeg at: {}", ffmpeg_path.display());
-        debug!("Found FFprobe at: {}", ffprobe_path.display());
+        debug!(path:? = ffmpeg_path.display(); "Found FFmpeg");
+        debug!(path:? = ffprobe_path.display(); "Found FFprobe");
 
         Ok((ffmpeg_path, ffprobe_path))
     }

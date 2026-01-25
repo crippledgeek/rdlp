@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use backon::Retryable;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, info, warn};
+use tracing::instrument;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
 };
@@ -125,6 +126,7 @@ impl HlsDownloader {
     /// # Returns
     /// * `Ok((index, path, bytes))` - Successfully downloaded segment
     /// * `Err(_)` - Failed after all retries
+    #[instrument(skip(self, progress), fields(segment = idx))]
     async fn download_segment_with_retry(
         &self,
         idx: usize,
@@ -196,7 +198,7 @@ impl HlsDownloader {
             matches!(e, RdlpError::Network(_) | RdlpError::Io(_))
         })
         .notify(|err, dur| {
-            warn!("Segment {idx} failed, retrying in {dur:?}: {err}");
+            warn!(segment = idx, delay:? = dur; "Segment download failed, retrying: {err}");
         })
         .await?;
 
@@ -283,8 +285,9 @@ impl HlsDownloader {
                     .to_string();
 
                 debug!(
-                    "[HLS] Master playlist detected, selecting variant: {} (bandwidth: {} bps)",
-                    variant.uri, variant.bandwidth
+                    variant:? = variant.uri,
+                    bandwidth = variant.bandwidth;
+                    "Master playlist detected, selecting variant"
                 );
 
                 // Recursively parse media playlist
@@ -312,6 +315,7 @@ impl HlsDownloader {
     /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
     /// * `Err(_)` - Download error (network, I/O, etc.)
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, segment_urls, progress_counter, segments_counter, state), fields(segments = segment_urls.len()))]
     async fn download_segments_with_resume(
         &self,
         segment_urls: Vec<String>,
@@ -338,10 +342,13 @@ impl HlsDownloader {
         let concurrent = self.concurrent_segments;
 
         if remaining == 0 {
-            info!("All {total_segments} segments already downloaded, skipping to merge");
+            info!(total = total_segments; "All segments already downloaded, skipping to merge");
         } else {
             info!(
-                "Downloading {remaining} segments ({already_downloaded} already done, {concurrent} concurrent)"
+                remaining,
+                completed = already_downloaded,
+                concurrent;
+                "Downloading HLS segments"
             );
         }
 
@@ -366,9 +373,9 @@ impl HlsDownloader {
                         if let Ok(meta) = tokio::fs::metadata(&segment_path).await {
                             if meta.len() > 0 {
                                 debug!(
-                                    "Segment {} already exists ({} bytes), skipping",
-                                    idx,
-                                    meta.len()
+                                    segment = idx,
+                                    bytes = meta.len();
+                                    "Segment already exists, skipping"
                                 );
                                 let bytes = meta.len();
                                 // Mark as completed in state
@@ -413,7 +420,7 @@ impl HlsDownloader {
                             if let Err(save_err) = state.lock().await.save(&output_path).await {
                                 warn!("Failed to save HLS state on error: {save_err}");
                             }
-                            warn!("Segment {idx} failed: {e}");
+                            warn!(segment = idx; "Segment download failed: {e}");
                         }
                     }
 
@@ -461,7 +468,7 @@ impl HlsDownloader {
             .map(|(_, path)| path)
             .collect();
 
-        info!("All {total_segments} segments ready for merge");
+        info!(total = total_segments; "All segments ready for merge");
         Ok(segment_paths)
     }
 
@@ -478,10 +485,7 @@ impl HlsDownloader {
     /// * `Ok(u64)` - Total bytes written
     /// * `Err(_)` - I/O error during merge
     async fn merge_segments(&self, segment_paths: Vec<PathBuf>, output_path: &Path) -> Result<u64> {
-        info!(
-            "Merging {} segments into final file...",
-            segment_paths.len()
-        );
+        info!(segments = segment_paths.len(); "Merging segments into final file");
 
         let final_file = File::create(output_path).await.map_err(RdlpError::Io)?;
 
@@ -499,16 +503,16 @@ impl HlsDownloader {
 
             if (idx + 1) % 100 == 0 || idx == segment_paths.len() - 1 {
                 debug!(
-                    "Merged {}/{} segments ({} MB total)",
-                    idx + 1,
-                    segment_paths.len(),
-                    total_bytes / (1024 * 1024)
+                    merged = idx + 1,
+                    total = segment_paths.len(),
+                    mb = total_bytes / (1024 * 1024);
+                    "Merge progress"
                 );
             }
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
-        info!("Merge complete: {} MB", total_bytes / (1024 * 1024));
+        info!(mb = total_bytes / (1024 * 1024); "Merge complete");
 
         Ok(total_bytes)
     }
@@ -521,7 +525,7 @@ impl HlsDownloader {
     /// # Arguments
     /// * `segment_paths` - Paths to segment files to delete
     async fn cleanup_segments(&self, segment_paths: Vec<PathBuf>) {
-        debug!("Cleaning up {} segment files...", segment_paths.len());
+        debug!(count = segment_paths.len(); "Cleaning up segment files");
 
         let mut deleted = 0;
         for path in segment_paths {
@@ -530,7 +534,7 @@ impl HlsDownloader {
             }
         }
 
-        debug!("Deleted {deleted} segment files");
+        debug!(deleted; "Segment cleanup complete");
     }
 }
 
@@ -555,6 +559,7 @@ impl Downloader for HlsDownloader {
         Ok(None)
     }
 
+    #[instrument(skip(self, progress), fields(url = %url, path = %path.display()))]
     async fn download_to_file(
         &self,
         url: &str,
@@ -566,7 +571,7 @@ impl Downloader for HlsDownloader {
         // Step 1: Parse playlist
         let segment_urls = self.parse_playlist(url).await?;
         let total_segments = segment_urls.len();
-        info!("Found {total_segments} segments in playlist");
+        info!(segments = total_segments; "Parsed HLS playlist");
 
         // Step 2: Load or create state for resume support
         let state = match HlsDownloadState::load(path, url, total_segments).await {
@@ -574,7 +579,10 @@ impl Downloader for HlsDownloader {
                 let completed = existing_state.completed_segments.len();
                 let remaining = total_segments - completed;
                 info!(
-                    "Resuming: {completed}/{total_segments} segments already downloaded, {remaining} remaining"
+                    completed,
+                    total = total_segments,
+                    remaining;
+                    "Resuming HLS download"
                 );
                 Arc::new(Mutex::new(existing_state))
             }
@@ -682,11 +690,13 @@ impl Downloader for HlsDownloader {
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_bytes, duration, 0).with_fragments(total_segments);
 
+        let duration_secs = duration.as_secs_f64();
+        let speed_mbps = (total_bytes as f64 / duration_secs) / (1024.0 * 1024.0);
         info!(
-            "HLS download complete: {} MB in {:.1}s ({:.1} MB/s)",
-            total_bytes / (1024 * 1024),
-            duration.as_secs_f64(),
-            (total_bytes as f64 / duration.as_secs_f64()) / (1024.0 * 1024.0)
+            mb = total_bytes / (1024 * 1024),
+            duration_secs:? = duration_secs,
+            speed_mbps:? = speed_mbps;
+            "HLS download complete"
         );
 
         Ok(stats)

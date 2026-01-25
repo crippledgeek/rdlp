@@ -46,7 +46,7 @@ pub(super) async fn cleanup_chunk_files(
     download_id: u64,
     total_chunks: usize,
 ) {
-    info!("Cleaning up {total_chunks} partial chunk files...");
+    info!(chunks = total_chunks; "Cleaning up partial chunk files");
     let mut deleted = 0;
     for chunk_id in 0..total_chunks {
         let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
@@ -54,7 +54,7 @@ pub(super) async fn cleanup_chunk_files(
             deleted += 1;
         }
     }
-    debug!("Deleted {deleted} chunk files");
+    debug!(deleted; "Chunk cleanup complete");
 }
 
 impl HttpDownloader {
@@ -71,11 +71,13 @@ impl HttpDownloader {
         let (chunk_size, total_chunks) = calculate_chunks(total_size, self.config.chunk_strategy);
 
         debug!(
-            "Chunk analysis: download_id={download_id}, size={} MB, chunk_size={} KB, chunks={total_chunks}, concurrent={}, batches={}",
-            total_size / 1024 / 1024,
-            chunk_size / 1024,
-            self.config.concurrent_fragments,
-            total_chunks.div_ceil(self.config.concurrent_fragments)
+            download_id,
+            size_mb = total_size / 1024 / 1024,
+            chunk_kb = chunk_size / 1024,
+            chunks = total_chunks,
+            concurrent = self.config.concurrent_fragments,
+            batches = total_chunks.div_ceil(self.config.concurrent_fragments);
+            "Chunk analysis"
         );
 
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -361,7 +363,7 @@ async fn merge_chunks(
     total_chunks: usize,
     config: &DownloaderConfig,
 ) -> Result<()> {
-    info!("Merging {total_chunks} chunks into final file...");
+    info!(chunks = total_chunks; "Merging chunks into final file");
     let final_file = File::create(path).await.map_err(RdlpError::Io)?;
     let mut writer = BufWriter::with_capacity(config.buffer_size, final_file);
 
@@ -378,10 +380,10 @@ async fn merge_chunks(
         }
 
         if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-            debug!("Merged {}/{} chunks", chunk_id + 1, total_chunks);
+            debug!(merged = chunk_id + 1, total = total_chunks; "Merge progress");
         }
     }
-    debug!("Cleaned up {deleted_chunks} chunk files");
+    debug!(deleted = deleted_chunks; "Chunk cleanup complete");
 
     writer.flush().await.map_err(RdlpError::Io)?;
     Ok(())
@@ -403,7 +405,7 @@ async fn append_chunks(
         .map_err(RdlpError::Io)?;
     let mut writer = BufWriter::with_capacity(config.buffer_size, file);
 
-    info!("Appending {total_chunks} chunks to existing file...");
+    info!(chunks = total_chunks; "Appending chunks to existing file");
     let mut deleted_chunks = 0;
     for chunk_id in 0..total_chunks {
         let chunk_path = temp_dir.join(format!("{filename}.{download_id}.resume{chunk_id}"));
@@ -417,10 +419,10 @@ async fn append_chunks(
         }
 
         if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-            debug!("Appended {}/{} chunks", chunk_id + 1, total_chunks);
+            debug!(appended = chunk_id + 1, total = total_chunks; "Append progress");
         }
     }
-    debug!("Cleaned up {deleted_chunks} chunk files");
+    debug!(deleted = deleted_chunks; "Chunk cleanup complete");
 
     writer.flush().await.map_err(RdlpError::Io)?;
     Ok(())

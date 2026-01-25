@@ -101,7 +101,7 @@ impl HlsDownloadState {
         let state_path = Self::state_file_path(output_path);
 
         if !state_path.exists() {
-            debug!("No HLS state file found at {}", state_path.display());
+            debug!(path:? = state_path.display(); "No HLS state file found");
             return None;
         }
 
@@ -140,9 +140,7 @@ impl HlsDownloadState {
         // Compare normalized URLs to handle dynamic tokens
         let normalized_url = extract_url_path(playlist_url);
         if state.playlist_url != normalized_url {
-            warn!("Playlist URL changed, starting fresh");
-            debug!("  Old: {}", state.playlist_url);
-            debug!("  New: {normalized_url}");
+            warn!(old:? = state.playlist_url, new:? = normalized_url; "Playlist URL changed, starting fresh");
             return None;
         }
 
@@ -156,7 +154,7 @@ impl HlsDownloadState {
 
         let completed = state.completed_segments.len();
         let mb = state.total_bytes_downloaded as f64 / (1024.0 * 1024.0);
-        info!("Resuming HLS download: {completed}/{segment_count} segments completed ({mb:.1} MB)");
+        info!(completed, total = segment_count, mb:? = mb; "Resuming HLS download");
 
         Some(state)
     }
@@ -180,9 +178,9 @@ impl HlsDownloadState {
         tokio::fs::rename(&temp_path, &state_path).await?;
 
         debug!(
-            "Saved HLS state: {}/{} segments",
-            self.completed_segments.len(),
-            self.segment_count
+            completed = self.completed_segments.len(),
+            total = self.segment_count;
+            "Saved HLS state"
         );
         Ok(())
     }
@@ -219,7 +217,7 @@ impl HlsDownloadState {
         let state_path = Self::state_file_path(output_path);
         if state_path.exists() {
             tokio::fs::remove_file(&state_path).await?;
-            debug!("Deleted HLS state file: {}", state_path.display());
+            debug!(path:? = state_path.display(); "Deleted HLS state file");
         }
         Ok(())
     }

@@ -138,7 +138,7 @@ impl HlsSizeDetector {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
-            debug!("[HLS] Counting segments for: {m3u8_url}");
+            debug!(url:? = m3u8_url; "HLS counting segments");
         }
 
         // Parse playlist to extract segment URLs
@@ -146,13 +146,13 @@ impl HlsSizeDetector {
             Ok(urls) => {
                 let count = urls.len();
                 if self.verbose {
-                    debug!("[HLS] Found {count} segments");
+                    debug!(count; "HLS found segments");
                 }
                 Ok(Some(count))
             }
             Err(e) => {
                 if self.verbose {
-                    debug!("[HLS] Failed to parse playlist: {e}");
+                    debug!("HLS failed to parse playlist: {e}");
                 }
                 Ok(None)
             }
@@ -178,7 +178,7 @@ impl HlsSizeDetector {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
-            debug!("[HLS] Detecting size for: {m3u8_url}");
+            debug!(url:? = m3u8_url; "HLS detecting size");
         }
 
         // Step 1: Parse playlist to extract segment URLs
@@ -186,7 +186,7 @@ impl HlsSizeDetector {
             Ok(urls) => urls,
             Err(e) => {
                 if self.verbose {
-                    debug!("[HLS] Failed to parse playlist: {e}");
+                    debug!("HLS failed to parse playlist: {e}");
                 }
                 return Ok(None);
             }
@@ -194,7 +194,7 @@ impl HlsSizeDetector {
 
         if segment_urls.is_empty() {
             if self.verbose {
-                debug!("[HLS] No segments found in playlist");
+                debug!("HLS no segments found in playlist");
             }
             return Ok(None);
         }
@@ -206,7 +206,7 @@ impl HlsSizeDetector {
             Ok(size) => size,
             Err(e) => {
                 if self.verbose {
-                    debug!("[HLS] Failed to calculate total size: {e}");
+                    debug!("HLS failed to calculate total size: {e}");
                 }
                 return Ok(None);
             }
@@ -215,8 +215,11 @@ impl HlsSizeDetector {
         if self.verbose {
             let duration = start.elapsed();
             debug!(
-                "[HLS] Detection completed in {duration:?}: {} MB ({total_size} bytes), {segment_count} segments",
-                total_size / 1_000_000
+                duration:? = duration,
+                mb = total_size / 1_000_000,
+                bytes = total_size,
+                segments = segment_count;
+                "HLS detection completed"
             );
         }
 
@@ -239,7 +242,7 @@ impl HlsSizeDetector {
     /// * `Err(_)` - Network error, parse error, or master playlist detected
     async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<String>> {
         if self.verbose {
-            debug!("[HLS] Fetching playlist from: {m3u8_url}");
+            debug!(url:? = m3u8_url; "HLS fetching playlist");
         }
 
         // Fetch playlist text
@@ -266,7 +269,7 @@ impl HlsSizeDetector {
             .map_err(|e| RdlpError::Network(format!("Failed to read playlist response: {e}")))?;
 
         if self.verbose {
-            debug!("[HLS] Playlist size: {} bytes", playlist_text.len());
+            debug!(bytes = playlist_text.len(); "HLS playlist size");
         }
 
         // Parse with m3u8-rs
@@ -306,7 +309,7 @@ impl HlsSizeDetector {
                 }
 
                 if self.verbose {
-                    debug!("[HLS] Found {} segments", segments.len());
+                    debug!(segments = segments.len(); "HLS found segments");
                 }
 
                 Ok(segments)
@@ -325,12 +328,10 @@ impl HlsSizeDetector {
 
                 if self.verbose {
                     debug!(
-                        "[HLS] Master playlist detected with {} variants",
-                        master.variants.len()
-                    );
-                    debug!(
-                        "[HLS] Selecting first variant: {} (bandwidth: {} bps)",
-                        media_playlist_uri, variant.bandwidth
+                        variants = master.variants.len(),
+                        uri:? = media_playlist_uri,
+                        bandwidth = variant.bandwidth;
+                        "HLS master playlist detected, selecting first variant"
                     );
                 }
 
@@ -377,15 +378,12 @@ impl HlsSizeDetector {
             }
             Ok(response) => {
                 if self.verbose {
-                    debug!(
-                        "[HLS] HEAD request returned HTTP {} for: {segment_url}",
-                        response.status()
-                    );
+                    debug!(status:? = response.status(); "HLS HEAD request returned non-success");
                 }
             }
             Err(e) => {
                 if self.verbose {
-                    debug!("[HLS] HEAD request failed for {segment_url}: {e}");
+                    debug!("HLS HEAD request failed: {e}");
                 }
             }
         }
@@ -451,8 +449,9 @@ impl HlsSizeDetector {
 
         if self.verbose {
             debug!(
-                "[HLS] Fetching sizes for {total_segments} segments ({} concurrent)...",
-                self.concurrent_requests
+                segments = total_segments,
+                concurrent = self.concurrent_requests;
+                "HLS fetching segment sizes"
             );
         }
 
@@ -479,7 +478,7 @@ impl HlsSizeDetector {
                 }
                 Err(e) => {
                     if self.verbose {
-                        debug!("[HLS] Segment size detection failed: {e}");
+                        debug!("HLS segment size detection failed: {e}");
                     }
                     failed += 1;
                 }
@@ -490,8 +489,10 @@ impl HlsSizeDetector {
 
         if self.verbose {
             debug!(
-                "[HLS] Results: {successful}/{total_segments} successful ({:.1}% success rate)",
-                success_rate * 100.0
+                successful,
+                total = total_segments,
+                success_rate:? = success_rate * 100.0;
+                "HLS segment size results"
             );
         }
 
@@ -505,7 +506,9 @@ impl HlsSizeDetector {
         // Warn if success rate is below 90%
         if success_rate < 0.9 && self.verbose {
             debug!(
-                "[HLS] Warning: Only {successful}/{total_segments} segments succeeded, size may be inaccurate"
+                successful,
+                total = total_segments;
+                "HLS low success rate, size may be inaccurate"
             );
         }
 
@@ -571,14 +574,16 @@ pub async fn detect_format_sizes(
                             );
                             if verbose {
                                 debug!(
-                                    "[{extractor_name}] HLS {}: {segment_count} segments",
-                                    format.format_note.as_deref().unwrap_or(&format.format_id),
+                                    extractor:? = extractor_name,
+                                    format:? = format.format_note.as_deref().unwrap_or(&format.format_id),
+                                    segments = segment_count;
+                                    "HLS segment count detected"
                                 );
                             }
                         }
                         Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
                             if verbose {
-                                debug!("[{extractor_name}] Could not count segments for: {url}");
+                                debug!(extractor:? = extractor_name, url:? = url; "Could not count HLS segments");
                             }
                         }
                     }

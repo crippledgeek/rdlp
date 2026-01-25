@@ -58,7 +58,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
         ));
     }
 
-    debug!("[PornHub] Total unique formats: {}", all_formats.len());
+    debug!(count = all_formats.len(); "[PornHub] Total unique formats");
 
     Ok(all_formats)
 }
@@ -121,7 +121,7 @@ async fn fetch_media_formats(
     let response = ctx.http_client.get(url).send().await.ok()?;
 
     if !response.status().is_success() {
-        debug!("[PornHub] get_media returned HTTP {}", response.status());
+        debug!(status:? = response.status(); "[PornHub] get_media returned non-success");
         return None;
     }
 
@@ -136,7 +136,7 @@ async fn fetch_media_formats(
 
         let format = build_format(real_url, quality, idx);
 
-        debug!("[PornHub] Found format: {}", format.format_id);
+        debug!(format_id:? = format.format_id; "[PornHub] Found format");
 
         formats.push(format);
     }
@@ -213,7 +213,7 @@ fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
                             let format = build_format(url, quality.parse().ok(), 0);
                             formats.push(format);
 
-                            debug!("[PornHub] Found format from qualityItems: {quality}");
+                            debug!(quality; "[PornHub] Found format from qualityItems");
                         }
                     }
                 }
@@ -234,7 +234,7 @@ fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
 
             let format = build_format(url_str, quality, 0);
 
-            debug!("[PornHub] Found format from JS var: {quality_name}");
+            debug!(quality:? = quality_name; "[PornHub] Found format from JS var");
 
             formats.push(format);
         }
@@ -267,7 +267,7 @@ fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
                 format.height = Some(q as u32);
             }
 
-            debug!("[PornHub] Found format from download button: {format_id}");
+            debug!(format_id:?; "[PornHub] Found format from download button");
 
             formats.push(format);
         }

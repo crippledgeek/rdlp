@@ -566,7 +566,7 @@ impl BaseExtractor {
         if let Ok(response) = ctx.http_client.head(url).send().await {
             if let Some(size) = response.content_length() {
                 if size > 0 {
-                    debug!("[BaseExtractor] HEAD Content-Length: {size}");
+                    debug!(size, method = "HEAD"; "[BaseExtractor] Detected Content-Length");
                     return Some(size);
                 }
             }
@@ -585,7 +585,7 @@ impl BaseExtractor {
                     // Parse "bytes 0-0/123456"
                     if let Some(total) = range_str.split('/').nth(1) {
                         if let Ok(size) = total.parse::<u64>() {
-                            debug!("[BaseExtractor] Range Content-Range: {size}");
+                            debug!(size, method = "Range"; "[BaseExtractor] Detected Content-Range");
                             return Some(size);
                         }
                     }
@@ -647,7 +647,7 @@ impl BaseExtractor {
         if let Ok(response) = ctx.http_client.head(url).send().await {
             if let Some(size) = response.content_length() {
                 if size > 0 {
-                    debug!("[{log_prefix}] HEAD Content-Length: {size}");
+                    debug!(size, method = "HEAD"; "[{log_prefix}] Detected Content-Length");
                     return Some(size);
                 }
             }
@@ -665,7 +665,7 @@ impl BaseExtractor {
                 if let Ok(range_str) = content_range.to_str() {
                     if let Some(total) = range_str.split('/').nth(1) {
                         if let Ok(size) = total.parse::<u64>() {
-                            debug!("[{log_prefix}] Range Content-Range: {size}");
+                            debug!(size, method = "Range"; "[{log_prefix}] Detected Content-Range");
                             return Some(size);
                         }
                     }

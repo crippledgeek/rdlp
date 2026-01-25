@@ -18,6 +18,7 @@ pub use errors::{OrchestratorError, Result};
 pub use state::{DownloadPhase, DownloadState};
 
 use log::{debug, warn};
+use tracing::instrument;
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
@@ -80,12 +81,12 @@ impl Orchestrator {
 
         match registry_result {
             Ok(registry) => {
-                debug!("[PostProcess] FFmpeg initialized successfully");
+                debug!("FFmpeg initialized successfully");
                 Some(Arc::new(registry))
             }
             Err(e) => {
                 // Warn about FFmpeg not being found (needed for HLS fixup)
-                warn!("[PostProcess] FFmpeg NOT found: {e}");
+                warn!("FFmpeg NOT found: {e}");
                 None
             }
         }
@@ -149,6 +150,7 @@ impl Orchestrator {
     /// - `Ok(Some(path))` - Download completed successfully
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Error occurred during any phase
+    #[instrument(skip(self), fields(url = %url))]
     pub async fn download(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
         // Try playlist extraction first to check if this is a playlist
         let infos = self.extract_playlist_info(url).await?;

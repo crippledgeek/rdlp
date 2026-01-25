@@ -3,6 +3,7 @@
 use super::{Orchestrator, errors::*};
 use log::{info, warn};
 use std::path::{Path, PathBuf};
+use tracing::instrument;
 
 /// Information about detected chunk files
 #[derive(Debug, Clone)]
@@ -109,7 +110,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
         "old-style".to_string()
     };
 
-    info!("Merging {chunk_count} {chunk_type} chunks...");
+    info!(chunk_count, chunk_type:?; "Merging chunks");
 
     // Create output file
     let file = File::create(output_path)
@@ -139,7 +140,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
 
         // Progress update every 100 chunks
         if (idx + 1) % 100 == 0 || idx == chunk_count - 1 {
-            info!("   Merged {}/{} chunks", idx + 1, chunk_count);
+            info!(merged = idx + 1, total = chunk_count; "   Merge progress");
         }
 
         // Delete chunk file after successful merge
@@ -153,7 +154,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
         .await
         .map_err(OrchestratorError::ChunkMergeFailed)?;
 
-    info!("Cleaned up {chunk_count} chunk files");
+    info!(chunk_count; "Cleaned up chunk files");
 
     Ok(total_size)
 }
@@ -175,7 +176,7 @@ async fn cleanup_old_chunks(output_path: &Path) {
     }
 
     if deleted > 0 {
-        info!("Cleaned up {deleted} old-style chunk files");
+        info!(deleted; "Cleaned up old-style chunk files");
     }
 }
 
@@ -192,6 +193,7 @@ impl Orchestrator {
     /// Automatically merges and cleans up chunk files.
     ///
     /// Returns the byte offset to resume from (0 for fresh download)
+    #[instrument(skip(self), fields(path = %output_path.display()))]
     pub(super) async fn detect_resume_point(
         &self,
         output_path: &Path,
@@ -257,10 +259,11 @@ impl Orchestrator {
             // Merge chunks into the main file
             match merge_chunk_files(output_path, &chunk_info).await {
                 Ok(size) => {
+                    let mb = size as f64 / (1024.0 * 1024.0);
                     info!(
-                        "Merged {} chunks into main file ({:.1} MB)",
-                        chunk_info.chunk_paths.len(),
-                        size as f64 / (1024.0 * 1024.0)
+                        chunks = chunk_info.chunk_paths.len(),
+                        mb:?;
+                        "Merged chunks into main file"
                     );
                     Ok(size)
                 }

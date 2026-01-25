@@ -154,7 +154,7 @@ impl PostProcessor for FFmpegMetadata {
             .and_then(|e| e.to_str())
             .unwrap_or("mp4");
 
-        info!("Embedding metadata into {}", input_file.display());
+        info!(file:? = input_file.display(); "Embedding metadata");
 
         // Create temp output file
         let temp_output = input_file.with_extension(format!("temp.{extension}"));
@@ -203,7 +203,7 @@ impl PostProcessor for FFmpegMetadata {
             let _ = tokio::fs::remove_file(&chapters_file).await;
         }
 
-        info!("Metadata embedded: {}", input_file.display());
+        info!(file:? = input_file.display(); "Metadata embedded");
 
         Ok(PostProcessResult::new(info.clone(), files))
     }

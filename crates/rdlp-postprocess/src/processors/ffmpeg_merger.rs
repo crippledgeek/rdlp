@@ -128,7 +128,7 @@ impl PostProcessor for FFmpegMerger {
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
-        info!("Merging {} streams into single file", files.len());
+        info!(streams = files.len(); "Merging streams into single file");
 
         // Determine which file is video and which is audio
         let (video_file, audio_file, video_idx, audio_idx) = if files.len() == 2 {
@@ -152,9 +152,9 @@ impl PostProcessor for FFmpegMerger {
         };
 
         debug!(
-            "Video file: {}, Audio file: {}",
-            video_file.display(),
-            audio_file.display()
+            video:? = video_file.display(),
+            audio:? = audio_file.display();
+            "Identified input streams"
         );
 
         // Determine output format
@@ -174,7 +174,7 @@ impl PostProcessor for FFmpegMerger {
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         self.ffmpeg.run(&args_refs).await?;
 
-        info!("Merged output: {}", output_path.display());
+        info!(output:? = output_path.display(); "Merged output");
 
         // Return result with merged file and original files as temp
         Ok(PostProcessResult {

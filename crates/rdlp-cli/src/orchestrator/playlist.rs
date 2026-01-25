@@ -71,18 +71,18 @@ impl Orchestrator {
         let remaining = total - already_downloaded;
 
         println!("\n{}", "=".repeat(60));
-        info!("Playlist: {playlist_title}");
-        info!("Folder: {}", playlist_dir.display());
-        info!("Total videos: {total}");
+        info!(title:? = playlist_title; "Playlist");
+        info!(path:? = playlist_dir.display(); "Folder");
+        info!(total; "Total videos");
 
         if already_downloaded > 0 || partial_count > 0 {
             if already_downloaded > 0 {
-                info!("Already downloaded: {already_downloaded}");
+                info!(already_downloaded; "Already downloaded");
             }
             if partial_count > 0 {
-                info!("Leftover segments: {partial_count} (will be cleaned up)");
+                info!(partial_count; "Leftover segments (will be cleaned up)");
             }
-            info!("Remaining: {remaining}");
+            info!(remaining; "Remaining");
         }
 
         println!("{}", "=".repeat(60));
@@ -90,7 +90,7 @@ impl Orchestrator {
 
         // If all videos are already downloaded, return early
         if remaining == 0 {
-            info!("All videos already downloaded!");
+            info!("All videos already downloaded");
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
         }
@@ -126,7 +126,7 @@ impl Orchestrator {
                     playlist_dir.display()
                 ))
             })?;
-            info!("Created folder: {}", playlist_dir.display());
+            info!(path:? = playlist_dir.display(); "Created folder");
         }
 
         // Download each video with progress tracking
@@ -147,12 +147,12 @@ impl Orchestrator {
             });
 
             if already_exists {
-                info!("[{position}/{total}] Already downloaded: {}", info.title);
+                info!(position, total, title:? = info.title; "Already downloaded");
                 continue;
             }
 
             println!("\n{}", "─".repeat(60));
-            info!("[{}/{}] Downloading: {}", position, total, info.title);
+            info!(position, total, title:? = info.title; "Downloading");
             println!("{}", "─".repeat(60));
 
             // Race download against Ctrl+C signal
@@ -161,14 +161,14 @@ impl Orchestrator {
                 result = self.download_from_info_to_dir(info, false, &playlist_dir) => {
                     match result {
                         Ok(Some(path)) => {
-                            info!("[{}/{}] Saved: {}", position, total, path.display());
+                            info!(position, total, path:? = path.display(); "Saved");
                             downloaded.push(path);
                         }
                         Ok(None) => {
-                            info!("[{position}/{total}] Skipped by user");
+                            info!(position, total; "Skipped by user");
                         }
                         Err(e) => {
-                            error!("[{position}/{total}] Failed: {e}");
+                            error!(position, total; "Failed: {e}");
                             failed.push((position, info.title.clone(), e.to_string()));
                         }
                     }
@@ -193,25 +193,25 @@ impl Orchestrator {
         info!("{}", "=".repeat(60));
         info!("Playlist Download Summary");
         info!("{}", "=".repeat(60));
-        info!("Folder: {}", playlist_dir.display());
-        info!("Total downloaded: {}/{}", downloaded.len(), total);
+        info!(path:? = playlist_dir.display(); "Folder");
+        info!(downloaded = downloaded.len(), total; "Total downloaded");
 
         if already_downloaded > 0 {
             println!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
         }
 
         if !failed.is_empty() {
-            error!("Failed: {}", failed.len());
+            error!(count = failed.len(); "Failed");
             error!("Failed videos:");
             for (pos, title, err) in &failed {
-                error!("   [{pos}] {title}");
-                error!("       Error: {err}");
+                error!(position = pos, title:?; "Failed video");
+                error!(err:?; "Error");
             }
         }
 
         if interrupted {
             let remaining_after = total - downloaded.len();
-            info!("Interrupted with {remaining_after} videos remaining");
+            info!(remaining = remaining_after; "Interrupted with videos remaining");
             info!("Run the same command again to resume");
         }
 
@@ -359,7 +359,7 @@ impl Orchestrator {
         self.cleanup_leftover_segments(output_dir, &sanitized_title)
             .await;
 
-        info!("Downloading to: {}", output_path.display());
+        info!(path:? = output_path.display(); "Downloading to");
 
         // Detect resume point
         let resume_offset = self
@@ -413,8 +413,8 @@ impl Orchestrator {
 
         // Report success
         info!("Downloaded successfully!");
-        info!("   File: {}", output_path.display());
-        info!("   Stats: {stats}");
+        info!(path:? = output_path.display(); "   File");
+        info!(stats:?; "   Stats");
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self

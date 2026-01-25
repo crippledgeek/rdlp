@@ -125,7 +125,7 @@ impl PostProcessorRegistry {
 
     /// Register a post-processor.
     pub fn register(&mut self, processor: Arc<dyn PostProcessor>) {
-        debug!("Registering post-processor: {}", processor.name());
+        debug!(name:? = processor.name(); "Registering post-processor");
         self.processors.push(processor);
     }
 
@@ -158,14 +158,11 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
 
         for processor in &processors {
             if !processor.should_run(&current_info, config) {
-                debug!(
-                    "Skipping post-processor {} (should_run returned false)",
-                    processor.name()
-                );
+                debug!(name:? = processor.name(); "Skipping post-processor (should_run returned false)");
                 continue;
             }
 
-            info!("Running post-processor: {}", processor.name());
+            info!(name:? = processor.name(); "Running post-processor");
 
             match processor
                 .process(&current_info, current_files.clone())
@@ -177,13 +174,13 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
                     all_temp_files.extend(result.temp_files);
 
                     debug!(
-                        "Post-processor {} completed, {} output files",
-                        processor.name(),
-                        current_files.len()
+                        name:? = processor.name(),
+                        output_files = current_files.len();
+                        "Post-processor completed"
                     );
                 }
                 Err(e) => {
-                    warn!("Post-processor {} failed: {}", processor.name(), e);
+                    warn!(name:? = processor.name(); "Post-processor failed: {e}");
                     // Continue with other processors on non-fatal errors
                     // Fatal errors should be propagated
                     if is_fatal_error(&e) {
@@ -197,9 +194,9 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         for temp_file in &all_temp_files {
             if temp_file.exists() {
                 if let Err(e) = tokio::fs::remove_file(temp_file).await {
-                    warn!("Failed to remove temp file {}: {}", temp_file.display(), e);
+                    warn!(path:? = temp_file.display(); "Failed to remove temp file: {e}");
                 } else {
-                    debug!("Removed temp file: {}", temp_file.display());
+                    debug!(path:? = temp_file.display(); "Removed temp file");
                 }
             }
         }
