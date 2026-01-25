@@ -4,10 +4,11 @@
 
 use anyhow::Result;
 use clap::Parser;
-use log::{error, info};
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::path::PathBuf;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 /// Get optimal number of worker threads for I/O-heavy workloads
 fn optimal_worker_threads() -> usize {
@@ -107,17 +108,17 @@ fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
+    // Initialize tracing subscriber
     // Use RUST_LOG environment variable or default based on verbose/quiet flags
     if !args.quiet {
-        let log_level = if args.verbose {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        };
+        let default_level = if args.verbose { "debug" } else { "info" };
 
-        env_logger::Builder::from_default_env()
-            .filter_level(log_level)
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(default_level));
+
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(true)
             .init();
     }
 

@@ -3,6 +3,7 @@
 use super::{Orchestrator, errors::*};
 use log::{info, warn};
 use std::path::{Path, PathBuf};
+use tracing::instrument;
 
 /// Information about detected chunk files
 #[derive(Debug, Clone)]
@@ -192,6 +193,7 @@ impl Orchestrator {
     /// Automatically merges and cleans up chunk files.
     ///
     /// Returns the byte offset to resume from (0 for fresh download)
+    #[instrument(skip(self), fields(path = %output_path.display()))]
     pub(super) async fn detect_resume_point(
         &self,
         output_path: &Path,

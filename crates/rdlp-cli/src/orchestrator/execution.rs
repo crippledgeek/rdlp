@@ -7,6 +7,7 @@ use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::instrument;
 
 /// Progress callback that updates a progress bar
 struct ProgressBarCallback {
@@ -159,6 +160,7 @@ impl Orchestrator {
     ///
     /// # Errors
     /// Returns an error if download fails
+    #[instrument(skip(self, downloader, progress_bar), fields(url = %url, output = %output_path.display()))]
     pub(super) async fn execute_download(
         &self,
         downloader: &Arc<dyn Downloader>,

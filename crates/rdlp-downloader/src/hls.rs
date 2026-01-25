@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use backon::Retryable;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, info, warn};
+use tracing::instrument;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
 };
@@ -125,6 +126,7 @@ impl HlsDownloader {
     /// # Returns
     /// * `Ok((index, path, bytes))` - Successfully downloaded segment
     /// * `Err(_)` - Failed after all retries
+    #[instrument(skip(self, progress), fields(segment = idx))]
     async fn download_segment_with_retry(
         &self,
         idx: usize,
@@ -313,6 +315,7 @@ impl HlsDownloader {
     /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
     /// * `Err(_)` - Download error (network, I/O, etc.)
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, segment_urls, progress_counter, segments_counter, state), fields(segments = segment_urls.len()))]
     async fn download_segments_with_resume(
         &self,
         segment_urls: Vec<String>,
@@ -556,6 +559,7 @@ impl Downloader for HlsDownloader {
         Ok(None)
     }
 
+    #[instrument(skip(self, progress), fields(url = %url, path = %path.display()))]
     async fn download_to_file(
         &self,
         url: &str,

@@ -2,6 +2,7 @@
 
 use super::{Orchestrator, errors::*};
 use log::info;
+use tracing::instrument;
 
 impl Orchestrator {
     /// Extract video information from URL
@@ -13,6 +14,7 @@ impl Orchestrator {
     /// Returns an error if:
     /// - No extractor is found for the URL
     /// - Extraction fails
+    #[instrument(skip(self), fields(url = %url))]
     pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_core::InfoDict> {
         info!("Finding extractor for URL...");
 
@@ -49,6 +51,7 @@ impl Orchestrator {
     /// Returns an error if:
     /// - No extractor is found for the URL
     /// - Extraction fails
+    #[instrument(skip(self), fields(url = %url))]
     pub(super) async fn extract_playlist_info(
         &self,
         url: &str,

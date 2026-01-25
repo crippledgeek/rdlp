@@ -5,6 +5,7 @@ use log::info;
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
+use tracing::instrument;
 
 /// Download state for resume logic
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +122,7 @@ impl DownloadPhase {
     /// # Errors
     ///
     /// Returns an error if any phase transition fails (extraction error, download error, etc.)
+    #[instrument(skip(orchestrator), fields(phase = %self))]
     pub(super) async fn advance(
         self,
         orchestrator: &Orchestrator,
