@@ -183,11 +183,18 @@ impl DownloadPhase {
                 format,
                 state,
             } => {
-                let resume_from = state.offset();
-
                 // Create progress bar with best available size estimate
                 // For HLS streams, use segment-based progress bar (not byte-based)
                 let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
+
+                // HLS downloads use segment-based resume (tracked in .hls_state.json), not byte offsets
+                // The HLS downloader handles its own resume logic internally
+                let resume_from = if is_hls {
+                    0 // HLS downloader manages its own state file for segment-based resume
+                } else {
+                    state.offset()
+                };
+
                 let estimated_size = if is_hls {
                     None // HLS uses segment-based progress, not byte-based
                 } else {

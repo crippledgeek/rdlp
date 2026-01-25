@@ -299,7 +299,7 @@ impl fmt::Display for DownloadStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} in {:.1}s ({}/s)",
+            "{} in {:.1}s ({})",
             self.bytes_string(),
             self.duration.as_secs_f64(),
             self.speed_string()
