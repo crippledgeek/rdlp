@@ -1,9 +1,13 @@
-use crate::{RdlpError, Result};
-use log::warn;
-use std::future::Future;
+use crate::RdlpError;
 use std::time::Duration;
 
+// Re-export backon types for convenience
+pub use backon::{ExponentialBuilder, Retryable};
+
 /// Retry configuration for network operations
+///
+/// This struct provides user-facing configuration that can be converted
+/// to a backon `ExponentialBuilder` for actual retry execution.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// Maximum number of retry attempts
@@ -13,7 +17,9 @@ pub struct RetryConfig {
     /// Maximum delay between retries
     pub max_delay: Duration,
     /// Exponential backoff multiplier (typically 2.0)
-    pub multiplier: f64,
+    pub multiplier: f32,
+    /// Enable jitter to prevent thundering herd
+    pub jitter: bool,
 }
 
 impl RetryConfig {
@@ -22,126 +28,81 @@ impl RetryConfig {
         max_retries: usize,
         initial_delay: Duration,
         max_delay: Duration,
-        multiplier: f64,
+        multiplier: f32,
     ) -> Self {
         Self {
             max_retries,
             initial_delay,
             max_delay,
             multiplier,
+            jitter: true, // Enable jitter by default for production resilience
         }
     }
 
-    /// Create default retry configuration (10 retries, 1s-60s backoff)
+    /// Create default retry configuration (10 retries, 1s-60s backoff, jitter enabled)
     pub fn default_config() -> Self {
         Self {
             max_retries: 10,
             initial_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(60),
             multiplier: 2.0,
+            jitter: true,
         }
     }
 
-    /// Calculate delay for a given attempt number (0-indexed)
-    pub fn calculate_delay(&self, attempt: usize) -> Duration {
-        let delay_secs = self.initial_delay.as_secs_f64() * self.multiplier.powi(attempt as i32);
-        Duration::from_secs_f64(delay_secs.min(self.max_delay.as_secs_f64()))
+    /// Enable or disable jitter
+    #[must_use]
+    pub fn with_jitter(mut self, enabled: bool) -> Self {
+        self.jitter = enabled;
+        self
+    }
+
+    /// Convert to backon ExponentialBuilder
+    ///
+    /// This allows using the RetryConfig with backon's `.retry()` trait extension.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use rdlp_core::{RetryConfig, Retryable};
+    ///
+    /// let config = RetryConfig::default_config();
+    /// let result = (|| async { fetch_data().await })
+    ///     .retry(config.to_backoff())
+    ///     .await;
+    /// ```
+    pub fn to_backoff(&self) -> ExponentialBuilder {
+        let mut builder = ExponentialBuilder::default()
+            .with_min_delay(self.initial_delay)
+            .with_max_delay(self.max_delay)
+            .with_max_times(self.max_retries)
+            .with_factor(self.multiplier);
+
+        if self.jitter {
+            builder = builder.with_jitter();
+        }
+
+        builder
     }
 }
 
-/// Execute an async operation with retry logic and exponential backoff
-///
-/// # Arguments
-/// * `config` - Retry configuration
-/// * `operation_name` - Human-readable name for logging
-/// * `f` - Async function to retry (takes attempt number as parameter)
-///
-/// # Returns
-/// Result from the operation, or the last error if all retries exhausted
-///
-/// # Closure Ownership Pattern
-///
-/// The closure `f` is `FnMut`, meaning it can be called multiple times (once per retry attempt).
-/// Each call to `f` returns a new `Future` that is then awaited.
-///
-/// **Why clones are necessary:**
-/// ```rust,ignore
-/// // ❌ COMPILE ERROR: url is &str and cannot be moved into async block multiple times
-/// retry_with_backoff(&config, "HTTP GET", |_attempt| async {
-///     client.get(url).send().await  // ERROR: url moved on first call
-/// }).await?;
-///
-/// // ✅ CORRECT: Clone necessary data before creating async block
-/// retry_with_backoff(&config, "HTTP GET", |_attempt| {
-///     let client = self.client.clone();  // Arc clone (~5ns)
-///     let url = url.to_string();         // String allocation (~10-20ns)
-///     async move {
-///         client.get(url).send().await   // Owned data can be moved
-///     }
-/// }).await?;
-/// ```
-///
-/// **Performance Note:** Clones only occur on retry (rare case). Most operations succeed
-/// on the first attempt, making the allocation overhead negligible in practice.
-///
-/// # Example
-/// ```rust,ignore
-/// let result = retry_with_backoff(
-///     &retry_config,
-///     "download chunk",
-///     |attempt| {
-///         let client = client.clone();
-///         let url = url.to_string();
-///         async move {
-///             client.get(url).send().await
-///         }
-///     }
-/// ).await?;
-/// ```
-pub async fn retry_with_backoff<F, Fut, T>(
-    config: &RetryConfig,
-    operation_name: &str,
-    mut f: F,
-) -> Result<T>
-where
-    F: FnMut(usize) -> Fut,
-    Fut: Future<Output = Result<T>>,
-{
-    let mut last_error: Option<RdlpError> = None;
-
-    for attempt in 0..=config.max_retries {
-        match f(attempt).await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                last_error = Some(e);
-
-                // Don't retry on the last attempt
-                if attempt < config.max_retries {
-                    let delay = config.calculate_delay(attempt);
-                    warn!(
-                        "{} failed (attempt {}/{}), retrying in {:.1}s...",
-                        operation_name,
-                        attempt + 1,
-                        config.max_retries + 1,
-                        delay.as_secs_f64()
-                    );
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self::default_config()
     }
-
-    // All retries exhausted
-    Err(last_error.unwrap_or_else(|| {
-        RdlpError::Network(format!(
-            "{} failed after {} attempts",
-            operation_name,
-            config.max_retries + 1
-        ))
-    }))
 }
 
 /// Check if an error is retryable (transient network error)
+///
+/// Use this with backon's `.when()` method to conditionally retry:
+///
+/// ```rust,ignore
+/// use rdlp_core::{is_retryable_error, Retryable};
+///
+/// fetch
+///     .retry(config.to_backoff())
+///     .when(|e| is_retryable_error(e))
+///     .await
+/// ```
 pub fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
         // Network errors are generally retryable
@@ -162,89 +123,34 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn test_calculate_delay() {
-        let config = RetryConfig::new(5, Duration::from_secs(1), Duration::from_secs(30), 2.0);
-
-        // Attempt 0: 1s * 2^0 = 1s
-        assert_eq!(config.calculate_delay(0), Duration::from_secs(1));
-
-        // Attempt 1: 1s * 2^1 = 2s
-        assert_eq!(config.calculate_delay(1), Duration::from_secs(2));
-
-        // Attempt 2: 1s * 2^2 = 4s
-        assert_eq!(config.calculate_delay(2), Duration::from_secs(4));
-
-        // Attempt 3: 1s * 2^3 = 8s
-        assert_eq!(config.calculate_delay(3), Duration::from_secs(8));
-
-        // Attempt 4: 1s * 2^4 = 16s
-        assert_eq!(config.calculate_delay(4), Duration::from_secs(16));
-
-        // Attempt 5: 1s * 2^5 = 32s, but capped at 30s
-        assert_eq!(config.calculate_delay(5), Duration::from_secs(30));
+    fn test_default_config() {
+        let config = RetryConfig::default_config();
+        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.initial_delay, Duration::from_secs(1));
+        assert_eq!(config.max_delay, Duration::from_secs(60));
+        assert_eq!(config.multiplier, 2.0);
+        assert!(config.jitter);
     }
 
-    #[tokio::test]
-    async fn test_retry_succeeds_on_second_attempt() {
+    #[test]
+    fn test_to_backoff() {
         let config = RetryConfig::new(
-            3,
-            Duration::from_millis(10),
+            5,
             Duration::from_millis(100),
+            Duration::from_secs(10),
             2.0,
         );
 
-        let attempt_counter = Arc::new(AtomicUsize::new(0));
-        let attempt_counter_clone = attempt_counter.clone();
-
-        let result = retry_with_backoff(&config, "test operation", |_attempt| {
-            let counter = attempt_counter_clone.clone();
-            async move {
-                let attempts = counter.fetch_add(1, Ordering::SeqCst);
-                if attempts < 1 {
-                    // Fail on first attempt
-                    Err(RdlpError::Network("temporary failure".to_string()))
-                } else {
-                    // Succeed on second attempt
-                    Ok(42)
-                }
-            }
-        })
-        .await;
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 42);
-        assert_eq!(attempt_counter.load(Ordering::SeqCst), 2);
+        // Should compile and create a valid builder
+        let _builder = config.to_backoff();
     }
 
-    #[tokio::test]
-    async fn test_retry_exhausts_all_attempts() {
-        let config = RetryConfig::new(
-            2,
-            Duration::from_millis(10),
-            Duration::from_millis(100),
-            2.0,
-        );
-
-        let attempt_counter = Arc::new(AtomicUsize::new(0));
-        let attempt_counter_clone = attempt_counter.clone();
-
-        let result: Result<i32> = retry_with_backoff(&config, "test operation", |_attempt| {
-            let counter = attempt_counter_clone.clone();
-            async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                // Always fail
-                Err(RdlpError::Network("persistent failure".to_string()))
-            }
-        })
-        .await;
-
-        assert!(result.is_err());
-        // Should try: initial + 2 retries = 3 total attempts
-        assert_eq!(attempt_counter.load(Ordering::SeqCst), 3);
+    #[test]
+    fn test_with_jitter() {
+        let config = RetryConfig::default_config().with_jitter(false);
+        assert!(!config.jitter);
     }
 
     #[test]

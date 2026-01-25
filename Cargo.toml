@@ -39,6 +39,9 @@ m3u8-rs = "6.0"  # HLS playlist parser
 anyhow = "1.0"
 thiserror = "2.0"
 
+# Retry logic
+backon = { version = "1.6", features = ["tokio-sleep"] }
+
 # JavaScript engine
 boa_engine = "0.21"
 
