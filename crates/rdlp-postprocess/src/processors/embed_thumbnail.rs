@@ -186,7 +186,7 @@ impl PostProcessor for EmbedThumbnail {
 
         // Check if container supports thumbnails
         if !Self::supports_thumbnail(extension) {
-            debug!("Container {extension} does not support thumbnail embedding");
+            debug!(extension; "Container does not support thumbnail embedding");
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
@@ -194,15 +194,15 @@ impl PostProcessor for EmbedThumbnail {
         let thumbnail_file = match self.find_thumbnail(media_file) {
             Some(path) => path,
             None => {
-                debug!("No thumbnail file found for {}", media_file.display());
+                debug!(file:? = media_file.display(); "No thumbnail file found");
                 return Ok(PostProcessResult::new(info.clone(), files));
             }
         };
 
         info!(
-            "Embedding thumbnail {} into {}",
-            thumbnail_file.display(),
-            media_file.display()
+            thumbnail:? = thumbnail_file.display(),
+            media:? = media_file.display();
+            "Embedding thumbnail"
         );
 
         // Create temp output file
@@ -216,7 +216,7 @@ impl PostProcessor for EmbedThumbnail {
             Ok(_) => {
                 // Replace original with temp
                 tokio::fs::rename(&temp_output, media_file).await?;
-                info!("Thumbnail embedded: {}", media_file.display());
+                info!(file:? = media_file.display(); "Thumbnail embedded");
 
                 // Return thumbnail as temp file for cleanup
                 Ok(PostProcessResult {

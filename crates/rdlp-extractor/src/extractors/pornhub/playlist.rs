@@ -55,7 +55,7 @@ pub async fn extract_playlist(
     // Set age verification cookies
     set_age_cookies(&host, ctx).await?;
 
-    debug!("[PornHub] Extracting playlist: {playlist_id}");
+    debug!(playlist_id:?; "[PornHub] Extracting playlist");
 
     // Fetch first page
     let response = ctx
@@ -83,11 +83,11 @@ pub async fn extract_playlist(
         (title, pagination, videos)
     };
 
-    info!("[PornHub] Playlist: {playlist_title}");
+    info!(title:? = playlist_title; "[PornHub] Playlist");
     debug!(
-        "[PornHub] Videos: {:?}, has_token: {}",
-        pagination_info.video_count,
-        pagination_info.token.is_some()
+        video_count:? = pagination_info.video_count,
+        has_token = pagination_info.token.is_some();
+        "[PornHub] Playlist info"
     );
 
     if all_video_urls.is_empty() {
@@ -100,11 +100,11 @@ pub async fn extract_playlist(
     if let Some(video_count) = pagination_info.video_count {
         let page_count = calculate_page_count(video_count);
 
-        debug!("[PornHub] {video_count} videos across {page_count} pages");
+        debug!(video_count, page_count; "[PornHub] Paginated playlist");
 
         // Fetch remaining pages
         for page_num in 2..=page_count {
-            debug!("[PornHub] Fetching page {page_num}...");
+            debug!(page = page_num; "[PornHub] Fetching page");
 
             match download_page(page_num, &pagination_info, &host, ctx).await {
                 Ok(page_html) => {
@@ -115,7 +115,7 @@ pub async fn extract_playlist(
                     all_video_urls.extend(page_videos);
                 }
                 Err(e) => {
-                    warn!("Failed to fetch page {page_num}: {e}");
+                    warn!(page = page_num; "Failed to fetch page: {e}");
                     break;
                 }
             }
@@ -126,7 +126,7 @@ pub async fn extract_playlist(
     }
 
     let total = all_video_urls.len();
-    info!("[PornHub] Found {total} videos in playlist");
+    info!(total; "[PornHub] Found videos in playlist");
 
     // Security check: limit playlist size to prevent memory exhaustion
     if total > MAX_PLAYLIST_SIZE {
@@ -136,7 +136,7 @@ pub async fn extract_playlist(
     }
 
     // Extract videos in parallel using buffer_unordered for concurrent processing
-    debug!("[PornHub] Extracting {total} videos ({CONCURRENT_EXTRACTIONS} concurrent)...");
+    debug!(total, concurrent = CONCURRENT_EXTRACTIONS; "[PornHub] Extracting videos");
 
     // Progress counter for verbose logging
     let completed = Arc::new(AtomicUsize::new(0));
@@ -164,18 +164,19 @@ pub async fn extract_playlist(
                         info.playlist_index = Some(position);
                         info.playlist_count = Some(total);
 
-                        debug!("[PornHub] Extracted {done}/{total}: {video_title_hint}");
+                        debug!(done, total, title:? = video_title_hint; "[PornHub] Extracted video");
 
                         Some((position, info))
                     }
                     Ok(Err(e)) => {
                         warn!(
-                            "Failed to extract video {position}/{total} ({video_title_hint}): {e}"
+                            position, total, title:? = video_title_hint;
+                            "Failed to extract video: {e}"
                         );
                         None
                     }
                     Err(_) => {
-                        warn!("Timed out extracting video {position}/{total} ({video_title_hint})");
+                        warn!(position, total, title:? = video_title_hint; "Timed out extracting video");
                         None
                     }
                 }
@@ -204,10 +205,7 @@ pub async fn extract_playlist(
         )));
     }
 
-    info!(
-        "[PornHub] Successfully extracted {}/{total} videos",
-        results.len()
-    );
+    info!(extracted = results.len(), total; "[PornHub] Successfully extracted videos");
 
     Ok(results)
 }
@@ -262,7 +260,7 @@ fn extract_video_urls(webpage: &str, host: &str) -> Vec<(String, String)> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("Video {}", video_id.as_str()));
 
-            debug!("[PornHub] Found: {} - {}", video_id.as_str(), title);
+            debug!(video_id:? = video_id.as_str(), title:?; "[PornHub] Found video");
 
             videos.push((video_url, title));
         }

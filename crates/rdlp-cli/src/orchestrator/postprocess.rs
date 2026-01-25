@@ -108,7 +108,7 @@ impl Orchestrator {
                     info!("Post-processing complete");
                     if self.config.verbose {
                         for file in &result.files {
-                            debug!("Output: {}", file.display());
+                            debug!(path:? = file.display(); "Output");
                         }
                     }
                 }
@@ -294,7 +294,7 @@ impl Orchestrator {
         }
 
         if deleted > 0 {
-            info!("Cleaned up {deleted} leftover segment files");
+            info!(deleted; "Cleaned up leftover segment files");
         }
     }
 }

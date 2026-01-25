@@ -72,7 +72,7 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
 
     if let Some(caps) = SOURCES_PATTERN.captures(webpage) {
         if let Some(sources_str) = caps.get(1) {
-            debug!("[RedTube] Found sources object: {}", sources_str.as_str());
+            debug!(sources:? = sources_str.as_str(); "[RedTube] Found sources object");
 
             // Try to parse as JSON
             match serde_json::from_str::<Value>(sources_str.as_str()) {
@@ -85,9 +85,9 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
                                     build_format(quality, url_str.to_string(), format_type);
 
                                 debug!(
-                                    "[RedTube] Extracted format: {} ({})",
-                                    format.format_id,
-                                    format.format_note.as_deref().unwrap_or("unknown")
+                                    format_id:? = format.format_id,
+                                    note:? = format.format_note.as_deref().unwrap_or("unknown");
+                                    "[RedTube] Extracted format"
                                 );
 
                                 formats.push(format);
@@ -97,10 +97,9 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
                 }
                 Err(e) => {
                     debug!(
-                        "[RedTube] Failed to parse sources JSON at {}:{}: {}",
-                        e.line(),
-                        e.column(),
-                        e
+                        line = e.line(),
+                        column = e.column();
+                        "[RedTube] Failed to parse sources JSON: {e}"
                     );
                 }
             }
@@ -228,9 +227,9 @@ async fn fetch_formats_from_endpoint(
         Ok(r) => r,
         Err(e) => {
             if e.is_timeout() {
-                warn!("[RedTube] Request timed out for URL: {absolute_url}");
+                warn!(url:? = absolute_url; "[RedTube] Request timed out");
             } else if e.is_connect() {
-                warn!("[RedTube] Connection failed for URL: {absolute_url}: {e}");
+                warn!(url:? = absolute_url; "[RedTube] Connection failed: {e}");
             } else {
                 warn!("[RedTube] Request failed: {e}");
             }

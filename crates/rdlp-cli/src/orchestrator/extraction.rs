@@ -22,7 +22,7 @@ impl Orchestrator {
             }
         })?;
 
-        info!("Using {} extractor", extractor.name());
+        info!(extractor:? = extractor.name(); "Using extractor");
         info!("Extracting video information...");
 
         let info = extractor
@@ -30,8 +30,8 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
-        info!("Title: {}", info.title);
-        info!("Found {} formats", info.formats.len());
+        info!(title:? = info.title; "Title");
+        info!(formats = info.formats.len(); "Found formats");
 
         Ok(info)
     }
@@ -61,7 +61,7 @@ impl Orchestrator {
             }
         })?;
 
-        info!("Using {} extractor", extractor.name());
+        info!(extractor:? = extractor.name(); "Using extractor");
         info!("Extracting playlist information...");
 
         let infos = extractor
@@ -70,14 +70,14 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         if infos.len() == 1 {
-            info!("Single video: {}", infos[0].title);
+            info!(title:? = infos[0].title; "Single video");
         } else {
             let playlist_title = infos[0]
                 .playlist_title
                 .as_deref()
                 .unwrap_or("Unnamed Playlist");
-            info!("Playlist: {playlist_title}");
-            info!("Found {} videos", infos.len());
+            info!(title:? = playlist_title; "Playlist");
+            info!(count = infos.len(); "Found videos");
         }
 
         Ok(infos)

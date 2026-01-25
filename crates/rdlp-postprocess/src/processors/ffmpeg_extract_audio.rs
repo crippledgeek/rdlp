@@ -131,7 +131,7 @@ impl PostProcessor for FFmpegExtractAudio {
         ];
 
         if can_copy {
-            debug!("Audio codec matches target, copying stream");
+            debug!(format:? = target_format; "Audio codec matches target, copying stream");
             args.push("-c:a".to_string());
             args.push("copy".to_string());
         } else {
@@ -153,7 +153,7 @@ impl PostProcessor for FFmpegExtractAudio {
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         self.ffmpeg.run(&args_refs).await?;
 
-        info!("Audio extracted: {}", output_path.display());
+        info!(output:? = output_path.display(); "Audio extracted");
 
         // Determine if we should keep original
         let temp_files = if config.keep_video {

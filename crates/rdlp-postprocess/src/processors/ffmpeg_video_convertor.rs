@@ -118,15 +118,15 @@ impl PostProcessor for FFmpegVideoConvertor {
 
         // Skip if already in target format
         if input_ext.eq_ignore_ascii_case(target_format) {
-            debug!("File already in target format, skipping conversion");
+            debug!(format:? = target_format; "File already in target format, skipping conversion");
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
         info!(
-            "Converting {} from {} to {}",
-            input_file.display(),
-            input_ext,
-            target_format
+            file:? = input_file.display(),
+            from:? = input_ext,
+            to:? = target_format;
+            "Converting format"
         );
 
         // Probe input to determine codecs
@@ -192,7 +192,7 @@ impl PostProcessor for FFmpegVideoConvertor {
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         self.ffmpeg.run(&args_refs).await?;
 
-        info!("Converted: {}", output_path.display());
+        info!(output:? = output_path.display(); "Converted");
 
         // Keep or delete original
         let temp_files = if config.keep_video {

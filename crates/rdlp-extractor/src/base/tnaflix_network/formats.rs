@@ -161,14 +161,13 @@ pub(crate) async fn build_formats(
         // Fetch filesize via HEAD request
         match ctx.http_client.head(&video_url).send().await {
             Ok(response) => {
-                debug!("HEAD response status: {}", response.status());
-                debug!("HEAD Content-Length: {:?}", response.content_length());
+                debug!(status:? = response.status(), content_length:? = response.content_length(); "HEAD response");
 
                 format.filesize = response.content_length();
 
                 // Fallback: If HEAD didn't give us content-length, try Range request
                 if format.filesize.is_none() || format.filesize == Some(0) {
-                    debug!("HEAD request returned no size, trying Range request...");
+                    debug!("HEAD request returned no size, trying Range request");
 
                     if let Ok(range_response) = ctx
                         .http_client
@@ -177,7 +176,7 @@ pub(crate) async fn build_formats(
                         .send()
                         .await
                     {
-                        debug!("Range response status: {}", range_response.status());
+                        debug!(status:? = range_response.status(); "Range response");
 
                         if let Some(content_range) = range_response.headers().get("content-range") {
                             if let Ok(range_str) = content_range.to_str() {
@@ -190,7 +189,7 @@ pub(crate) async fn build_formats(
                 }
             }
             Err(e) => {
-                warn!("HEAD request failed for {video_url}: {e}");
+                warn!(url:? = video_url; "HEAD request failed: {e}");
             }
         }
 

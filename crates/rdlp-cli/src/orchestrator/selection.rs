@@ -39,7 +39,7 @@ impl Orchestrator {
             selected_formats[0].clone()
         };
 
-        info!("Selected format: {format}");
+        info!(format:?; "Selected format");
         Ok(Some(format))
     }
 

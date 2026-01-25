@@ -102,7 +102,7 @@ impl HttpDownloader {
         .retry(backoff)
         .when(is_retryable_error)
         .notify(|err, dur| {
-            warn!("HTTP HEAD (range check) failed, retrying in {dur:?}: {err}");
+            warn!(delay:? = dur; "HTTP HEAD (range check) failed, retrying: {err}");
         })
         .await?;
 
@@ -145,7 +145,7 @@ impl HttpDownloader {
         .retry(backoff)
         .when(is_retryable_error)
         .notify(|err, dur| {
-            warn!("HTTP GET (range) failed, retrying in {dur:?}: {err}");
+            warn!(delay:? = dur; "HTTP GET (range) failed, retrying: {err}");
         })
         .await?;
 
@@ -200,7 +200,7 @@ impl HttpDownloader {
         .retry(backoff)
         .when(is_retryable_error)
         .notify(|err, dur| {
-            warn!("HTTP GET failed, retrying in {dur:?}: {err}");
+            warn!(delay:? = dur; "HTTP GET failed, retrying: {err}");
         })
         .await?;
 
@@ -300,7 +300,7 @@ impl Downloader for HttpDownloader {
             .retry(backoff)
             .when(is_retryable_error)
             .notify(|err, dur| {
-                warn!("HTTP GET (size check) failed, retrying in {dur:?}: {err}");
+                warn!(delay:? = dur; "HTTP GET (size check) failed, retrying: {err}");
             })
             .await
             {
@@ -386,7 +386,7 @@ impl Downloader for HttpDownloader {
         .retry(backoff)
         .when(is_retryable_error)
         .notify(|err, dur| {
-            warn!("HTTP HEAD failed, retrying in {dur:?}: {err}");
+            warn!(delay:? = dur; "HTTP HEAD failed, retrying: {err}");
         })
         .await?;
 
@@ -431,7 +431,7 @@ impl Downloader for HttpDownloader {
         .retry(backoff)
         .when(is_retryable_error)
         .notify(|err, dur| {
-            warn!("HTTP GET (resume) failed, retrying in {dur:?}: {err}");
+            warn!(delay:? = dur; "HTTP GET (resume) failed, retrying: {err}");
         })
         .await?;
 

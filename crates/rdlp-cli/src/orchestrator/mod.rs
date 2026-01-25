@@ -80,12 +80,12 @@ impl Orchestrator {
 
         match registry_result {
             Ok(registry) => {
-                debug!("[PostProcess] FFmpeg initialized successfully");
+                debug!("FFmpeg initialized successfully");
                 Some(Arc::new(registry))
             }
             Err(e) => {
                 // Warn about FFmpeg not being found (needed for HLS fixup)
-                warn!("[PostProcess] FFmpeg NOT found: {e}");
+                warn!("FFmpeg NOT found: {e}");
                 None
             }
         }

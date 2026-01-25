@@ -148,7 +148,7 @@ impl DownloadPhase {
 
             Self::Preparing { info, format } => {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
-                info!("Downloading to: {}", output_path.display());
+                info!(path:? = output_path.display(); "Downloading to");
 
                 let resume_offset = orchestrator
                     .detect_resume_point(&output_path, format.filesize)
@@ -229,8 +229,8 @@ impl DownloadPhase {
 
                 // Report success
                 info!("Downloaded successfully!");
-                info!("   File: {}", output_path.display());
-                info!("   Stats: {stats}");
+                info!(path:? = output_path.display(); "   File");
+                info!(stats:?; "   Stats");
 
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_path = orchestrator
