@@ -58,8 +58,8 @@ pub trait InfoExtractor: Send + Sync {
     /// - Borrowed data (&str) cannot be held across `.await` points
     /// - InfoDict must outlive the HTML parsing scope and async operations
     ///
-    /// **Common Pattern:**
-    /// ```rust,ignore
+    /// **Common Pattern** (pseudocode showing ownership flow):
+    /// ```text
     /// async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
     ///     // Extract data from HTML synchronously, allocating strings
     ///     let (title, description) = {
@@ -140,8 +140,8 @@ pub trait InfoExtractor: Send + Sync {
 /// - Breaking recursive type cycles
 /// - Storing large values on heap to avoid stack overflow
 ///
-/// **Example:**
-/// ```rust,ignore
+/// **Example** (pseudocode illustrating Arc vs Box patterns):
+/// ```text
 /// // Arc: Shared across tasks
 /// let ctx_clone = ctx.clone(); // Cheap: only increments Arc refcounts
 /// tokio::spawn(async move {
