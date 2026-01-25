@@ -4,17 +4,17 @@
 
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info};
-use rdlp_core::{DownloadProgress, DownloadStats, Result, RdlpError};
+use rdlp_core::{DownloadProgress, DownloadStats, RdlpError, Result};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
-use crate::chunking::calculate_chunks;
-use super::config::DownloaderConfig;
 use super::HttpDownloader;
+use super::config::DownloaderConfig;
+use crate::chunking::calculate_chunks;
 
 /// Global atomic counter for generating unique download IDs
 pub(super) static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -111,14 +111,21 @@ impl HttpDownloader {
                     start + chunk_size as u64 - 1
                 };
 
-                let chunk_path = temp_dir.join(format!("{}.{}.part{}", &filename, download_id, chunk_id));
+                let chunk_path =
+                    temp_dir.join(format!("{}.{}.part{}", &filename, download_id, chunk_id));
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
                 let progress_counter = Some(downloaded.clone());
 
                 async move {
                     let result = downloader
-                        .download_range_with_progress(&url, start, end, &chunk_path, progress_counter)
+                        .download_range_with_progress(
+                            &url,
+                            start,
+                            end,
+                            &chunk_path,
+                            progress_counter,
+                        )
                         .await;
                     if let Err(ref e) = result {
                         error!("Chunk {chunk_id} failed: {e}");
@@ -148,7 +155,15 @@ impl HttpDownloader {
             total_downloaded / 1024 / 1024
         );
 
-        merge_chunks(path, temp_dir, &filename, download_id, total_chunks, &self.config).await?;
+        merge_chunks(
+            path,
+            temp_dir,
+            &filename,
+            download_id,
+            total_chunks,
+            &self.config,
+        )
+        .await?;
 
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_downloaded, duration, 0);
@@ -175,7 +190,8 @@ impl HttpDownloader {
         let start_time = Instant::now();
         let remaining_size = total_size - resume_from;
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let (chunk_size, total_chunks) = calculate_chunks(remaining_size, self.config.chunk_strategy);
+        let (chunk_size, total_chunks) =
+            calculate_chunks(remaining_size, self.config.chunk_strategy);
 
         debug!(
             "Parallel resume: download_id={download_id}, already={} MB ({:.1}%), remaining={} MB, chunk_size={} KB, chunks={total_chunks}, concurrent={}",
@@ -219,14 +235,21 @@ impl HttpDownloader {
                     start + chunk_size as u64 - 1
                 };
 
-                let chunk_path = temp_dir.join(format!("{}.{}.resume{}", &filename, download_id, chunk_id));
+                let chunk_path =
+                    temp_dir.join(format!("{}.{}.resume{}", &filename, download_id, chunk_id));
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
                 let progress_counter = Some(downloaded.clone());
 
                 async move {
                     let result = downloader
-                        .download_range_with_progress(&url, start, end, &chunk_path, progress_counter)
+                        .download_range_with_progress(
+                            &url,
+                            start,
+                            end,
+                            &chunk_path,
+                            progress_counter,
+                        )
                         .await;
                     if let Err(ref e) = result {
                         error!("Chunk {chunk_id} failed: {e}");
@@ -264,7 +287,15 @@ impl HttpDownloader {
         }
 
         // Append chunks to existing file
-        append_chunks(path, temp_dir, &filename, download_id, total_chunks, &self.config).await?;
+        append_chunks(
+            path,
+            temp_dir,
+            &filename,
+            download_id,
+            total_chunks,
+            &self.config,
+        )
+        .await?;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
@@ -307,7 +338,8 @@ fn create_progress_reporter(
                         0.0
                     };
 
-                    let progress_info = DownloadProgress::new(bytes_downloaded, Some(total_size), speed);
+                    let progress_info =
+                        DownloadProgress::new(bytes_downloaded, Some(total_size), speed);
                     cb.on_progress(&progress_info);
                     last_update = now;
 

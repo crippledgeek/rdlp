@@ -227,11 +227,14 @@ impl InfoDict {
             .iter()
             .filter(|f| f.has_video())
             .max_by(|a, b| {
-                a.quality.cmp(&b.quality).then(a.height.cmp(&b.height)).then(
-                    a.vbr
-                        .partial_cmp(&b.vbr)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+                a.quality
+                    .cmp(&b.quality)
+                    .then(a.height.cmp(&b.height))
+                    .then(
+                        a.vbr
+                            .partial_cmp(&b.vbr)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
             })
     }
 

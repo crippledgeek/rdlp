@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 use log::{debug, info, warn};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 
 use crate::error::Result;
 use crate::ffmpeg::FFmpegRunner;
@@ -167,7 +167,10 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
 
             info!("Running post-processor: {}", processor.name());
 
-            match processor.process(&current_info, current_files.clone()).await {
+            match processor
+                .process(&current_info, current_files.clone())
+                .await
+            {
                 Ok(result) => {
                     current_info = result.info;
                     current_files = result.files;

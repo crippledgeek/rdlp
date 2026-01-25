@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 use log::{debug, info, warn};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::ffmpeg::FFmpegRunner;
 
@@ -19,7 +19,9 @@ use crate::ffmpeg::FFmpegRunner;
 const THUMBNAIL_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 /// Containers that support thumbnail embedding.
-const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus"];
+const SUPPORTED_CONTAINERS: &[&str] = &[
+    "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
+];
 
 /// Post-processor that embeds thumbnails into media files.
 ///

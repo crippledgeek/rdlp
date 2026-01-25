@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 use log::{debug, info};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
 use crate::ffmpeg::FFmpegRunner;
@@ -133,20 +133,14 @@ impl PostProcessor for FFmpegVideoConvertor {
         let media_info = self.ffmpeg.probe(input_file).await?;
 
         // Determine if we can remux or need to transcode
-        let can_remux = Self::can_remux(
-            input_ext,
-            target_format,
-            media_info.video_codec.as_deref(),
-        );
+        let can_remux =
+            Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
 
         // Build output path
         let output_path = input_file.with_extension(target_format);
 
         // Build FFmpeg arguments
-        let mut args = vec![
-            "-i".to_string(),
-            input_file.to_string_lossy().to_string(),
-        ];
+        let mut args = vec!["-i".to_string(), input_file.to_string_lossy().to_string()];
 
         if can_remux {
             debug!("Remuxing (stream copy)");

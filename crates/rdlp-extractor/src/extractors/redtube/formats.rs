@@ -11,6 +11,11 @@ use crate::utils::{extract_extension_from_url, make_absolute_url};
 
 use super::patterns::{MEDIA_DEF_PATTERN, SOURCES_PATTERN};
 
+// Common codec strings to avoid repeated allocations
+const CODEC_H264: &str = "h264";
+const CODEC_AAC: &str = "aac";
+const PROTOCOL_HTTPS: &str = "https";
+
 /// Extract quality string from JSON value (handles both string and number types)
 pub fn parse_quality(item: &Value) -> String {
     item.get("quality")
@@ -19,7 +24,7 @@ pub fn parse_quality(item: &Value) -> String {
                 .map(String::from)
                 .or_else(|| q.as_i64().map(|i| i.to_string()))
         })
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 /// Build Format from quality string and URL using BaseExtractor utilities
@@ -27,10 +32,10 @@ pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format
     let height = BaseExtractor::parse_quality_height(quality_str);
 
     let mut format = Format::new(
-        quality_str.to_string(),
+        quality_str.to_owned(),
         url,
-        format_type.to_string(),
-        "https".to_string(),
+        format_type.to_owned(),
+        PROTOCOL_HTTPS.to_owned(),
     );
 
     if let Some(h) = height {
@@ -39,11 +44,11 @@ pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format
         format.quality = Some((h / 100) as i32);
         format.format_note = Some(format!("{h}p"));
     } else {
-        format.format_note = Some(quality_str.to_string());
+        format.format_note = Some(quality_str.to_owned());
     }
 
-    format.vcodec = Some("h264".to_string());
-    format.acodec = Some("aac".to_string());
+    format.vcodec = Some(CODEC_H264.to_owned());
+    format.acodec = Some(CODEC_AAC.to_owned());
 
     format
 }
@@ -76,7 +81,8 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
                         for (quality, url) in obj {
                             if let Some(url_str) = url.as_str() {
                                 let format_type = get_format_type_from_url(url_str);
-                                let format = build_format(quality, url_str.to_string(), format_type);
+                                let format =
+                                    build_format(quality, url_str.to_string(), format_type);
 
                                 debug!(
                                     "[RedTube] Extracted format: {} ({})",
@@ -128,7 +134,11 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
             match serde_json::from_str::<Value>(media_def_str.as_str()) {
                 Ok(media_def) => {
                     let Some(arr) = media_def.as_array() else {
-                        BaseExtractor::log_if_verbose(ctx, "RedTube", "mediaDefinition is not an array");
+                        BaseExtractor::log_if_verbose(
+                            ctx,
+                            "RedTube",
+                            "mediaDefinition is not an array",
+                        );
                         return formats;
                     };
                     BaseExtractor::log_if_verbose(
@@ -145,10 +155,8 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
                         );
 
                         if let Some(video_url) = item.get("videoUrl").and_then(|v| v.as_str()) {
-                            let format_type = item
-                                .get("format")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("mp4");
+                            let format_type =
+                                item.get("format").and_then(|v| v.as_str()).unwrap_or("mp4");
 
                             let has_quality = item.get("quality").is_some();
 
@@ -326,12 +334,16 @@ mod tests {
         assert!(formats.iter().any(|f| f.format_id == "1080"));
 
         // Check format_note is set
-        assert!(formats
-            .iter()
-            .any(|f| f.format_note == Some("720p".to_string())));
-        assert!(formats
-            .iter()
-            .any(|f| f.format_note == Some("1080p".to_string())));
+        assert!(
+            formats
+                .iter()
+                .any(|f| f.format_note == Some("720p".to_string()))
+        );
+        assert!(
+            formats
+                .iter()
+                .any(|f| f.format_note == Some("1080p".to_string()))
+        );
     }
 
     #[test]
@@ -374,9 +386,21 @@ mod tests {
 
     #[test]
     fn test_get_format_type_from_url() {
-        assert_eq!(get_format_type_from_url("https://example.com/video.mp4"), "mp4");
-        assert_eq!(get_format_type_from_url("https://example.com/playlist.m3u8"), "hls");
-        assert_eq!(get_format_type_from_url("https://example.com/video.webm"), "webm");
-        assert_eq!(get_format_type_from_url("https://example.com/video"), "unknown");
+        assert_eq!(
+            get_format_type_from_url("https://example.com/video.mp4"),
+            "mp4"
+        );
+        assert_eq!(
+            get_format_type_from_url("https://example.com/playlist.m3u8"),
+            "hls"
+        );
+        assert_eq!(
+            get_format_type_from_url("https://example.com/video.webm"),
+            "webm"
+        );
+        assert_eq!(
+            get_format_type_from_url("https://example.com/video"),
+            "unknown"
+        );
     }
 }

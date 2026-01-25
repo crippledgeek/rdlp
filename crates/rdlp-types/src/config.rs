@@ -208,10 +208,10 @@ impl Default for Config {
             rate_limit: None,
             retries: 10,
             fragment_retries: 10,
-            retry_initial_delay_ms: 1000,      // 1 second
-            retry_max_delay_ms: 60000,         // 60 seconds
-            retry_backoff_multiplier: 2.0,     // Double delay each retry
-            buffer_size: 2 * 1024 * 1024, // 2 MB - larger buffer for faster downloads
+            retry_initial_delay_ms: 1000,  // 1 second
+            retry_max_delay_ms: 60000,     // 60 seconds
+            retry_backoff_multiplier: 2.0, // Double delay each retry
+            buffer_size: 2 * 1024 * 1024,  // 2 MB - larger buffer for faster downloads
 
             // Network options
             proxy: None,

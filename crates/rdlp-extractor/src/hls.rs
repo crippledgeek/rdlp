@@ -119,7 +119,10 @@ impl HlsSizeDetector {
     /// ```
     pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
         // Use detect_info and extract just the size
-        Ok(self.detect_info(m3u8_url).await?.and_then(|info| info.total_size))
+        Ok(self
+            .detect_info(m3u8_url)
+            .await?
+            .and_then(|info| info.total_size))
     }
 
     /// Fast segment count detection (no size fetching)
@@ -257,22 +260,18 @@ impl HlsSizeDetector {
             )));
         }
 
-        let playlist_text = response.text().await.map_err(|e| {
-            RdlpError::Network(format!("Failed to read playlist response: {e}"))
-        })?;
+        let playlist_text = response
+            .text()
+            .await
+            .map_err(|e| RdlpError::Network(format!("Failed to read playlist response: {e}")))?;
 
         if self.verbose {
-            debug!(
-                "[HLS] Playlist size: {} bytes",
-                playlist_text.len()
-            );
+            debug!("[HLS] Playlist size: {} bytes", playlist_text.len());
         }
 
         // Parse with m3u8-rs
-        let playlist =
-            m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
-                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
-            })?;
+        let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes())
+            .map_err(|e| RdlpError::Extraction(format!("M3U8 parse error: {e:?}")))?;
 
         // Extract segment URLs
         match playlist {
@@ -331,8 +330,7 @@ impl HlsSizeDetector {
                     );
                     debug!(
                         "[HLS] Selecting first variant: {} (bandwidth: {} bps)",
-                        media_playlist_uri,
-                        variant.bandwidth
+                        media_playlist_uri, variant.bandwidth
                     );
                 }
 
@@ -557,11 +555,8 @@ pub async fn detect_format_sizes(
 
                 if is_hls {
                     // Fast segment count only (parses m3u8, no size fetching)
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        hls_detector.count_segments(&url),
-                    )
-                    .await;
+                    let result =
+                        timeout(Duration::from_secs(5), hls_detector.count_segments(&url)).await;
 
                     match result {
                         Ok(Ok(Some(segment_count))) => {

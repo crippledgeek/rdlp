@@ -28,10 +28,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use log::{debug, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use log::{debug, trace};
 
 use crate::error::{PostProcessError, Result};
 
@@ -268,7 +268,10 @@ impl FFmpegRunner {
         // If location is a file, check if it's one of the executables
         if location.is_file() {
             if let Some(name) = location.file_name().and_then(|n| n.to_str()) {
-                if names.iter().any(|n| name.contains(n.trim_end_matches(".exe"))) {
+                if names
+                    .iter()
+                    .any(|n| name.contains(n.trim_end_matches(".exe")))
+                {
                     return Ok(location.to_path_buf());
                 }
             }
@@ -318,7 +321,9 @@ impl FFmpegRunner {
                 .arg("-version")
                 .output()
                 .await
-                .map_err(|e| PostProcessError::ffmpeg_failed_with_source("Failed to get version", e))?;
+                .map_err(|e| {
+                    PostProcessError::ffmpeg_failed_with_source("Failed to get version", e)
+                })?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let version = stdout
@@ -385,11 +390,10 @@ impl FFmpegRunner {
 
     /// Parse FFprobe JSON output into MediaInfo.
     fn parse_probe_output(&self, path: &Path, json: &str) -> Result<MediaInfo> {
-        let data: serde_json::Value = serde_json::from_str(json).map_err(|e| {
-            PostProcessError::ParseError {
+        let data: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| PostProcessError::ParseError {
                 message: format!("Invalid JSON from FFprobe: {e}"),
-            }
-        })?;
+            })?;
 
         let mut info = MediaInfo {
             path: path.to_path_buf(),
@@ -455,7 +459,9 @@ impl FFmpegRunner {
                 if let Some(tags) = stream.get("tags").and_then(|t| t.as_object()) {
                     for (key, value) in tags {
                         if let Some(v) = value.as_str() {
-                            stream_info.metadata.insert(key.to_lowercase(), v.to_string());
+                            stream_info
+                                .metadata
+                                .insert(key.to_lowercase(), v.to_string());
                         }
                     }
                 }
@@ -464,8 +470,14 @@ impl FFmpegRunner {
                     "video" => {
                         info.has_video = true;
                         info.video_codec = codec_name;
-                        info.width = stream.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
-                        info.height = stream.get("height").and_then(|v| v.as_u64()).map(|v| v as u32);
+                        info.width = stream
+                            .get("width")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32);
+                        info.height = stream
+                            .get("height")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32);
 
                         // Parse frame rate (could be "30/1" or "29.97")
                         if let Some(fps_str) = stream.get("r_frame_rate").and_then(|v| v.as_str()) {
@@ -677,7 +689,10 @@ mod tests {
     #[test]
     fn test_parse_frame_rate() {
         assert_eq!(FFmpegRunner::parse_frame_rate("30/1"), Some(30.0));
-        assert_eq!(FFmpegRunner::parse_frame_rate("30000/1001"), Some(29.97002997002997));
+        assert_eq!(
+            FFmpegRunner::parse_frame_rate("30000/1001"),
+            Some(29.97002997002997)
+        );
         assert_eq!(FFmpegRunner::parse_frame_rate("24"), Some(24.0));
         assert!(FFmpegRunner::parse_frame_rate("invalid").is_none());
     }
@@ -685,10 +700,16 @@ mod tests {
     #[test]
     fn test_filename_arg() {
         // Normal path
-        assert_eq!(FFmpegRunner::filename_arg(Path::new("video.mp4")), "video.mp4");
+        assert_eq!(
+            FFmpegRunner::filename_arg(Path::new("video.mp4")),
+            "video.mp4"
+        );
 
         // Path starting with dash
-        assert_eq!(FFmpegRunner::filename_arg(Path::new("-output.mp4")), "file:-output.mp4");
+        assert_eq!(
+            FFmpegRunner::filename_arg(Path::new("-output.mp4")),
+            "file:-output.mp4"
+        );
     }
 
     #[test]

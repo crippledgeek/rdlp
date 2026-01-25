@@ -59,14 +59,12 @@ pub static VIDEO_LINK_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Pattern to extract video count from JavaScript
-pub static VIDEO_COUNT_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"var\s+itemsCount\s*=\s*(\d+)").expect("Valid video count pattern")
-});
+pub static VIDEO_COUNT_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"var\s+itemsCount\s*=\s*(\d+)").expect("Valid video count pattern"));
 
 /// Pattern to extract AJAX token from JavaScript
-pub static AJAX_TOKEN_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"var\s+token\s*=\s*"([^"]+)""#).expect("Valid AJAX token pattern")
-});
+pub static AJAX_TOKEN_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"var\s+token\s*=\s*"([^"]+)""#).expect("Valid AJAX token pattern"));
 
 /// Pattern to extract flashvars JSON
 pub static FLASHVARS_PATTERN: Lazy<Regex> = Lazy::new(|| {
@@ -74,9 +72,8 @@ pub static FLASHVARS_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Pattern to extract quality from URL (e.g., "1080P_4000K")
-pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(\d+)[pP]").expect("Valid quality pattern")
-});
+pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(\d+)[pP]").expect("Valid quality pattern"));
 
 /// Pattern to extract qualityItems JSON arrays
 pub static QUALITY_ITEMS_PATTERN: Lazy<Regex> = Lazy::new(|| {
@@ -128,31 +125,42 @@ mod tests {
     #[test]
     fn test_video_url_pattern() {
         // Standard URLs
-        assert!(PORNHUB_VIDEO_URL_PATTERN.is_match(
-            "https://www.pornhub.com/view_video.php?viewkey=ph5f490e56f1b51"
-        ));
-        assert!(PORNHUB_VIDEO_URL_PATTERN
-            .is_match("https://pornhub.com/view_video.php?viewkey=ph123456789abcd"));
+        assert!(
+            PORNHUB_VIDEO_URL_PATTERN
+                .is_match("https://www.pornhub.com/view_video.php?viewkey=ph5f490e56f1b51")
+        );
+        assert!(
+            PORNHUB_VIDEO_URL_PATTERN
+                .is_match("https://pornhub.com/view_video.php?viewkey=ph123456789abcd")
+        );
 
         // video/show format
-        assert!(PORNHUB_VIDEO_URL_PATTERN
-            .is_match("https://www.pornhub.com/video/show?viewkey=ph5f490e56f1b51"));
+        assert!(
+            PORNHUB_VIDEO_URL_PATTERN
+                .is_match("https://www.pornhub.com/video/show?viewkey=ph5f490e56f1b51")
+        );
 
         // Embed URLs
-        assert!(PORNHUB_VIDEO_URL_PATTERN.is_match("https://www.pornhub.com/embed/ph5f490e56f1b51"));
+        assert!(
+            PORNHUB_VIDEO_URL_PATTERN.is_match("https://www.pornhub.com/embed/ph5f490e56f1b51")
+        );
 
         // Alternative TLDs
         assert!(
-            PORNHUB_VIDEO_URL_PATTERN.is_match("https://www.pornhub.net/view_video.php?viewkey=ph123")
+            PORNHUB_VIDEO_URL_PATTERN
+                .is_match("https://www.pornhub.net/view_video.php?viewkey=ph123")
         );
 
         // Country codes
         assert!(
-            PORNHUB_VIDEO_URL_PATTERN.is_match("https://de.pornhub.com/view_video.php?viewkey=ph789")
+            PORNHUB_VIDEO_URL_PATTERN
+                .is_match("https://de.pornhub.com/view_video.php?viewkey=ph789")
         );
 
         // Thumbzilla
-        assert!(PORNHUB_VIDEO_URL_PATTERN.is_match("https://www.thumbzilla.com/video/ph5f490e56f1b51"));
+        assert!(
+            PORNHUB_VIDEO_URL_PATTERN.is_match("https://www.thumbzilla.com/video/ph5f490e56f1b51")
+        );
 
         // Invalid URLs
         assert!(!PORNHUB_VIDEO_URL_PATTERN.is_match("https://youtube.com/watch?v=test"));
@@ -160,12 +168,16 @@ mod tests {
 
     #[test]
     fn test_playlist_url_pattern() {
-        assert!(PORNHUB_PLAYLIST_URL_PATTERN.is_match("https://www.pornhub.com/playlist/186608902"));
+        assert!(
+            PORNHUB_PLAYLIST_URL_PATTERN.is_match("https://www.pornhub.com/playlist/186608902")
+        );
         assert!(PORNHUB_PLAYLIST_URL_PATTERN.is_match("https://pornhub.com/playlist/12345"));
         assert!(PORNHUB_PLAYLIST_URL_PATTERN.is_match("https://de.pornhub.com/playlist/789"));
 
-        assert!(!PORNHUB_PLAYLIST_URL_PATTERN
-            .is_match("https://www.pornhub.com/view_video.php?viewkey=ph123"));
+        assert!(
+            !PORNHUB_PLAYLIST_URL_PATTERN
+                .is_match("https://www.pornhub.com/view_video.php?viewkey=ph123")
+        );
     }
 
     #[test]

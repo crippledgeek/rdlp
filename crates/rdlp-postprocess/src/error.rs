@@ -1,19 +1,23 @@
 //! Error types for post-processing operations.
 
+use rdlp_core::RdlpError;
 use std::path::PathBuf;
 use thiserror::Error;
-use rdlp_core::RdlpError;
 
 /// Errors that can occur during post-processing.
 #[derive(Debug, Error)]
 #[allow(missing_docs)] // Field names are self-explanatory, variant docs describe them
 pub enum PostProcessError {
     /// FFmpeg executable not found
-    #[error("FFmpeg not found. Please install FFmpeg and ensure it's in your PATH, or specify the location with --ffmpeg-location")]
+    #[error(
+        "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH, or specify the location with --ffmpeg-location"
+    )]
     FFmpegNotFound,
 
     /// FFprobe executable not found
-    #[error("FFprobe not found. Please install FFmpeg (includes FFprobe) and ensure it's in your PATH")]
+    #[error(
+        "FFprobe not found. Please install FFmpeg (includes FFprobe) and ensure it's in your PATH"
+    )]
     FFprobeNotFound,
 
     /// FFmpeg execution failed
@@ -134,9 +138,7 @@ impl From<PostProcessError> for RdlpError {
             PostProcessError::InputNotFound { .. }
             | PostProcessError::OutputExists { .. }
             | PostProcessError::IoError { .. }
-            | PostProcessError::TempFileError { .. } => {
-                RdlpError::PostProcess(error.to_string())
-            }
+            | PostProcessError::TempFileError { .. } => RdlpError::PostProcess(error.to_string()),
 
             _ => RdlpError::PostProcess(error.to_string()),
         }

@@ -31,11 +31,7 @@ impl Orchestrator {
         // Priority 1: Use container field if explicitly set
         if let Some(ref container) = format.container {
             // Clean up container names (e.g., "mp4_dash" -> "mp4")
-            return container
-                .split('_')
-                .next()
-                .unwrap_or(container)
-                .to_string();
+            return container.split('_').next().unwrap_or(container).to_string();
         }
 
         // Priority 2: For HLS/DASH, detect from URL or default to mp4

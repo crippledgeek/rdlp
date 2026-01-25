@@ -24,14 +24,12 @@ use regex::Regex;
 // ============================================================================
 
 /// Pattern for HTML entity references (e.g., &amp; &#39; &#x27;)
-static HTML_ENTITY_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"&(#?[a-zA-Z0-9]+);").expect("Valid HTML entity pattern")
-});
+static HTML_ENTITY_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"&(#?[a-zA-Z0-9]+);").expect("Valid HTML entity pattern"));
 
 /// Pattern for whitespace normalization
-static WHITESPACE_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\s+").expect("Valid whitespace pattern")
-});
+static WHITESPACE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\s+").expect("Valid whitespace pattern"));
 
 // ============================================================================
 // Debug Output Functions
@@ -81,7 +79,10 @@ pub fn debug_print_json(label: &str, json: &serde_json::Value, max_length: usize
     trace!("=== {label} ===");
     if let Ok(formatted) = serde_json::to_string_pretty(json) {
         if max_length > 0 && formatted.len() > max_length {
-            trace!("{}", &formatted.chars().take(max_length).collect::<String>());
+            trace!(
+                "{}",
+                &formatted.chars().take(max_length).collect::<String>()
+            );
             trace!("... (truncated, {} total chars)", formatted.len());
         } else {
             trace!("{formatted}");
@@ -172,7 +173,10 @@ pub fn decode_html_entities(text: &str) -> String {
             let entity = &caps[1];
             if let Some(stripped) = entity.strip_prefix('#') {
                 // Numeric entity
-                let code = if let Some(hex) = stripped.strip_prefix('x').or_else(|| stripped.strip_prefix('X')) {
+                let code = if let Some(hex) = stripped
+                    .strip_prefix('x')
+                    .or_else(|| stripped.strip_prefix('X'))
+                {
                     // Hex entity
                     u32::from_str_radix(hex, 16).ok()
                 } else {
@@ -445,10 +449,7 @@ mod tests {
             extract_extension_from_url("https://example.com/video"),
             None
         );
-        assert_eq!(
-            extract_extension_from_url("https://example.com/"),
-            None
-        );
+        assert_eq!(extract_extension_from_url("https://example.com/"), None);
     }
 
     #[test]

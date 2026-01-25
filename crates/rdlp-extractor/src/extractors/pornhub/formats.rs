@@ -31,7 +31,10 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
             }
         }
         if !all_formats.is_empty() {
-            debug!("[PornHub] Extracted {} formats from flashvars", all_formats.len());
+            debug!(
+                "[PornHub] Extracted {} formats from flashvars",
+                all_formats.len()
+            );
         }
     }
 
@@ -99,7 +102,9 @@ async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Resul
     }
 
     if formats.is_empty() {
-        return Err(RdlpError::Extraction("No formats in mediaDefinitions".to_string()));
+        return Err(RdlpError::Extraction(
+            "No formats in mediaDefinitions".to_string(),
+        ));
     }
 
     Ok(formats)
@@ -309,7 +314,10 @@ mod tests {
             parse_quality_from_url("https://example.com/1080p_4000k.mp4"),
             Some(1080)
         );
-        assert_eq!(parse_quality_from_url("https://example.com/video.mp4"), None);
+        assert_eq!(
+            parse_quality_from_url("https://example.com/video.mp4"),
+            None
+        );
     }
 
     #[test]

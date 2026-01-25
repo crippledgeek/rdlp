@@ -3,7 +3,7 @@
 //! This module provides functions to load and save Config from/to files.
 //! The Config type itself is defined in rdlp-types.
 
-use crate::{Config, Result, RdlpError};
+use crate::{Config, RdlpError, Result};
 use std::path::Path;
 
 /// Load configuration from a TOML file

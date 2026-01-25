@@ -11,11 +11,13 @@
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
-use rdlp_core::{check_http_response, ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, check_http_response,
+};
 use scraper::{Html, Selector};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -28,9 +30,9 @@ const PAGE_RATE_LIMIT_MS: u64 = 500;
 /// Number of concurrent video extractions (balance speed vs rate limiting)
 const CONCURRENT_EXTRACTIONS: usize = 4;
 
+use super::PornHubExtractor;
 use super::patterns::{AJAX_TOKEN_PATTERN, VIDEO_COUNT_PATTERN, VIDEO_LINK_PATTERN};
 use super::utils::{extract_host, set_age_cookies};
-use super::PornHubExtractor;
 
 /// Pagination metadata
 struct PaginationInfo {
@@ -134,18 +136,14 @@ pub async fn extract_playlist(
     }
 
     // Extract videos in parallel using buffer_unordered for concurrent processing
-    debug!(
-        "[PornHub] Extracting {total} videos ({CONCURRENT_EXTRACTIONS} concurrent)..."
-    );
+    debug!("[PornHub] Extracting {total} videos ({CONCURRENT_EXTRACTIONS} concurrent)...");
 
     // Progress counter for verbose logging
     let completed = Arc::new(AtomicUsize::new(0));
 
     // Create extraction futures for all videos
-    let extraction_futures = all_video_urls
-        .into_iter()
-        .enumerate()
-        .map(|(index, (video_url, video_title_hint))| {
+    let extraction_futures = all_video_urls.into_iter().enumerate().map(
+        |(index, (video_url, video_title_hint))| {
             let position = index + 1;
             let playlist_title = playlist_title.clone();
             let playlist_id = playlist_id.clone();
@@ -177,14 +175,13 @@ pub async fn extract_playlist(
                         None
                     }
                     Err(_) => {
-                        warn!(
-                            "Timed out extracting video {position}/{total} ({video_title_hint})"
-                        );
+                        warn!("Timed out extracting video {position}/{total} ({video_title_hint})");
                         None
                     }
                 }
             }
-        });
+        },
+    );
 
     // Process extractions concurrently with bounded parallelism
     let results: Vec<Option<(usize, InfoDict)>> = stream::iter(extraction_futures)
@@ -207,7 +204,10 @@ pub async fn extract_playlist(
         )));
     }
 
-    info!("[PornHub] Successfully extracted {}/{total} videos", results.len());
+    info!(
+        "[PornHub] Successfully extracted {}/{total} videos",
+        results.len()
+    );
 
     Ok(results)
 }

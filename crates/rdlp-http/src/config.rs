@@ -145,6 +145,9 @@ mod tests {
 
         assert_eq!(config.user_agent, "Test/1.0");
         assert_eq!(config.connect_timeout_secs, 15);
-        assert_eq!(config.proxy.as_deref(), Some("http://proxy.example.com:8080"));
+        assert_eq!(
+            config.proxy.as_deref(),
+            Some("http://proxy.example.com:8080")
+        );
     }
 }

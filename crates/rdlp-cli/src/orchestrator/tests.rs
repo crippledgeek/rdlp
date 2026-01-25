@@ -300,10 +300,7 @@ async fn test_detect_resume_point_no_file() {
     let orchestrator = create_test_orchestrator();
     let path = Path::new("nonexistent_file.mp4");
 
-    let resume_from = orchestrator
-        .detect_resume_point(path, None)
-        .await
-        .unwrap();
+    let resume_from = orchestrator.detect_resume_point(path, None).await.unwrap();
     assert_eq!(resume_from, 0);
 }
 
@@ -424,7 +421,11 @@ async fn test_merge_chunk_files_success() {
     // Create ChunkInfo for old-style chunks
     let chunk_info = resume::ChunkInfo {
         download_id: None,
-        chunk_paths: vec![chunk0_path.clone(), chunk1_path.clone(), chunk2_path.clone()],
+        chunk_paths: vec![
+            chunk0_path.clone(),
+            chunk1_path.clone(),
+            chunk2_path.clone(),
+        ],
         total_size: 1536,
     };
 
@@ -597,10 +598,12 @@ mod resume_compatibility_tests {
 
         // Verify chunk files were deleted
         for i in 0..5 {
-            assert!(!temp_dir
-                .path()
-                .join(format!("video.mp4.0.part{i}"))
-                .exists());
+            assert!(
+                !temp_dir
+                    .path()
+                    .join(format!("video.mp4.0.part{i}"))
+                    .exists()
+            );
         }
     }
 
@@ -648,10 +651,12 @@ mod resume_compatibility_tests {
 
         // Verify new-style chunk files were deleted
         for i in 0..5 {
-            assert!(!temp_dir
-                .path()
-                .join(format!("video.mp4.0.part{i}"))
-                .exists());
+            assert!(
+                !temp_dir
+                    .path()
+                    .join(format!("video.mp4.0.part{i}"))
+                    .exists()
+            );
         }
 
         // Verify old-style chunk files were also cleaned up
@@ -701,10 +706,12 @@ mod resume_compatibility_tests {
 
         // Verify download ID 2 chunks were deleted
         for i in 0..3 {
-            assert!(!temp_dir
-                .path()
-                .join(format!("video.mp4.2.part{i}"))
-                .exists());
+            assert!(
+                !temp_dir
+                    .path()
+                    .join(format!("video.mp4.2.part{i}"))
+                    .exists()
+            );
         }
 
         // Verify download ID 0 chunks still exist (not cleaned up since not used)
@@ -775,10 +782,12 @@ mod resume_compatibility_tests {
 
         // Verify all chunk files were deleted
         for i in 0..100 {
-            assert!(!temp_dir
-                .path()
-                .join(format!("video.mp4.0.part{i}"))
-                .exists());
+            assert!(
+                !temp_dir
+                    .path()
+                    .join(format!("video.mp4.0.part{i}"))
+                    .exists()
+            );
         }
     }
 }

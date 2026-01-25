@@ -222,7 +222,9 @@ impl DownloadProgress {
 
     /// Format total size as human-readable string (e.g., "100.0 MB")
     pub fn total_string(&self) -> String {
-        self.total_bytes.map(format_bytes).unwrap_or_else(|| "Unknown".to_string())
+        self.total_bytes
+            .map(format_bytes)
+            .unwrap_or_else(|| "Unknown".to_string())
     }
 }
 
@@ -338,9 +340,9 @@ mod tests {
     fn test_format_bytes() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(500), "500.0 B");
-        assert_eq!(format_bytes(1536), "1.5 KiB");  // 1.5 * 1024
-        assert_eq!(format_bytes(1572864), "1.5 MiB");  // 1.5 * 1024^2
-        assert_eq!(format_bytes(1610612736), "1.5 GiB");  // 1.5 * 1024^3
+        assert_eq!(format_bytes(1536), "1.5 KiB"); // 1.5 * 1024
+        assert_eq!(format_bytes(1572864), "1.5 MiB"); // 1.5 * 1024^2
+        assert_eq!(format_bytes(1610612736), "1.5 GiB"); // 1.5 * 1024^3
     }
 
     #[test]

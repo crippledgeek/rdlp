@@ -1,6 +1,6 @@
 //! Download execution and progress tracking
 
-use super::{errors::*, Orchestrator};
+use super::{Orchestrator, errors::*};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::info;
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
@@ -17,7 +17,10 @@ struct ProgressBarCallback {
 
 impl ProgressBarCallback {
     fn new(progress_bar: ProgressBar, expected_size: Option<u64>) -> Self {
-        Self { progress_bar, expected_size }
+        Self {
+            progress_bar,
+            expected_size,
+        }
     }
 }
 
@@ -26,14 +29,17 @@ impl ProgressCallback for ProgressBarCallback {
         // Check if this is segment-based progress (HLS downloads)
         if progress.is_segmented() {
             // For HLS: progress bar tracks segments, message shows bytes
-            if let (Some(completed), Some(total)) = (progress.segments_downloaded, progress.total_segments) {
+            if let (Some(completed), Some(total)) =
+                (progress.segments_downloaded, progress.total_segments)
+            {
                 self.progress_bar.set_length(total);
                 self.progress_bar.set_position(completed);
 
                 // Update message with byte info
                 let bytes_str = progress.bytes_string();
                 let speed_str = progress.speed_string();
-                let eta_str = progress.eta
+                let eta_str = progress
+                    .eta
                     .map(|d| format!("~{}s", d.as_secs()))
                     .unwrap_or_else(|| "calculating...".to_string());
 
@@ -85,10 +91,7 @@ impl Orchestrator {
         }
 
         // Use higher refresh rate (30 fps) for smoother animation
-        let pb = ProgressBar::with_draw_target(
-            filesize,
-            ProgressDrawTarget::stderr_with_hz(30),
-        );
+        let pb = ProgressBar::with_draw_target(filesize, ProgressDrawTarget::stderr_with_hz(30));
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(
@@ -128,9 +131,7 @@ impl Orchestrator {
         );
         pb.set_style(
             ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
-                )
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}")
                 .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
                 .progress_chars("#>-"),
         );
@@ -168,7 +169,8 @@ impl Orchestrator {
         expected_size: Option<u64>,
     ) -> Result<Option<DownloadStats>> {
         let progress_callback: Option<Box<dyn ProgressCallback>> = progress_bar.map(|pb| {
-            Box::new(ProgressBarCallback::new(pb.clone(), expected_size)) as Box<dyn ProgressCallback>
+            Box::new(ProgressBarCallback::new(pb.clone(), expected_size))
+                as Box<dyn ProgressCallback>
         });
 
         info!("Press Ctrl+C to pause and save progress");

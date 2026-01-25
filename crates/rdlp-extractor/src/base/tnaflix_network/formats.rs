@@ -17,9 +17,8 @@ pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32
 // ============================================================================
 
 /// Selector for video source tags: <source src="..." type="video/mp4">
-pub(crate) static SOURCE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector")
-});
+pub(crate) static SOURCE_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector"));
 
 /// Regex to extract CDN URL from MovieFap JavaScript
 pub(crate) static CDN_URL_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -67,10 +66,10 @@ pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
         let format_id = if quality_str != "unknown" {
             format!("http-{quality_str}")
         } else {
-            "http-default".to_string()
+            "http-default".into()
         };
 
-        video_data.push((format_id, video_url.to_string(), ext, height, width));
+        video_data.push((format_id, video_url.to_owned(), ext.to_owned(), height, width));
     }
 
     video_data
@@ -117,10 +116,10 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
         let format_id = if let Some(h) = height {
             format!("http-{h}")
         } else {
-            "http-default".to_string()
+            "http-default".into()
         };
 
-        video_data.push((format_id, video_url, ext, height, width));
+        video_data.push((format_id, video_url, ext.to_owned(), height, width));
     }
 
     video_data
@@ -129,6 +128,11 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
 // ============================================================================
 // Format Building
 // ============================================================================
+
+// Common codec strings to avoid repeated allocations
+const CODEC_H264: &str = "h264";
+const CODEC_AAC: &str = "aac";
+const PROTOCOL_HTTPS: &str = "https";
 
 /// Build format list from video metadata and fetch filesizes
 pub(crate) async fn build_formats(
@@ -139,10 +143,10 @@ pub(crate) async fn build_formats(
 
     for (format_id, video_url, ext, height, width) in video_data {
         let mut format = Format::new(
-            format_id.clone(),
+            format_id,
             video_url.clone(),
             ext.clone(),
-            "https".to_string(),
+            PROTOCOL_HTTPS.to_owned(),
         );
 
         format.height = height;
@@ -150,8 +154,8 @@ pub(crate) async fn build_formats(
         format.format_note = height.map(|h| format!("{h}p"));
 
         if ext == "mp4" {
-            format.vcodec = Some("h264".to_string());
-            format.acodec = Some("aac".to_string());
+            format.vcodec = Some(CODEC_H264.to_owned());
+            format.acodec = Some(CODEC_AAC.to_owned());
         }
 
         // Fetch filesize via HEAD request
@@ -201,7 +205,9 @@ pub(crate) async fn build_formats(
 // ============================================================================
 
 /// Extract file extension from URL path
-fn extract_extension_from_url(url: &str) -> String {
+///
+/// Returns a static string reference to avoid allocation.
+fn extract_extension_from_url(url: &str) -> &'static str {
     if let Ok(parsed_url) = url::Url::parse(url) {
         if let Some(mut path_segments) = parsed_url.path_segments() {
             if let Some(last_segment) = path_segments.next_back() {
@@ -214,11 +220,10 @@ fn extract_extension_from_url(url: &str) -> String {
                         "webm" => "webm",
                         "mkv" => "mkv",
                         _ => "unknown",
-                    }
-                    .to_string();
+                    };
                 }
             }
         }
     }
-    "unknown".to_string()
+    "unknown"
 }

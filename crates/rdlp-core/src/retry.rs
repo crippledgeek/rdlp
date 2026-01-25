@@ -1,4 +1,4 @@
-use crate::{Result, RdlpError};
+use crate::{RdlpError, Result};
 use log::warn;
 use std::future::Future;
 use std::time::Duration;
@@ -18,7 +18,12 @@ pub struct RetryConfig {
 
 impl RetryConfig {
     /// Create a new retry configuration
-    pub fn new(max_retries: usize, initial_delay: Duration, max_delay: Duration, multiplier: f64) -> Self {
+    pub fn new(
+        max_retries: usize,
+        initial_delay: Duration,
+        max_delay: Duration,
+        multiplier: f64,
+    ) -> Self {
         Self {
             max_retries,
             initial_delay,
@@ -128,7 +133,11 @@ where
 
     // All retries exhausted
     Err(last_error.unwrap_or_else(|| {
-        RdlpError::Network(format!("{} failed after {} attempts", operation_name, config.max_retries + 1))
+        RdlpError::Network(format!(
+            "{} failed after {} attempts",
+            operation_name,
+            config.max_retries + 1
+        ))
     }))
 }
 
@@ -153,17 +162,12 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_calculate_delay() {
-        let config = RetryConfig::new(
-            5,
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-            2.0,
-        );
+        let config = RetryConfig::new(5, Duration::from_secs(1), Duration::from_secs(30), 2.0);
 
         // Attempt 0: 1s * 2^0 = 1s
         assert_eq!(config.calculate_delay(0), Duration::from_secs(1));
@@ -246,13 +250,23 @@ mod tests {
     #[test]
     fn test_is_retryable_error() {
         // Network errors are retryable
-        assert!(is_retryable_error(&RdlpError::Network("timeout".to_string())));
-        assert!(is_retryable_error(&RdlpError::Network("HTTP error 503".to_string())));
-        assert!(is_retryable_error(&RdlpError::Network("HTTP error 429".to_string())));
+        assert!(is_retryable_error(&RdlpError::Network(
+            "timeout".to_string()
+        )));
+        assert!(is_retryable_error(&RdlpError::Network(
+            "HTTP error 503".to_string()
+        )));
+        assert!(is_retryable_error(&RdlpError::Network(
+            "HTTP error 429".to_string()
+        )));
 
         // 4xx client errors (except 429) are not retryable
-        assert!(!is_retryable_error(&RdlpError::Network("HTTP error 404".to_string())));
-        assert!(!is_retryable_error(&RdlpError::Network("HTTP error 403".to_string())));
+        assert!(!is_retryable_error(&RdlpError::Network(
+            "HTTP error 404".to_string()
+        )));
+        assert!(!is_retryable_error(&RdlpError::Network(
+            "HTTP error 403".to_string()
+        )));
 
         // I/O errors are retryable
         assert!(is_retryable_error(&RdlpError::Io(std::io::Error::new(
@@ -261,6 +275,8 @@ mod tests {
         ))));
 
         // Other errors are not retryable
-        assert!(!is_retryable_error(&RdlpError::Extraction("invalid format".to_string())));
+        assert!(!is_retryable_error(&RdlpError::Extraction(
+            "invalid format".to_string()
+        )));
     }
 }

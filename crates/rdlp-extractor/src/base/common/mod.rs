@@ -38,12 +38,15 @@ mod tests;
 
 use log::{debug, trace};
 use once_cell::sync::Lazy;
-use rdlp_core::{ExtractionContext, Format, Result, RdlpError};
+use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use regex::Regex;
 use scraper::{Html, Selector};
 
 // Re-export security functions from rdlp-security
-pub use rdlp_security::{is_private_host, sanitize_for_logging, validate_url_security, MAX_URL_LENGTH as SECURITY_MAX_URL_LENGTH};
+pub use rdlp_security::{
+    MAX_URL_LENGTH as SECURITY_MAX_URL_LENGTH, is_private_host, sanitize_for_logging,
+    validate_url_security,
+};
 
 // ============================================================================
 // Security Constants
@@ -70,9 +73,8 @@ pub const DEFAULT_DEBUG_SAMPLE_SIZE: usize = 5000;
 // ============================================================================
 
 /// Selector for Open Graph title: `<meta property="og:title" content="...">`
-pub static OG_TITLE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector")
-});
+pub static OG_TITLE_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector"));
 
 /// Selector for Open Graph description: `<meta property="og:description" content="...">`
 pub static OG_DESCRIPTION_SELECTOR: Lazy<Selector> = Lazy::new(|| {
@@ -80,9 +82,8 @@ pub static OG_DESCRIPTION_SELECTOR: Lazy<Selector> = Lazy::new(|| {
 });
 
 /// Selector for Open Graph image: `<meta property="og:image" content="...">`
-pub static OG_IMAGE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"meta[property="og:image"]"#).expect("Valid OG image selector")
-});
+pub static OG_IMAGE_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse(r#"meta[property="og:image"]"#).expect("Valid OG image selector"));
 
 /// Selector for meta description: `<meta name="description" content="...">`
 pub static META_DESCRIPTION_SELECTOR: Lazy<Selector> = Lazy::new(|| {
@@ -100,14 +101,12 @@ pub static TWITTER_IMAGE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
 });
 
 /// Selector for HTML title tag: `<title>...</title>`
-pub static TITLE_TAG_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse("title").expect("Valid title selector")
-});
+pub static TITLE_TAG_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse("title").expect("Valid title selector"));
 
 /// Selector for H1 heading: `<h1>...</h1>`
-pub static H1_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse("h1").expect("Valid h1 selector")
-});
+pub static H1_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse("h1").expect("Valid h1 selector"));
 
 /// Selector for JSON-LD scripts: `<script type="application/ld+json">`
 pub static JSONLD_SELECTOR: Lazy<Selector> = Lazy::new(|| {
@@ -115,33 +114,30 @@ pub static JSONLD_SELECTOR: Lazy<Selector> = Lazy::new(|| {
 });
 
 /// Selector for canonical link: `<link rel="canonical" href="...">`
-pub static CANONICAL_SELECTOR: Lazy<Selector> = Lazy::new(|| {
-    Selector::parse(r#"link[rel="canonical"]"#).expect("Valid canonical selector")
-});
+pub static CANONICAL_SELECTOR: Lazy<Selector> =
+    Lazy::new(|| Selector::parse(r#"link[rel="canonical"]"#).expect("Valid canonical selector"));
 
 // ============================================================================
 // Common Static Patterns
 // ============================================================================
 
 /// Pattern to extract quality from URL (e.g., "720p", "1080P")
-pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(\d+)[pP]").expect("Valid quality pattern")
-});
+pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\d+)[pP]").expect("Valid quality pattern"));
 
 /// Pattern to extract bitrate from URL (e.g., "720P_4000K")
-pub static BITRATE_FROM_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern")
-});
+pub static BITRATE_FROM_URL_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern"));
 
 /// Pattern for ISO 8601 duration (e.g., "PT1H2M3S")
 pub static ISO8601_DURATION_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$").expect("Valid ISO8601 duration pattern")
+    Regex::new(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$")
+        .expect("Valid ISO8601 duration pattern")
 });
 
 /// Pattern for ISO 8601 date (e.g., "2024-01-15" or "2024-01-15T10:30:00Z")
-pub static ISO8601_DATE_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern")
-});
+pub static ISO8601_DATE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern"));
 
 // ============================================================================
 // Base Extractor
@@ -305,9 +301,7 @@ impl BaseExtractor {
             _ => "Unexpected HTTP status",
         };
 
-        Err(RdlpError::Network(format!(
-            "{error_msg}: HTTP {status}"
-        )))
+        Err(RdlpError::Network(format!("{error_msg}: HTTP {status}")))
     }
 
     // ========================================================================
@@ -338,8 +332,7 @@ impl BaseExtractor {
     /// BaseExtractor::validate_url_security(segment_url)?;
     /// ```
     pub fn validate_url_security(url: &str) -> Result<()> {
-        rdlp_security::validate_url_security(url)
-            .map_err(|e| RdlpError::Extraction(e.to_string()))
+        rdlp_security::validate_url_security(url).map_err(|e| RdlpError::Extraction(e.to_string()))
     }
 
     // ========================================================================
@@ -398,7 +391,11 @@ impl BaseExtractor {
     ///
     /// let id = BaseExtractor::extract_id_positional(url, &PATTERN, &[1, 2]);
     /// ```
-    pub fn extract_id_positional(url: &str, pattern: &Regex, group_indices: &[usize]) -> Option<String> {
+    pub fn extract_id_positional(
+        url: &str,
+        pattern: &Regex,
+        group_indices: &[usize],
+    ) -> Option<String> {
         pattern.captures(url).and_then(|cap| {
             for &idx in group_indices {
                 if let Some(m) = cap.get(idx) {
@@ -703,10 +700,7 @@ impl BaseExtractor {
     /// # Returns
     /// Parsed height as u32, `None` if parsing fails
     pub fn parse_quality_height(quality_str: &str) -> Option<u32> {
-        quality_str
-            .trim_end_matches(['p', 'P'])
-            .parse::<u32>()
-            .ok()
+        quality_str.trim_end_matches(['p', 'P']).parse::<u32>().ok()
     }
 
     /// Parse quality from URL using common patterns
@@ -737,7 +731,12 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// A Format struct with quality metadata populated
-    pub fn build_format(format_id: String, url: String, ext: String, height: Option<u32>) -> Format {
+    pub fn build_format(
+        format_id: String,
+        url: String,
+        ext: String,
+        height: Option<u32>,
+    ) -> Format {
         let mut format = Format::new(format_id, url, ext.clone(), "https".to_string());
 
         if let Some(h) = height {
@@ -868,9 +867,18 @@ impl BaseExtractor {
 
         let caps = ISO8601_DURATION_PATTERN.captures(duration_str)?;
 
-        let hours: f64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-        let minutes: f64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-        let seconds: f64 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+        let hours: f64 = caps
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
+        let minutes: f64 = caps
+            .get(2)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
+        let seconds: f64 = caps
+            .get(3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
 
         Some(hours * 3600.0 + minutes * 60.0 + seconds)
     }
