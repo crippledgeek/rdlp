@@ -1,7 +1,7 @@
 //! HTTP/HTTPS downloader implementation
 //!
 //! Provides HTTP downloading with parallel chunk support, resume capability,
-//! and automatic retry logic.
+//! and automatic retry logic using the backon crate.
 
 mod config;
 mod parallel;
@@ -10,11 +10,12 @@ mod parallel;
 mod tests;
 
 use async_trait::async_trait;
+use backon::Retryable;
 use futures::StreamExt;
 use log::{debug, info, warn};
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
-    check_http_response, retry_with_backoff,
+    check_http_response, is_retryable_error,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -83,21 +84,26 @@ impl HttpDownloader {
 
     /// Check if server supports range requests
     async fn supports_ranges(&self, url: &str) -> Result<bool> {
-        let response = retry_with_backoff(
-            &self.config.retry_config,
-            "HTTP HEAD (range check)",
-            |_attempt| {
-                let client = self.client.clone();
-                let url = url.to_string();
-                async move {
-                    client
-                        .head(&url)
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network(format!("Failed to HEAD request: {e}")))
-                }
-            },
-        )
+        let client = self.client.clone();
+        let url = url.to_string();
+        let backoff = self.config.retry_config.to_backoff();
+
+        let response = (|| {
+            let client = client.clone();
+            let url = url.clone();
+            async move {
+                client
+                    .head(&url)
+                    .send()
+                    .await
+                    .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
+            }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!("HTTP HEAD (range check) failed, retrying in {dur:?}: {err}");
+        })
         .await?;
 
         Ok(response
@@ -117,23 +123,31 @@ impl HttpDownloader {
         chunk_path: &Path,
         progress_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) -> Result<u64> {
-        let response =
-            retry_with_backoff(&self.config.retry_config, "HTTP GET (range)", |_attempt| {
-                let client = self.client.clone();
-                let url = url.to_string();
-                async move {
-                    let response = client
-                        .get(&url)
-                        .header("Range", format!("bytes={start}-{end}"))
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network(format!("Failed to fetch range: {e}")))?;
+        let client = self.client.clone();
+        let url = url.to_string();
+        let backoff = self.config.retry_config.to_backoff();
 
-                    check_http_response(&response)?;
-                    Ok(response)
-                }
-            })
-            .await?;
+        let response = (|| {
+            let client = client.clone();
+            let url = url.clone();
+            async move {
+                let response = client
+                    .get(&url)
+                    .header("Range", format!("bytes={start}-{end}"))
+                    .send()
+                    .await
+                    .map_err(|e| RdlpError::Network(format!("Range request failed: {e}")))?;
+
+                check_http_response(&response)?;
+                Ok(response)
+            }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!("HTTP GET (range) failed, retrying in {dur:?}: {err}");
+        })
+        .await?;
 
         let file = File::create(chunk_path).await.map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
@@ -165,20 +179,28 @@ impl HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
+        let client = self.client.clone();
+        let url_string = url.to_string();
+        let backoff = self.config.retry_config.to_backoff();
 
-        let response = retry_with_backoff(&self.config.retry_config, "HTTP GET", |_attempt| {
-            let client = self.client.clone();
-            let url = url.to_string();
+        let response = (|| {
+            let client = client.clone();
+            let url = url_string.clone();
             async move {
                 let response = client
                     .get(&url)
                     .send()
                     .await
-                    .map_err(|e| RdlpError::Network(format!("Failed to fetch URL: {e}")))?;
+                    .map_err(|e| RdlpError::Network(format!("GET request failed: {e}")))?;
 
                 check_http_response(&response)?;
                 Ok(response)
             }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!("HTTP GET failed, retrying in {dur:?}: {err}");
         })
         .await?;
 
@@ -259,22 +281,27 @@ impl Downloader for HttpDownloader {
         // Try Range request if HEAD didn't return size
         let size = if (size.is_none() || size == Some(0)) && supports_ranges {
             debug!("HEAD didn't return valid size, trying Range request...");
-            match retry_with_backoff(
-                &self.config.retry_config,
-                "HTTP GET (size check)",
-                |_attempt| {
-                    let client = self.client.clone();
-                    let url = url.to_string();
-                    async move {
-                        client
-                            .get(&url)
-                            .header("Range", "bytes=0-0")
-                            .send()
-                            .await
-                            .map_err(|e| RdlpError::Network(format!("Failed to check size: {e}")))
-                    }
-                },
-            )
+            let client = self.client.clone();
+            let url_string = url.to_string();
+            let backoff = self.config.retry_config.to_backoff();
+
+            match (|| {
+                let client = client.clone();
+                let url = url_string.clone();
+                async move {
+                    client
+                        .get(&url)
+                        .header("Range", "bytes=0-0")
+                        .send()
+                        .await
+                        .map_err(|e| RdlpError::Network(format!("Size check failed: {e}")))
+                }
+            })
+            .retry(backoff)
+            .when(is_retryable_error)
+            .notify(|err, dur| {
+                warn!("HTTP GET (size check) failed, retrying in {dur:?}: {err}");
+            })
             .await
             {
                 Ok(response) => {
@@ -341,16 +368,25 @@ impl Downloader for HttpDownloader {
     }
 
     async fn get_size(&self, url: &str) -> Result<Option<u64>> {
-        let response = retry_with_backoff(&self.config.retry_config, "HTTP HEAD", |_attempt| {
-            let client = self.client.clone();
-            let url = url.to_string();
+        let client = self.client.clone();
+        let url = url.to_string();
+        let backoff = self.config.retry_config.to_backoff();
+
+        let response = (|| {
+            let client = client.clone();
+            let url = url.clone();
             async move {
                 client
                     .head(&url)
                     .send()
                     .await
-                    .map_err(|e| RdlpError::Network(format!("Failed to HEAD request: {e}")))
+                    .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
             }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!("HTTP HEAD failed, retrying in {dur:?}: {err}");
         })
         .await?;
 
@@ -365,32 +401,39 @@ impl Downloader for HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
+        let client = self.client.clone();
+        let url_string = url.to_string();
+        let backoff = self.config.retry_config.to_backoff();
 
-        let response =
-            retry_with_backoff(&self.config.retry_config, "HTTP GET (resume)", |_attempt| {
-                let client = self.client.clone();
-                let url = url.to_string();
-                async move {
-                    let response = client
-                        .get(&url)
-                        .header("Range", format!("bytes={resume_from}-"))
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network(format!("Failed to fetch URL: {e}")))?;
+        let response = (|| {
+            let client = client.clone();
+            let url = url_string.clone();
+            async move {
+                let response = client
+                    .get(&url)
+                    .header("Range", format!("bytes={resume_from}-"))
+                    .send()
+                    .await
+                    .map_err(|e| RdlpError::Network(format!("Resume request failed: {e}")))?;
 
-                    if response.status().as_u16() != 206 {
-                        return Err(RdlpError::Download(format!(
-                            "Server does not support resume (expected HTTP 206, got {}). \
-                             Cannot continue download without overwriting existing data. \
-                             Please delete the partial file and restart the download.",
-                            response.status()
-                        )));
-                    }
-
-                    Ok(response)
+                if response.status().as_u16() != 206 {
+                    return Err(RdlpError::Download(format!(
+                        "Server does not support resume (expected HTTP 206, got {}). \
+                         Cannot continue download without overwriting existing data. \
+                         Please delete the partial file and restart the download.",
+                        response.status()
+                    )));
                 }
-            })
-            .await?;
+
+                Ok(response)
+            }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!("HTTP GET (resume) failed, retrying in {dur:?}: {err}");
+        })
+        .await?;
 
         let total_size = if let Some(content_range) = response.headers().get("content-range") {
             if let Ok(range_str) = content_range.to_str() {

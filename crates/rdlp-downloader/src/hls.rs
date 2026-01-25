@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use backon::Retryable;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, info, warn};
 use rdlp_core::{
@@ -111,7 +112,7 @@ impl HlsDownloader {
         self
     }
 
-    /// Download a single HLS segment with retry logic
+    /// Download a single HLS segment with retry logic using backon
     ///
     /// Handles network errors, timeouts, and expired URLs by retrying with exponential backoff.
     ///
@@ -131,98 +132,75 @@ impl HlsDownloader {
         segment_path: PathBuf,
         progress: Arc<AtomicU64>,
     ) -> Result<(usize, PathBuf, u64)> {
-        let mut attempt = 0;
-        let max_attempts = self.retry_config.max_retries + 1;
-        let mut delay = self.retry_config.initial_delay;
+        let http_client = self.http_downloader.client().clone();
+        let buffer_size = self.buffer_size;
+        let backoff = self.retry_config.to_backoff();
 
-        loop {
-            attempt += 1;
+        // Use backon for retry with exponential backoff and jitter
+        let result = (|| {
+            let client = http_client.clone();
+            let url = url.clone();
+            let segment_path = segment_path.clone();
+            let progress = progress.clone();
 
-            match self
-                .try_download_segment(idx, &url, &segment_path, progress.clone())
-                .await
-            {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    if attempt >= max_attempts {
-                        return Err(RdlpError::Network(format!(
-                            "Segment {idx} failed after {max_attempts} attempts: {e}"
-                        )));
-                    }
+            async move {
+                // Download segment to file
+                let response = client
+                    .get(&url)
+                    .timeout(Duration::from_secs(30)) // 30 second timeout per segment
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.is_timeout() {
+                            RdlpError::Network(format!("Segment {idx} timeout"))
+                        } else if e.is_connect() {
+                            RdlpError::Network(format!("Segment {idx} connection failed"))
+                        } else {
+                            RdlpError::Network(format!("Segment {idx} request failed: {e}"))
+                        }
+                    })?;
 
-                    // Log retry
-                    warn!(
-                        "Segment {idx} failed (attempt {attempt}/{max_attempts}): {e} - Retrying in {delay:?}..."
-                    );
-
-                    // Wait before retry
-                    tokio::time::sleep(delay).await;
-
-                    // Exponential backoff
-                    delay = Duration::from_millis(
-                        (delay.as_millis() as f64 * self.retry_config.multiplier) as u64,
-                    )
-                    .min(self.retry_config.max_delay);
+                if !response.status().is_success() {
+                    return Err(RdlpError::Network(format!(
+                        "Segment {} returned HTTP {}",
+                        idx,
+                        response.status()
+                    )));
                 }
+
+                // Stream segment to file with progress tracking
+                let file = File::create(&segment_path).await.map_err(RdlpError::Io)?;
+                let mut writer = BufWriter::with_capacity(buffer_size, file);
+                let mut stream = response.bytes_stream();
+                let mut downloaded = 0u64;
+
+                while let Some(chunk_result) = stream.next().await {
+                    let chunk = chunk_result
+                        .map_err(|e| RdlpError::Network(format!("Segment {idx} read error: {e}")))?;
+
+                    writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
+                    downloaded += chunk.len() as u64;
+
+                    // Update shared progress counter (lock-free atomic)
+                    progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                }
+
+                writer.flush().await.map_err(RdlpError::Io)?;
+
+                Ok((idx, segment_path, downloaded))
             }
-        }
-    }
+        })
+        .retry(backoff)
+        .when(|e: &RdlpError| {
+            // Retry on network errors, not on permanent failures
+            matches!(e, RdlpError::Network(_) | RdlpError::Io(_))
+        })
+        .notify(|err, dur| {
+            warn!("Segment {idx} failed, retrying in {dur:?}: {err}");
+        })
+        .await?;
 
-    /// Try to download a single segment (single attempt, no retry)
-    async fn try_download_segment(
-        &self,
-        idx: usize,
-        url: &str,
-        segment_path: &Path,
-        progress: Arc<AtomicU64>,
-    ) -> Result<(usize, PathBuf, u64)> {
-        // Download segment to temporary file
-        let response = self
-            .http_downloader
-            .client()
-            .get(url)
-            .timeout(Duration::from_secs(30)) // 30 second timeout per segment
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    RdlpError::Network(format!("Segment {idx} timeout"))
-                } else if e.is_connect() {
-                    RdlpError::Network(format!("Segment {idx} connection failed"))
-                } else {
-                    RdlpError::Network(format!("Segment {idx} request failed: {e}"))
-                }
-            })?;
-
-        if !response.status().is_success() {
-            return Err(RdlpError::Network(format!(
-                "Segment {} returned HTTP {}",
-                idx,
-                response.status()
-            )));
-        }
-
-        // Stream segment to file with progress tracking
-        let file = File::create(segment_path).await.map_err(RdlpError::Io)?;
-
-        let mut writer = BufWriter::with_capacity(self.buffer_size, file);
-        let mut stream = response.bytes_stream();
-        let mut downloaded = 0u64;
-
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| RdlpError::Network(format!("Segment {idx} read error: {e}")))?;
-
-            writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
-            downloaded += chunk.len() as u64;
-
-            // Update shared progress counter (lock-free atomic)
-            progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-        }
-
-        writer.flush().await.map_err(RdlpError::Io)?;
-
-        Ok((idx, segment_path.to_path_buf(), downloaded))
+        Ok(result)
     }
 
     /// Parse m3u8 playlist and extract segment URLs
@@ -405,7 +383,7 @@ impl HlsDownloader {
                         }
                     }
 
-                    // Download segment with retry logic
+                    // Download segment with retry logic (now using backon)
                     let result = downloader
                         .download_segment_with_retry(
                             idx,

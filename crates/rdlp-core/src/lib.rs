@@ -43,8 +43,8 @@ pub use rdlp_types::{
 // Re-export error types and utilities
 pub use error::{RdlpError, Result, check_http_response};
 
-// Re-export retry utilities
-pub use retry::{RetryConfig, is_retryable_error, retry_with_backoff};
+// Re-export retry utilities (backon-based)
+pub use retry::{ExponentialBuilder, RetryConfig, Retryable, is_retryable_error};
 
 // Re-export traits
 pub use traits::{

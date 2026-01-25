@@ -82,9 +82,17 @@ pub type Result<T> = std::result::Result<T, RdlpError>;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let response = client.get(url).send().await?;
-/// check_http_response(&response)?;
+/// ```rust,no_run
+/// use rdlp_core::check_http_response;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let client = reqwest::Client::new();
+///     let url = "https://example.com";
+///     let response = client.get(url).send().await?;
+///     check_http_response(&response)?;
+///     Ok(())
+/// }
 /// ```
 pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
     if !response.status().is_success() {
