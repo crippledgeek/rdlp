@@ -206,6 +206,108 @@ pub fn is_private_host(host: &str) -> bool {
 }
 
 // ============================================================================
+// URL Normalization
+// ============================================================================
+
+/// Normalize a URL by stripping query parameters and fragments
+///
+/// This is useful for comparing URLs that may have dynamic tokens,
+/// session IDs, or other ephemeral query parameters. The comparison
+/// should focus on the essential parts: scheme, host, port, and path.
+///
+/// # Arguments
+/// * `url` - The URL to normalize
+///
+/// # Returns
+/// The normalized URL string (scheme + host + port + path)
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::normalize_url;
+///
+/// // Strips query parameters
+/// assert_eq!(
+///     normalize_url("https://cdn.example.com/video.m3u8?token=abc123"),
+///     "https://cdn.example.com/video.m3u8"
+/// );
+///
+/// // Different tokens normalize to same URL
+/// let url1 = "https://cdn.example.com/video.m3u8?token=abc";
+/// let url2 = "https://cdn.example.com/video.m3u8?token=xyz";
+/// assert_eq!(normalize_url(url1), normalize_url(url2));
+///
+/// // Preserves port if present
+/// assert_eq!(
+///     normalize_url("https://cdn.example.com:8080/video.m3u8?key=123"),
+///     "https://cdn.example.com:8080/video.m3u8"
+/// );
+///
+/// // Strips fragments
+/// assert_eq!(
+///     normalize_url("https://example.com/video.m3u8#section"),
+///     "https://example.com/video.m3u8"
+/// );
+/// ```
+pub fn normalize_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(mut parsed) => {
+            // Strip query and fragment, keep everything else
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.into()
+        }
+        Err(_) => {
+            // If URL parsing fails, fall back to simple query string stripping
+            url.split('?').next().unwrap_or(url).to_string()
+        }
+    }
+}
+
+/// Extract the path portion of a URL for CDN-agnostic comparison
+///
+/// CDNs often use different edge server hostnames for the same content
+/// (e.g., `ev-h-ph.rdtcdn.com` vs `ev-a-ph.rdtcdn.com`). This function
+/// extracts only the path, which uniquely identifies the content.
+///
+/// # Arguments
+/// * `url` - The URL to extract the path from
+///
+/// # Returns
+/// The path portion of the URL (e.g., `/hls/videos/123/master.m3u8`)
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::extract_url_path;
+///
+/// // Different CDN hostnames, same path
+/// let url1 = "https://ev-h-ph.cdn.com/videos/123/master.m3u8?token=abc";
+/// let url2 = "https://ev-a-ph.cdn.com/videos/123/master.m3u8?token=xyz";
+/// assert_eq!(extract_url_path(url1), extract_url_path(url2));
+///
+/// // Extracts just the path
+/// assert_eq!(
+///     extract_url_path("https://cdn.example.com/hls/video.m3u8?key=123"),
+///     "/hls/video.m3u8"
+/// );
+/// ```
+pub fn extract_url_path(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(parsed) => parsed.path().to_string(),
+        Err(_) => {
+            // Fallback: find path after scheme://host
+            url.split('?')
+                .next()
+                .and_then(|s| s.find("://").map(|i| &s[i + 3..]))
+                .and_then(|s| s.find('/').map(|i| &s[i..]))
+                .unwrap_or(url)
+                .to_string()
+        }
+    }
+}
+
+// ============================================================================
 // Sanitization for Safe Logging
 // ============================================================================
 

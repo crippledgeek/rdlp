@@ -5,13 +5,16 @@ use rdlp_core::{
     Downloader, DownloadProgress, DownloadStats, ProgressCallback,
     Result, RetryConfig, RdlpError,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::Mutex;
 
+use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
 
 /// HLS (HTTP Live Streaming) downloader
@@ -300,10 +303,11 @@ impl HlsDownloader {
         }
     }
 
-    /// Download all segments in parallel
+    /// Download segments with resume support
     ///
-    /// Downloads segments to temporary files using the HTTP downloader.
-    /// Uses `buffer_unordered` for bounded parallelism.
+    /// Skips segments that are already completed (tracked in state).
+    /// Updates state after each successful segment download.
+    /// Saves state periodically for crash recovery.
     ///
     /// # Arguments
     /// * `segment_urls` - List of segment URLs to download
@@ -311,38 +315,110 @@ impl HlsDownloader {
     /// * `base_filename` - Base filename for temporary files
     /// * `progress_counter` - Shared atomic counter for bytes downloaded
     /// * `segments_counter` - Shared atomic counter for segments completed
+    /// * `state` - Shared download state for resume tracking
+    /// * `output_path` - Final output path (for state file location)
     ///
     /// # Returns
-    /// * `Ok(Vec<PathBuf>)` - Paths to downloaded segment files (in order)
+    /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
     /// * `Err(_)` - Download error (network, I/O, etc.)
-    async fn download_segments(
+    #[allow(clippy::too_many_arguments)]
+    async fn download_segments_with_resume(
         &self,
         segment_urls: Vec<String>,
         temp_dir: &Path,
         base_filename: &str,
         progress_counter: Arc<AtomicU64>,
         segments_counter: Arc<AtomicU64>,
+        state: Arc<Mutex<HlsDownloadState>>,
+        output_path: &Path,
     ) -> Result<Vec<PathBuf>> {
         let total_segments = segment_urls.len();
 
-        info!("Downloading {} segments ({} concurrent)", total_segments, self.concurrent_segments);
+        // Get already completed segments
+        let completed: HashSet<usize> = state.lock().await.completed_segments.clone();
+        let to_download: Vec<(usize, String)> = segment_urls
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| !completed.contains(idx))
+            .map(|(idx, url)| (idx, url.clone()))
+            .collect();
 
-        // Download all segments using buffer_unordered for batch processing with retry logic
+        let already_downloaded = completed.len();
+        let remaining = to_download.len();
+        let concurrent = self.concurrent_segments;
+
+        if remaining == 0 {
+            info!("All {total_segments} segments already downloaded, skipping to merge");
+        } else {
+            info!("Downloading {remaining} segments ({already_downloaded} already done, {concurrent} concurrent)");
+        }
+
+        // Download remaining segments using buffer_unordered with state tracking
         let downloader = self.clone();
-        let results: Vec<(usize, PathBuf, u64)> = stream::iter(segment_urls.into_iter().enumerate())
+        let temp_dir_owned = temp_dir.to_path_buf();
+        let base_filename_owned = base_filename.to_string();
+        let output_path_owned = output_path.to_path_buf();
+
+        let results: Vec<(usize, PathBuf, u64)> = stream::iter(to_download.into_iter())
             .map(|(idx, url)| {
-                let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
+                let segment_path = temp_dir_owned.join(format!("{base_filename_owned}.part{idx}"));
                 let downloader = downloader.clone();
                 let progress = progress_counter.clone();
                 let segments = segments_counter.clone();
+                let state = state.clone();
+                let output_path = output_path_owned.clone();
 
                 async move {
-                    // Download segment with retry logic
-                    let result = downloader.download_segment_with_retry(idx, url, segment_path, progress).await;
-                    // Increment segment counter on success
-                    if result.is_ok() {
-                        segments.fetch_add(1, Ordering::Relaxed);
+                    // Check if segment file already exists and is non-empty
+                    if segment_path.exists() {
+                        if let Ok(meta) = tokio::fs::metadata(&segment_path).await {
+                            if meta.len() > 0 {
+                                debug!("Segment {} already exists ({} bytes), skipping", idx, meta.len());
+                                let bytes = meta.len();
+                                // Mark as completed in state
+                                {
+                                    let mut state_guard = state.lock().await;
+                                    state_guard.mark_completed(idx, bytes);
+                                }
+                                segments.fetch_add(1, Ordering::Relaxed);
+                                progress.fetch_add(bytes, Ordering::Relaxed);
+                                return Ok((idx, segment_path, bytes));
+                            }
+                        }
                     }
+
+                    // Download segment with retry logic
+                    let result = downloader.download_segment_with_retry(
+                        idx,
+                        url,
+                        segment_path.clone(),
+                        progress.clone()
+                    ).await;
+
+                    match &result {
+                        Ok((_, _, bytes)) => {
+                            // Update state on success
+                            let mut state_guard = state.lock().await;
+                            state_guard.mark_completed(idx, *bytes);
+
+                            // Save state every 50 segments for crash recovery
+                            if state_guard.completed_segments.len() % 50 == 0 {
+                                if let Err(e) = state_guard.save(&output_path).await {
+                                    warn!("Failed to save HLS state: {e}");
+                                }
+                            }
+
+                            segments.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            // Save state on error before propagating
+                            if let Err(save_err) = state.lock().await.save(&output_path).await {
+                                warn!("Failed to save HLS state on error: {save_err}");
+                            }
+                            warn!("Segment {idx} failed: {e}");
+                        }
+                    }
+
                     result
                 }
             })
@@ -350,24 +426,44 @@ impl HlsDownloader {
             .try_collect()
             .await?;
 
-        // Sort results by index to ensure correct order
-        let mut sorted_results = results;
-        sorted_results.sort_by_key(|(idx, _, _)| *idx);
+        // Save final state
+        if let Err(e) = state.lock().await.save(output_path).await {
+            warn!("Failed to save final HLS state: {e}");
+        }
 
-        // Extract paths and log progress
-        let segment_paths: Vec<PathBuf> = sorted_results
+        // Build complete list of segment paths (including pre-existing)
+        let mut all_segment_paths: Vec<(usize, PathBuf)> = Vec::with_capacity(total_segments);
+
+        // Add downloaded segments from this run
+        for (idx, path, _) in results {
+            all_segment_paths.push((idx, path));
+        }
+
+        // Add pre-existing segments
+        for idx in completed {
+            let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
+            if segment_path.exists() {
+                all_segment_paths.push((idx, segment_path));
+            }
+        }
+
+        // Sort by index for correct merge order
+        all_segment_paths.sort_by_key(|(idx, _)| *idx);
+
+        // Verify we have all segments
+        let actual_count = all_segment_paths.len();
+        if actual_count != total_segments {
+            return Err(RdlpError::Download(format!(
+                "Missing segments: expected {total_segments}, got {actual_count}"
+            )));
+        }
+
+        let segment_paths: Vec<PathBuf> = all_segment_paths
             .into_iter()
-            .enumerate()
-            .map(|(count, (idx, path, _bytes))| {
-                if (count + 1) % 100 == 0 || count == total_segments - 1 {
-                    debug!("Completed {}/{} segments", count + 1, total_segments);
-                }
-                (idx, path)
-            })
             .map(|(_, path)| path)
             .collect();
 
-        info!("All {total_segments} segments downloaded");
+        info!("All {total_segments} segments ready for merge");
         Ok(segment_paths)
     }
 
@@ -439,25 +535,6 @@ impl HlsDownloader {
 
         debug!("Deleted {deleted} segment files");
     }
-
-    /// Clean up segments on error
-    ///
-    /// Called when download fails to remove partial segment files.
-    async fn cleanup_segments_on_error(&self, temp_dir: &Path, base_filename: &str, total_segments: usize) {
-        debug!("Cleaning up partial segment files...");
-
-        let mut deleted = 0;
-        for idx in 0..total_segments {
-            let path = temp_dir.join(format!("{base_filename}.part{idx}"));
-            if tokio::fs::remove_file(&path).await.is_ok() {
-                deleted += 1;
-            }
-        }
-
-        if deleted > 0 {
-            debug!("Deleted {deleted} partial files");
-        }
-    }
 }
 
 impl Default for HlsDownloader {
@@ -491,12 +568,31 @@ impl Downloader for HlsDownloader {
 
         // Step 1: Parse playlist
         let segment_urls = self.parse_playlist(url).await?;
-        info!("Found {} segments in playlist", segment_urls.len());
+        let total_segments = segment_urls.len();
+        info!("Found {total_segments} segments in playlist");
 
-        // Step 2: Setup progress tracking
-        let downloaded = Arc::new(AtomicU64::new(0));
-        let segments_completed = Arc::new(AtomicU64::new(0));
-        let total_segments = segment_urls.len() as u64;
+        // Step 2: Load or create state for resume support
+        let state = match HlsDownloadState::load(path, url, total_segments).await {
+            Some(existing_state) => {
+                let completed = existing_state.completed_segments.len();
+                let remaining = total_segments - completed;
+                info!("Resuming: {completed}/{total_segments} segments already downloaded, {remaining} remaining");
+                Arc::new(Mutex::new(existing_state))
+            }
+            None => {
+                info!("Starting fresh HLS download");
+                Arc::new(Mutex::new(HlsDownloadState::new(url.to_string(), total_segments)))
+            }
+        };
+
+        // Step 3: Setup progress tracking
+        let downloaded = Arc::new(AtomicU64::new(
+            state.lock().await.total_bytes_downloaded
+        ));
+        let segments_completed = Arc::new(AtomicU64::new(
+            state.lock().await.completed_segments.len() as u64
+        ));
+        let total_segments_u64 = total_segments as u64;
 
         // Spawn progress reporter task with segment-based progress
         let progress_task = if let Some(callback) = progress {
@@ -525,7 +621,7 @@ impl Downloader for HlsDownloader {
                             bytes,
                             speed,
                             segments,
-                            total_segments,
+                            total_segments_u64,
                         );
                         callback.on_progress(&progress_info);
                         last_update = now;
@@ -536,26 +632,30 @@ impl Downloader for HlsDownloader {
             None
         };
 
-        // Step 3: Download segments
+        // Step 4: Download segments (with resume support)
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let base_filename = path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("download");
 
-        let segment_paths = match self.download_segments(
+        let segment_paths = match self.download_segments_with_resume(
             segment_urls.clone(),
             temp_dir,
             base_filename,
             downloaded.clone(),
             segments_completed.clone(),
+            state.clone(),
+            path,
         ).await {
             Ok(paths) => paths,
             Err(e) => {
-                // Clean up partial downloads on error
+                // Save state on error (so we can resume later)
+                if let Err(save_err) = state.lock().await.save(path).await {
+                    warn!("Failed to save HLS state: {save_err}");
+                }
                 if let Some(task) = progress_task {
                     task.abort();
                 }
-                self.cleanup_segments_on_error(temp_dir, base_filename, segment_urls.len()).await;
                 return Err(e);
             }
         };
@@ -565,16 +665,19 @@ impl Downloader for HlsDownloader {
             task.abort();
         }
 
-        // Step 4: Merge segments
+        // Step 5: Merge segments
         let total_bytes = self.merge_segments(segment_paths.clone(), path).await?;
 
-        // Step 5: Cleanup
+        // Step 6: Cleanup segments and state file
         self.cleanup_segments(segment_paths).await;
+        if let Err(e) = HlsDownloadState::delete(path).await {
+            warn!("Failed to delete HLS state file: {e}");
+        }
 
-        // Step 6: Return statistics
+        // Step 7: Return statistics
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_bytes, duration, 0)
-            .with_fragments(segment_urls.len());
+            .with_fragments(total_segments);
 
         info!("HLS download complete: {} MB in {:.1}s ({:.1} MB/s)",
             total_bytes / (1024 * 1024),
