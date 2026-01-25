@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 use log::{debug, info};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::ffmpeg::FFmpegRunner;
 
@@ -160,10 +160,7 @@ impl PostProcessor for FFmpegMetadata {
         let temp_output = input_file.with_extension(format!("temp.{extension}"));
 
         // Build base arguments
-        let mut args = vec![
-            "-i".to_string(),
-            input_file.to_string_lossy().to_string(),
-        ];
+        let mut args = vec!["-i".to_string(), input_file.to_string_lossy().to_string()];
 
         // Handle chapters if present
         let mut temp_metadata_file = None;

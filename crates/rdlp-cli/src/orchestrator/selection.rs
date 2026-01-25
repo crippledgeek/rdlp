@@ -1,7 +1,7 @@
 //! Format selection logic
 
-use super::{errors::*, Orchestrator};
-use dialoguer::{theme::ColorfulTheme, Select};
+use super::{Orchestrator, errors::*};
+use dialoguer::{Select, theme::ColorfulTheme};
 use log::info;
 use rdlp_core::{Format, FormatSelector};
 
@@ -52,7 +52,6 @@ impl Orchestrator {
         if formats.is_empty() {
             return Err(OrchestratorError::NoFormat);
         }
-
 
         // Build menu items with format details
         let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();

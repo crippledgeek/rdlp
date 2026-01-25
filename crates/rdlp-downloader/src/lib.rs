@@ -247,7 +247,7 @@ pub mod hls_state;
 /// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
 
-pub use chunking::{calculate_chunks, chunk_size_for_file, ChunkSizeStrategy};
+pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
 
@@ -331,10 +331,7 @@ impl DownloaderRegistry {
     /// assert!(downloader.is_some());
     /// ```
     pub fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
-        self.downloaders
-            .iter()
-            .find(|d| d.supports(url))
-            .cloned()
+        self.downloaders.iter().find(|d| d.supports(url)).cloned()
     }
 
     /// Get all registered downloader protocol names

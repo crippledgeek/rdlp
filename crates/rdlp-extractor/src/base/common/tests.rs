@@ -119,9 +119,7 @@ fn test_is_private_host() {
 
 #[test]
 fn test_extract_meta_content() {
-    let html = Html::parse_document(
-        r#"<meta property="og:title" content="Test Title">"#
-    );
+    let html = Html::parse_document(r#"<meta property="og:title" content="Test Title">"#);
     assert_eq!(
         BaseExtractor::extract_meta_content(&html, &OG_TITLE_SELECTOR),
         Some("Test Title".to_string())
@@ -130,9 +128,7 @@ fn test_extract_meta_content() {
 
 #[test]
 fn test_extract_meta_content_empty() {
-    let html = Html::parse_document(
-        r#"<meta property="og:title" content="">"#
-    );
+    let html = Html::parse_document(r#"<meta property="og:title" content="">"#);
     assert_eq!(
         BaseExtractor::extract_meta_content(&html, &OG_TITLE_SELECTOR),
         None
@@ -155,7 +151,7 @@ fn test_extract_title_multi_strategy() {
         r#"
         <meta property="og:title" content="OG Title">
         <title>HTML Title</title>
-        "#
+        "#,
     );
     assert_eq!(
         BaseExtractor::extract_title_multi_strategy(&html1),
@@ -183,7 +179,10 @@ fn test_extract_title_multi_strategy() {
 
 #[test]
 fn test_parse_iso8601_duration() {
-    assert_eq!(BaseExtractor::parse_iso8601_duration("PT1H2M3S"), Some(3723.0));
+    assert_eq!(
+        BaseExtractor::parse_iso8601_duration("PT1H2M3S"),
+        Some(3723.0)
+    );
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT30M"), Some(1800.0));
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT45S"), Some(45.0));
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT2H"), Some(7200.0));
@@ -214,10 +213,7 @@ fn test_truncate_string() {
         BaseExtractor::truncate_string("Hello World".to_string(), 5),
         "Hello"
     );
-    assert_eq!(
-        BaseExtractor::truncate_string("Hi".to_string(), 10),
-        "Hi"
-    );
+    assert_eq!(BaseExtractor::truncate_string("Hi".to_string(), 10), "Hi");
     // Unicode handling
     assert_eq!(
         BaseExtractor::truncate_string("Hello 世界".to_string(), 7),

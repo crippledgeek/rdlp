@@ -28,13 +28,11 @@ static NO_VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
         .expect("Valid no video pattern")
 });
 
-static GEO_BLOCKED_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"class=["']geoBlocked["']"#).expect("Valid geo blocked pattern")
-});
+static GEO_BLOCKED_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"class=["']geoBlocked["']"#).expect("Valid geo blocked pattern"));
 
-static LOCKED_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<[^>]+\bid=["']lockedPlayer"#).expect("Valid locked pattern")
-});
+static LOCKED_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"<[^>]+\bid=["']lockedPlayer"#).expect("Valid locked pattern"));
 
 static HTML_TAG_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
@@ -206,9 +204,11 @@ mod tests {
 
         // Geo-blocked
         let html = r#"<div class="geoBlocked">Content blocked</div>"#;
-        assert!(detect_video_unavailable(html)
-            .unwrap()
-            .contains("geo-blocked"));
+        assert!(
+            detect_video_unavailable(html)
+                .unwrap()
+                .contains("geo-blocked")
+        );
 
         // Normal video
         let html = r#"<div class="video">Normal content</div>"#;

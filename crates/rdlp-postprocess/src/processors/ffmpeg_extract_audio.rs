@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 use log::{debug, info};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{get_audio_codec, FFmpegRunner};
+use crate::ffmpeg::{FFmpegRunner, get_audio_codec};
 
 /// Post-processor that extracts audio from video files.
 ///
@@ -102,12 +102,11 @@ impl PostProcessor for FFmpegExtractAudio {
         // Determine target format
         let config = PostProcessConfig::default();
         let target_format = config.audio_format.as_deref().unwrap_or("mp3");
-        let codec_config = get_audio_codec(target_format).ok_or_else(|| {
-            PostProcessError::UnsupportedFormat {
+        let codec_config =
+            get_audio_codec(target_format).ok_or_else(|| PostProcessError::UnsupportedFormat {
                 format: target_format.to_string(),
                 operation: "audio extraction".to_string(),
-            }
-        })?;
+            })?;
 
         info!(
             "Extracting audio from {} to {} format",
@@ -143,7 +142,8 @@ impl PostProcessor for FFmpegExtractAudio {
             }
 
             // Add quality arguments
-            let quality_args = self.build_quality_args(target_format, config.audio_quality.as_deref());
+            let quality_args =
+                self.build_quality_args(target_format, config.audio_quality.as_deref());
             args.extend(quality_args);
         }
 

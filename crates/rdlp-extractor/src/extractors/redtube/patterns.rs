@@ -12,14 +12,15 @@ use regex::Regex;
 /// - Brazilian domain: https://www.redtube.com.br/123456
 /// - Embed URLs: https://embed.redtube.com/?id=123456
 pub static REDTUBE_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"https?://(?:(?:\w+\.)?redtube\.com(?:\.br)?/|embed\.redtube\.com/\?.*\bid=)(?P<id>\d+)")
-        .expect("Valid RedTube URL pattern")
+    Regex::new(
+        r"https?://(?:(?:\w+\.)?redtube\.com(?:\.br)?/|embed\.redtube\.com/\?.*\bid=)(?P<id>\d+)",
+    )
+    .expect("Valid RedTube URL pattern")
 });
 
 /// Regex to extract JavaScript sources object: sources: {"720": "url", ...}
-pub static SOURCES_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"sources\s*:\s*(\{[^}]+\})"#).expect("Valid sources pattern")
-});
+pub static SOURCES_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"sources\s*:\s*(\{[^}]+\})"#).expect("Valid sources pattern"));
 
 /// Regex to extract mediaDefinition array: mediaDefinition: [{...}, ...]
 pub static MEDIA_DEF_PATTERN: Lazy<Regex> = Lazy::new(|| {

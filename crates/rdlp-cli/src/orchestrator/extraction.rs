@@ -1,6 +1,6 @@
 //! Video information extraction
 
-use super::{errors::*, Orchestrator};
+use super::{Orchestrator, errors::*};
 use log::info;
 
 impl Orchestrator {
@@ -16,12 +16,11 @@ impl Orchestrator {
     pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_core::InfoDict> {
         info!("Finding extractor for URL...");
 
-        let extractor = self
-            .extractor_registry
-            .find_extractor(url)
-            .ok_or_else(|| OrchestratorError::NoExtractor {
+        let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
+            OrchestratorError::NoExtractor {
                 url: url.to_string(),
-            })?;
+            }
+        })?;
 
         info!("Using {} extractor", extractor.name());
         info!("Extracting video information...");
@@ -50,15 +49,17 @@ impl Orchestrator {
     /// Returns an error if:
     /// - No extractor is found for the URL
     /// - Extraction fails
-    pub(super) async fn extract_playlist_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
+    pub(super) async fn extract_playlist_info(
+        &self,
+        url: &str,
+    ) -> Result<Vec<rdlp_core::InfoDict>> {
         info!("Finding extractor for URL...");
 
-        let extractor = self
-            .extractor_registry
-            .find_extractor(url)
-            .ok_or_else(|| OrchestratorError::NoExtractor {
+        let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
+            OrchestratorError::NoExtractor {
                 url: url.to_string(),
-            })?;
+            }
+        })?;
 
         info!("Using {} extractor", extractor.name());
         info!("Extracting playlist information...");

@@ -1,6 +1,6 @@
 //! Resume detection and chunk merging functionality
 
-use super::{errors::*, Orchestrator};
+use super::{Orchestrator, errors::*};
 use log::{info, warn};
 use std::path::{Path, PathBuf};
 
@@ -98,10 +98,7 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
 /// Merge chunk files into the output file
 ///
 /// Supports both old-style and new-style chunk patterns
-pub(crate) async fn merge_chunk_files(
-    output_path: &Path,
-    chunk_info: &ChunkInfo,
-) -> Result<u64> {
+pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> Result<u64> {
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, BufWriter};
 
@@ -125,7 +122,9 @@ pub(crate) async fn merge_chunk_files(
     // Merge each chunk in order
     for (idx, chunk_path) in chunk_info.chunk_paths.iter().enumerate() {
         if !chunk_path.exists() {
-            return Err(OrchestratorError::MissingChunk { path: chunk_path.clone() });
+            return Err(OrchestratorError::MissingChunk {
+                path: chunk_path.clone(),
+            });
         }
 
         let mut chunk_file = File::open(chunk_path)

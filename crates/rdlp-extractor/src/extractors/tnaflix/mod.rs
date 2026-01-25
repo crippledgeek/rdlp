@@ -109,7 +109,9 @@ impl InfoExtractor for TNAFlixExtractor {
         let video_data = if is_moviefap {
             // MovieFap: fetch XML from cdn.php
             let cdn_url = cdn_url_opt.ok_or_else(|| {
-                RdlpError::Extraction(format!("Could not find cdn.php URL in MovieFap page: {url}"))
+                RdlpError::Extraction(format!(
+                    "Could not find cdn.php URL in MovieFap page: {url}"
+                ))
             })?;
 
             BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
@@ -154,8 +156,7 @@ impl InfoExtractor for TNAFlixExtractor {
         }
 
         // Build InfoDict with all extracted metadata
-        let mut info =
-            InfoDict::new(video_id, metadata.title, self.name.clone(), url.to_string());
+        let mut info = InfoDict::new(video_id, metadata.title, self.name.clone(), url.to_string());
         info.description = metadata.description;
         info.uploader = metadata.uploader;
         info.thumbnail = metadata.thumbnail;

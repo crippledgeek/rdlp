@@ -1,6 +1,6 @@
 //! State machine types for the download workflow
 
-use super::{errors::*, Orchestrator};
+use super::{Orchestrator, errors::*};
 use log::info;
 use rdlp_core::Format;
 use std::fmt;
@@ -99,10 +99,7 @@ impl fmt::Display for DownloadPhase {
                 write!(f, "downloading ({state})")
             }
             Self::Complete { path } => {
-                let filename = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("file");
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
                 write!(f, "complete: {filename}")
             }
             Self::Cancelled => write!(f, "cancelled by user"),

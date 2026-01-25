@@ -1,13 +1,16 @@
 //! Test utilities for orchestrator integration tests
 
-use rdlp_core::{Downloader, DownloadProgress, DownloadStats, Format, InfoDict, InfoExtractor, ProgressCallback, RdlpError};
+use async_trait::async_trait;
+use rdlp_core::{
+    DownloadProgress, DownloadStats, Downloader, Format, InfoDict, InfoExtractor, ProgressCallback,
+    RdlpError,
+};
 use rdlp_downloader::DownloaderRegistryTrait;
 use rdlp_extractor::ExtractorRegistryTrait;
 use regex::Regex;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use async_trait::async_trait;
 
 type Result<T> = std::result::Result<T, RdlpError>;
 
@@ -20,7 +23,11 @@ pub struct MockExtractor {
 }
 
 impl MockExtractor {
-    pub fn new(name: impl Into<String>, url_pattern: impl Into<String>, info_dict: InfoDict) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        url_pattern: impl Into<String>,
+        info_dict: InfoDict,
+    ) -> Self {
         let url_pattern_str = url_pattern.into();
         // Create a simple regex that matches if the URL contains the pattern
         // Escape special regex characters
@@ -189,7 +196,9 @@ impl Downloader for MockDownloader {
         progress_callback: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         if !self.should_succeed {
-            return Err(RdlpError::Download("Mock download with resume failed".to_string()));
+            return Err(RdlpError::Download(
+                "Mock download with resume failed".to_string(),
+            ));
         }
 
         // Simulate download delay
@@ -198,7 +207,9 @@ impl Downloader for MockDownloader {
         }
 
         // Read existing content or create new
-        let mut content = tokio::fs::read(output_path).await.unwrap_or_else(|_| Vec::new());
+        let mut content = tokio::fs::read(output_path)
+            .await
+            .unwrap_or_else(|_| Vec::new());
 
         // Extend content to full size
         let remaining = self.download_size.saturating_sub(resume_from);
@@ -252,10 +263,7 @@ impl MockDownloaderRegistry {
 
 impl DownloaderRegistryTrait for MockDownloaderRegistry {
     fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
-        self.downloaders
-            .iter()
-            .find(|d| d.supports(url))
-            .cloned()
+        self.downloaders.iter().find(|d| d.supports(url)).cloned()
     }
 
     fn list_downloaders(&self) -> Vec<String> {

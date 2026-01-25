@@ -99,7 +99,10 @@ impl Orchestrator {
         };
 
         // Run the full post-processing pipeline
-        match registry.process(info, result_files.clone(), &pp_config).await {
+        match registry
+            .process(info, result_files.clone(), &pp_config)
+            .await
+        {
             Ok(result) => {
                 if result.files != files {
                     info!("Post-processing complete");

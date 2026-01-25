@@ -93,7 +93,11 @@ impl HlsDownloadState {
     /// - State file is corrupted
     /// - Playlist URL doesn't match (different download)
     /// - Segment count doesn't match (playlist changed)
-    pub async fn load(output_path: &Path, playlist_url: &str, segment_count: usize) -> Option<Self> {
+    pub async fn load(
+        output_path: &Path,
+        playlist_url: &str,
+        segment_count: usize,
+    ) -> Option<Self> {
         let state_path = Self::state_file_path(output_path);
 
         if !state_path.exists() {
@@ -152,9 +156,7 @@ impl HlsDownloadState {
 
         let completed = state.completed_segments.len();
         let mb = state.total_bytes_downloaded as f64 / (1024.0 * 1024.0);
-        info!(
-            "Resuming HLS download: {completed}/{segment_count} segments completed ({mb:.1} MB)"
-        );
+        info!("Resuming HLS download: {completed}/{segment_count} segments completed ({mb:.1} MB)");
 
         Some(state)
     }
@@ -167,8 +169,7 @@ impl HlsDownloadState {
         let temp_path = state_path.with_extension("json.tmp");
 
         // Serialize to JSON
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 
         // Write to temp file
         let mut file = File::create(&temp_path).await?;
@@ -178,7 +179,11 @@ impl HlsDownloadState {
         // Atomic rename
         tokio::fs::rename(&temp_path, &state_path).await?;
 
-        debug!("Saved HLS state: {}/{} segments", self.completed_segments.len(), self.segment_count);
+        debug!(
+            "Saved HLS state: {}/{} segments",
+            self.completed_segments.len(),
+            self.segment_count
+        );
         Ok(())
     }
 
@@ -290,11 +295,9 @@ mod tests {
         state.save(&output_path).await.unwrap();
 
         // Load state
-        let loaded = HlsDownloadState::load(
-            &output_path,
-            "https://example.com/playlist.m3u8",
-            100
-        ).await.unwrap();
+        let loaded = HlsDownloadState::load(&output_path, "https://example.com/playlist.m3u8", 100)
+            .await
+            .unwrap();
 
         assert_eq!(loaded.completed_segments.len(), 2);
         assert!(loaded.is_completed(0));
@@ -312,11 +315,8 @@ mod tests {
         state.save(&output_path).await.unwrap();
 
         // Load with different URL should fail
-        let loaded = HlsDownloadState::load(
-            &output_path,
-            "https://example.com/new.m3u8",
-            100
-        ).await;
+        let loaded =
+            HlsDownloadState::load(&output_path, "https://example.com/new.m3u8", 100).await;
 
         assert!(loaded.is_none());
     }
@@ -334,8 +334,9 @@ mod tests {
         let loaded = HlsDownloadState::load(
             &output_path,
             "https://example.com/playlist.m3u8",
-            200  // Different count
-        ).await;
+            200, // Different count
+        )
+        .await;
 
         assert!(loaded.is_none());
     }
@@ -367,7 +368,9 @@ mod tests {
 
         // URL with query parameters - extracts path without query
         assert_eq!(
-            extract_url_path("https://cdn.example.com/hls/master.m3u8?token=abc123&expires=1706140800"),
+            extract_url_path(
+                "https://cdn.example.com/hls/master.m3u8?token=abc123&expires=1706140800"
+            ),
             "/hls/master.m3u8"
         );
 
@@ -397,7 +400,7 @@ mod tests {
         // Create state with URL from one CDN edge server
         let mut state = HlsDownloadState::new(
             "https://ev-h-ph.rdtcdn.com/hls/videos/123/master.m3u8?token=abc123".to_string(),
-            100
+            100,
         );
         state.mark_completed(0, 1000);
         state.mark_completed(1, 1000);
@@ -407,10 +410,14 @@ mod tests {
         let loaded = HlsDownloadState::load(
             &output_path,
             "https://ev-a-ph.rdtcdn.com/hls/videos/123/master.m3u8?token=xyz789",
-            100
-        ).await;
+            100,
+        )
+        .await;
 
-        assert!(loaded.is_some(), "Should resume with different CDN hostname");
+        assert!(
+            loaded.is_some(),
+            "Should resume with different CDN hostname"
+        );
         let loaded = loaded.unwrap();
         assert_eq!(loaded.completed_segments.len(), 2);
     }

@@ -61,7 +61,9 @@ mod tests {
 
     #[test]
     fn test_moviefap_url_pattern() {
-        assert!(MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/abc123def/title.html"));
+        assert!(
+            MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/abc123def/title.html")
+        );
         assert!(!MOVIEFAP_URL_PATTERN.is_match("https://tnaflix.com/video/123"));
     }
 

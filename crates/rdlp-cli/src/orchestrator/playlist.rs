@@ -3,7 +3,7 @@
 //! Provides batch download support with progress tracking, resume capability,
 //! and graceful degradation for failed videos.
 
-use super::{OrchestratorError, Orchestrator, Result};
+use super::{Orchestrator, OrchestratorError, Result};
 use log::{error, info};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -219,7 +219,9 @@ impl Orchestrator {
 
         if downloaded.is_empty() {
             Err(OrchestratorError::ExtractionFailed(
-                rdlp_core::RdlpError::Extraction("All playlist videos failed to download".to_string()),
+                rdlp_core::RdlpError::Extraction(
+                    "All playlist videos failed to download".to_string(),
+                ),
             ))
         } else {
             Ok(Some(downloaded))
@@ -272,10 +274,7 @@ impl Orchestrator {
             let mut found_partial = false;
 
             for file_path in &files {
-                let filename = file_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let filename = file_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
                 // Check for .part files (HLS segments or HTTP chunks)
                 // HLS segments: filename.part{n} (no extension before .part)

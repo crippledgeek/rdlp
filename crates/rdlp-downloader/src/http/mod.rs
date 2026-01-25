@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use log::{debug, info, warn};
 use rdlp_core::{
-    check_http_response, retry_with_backoff, DownloadProgress, DownloadStats, Downloader,
-    ProgressCallback, Result, RetryConfig, RdlpError,
+    DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
+    check_http_response, retry_with_backoff,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -117,10 +117,8 @@ impl HttpDownloader {
         chunk_path: &Path,
         progress_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) -> Result<u64> {
-        let response = retry_with_backoff(
-            &self.config.retry_config,
-            "HTTP GET (range)",
-            |_attempt| {
+        let response =
+            retry_with_backoff(&self.config.retry_config, "HTTP GET (range)", |_attempt| {
                 let client = self.client.clone();
                 let url = url.to_string();
                 async move {
@@ -134,9 +132,8 @@ impl HttpDownloader {
                     check_http_response(&response)?;
                     Ok(response)
                 }
-            },
-        )
-        .await?;
+            })
+            .await?;
 
         let file = File::create(chunk_path).await.map_err(RdlpError::Io)?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
@@ -152,10 +149,7 @@ impl HttpDownloader {
             downloaded += chunk.len() as u64;
 
             if let Some(ref counter) = progress_counter {
-                counter.fetch_add(
-                    chunk.len() as u64,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
+                counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -372,10 +366,8 @@ impl Downloader for HttpDownloader {
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
 
-        let response = retry_with_backoff(
-            &self.config.retry_config,
-            "HTTP GET (resume)",
-            |_attempt| {
+        let response =
+            retry_with_backoff(&self.config.retry_config, "HTTP GET (resume)", |_attempt| {
                 let client = self.client.clone();
                 let url = url.to_string();
                 async move {
@@ -397,9 +389,8 @@ impl Downloader for HttpDownloader {
 
                     Ok(response)
                 }
-            },
-        )
-        .await?;
+            })
+            .await?;
 
         let total_size = if let Some(content_range) = response.headers().get("content-range") {
             if let Ok(range_str) = content_range.to_str() {

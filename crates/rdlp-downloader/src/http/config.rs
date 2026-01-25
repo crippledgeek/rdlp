@@ -3,8 +3,8 @@
 //! Provides configuration for HTTP downloads including buffer sizes,
 //! retry settings, and concurrent download settings.
 
-use rdlp_core::RetryConfig;
 use crate::chunking::ChunkSizeStrategy;
+use rdlp_core::RetryConfig;
 
 /// Downloader configuration (shared across clones via Arc)
 ///

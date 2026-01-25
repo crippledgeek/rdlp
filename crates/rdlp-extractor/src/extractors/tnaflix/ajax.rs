@@ -4,7 +4,7 @@
 //! - EMPFlix: AJAX endpoint for video player HTML
 //! - MovieFap: XML endpoint for video sources
 
-use rdlp_core::{check_http_response, ExtractionContext, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
 use scraper::Html;
 
 use crate::base::common::BaseExtractor;

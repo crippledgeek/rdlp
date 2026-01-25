@@ -41,10 +41,10 @@ pub use rdlp_types::{
 };
 
 // Re-export error types and utilities
-pub use error::{check_http_response, Result, RdlpError};
+pub use error::{RdlpError, Result, check_http_response};
 
 // Re-export retry utilities
-pub use retry::{is_retryable_error, retry_with_backoff, RetryConfig};
+pub use retry::{RetryConfig, is_retryable_error, retry_with_backoff};
 
 // Re-export traits
 pub use traits::{

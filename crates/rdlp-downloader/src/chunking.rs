@@ -80,8 +80,8 @@ impl fmt::Display for ChunkSizeStrategy {
 /// assert_eq!(chunk_size_for_file(5 * 1024 * 1024 * 1024), 8 * 1024 * 1024); // 5 GB → 8 MB
 /// ```
 pub fn chunk_size_for_file(file_size: u64) -> usize {
-    const MIN_CHUNK: u64 = 64 * 1024;        // 64 KB (NTFS cluster size)
-    const MAX_CHUNK: u64 = 8 * 1024 * 1024;  // 8 MB (reasonable upper bound)
+    const MIN_CHUNK: u64 = 64 * 1024; // 64 KB (NTFS cluster size)
+    const MAX_CHUNK: u64 = 8 * 1024 * 1024; // 8 MB (reasonable upper bound)
 
     // Aim for ~1024 chunks per file
     let target = file_size / 1024;
@@ -101,7 +101,10 @@ pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, 
         ChunkSizeStrategy::Auto => chunk_size_for_file(file_size),
         ChunkSizeStrategy::Fixed(size) => {
             // Validate power of two
-            assert!(size.is_power_of_two(), "Fixed chunk size must be power of two");
+            assert!(
+                size.is_power_of_two(),
+                "Fixed chunk size must be power of two"
+            );
             size
         }
         ChunkSizeStrategy::Legacy { chunk_count } => {
@@ -152,18 +155,24 @@ mod tests {
     #[test]
     fn test_chunk_size_huge_files() {
         // Files > 8 GB should cap at 8 MB chunks
-        assert_eq!(chunk_size_for_file(20 * 1024 * 1024 * 1024), 8 * 1024 * 1024);
-        assert_eq!(chunk_size_for_file(100 * 1024 * 1024 * 1024), 8 * 1024 * 1024);
+        assert_eq!(
+            chunk_size_for_file(20 * 1024 * 1024 * 1024),
+            8 * 1024 * 1024
+        );
+        assert_eq!(
+            chunk_size_for_file(100 * 1024 * 1024 * 1024),
+            8 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_all_chunk_sizes_are_power_of_two() {
         let test_sizes = vec![
-            1024 * 1024,       // 1 MB
-            10 * 1024 * 1024,      // 10 MB
-            100 * 1024 * 1024,     // 100 MB
-            500 * 1024 * 1024,     // 500 MB
-            1024 * 1024 * 1024,    // 1 GB
+            1024 * 1024,            // 1 MB
+            10 * 1024 * 1024,       // 10 MB
+            100 * 1024 * 1024,      // 100 MB
+            500 * 1024 * 1024,      // 500 MB
+            1024 * 1024 * 1024,     // 1 GB
             5 * 1024 * 1024 * 1024, // 5 GB
         ];
 
@@ -194,7 +203,7 @@ mod tests {
         // Zero-size files should still return valid chunk size
         let (chunk_size, total_chunks) = calculate_chunks(0, ChunkSizeStrategy::Auto);
         assert_eq!(chunk_size, 64 * 1024); // Min chunk size
-        assert_eq!(total_chunks, 0);        // No chunks needed
+        assert_eq!(total_chunks, 0); // No chunks needed
     }
 
     #[test]
@@ -211,7 +220,7 @@ mod tests {
         let file_size = 1024 * 1024 * 1024; // 1 GB
         let (chunk_size, total_chunks) = calculate_chunks(
             file_size,
-            ChunkSizeStrategy::Fixed(2 * 1024 * 1024) // 2 MB
+            ChunkSizeStrategy::Fixed(2 * 1024 * 1024), // 2 MB
         );
 
         assert_eq!(chunk_size, 2 * 1024 * 1024);
@@ -227,10 +236,8 @@ mod tests {
     #[test]
     fn test_calculate_chunks_legacy() {
         let file_size = 1024 * 1024 * 1024; // 1 GB
-        let (chunk_size, total_chunks) = calculate_chunks(
-            file_size,
-            ChunkSizeStrategy::Legacy { chunk_count: 4 }
-        );
+        let (chunk_size, total_chunks) =
+            calculate_chunks(file_size, ChunkSizeStrategy::Legacy { chunk_count: 4 });
 
         assert_eq!(total_chunks, 4);
         assert_eq!(chunk_size as u64 * 4, file_size);

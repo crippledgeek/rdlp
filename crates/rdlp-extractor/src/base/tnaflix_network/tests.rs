@@ -394,9 +394,8 @@ fn test_extract_thumbnail_with_twitter_card() {
 fn test_extract_thumbnail_with_link_rel() {
     let base = TnaFlixNetworkBase::new();
 
-    let html = Html::parse_document(
-        r#"<link rel="image_src" href="https://example.com/link-thumb.jpg">"#,
-    );
+    let html =
+        Html::parse_document(r#"<link rel="image_src" href="https://example.com/link-thumb.jpg">"#);
 
     // Should use link rel as last fallback
     assert_eq!(
@@ -422,7 +421,10 @@ fn test_json_ld_parsing_ignores_non_video_objects() {
     );
 
     // Should ignore non-VideoObject JSON-LD and fall back to input field
-    assert_eq!(base.extract_title(&html), Some("Fallback Title".to_string()));
+    assert_eq!(
+        base.extract_title(&html),
+        Some("Fallback Title".to_string())
+    );
 }
 
 #[test]
@@ -493,7 +495,7 @@ fn test_parse_iso8601_duration_invalid() {
 
     // Invalid format
     assert_eq!(base.parse_iso8601_duration("1H2M3S"), None); // Missing PT prefix
-    assert_eq!(base.parse_iso8601_duration("PT1X2M"), None);  // Invalid character
+    assert_eq!(base.parse_iso8601_duration("PT1X2M"), None); // Invalid character
 }
 
 #[test]
@@ -532,9 +534,9 @@ fn test_parse_iso8601_date_with_timezone() {
 fn test_parse_iso8601_date_invalid() {
     let base = TnaFlixNetworkBase::new();
 
-    assert_eq!(base.parse_iso8601_date("2024-1-5"), None);      // Wrong format
-    assert_eq!(base.parse_iso8601_date("24-01-15"), None);      // Wrong year length
-    assert_eq!(base.parse_iso8601_date("2024/01/15"), None);    // Wrong separator
+    assert_eq!(base.parse_iso8601_date("2024-1-5"), None); // Wrong format
+    assert_eq!(base.parse_iso8601_date("24-01-15"), None); // Wrong year length
+    assert_eq!(base.parse_iso8601_date("2024/01/15"), None); // Wrong separator
 }
 
 #[test]
@@ -734,15 +736,31 @@ fn test_extract_metadata_with_full_json_ld() {
 
     // Check all fields were extracted
     assert_eq!(metadata.title, "Awesome Video");
-    assert_eq!(metadata.description, Some("This is a great video".to_string()));
+    assert_eq!(
+        metadata.description,
+        Some("This is a great video".to_string())
+    );
     assert_eq!(metadata.uploader, Some("John Doe".to_string()));
-    assert_eq!(metadata.thumbnail, Some("https://example.com/thumb1.jpg".to_string()));
+    assert_eq!(
+        metadata.thumbnail,
+        Some("https://example.com/thumb1.jpg".to_string())
+    );
     assert_eq!(metadata.thumbnails.as_ref().unwrap().len(), 2);
     assert_eq!(metadata.duration, Some(5445.0)); // 1h 30m 45s = 5445 seconds
     assert_eq!(metadata.upload_date, Some("20240115".to_string()));
     assert_eq!(metadata.view_count, Some(50000));
-    assert_eq!(metadata.tags, Some(vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()]));
-    assert_eq!(metadata.categories, Some(vec!["Comedy".to_string(), "Action".to_string()]));
+    assert_eq!(
+        metadata.tags,
+        Some(vec![
+            "tag1".to_string(),
+            "tag2".to_string(),
+            "tag3".to_string()
+        ])
+    );
+    assert_eq!(
+        metadata.categories,
+        Some(vec!["Comedy".to_string(), "Action".to_string()])
+    );
 }
 
 #[test]

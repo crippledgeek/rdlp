@@ -6,12 +6,12 @@ mod test_utils;
 
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
+use std::sync::Arc;
 use tempfile::TempDir;
 use test_utils::{
-    create_test_info_dict, MockDownloader, MockDownloaderRegistry, MockExtractor,
-    MockExtractorRegistry,
+    MockDownloader, MockDownloaderRegistry, MockExtractor, MockExtractorRegistry,
+    create_test_info_dict,
 };
-use std::sync::Arc;
 
 /// Helper function to create a test config with a temporary directory
 fn create_test_config(temp_dir: &TempDir) -> Config {
@@ -152,9 +152,9 @@ async fn test_full_download_workflow_with_mocks() {
     // Create mock downloader
     let downloader = Arc::new(MockDownloader::new(
         "mock",
-        true,  // should_succeed
+        true,        // should_succeed
         1024 * 1024, // 1 MB file
-        100,   // 100ms delay
+        100,         // 100ms delay
     ));
 
     let mut downloader_registry = MockDownloaderRegistry::new();
@@ -261,10 +261,8 @@ async fn test_download_failure_handling() {
 
     // Create failing mock downloader
     let downloader = Arc::new(MockDownloader::new(
-        "mock",
-        false, // should_succeed = false
-        0,
-        0,
+        "mock", false, // should_succeed = false
+        0, 0,
     ));
 
     let mut downloader_registry = MockDownloaderRegistry::new();
@@ -359,6 +357,10 @@ async fn test_multiple_format_selection() {
     let result = orch.download("mock://example.com/multi123", false).await;
 
     // Verify download succeeded
-    assert!(result.is_ok(), "Download with format selection should succeed: {:?}", result.as_ref().err());
+    assert!(
+        result.is_ok(),
+        "Download with format selection should succeed: {:?}",
+        result.as_ref().err()
+    );
     assert!(result.unwrap().is_some(), "Should return output path");
 }

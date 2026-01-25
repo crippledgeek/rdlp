@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Write};
 use std::sync::OnceLock;
 
 /// Video/audio format information
@@ -185,10 +185,7 @@ impl Format {
     /// Check if this is a DASH format
     pub fn is_dash(&self) -> bool {
         self.protocol.contains("dash")
-            || self
-                .container
-                .as_ref()
-                .is_some_and(|c| c.contains("dash"))
+            || self.container.as_ref().is_some_and(|c| c.contains("dash"))
     }
 
     /// Check if this is an HLS format
@@ -238,47 +235,86 @@ impl Format {
     ///
     /// Returns a formatted string suitable for display in selection menus:
     /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
+    ///
+    /// Optimized to minimize heap allocations using pre-allocated buffer.
     pub fn table_row(&self) -> String {
-        let quality = self.format_note.as_deref().unwrap_or("unknown");
+        // Pre-allocate buffer for typical row length (~80 chars)
+        let mut buf = String::with_capacity(80);
 
-        let resolution = self
-            .resolution_string()
-            .unwrap_or_else(|| "N/A".to_string());
+        let quality = self.format_note.as_deref().unwrap_or("unknown");
+        let _ = write!(buf, "{quality:<12} | ");
+
+        // Resolution: avoid intermediate String allocation
+        match (self.width, self.height) {
+            (Some(w), Some(h)) => {
+                let _ = write!(buf, "{w}x{h}");
+                // Pad to 10 chars
+                let len = buf.len() - 15; // account for "quality | "
+                for _ in len..10 {
+                    buf.push(' ');
+                }
+            }
+            _ => buf.push_str("N/A       "),
+        }
+        buf.push_str(" | ");
 
         // Check if this is an HLS format (also check URL for .m3u8)
         let is_hls = self.is_hls() || self.url.contains(".m3u8");
 
-        // For HLS: show segment count if available, otherwise "HLS stream"
-        // For non-HLS: show exact size if available, otherwise approximate size with ~ prefix
-        let size = if is_hls {
+        // Size column: write directly to buffer
+        let size_start = buf.len();
+        if is_hls {
             if let Some(ref fragments) = self.fragments {
-                format!("{} segments", fragments.len())
+                let _ = write!(buf, "{} segments", fragments.len());
             } else {
-                "HLS stream".to_string()
+                buf.push_str("HLS stream");
             }
         } else if let Some(filesize) = self.filesize {
-            format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
+            let _ = write!(buf, "{:.1} MB", filesize as f64 / (1024.0 * 1024.0));
         } else if let Some(filesize_approx) = self.filesize_approx {
-            format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
+            let _ = write!(buf, "~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0));
         } else {
-            "Unknown".to_string()
-        };
+            buf.push_str("Unknown");
+        }
+        // Pad size to 12 chars
+        let size_len = buf.len() - size_start;
+        for _ in size_len..12 {
+            buf.push(' ');
+        }
+        buf.push_str(" | ");
 
-        // For HLS, show "HLS" as the format type instead of the extension
-        let format_type = if is_hls {
-            "HLS".to_string()
+        // Format type column: avoid to_uppercase() allocation for HLS
+        let format_start = buf.len();
+        if is_hls {
+            buf.push_str("HLS");
         } else {
-            self.ext.to_uppercase()
-        };
+            // Write uppercase directly
+            for c in self.ext.chars() {
+                buf.push(c.to_ascii_uppercase());
+            }
+        }
+        // Pad to 6 chars
+        let format_len = buf.len() - format_start;
+        for _ in format_len..6 {
+            buf.push(' ');
+        }
+        buf.push_str(" | ");
 
-        let codecs = match (&self.vcodec, &self.acodec) {
-            (Some(v), Some(a)) => format!("{v}/{a}"),
-            (Some(v), None) => format!("{v} (video only)"),
-            (None, Some(a)) => format!("{a} (audio only)"),
-            (None, None) => "Unknown".to_string(),
-        };
+        // Codecs column: write directly
+        match (&self.vcodec, &self.acodec) {
+            (Some(v), Some(a)) => {
+                let _ = write!(buf, "{v}/{a}");
+            }
+            (Some(v), None) => {
+                let _ = write!(buf, "{v} (video only)");
+            }
+            (None, Some(a)) => {
+                let _ = write!(buf, "{a} (audio only)");
+            }
+            (None, None) => buf.push_str("Unknown"),
+        }
 
-        format!("{quality:<12} | {resolution:<10} | {size:<12} | {format_type:<6} | {codecs}")
+        buf
     }
 }
 
@@ -378,32 +414,24 @@ impl FormatSelector {
                 }
             }
             "bestvideo" => {
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| f.has_video())
-                    .max_by(|a, b| {
-                        a.height.cmp(&b.height).then(
-                            a.vbr
-                                .partial_cmp(&b.vbr)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        )
-                    })
-                {
+                if let Some(best) = formats.iter().filter(|f| f.has_video()).max_by(|a, b| {
+                    a.height.cmp(&b.height).then(
+                        a.vbr
+                            .partial_cmp(&b.vbr)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
+                }) {
                     vec![best]
                 } else {
                     Vec::new()
                 }
             }
             "bestaudio" => {
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| f.has_audio())
-                    .max_by(|a, b| {
-                        a.abr
-                            .partial_cmp(&b.abr)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                {
+                if let Some(best) = formats.iter().filter(|f| f.has_audio()).max_by(|a, b| {
+                    a.abr
+                        .partial_cmp(&b.abr)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) {
                     vec![best]
                 } else {
                     Vec::new()
@@ -412,11 +440,14 @@ impl FormatSelector {
             _ => {
                 // Default: return best format
                 if let Some(best) = formats.iter().max_by(|a, b| {
-                    a.quality.cmp(&b.quality).then(a.height.cmp(&b.height)).then(
-                        a.tbr
-                            .partial_cmp(&b.tbr)
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                    )
+                    a.quality
+                        .cmp(&b.quality)
+                        .then(a.height.cmp(&b.height))
+                        .then(
+                            a.tbr
+                                .partial_cmp(&b.tbr)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
                 }) {
                     vec![best]
                 } else {

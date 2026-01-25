@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 use log::{debug, info};
+use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::ffmpeg::FFmpegRunner;
 
@@ -196,15 +196,24 @@ mod tests {
 
             // Default config has merge_output_format=mp4, so always returns mp4
             let config = PostProcessConfig::default();
-            assert_eq!(merger.determine_output_format(&config, Some("mp4"), Some("m4a")), "mp4");
-            assert_eq!(merger.determine_output_format(&config, Some("webm"), Some("opus")), "mp4");
+            assert_eq!(
+                merger.determine_output_format(&config, Some("mp4"), Some("m4a")),
+                "mp4"
+            );
+            assert_eq!(
+                merger.determine_output_format(&config, Some("webm"), Some("opus")),
+                "mp4"
+            );
 
             // Without explicit format, uses codec-based detection
             let config_no_format = PostProcessConfig {
                 merge_output_format: None,
                 ..Default::default()
             };
-            assert_eq!(merger.determine_output_format(&config_no_format, Some("webm"), Some("opus")), "mkv");
+            assert_eq!(
+                merger.determine_output_format(&config_no_format, Some("webm"), Some("opus")),
+                "mkv"
+            );
         }
     }
 

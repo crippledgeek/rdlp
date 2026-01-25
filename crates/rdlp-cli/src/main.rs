@@ -61,7 +61,6 @@ struct Args {
     interactive: bool,
 
     // === Post-processing options ===
-
     /// Extract audio only (requires FFmpeg)
     #[arg(short = 'x', long)]
     extract_audio: bool,
@@ -132,7 +131,11 @@ async fn async_main() -> Result<()> {
         progress: !args.quiet,
         // Post-processing options
         extract_audio: args.extract_audio,
-        audio_format: if args.extract_audio { Some(args.audio_format) } else { None },
+        audio_format: if args.extract_audio {
+            Some(args.audio_format)
+        } else {
+            None
+        },
         audio_quality: args.audio_quality,
         embed_metadata: args.embed_metadata,
         embed_thumbnail: args.embed_thumbnail,
@@ -165,9 +168,9 @@ async fn async_main() -> Result<()> {
     }
 
     // Check if URL is provided
-    let url = args.url.ok_or_else(|| {
-        anyhow::anyhow!("No URL provided. Use --help for usage information.")
-    })?;
+    let url = args
+        .url
+        .ok_or_else(|| anyhow::anyhow!("No URL provided. Use --help for usage information."))?;
 
     // Download the video
     if args.simulate {

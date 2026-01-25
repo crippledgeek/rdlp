@@ -12,6 +12,6 @@ pub mod extractor;
 /// Post-processing pipeline traits
 pub mod postprocessor;
 
-pub use downloader::{Downloader, DownloadProgress, DownloadStats, ProgressCallback};
+pub use downloader::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 pub use extractor::{CookieJar, ExtractionContext, InfoExtractor, JsEngine};
 pub use postprocessor::{PostProcessConfig, PostProcessResult, PostProcessor};
