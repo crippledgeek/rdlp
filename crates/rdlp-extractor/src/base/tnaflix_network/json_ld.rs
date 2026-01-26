@@ -47,16 +47,52 @@ pub(crate) enum JsonLdThumbnail {
     Multiple(Vec<String>),
 }
 
-/// JSON-LD author structure
+/// JSON-LD author can be a string or an object
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonLdAuthor {
+#[serde(untagged)]
+pub(crate) enum JsonLdAuthor {
+    /// Simple string author (e.g., "Hope Heaven")
+    String(String),
+    /// Object author with name, url, etc.
+    Object(JsonLdAuthorObject),
+}
+
+/// JSON-LD author object structure
+#[derive(Debug, Deserialize)]
+pub(crate) struct JsonLdAuthorObject {
     #[serde(rename = "@type")]
-    #[allow(dead_code)] // Deserialized from JSON-LD but not currently used
+    #[allow(dead_code)]
     pub author_type: Option<String>,
     pub name: Option<String>,
     pub url: Option<String>,
     #[serde(rename = "@id")]
     pub id: Option<String>,
+}
+
+impl JsonLdAuthor {
+    /// Get the author name regardless of format
+    pub fn name(&self) -> Option<String> {
+        match self {
+            JsonLdAuthor::String(s) => Some(s.clone()),
+            JsonLdAuthor::Object(obj) => obj.name.clone(),
+        }
+    }
+
+    /// Get the author URL if available
+    pub fn url(&self) -> Option<String> {
+        match self {
+            JsonLdAuthor::String(_) => None,
+            JsonLdAuthor::Object(obj) => obj.url.clone(),
+        }
+    }
+
+    /// Get the author ID if available
+    pub fn id(&self) -> Option<String> {
+        match self {
+            JsonLdAuthor::String(_) => None,
+            JsonLdAuthor::Object(obj) => obj.id.clone(),
+        }
+    }
 }
 
 /// JSON-LD interaction statistic for view counts, likes, etc.

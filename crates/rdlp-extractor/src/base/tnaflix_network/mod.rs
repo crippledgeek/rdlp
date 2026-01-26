@@ -202,7 +202,7 @@ impl TnaFlixNetworkBase {
         // Strategy 1: JSON-LD author
         if let Some(json_ld) = json_ld::extract_json_ld(html) {
             if let Some(author) = json_ld.author {
-                if let Some(name) = author.name {
+                if let Some(name) = author.name() {
                     if !name.is_empty() {
                         return Some(name);
                     }
@@ -298,10 +298,10 @@ impl TnaFlixNetworkBase {
             if let Some(ref author) = json_ld.author {
                 // Use author name as uploader if not already set
                 if metadata.uploader.is_none() {
-                    metadata.uploader = author.name.clone();
+                    metadata.uploader = author.name();
                 }
-                metadata.uploader_url = author.url.clone();
-                metadata.uploader_id = author.id.clone();
+                metadata.uploader_url = author.url();
+                metadata.uploader_id = author.id();
             }
         }
 
