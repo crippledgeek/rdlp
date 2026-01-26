@@ -2,66 +2,50 @@
 
 Thank you for your interest in contributing to rdlp! We welcome contributions from everyone, whether you're fixing bugs, adding features, improving documentation, or adding support for new sites.
 
-## 🎯 Ways to Contribute
+## Ways to Contribute
 
-### 🐛 Report Bugs
+### Report Bugs
 
-Found a bug? Please [open an issue](https://github.com/yourusername/rdlp/issues/new) with:
+Found a bug? Please open an issue with:
 - Clear description of the problem
 - Steps to reproduce
 - Expected vs actual behavior
 - Your environment (OS, Rust version)
 - Relevant logs (use `-v` flag for verbose output)
 
-### 💡 Suggest Features
+### Suggest Features
 
-Have an idea? [Open an issue](https://github.com/yourusername/rdlp/issues/new) with:
+Have an idea? Open an issue with:
 - Clear description of the feature
 - Use cases and benefits
 - Possible implementation approach
-- Willingness to implement it yourself
 
-### 📝 Improve Documentation
-
-Documentation improvements are always welcome:
-- Fix typos or unclear explanations
-- Add examples and use cases
-- Improve API documentation
-- Write guides or tutorials
-
-### 🏗️ Add Site Extractors
+### Add Site Extractors
 
 One of the best ways to contribute is adding support for new sites. See [Adding a New Extractor](#adding-a-new-extractor) below.
 
-### 🧪 Write Tests
+### Write Tests
 
 More test coverage is always helpful:
 - Unit tests for individual functions
 - Integration tests for full workflows
 - Edge case tests
-- Performance benchmarks
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
 - Rust 1.85+ (2024 Edition)
 - Git
+- FFmpeg (for post-processing features)
 - Basic understanding of async Rust (tokio)
 
 ### Setup Development Environment
 
 ```bash
-# Fork the repository on GitHub
-# Then clone your fork
+# Clone the repository
 git clone https://github.com/YOUR_USERNAME/rdlp.git
 cd rdlp
-
-# Add upstream remote
-git remote add upstream https://github.com/yourusername/rdlp.git
-
-# Create a branch for your changes
-git checkout -b feature/my-feature
 
 # Build the project
 cargo build
@@ -76,15 +60,50 @@ cargo clippy
 cargo fmt
 ```
 
-## 📋 Development Workflow
+## Project Architecture
 
-### 1. Pick an Issue
+### Workspace Crates
 
-- Browse [open issues](https://github.com/yourusername/rdlp/issues)
-- Look for issues labeled `good first issue` if you're new
-- Comment on the issue to let others know you're working on it
+| Crate | Purpose |
+|-------|---------|
+| `rdlp-core` | Core traits (`InfoExtractor`, `Downloader`, `PostProcessor`), error types |
+| `rdlp-types` | Shared types (`InfoDict`, `Format`, `Config`, `Thumbnail`) |
+| `rdlp-http` | Centralized HTTP client factory with connection pooling |
+| `rdlp-security` | URL validation, SSRF protection, input sanitization |
+| `rdlp-extractor` | Site extractors with base extractor framework |
+| `rdlp-downloader` | HTTP + HLS downloaders with parallel chunking |
+| `rdlp-jsinterp` | JavaScript interpretation for encrypted content |
+| `rdlp-postprocess` | FFmpeg pipeline (merge, audio extract, metadata) |
+| `rdlp-cookies` | Browser cookie extraction |
+| `rdlp-plugin` | Plugin system architecture |
+| `rdlp-cli` | CLI application and download orchestrator |
 
-### 2. Create a Branch
+### Three-Stage Pipeline
+
+1. **Extract**: URL -> metadata -> format list (`InfoExtractor` trait)
+2. **Download**: Select format -> parallel chunks/HLS segments -> file (`Downloader` trait)
+3. **Post-process**: FFmpeg transforms -> cleanup (`PostProcessor` trait)
+
+### Extractor Architecture
+
+Extractors follow a three-tier architecture:
+
+```
+Tier 1: BaseExtractor          (common utilities for ALL extractors)
+Tier 2: TnaFlixNetworkBase     (shared logic for site families)
+Tier 3: Site Extractors        (individual site implementations)
+```
+
+**Currently supported extractors:**
+- TNAFlix (via `TNAFlixExtractor`)
+- EMPFlix (via `TNAFlixExtractor`)
+- MovieFap (via `TNAFlixExtractor`)
+- RedTube (`RedTubeExtractor`)
+- PornHub (`PornHubExtractor`) - includes playlist support
+
+## Development Workflow
+
+### 1. Create a Branch
 
 ```bash
 git checkout -b feature/my-feature
@@ -92,21 +111,20 @@ git checkout -b feature/my-feature
 git checkout -b fix/bug-description
 ```
 
-### 3. Make Changes
+### 2. Make Changes
 
 - Follow the [Code Style Guide](#code-style-guide)
 - Write tests for new functionality
-- Update documentation if needed
 - Keep commits atomic and focused
 
-### 4. Test Your Changes
+### 3. Test Your Changes
 
 ```bash
 # Run all tests
 cargo test
 
-# Run specific test
-cargo test test_name
+# Run tests for a specific crate
+cargo test -p rdlp-extractor
 
 # Run tests with output
 cargo test -- --nocapture
@@ -117,203 +135,307 @@ cargo clippy -- -W clippy::all
 # Format code
 cargo fmt
 
-# Build in release mode
+# Build release
 cargo build --release
 ```
 
-### 5. Commit Your Changes
+### 4. Commit Your Changes
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```bash
-git add .
-git commit -m "feat: add YouTube extractor"
-# or
-git commit -m "fix: handle 404 errors in HTTP downloader"
-# or
+git commit -m "feat(extractor): add YouTube extractor"
+git commit -m "fix(downloader): handle 404 errors in HTTP downloader"
 git commit -m "docs: improve installation instructions"
 ```
 
-**Commit Types:**
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `docs:` - Documentation only
-- `test:` - Adding or updating tests
-- `refactor:` - Code change that neither fixes a bug nor adds a feature
-- `perf:` - Performance improvement
-- `chore:` - Maintenance tasks
+**Commit types:** `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`
 
-### 6. Push and Create Pull Request
+**Scope examples:** `extractor`, `downloader`, `cli`, `core`, `postprocess`
 
-```bash
-git push origin feature/my-feature
+## Adding a New Extractor
+
+### Legal Requirements
+
+Before adding an extractor, verify the site's Terms of Service. Contributors and users must ensure compliance with applicable laws and site ToS.
+
+### Step 1: Create the Extractor Module
+
+Create a new directory under `crates/rdlp-extractor/src/extractors/`:
+
+```
+extractors/mysite/
+  mod.rs        # Main extractor implementation
+  patterns.rs   # URL regex patterns
+  formats.rs    # Format extraction logic (optional)
 ```
 
-Then open a Pull Request on GitHub with:
-- Clear title describing the change
-- Description of what changed and why
-- Reference to related issues (`Fixes #123`)
-- Screenshots/examples if applicable
+### Step 2: Define URL Patterns
 
-### 7. Code Review
-
-- Address reviewer feedback
-- Push additional commits if needed
-- Once approved, a maintainer will merge your PR
-
-## 🏗️ Adding a New Extractor
-
-**⚖️ Legal Requirements**: Before adding an extractor, verify the site's Terms of Service:
-
-✅ **Sites we support:**
-- Explicitly allow downloading (e.g., Archive.org, Vimeo with privacy settings)
-- Don't prohibit downloading in their ToS
-- Designed for content distribution (creator platforms)
-- Educational/archival purposes explicitly allowed
-
-❌ **Sites we avoid:**
-- Explicit ToS prohibitions against downloading
-- Major streaming platforms with DRM
-- Sites with technical anti-download measures
-- Commercial services with subscription-only content
-
-**User responsibility**: Contributors and users must ensure compliance with applicable laws and site ToS.
-
-### Template
-
-Use `crates/rdlp-extractor/src/extractors/tnaflix.rs` as a template:
+In `patterns.rs`:
 
 ```rust
-use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, Format, InfoDict, InfoExtractor, Result, RdlpError};
+use once_cell::sync::Lazy;
 use regex::Regex;
-use scraper::{Html, Selector};
 
-pub struct MyExtractor {
-    name: String,
-    url_pattern: Regex,
+/// URL pattern for MySite videos
+pub static MYSITE_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"https?://(?:www\.)?mysite\.com/video/(?P<id>[a-zA-Z0-9]+)")
+        .expect("Valid URL pattern")
+});
+
+/// Check if a URL is suitable for this extractor
+pub fn is_suitable(url: &str) -> bool {
+    MYSITE_URL_PATTERN.is_match(url)
 }
 
-impl MyExtractor {
+/// Extract video ID from URL
+pub fn extract_video_id(url: &str) -> Option<String> {
+    MYSITE_URL_PATTERN
+        .captures(url)
+        .and_then(|caps| caps.name("id"))
+        .map(|m| m.as_str().to_string())
+}
+```
+
+### Step 3: Implement the Extractor
+
+In `mod.rs`:
+
+```rust
+mod patterns;
+
+use async_trait::async_trait;
+use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, Result, RdlpError};
+use scraper::Html;
+
+use crate::base::common::BaseExtractor;
+
+pub use patterns::MYSITE_URL_PATTERN;
+
+pub struct MySiteExtractor;
+
+impl MySiteExtractor {
     pub fn new() -> Self {
-        Self {
-            name: "MySite".to_string(),
-            url_pattern: Regex::new(
-                r"https?://(?:www\.)?mysite\.com/watch\?v=([a-zA-Z0-9_-]+)"
-            ).expect("Valid URL pattern"),
-        }
+        Self
+    }
+}
+
+impl Default for MySiteExtractor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait]
-impl InfoExtractor for MyExtractor {
+impl InfoExtractor for MySiteExtractor {
     fn name(&self) -> &str {
-        &self.name
+        "MySite"
     }
 
-    fn valid_url(&self) -> &Regex {
-        &self.url_pattern
+    fn valid_url(&self) -> &regex::Regex {
+        &MYSITE_URL_PATTERN
     }
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        // 1. Fetch webpage
-        let response = ctx.http_client.get(url).send().await?;
-        let html_text = response.text().await?;
+        // 1. Fetch webpage using BaseExtractor
+        let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
-        // 2. Parse HTML
-        let document = Html::parse_document(&html_text);
+        // 2. Extract video ID
+        let video_id = patterns::extract_video_id(url)
+            .ok_or_else(|| RdlpError::Extraction(
+                format!("Could not extract video ID: {url}")
+            ))?;
 
-        // 3. Extract metadata
-        let title = extract_title(&document)?;
-        let video_id = extract_id(url)?;
+        // 3. Parse HTML and extract metadata
+        //    NOTE: Html is not Send, so scope it in a block before any .await
+        let (title, description, thumbnail) = {
+            let html = Html::parse_document(&webpage);
+            (
+                extract_title(&html),
+                extract_description(&html),
+                extract_thumbnail(&html),
+            )
+        }; // html dropped here before await
 
-        // 4. Extract video URLs and build formats
-        let formats = extract_formats(&document, ctx).await?;
+        let title = title.ok_or_else(|| {
+            RdlpError::Extraction("Could not find video title".to_string())
+        })?;
+
+        // 4. Extract formats
+        let formats = extract_formats(&webpage, ctx).await?;
+
+        if formats.is_empty() {
+            return Err(RdlpError::Extraction(
+                format!("No video formats found for URL: {url}")
+            ));
+        }
 
         // 5. Build InfoDict
-        let mut info = InfoDict::new(video_id, title, self.name.clone(), url.to_string());
+        let mut info = InfoDict::new(
+            video_id, title, self.name().to_string(), url.to_string()
+        );
+        info.description = description;
+        info.thumbnail = thumbnail;
         info.formats = formats;
 
         Ok(info)
+    }
+
+    fn suitable(&self, url: &str) -> bool {
+        patterns::is_suitable(url)
     }
 
     fn priority(&self) -> i32 {
         0
     }
 }
+```
 
-// Helper functions
-fn extract_title(document: &Html) -> Result<String> {
-    let selector = Selector::parse("title").unwrap();
-    document.select(&selector)
-        .next()
-        .map(|el| el.text().collect::<String>().trim().to_string())
-        .ok_or_else(|| RdlpError::Extraction("No title found".to_string()))
-}
+**Important notes:**
 
-fn extract_id(url: &str) -> Result<String> {
-    // Extract video ID from URL
-    todo!()
-}
+- `Html` (from scraper) is **not `Send`** - always scope it in a block and drop it before any `.await` call
+- Use `BaseExtractor::fetch_webpage()` for HTTP requests (handles errors and logging)
+- All metadata fields on `InfoDict` are optional except `id`, `title`, `extractor`, and `webpage_url`
+- Use `once_cell::sync::Lazy` for static regex patterns
 
-async fn extract_formats(document: &Html, ctx: &ExtractionContext) -> Result<Vec<Format>> {
-    // Extract video URLs and build formats
-    todo!()
-}
+### Step 4: Register the Extractor
 
+In `crates/rdlp-extractor/src/extractors/mod.rs`, add your module:
+
+```rust
+pub mod mysite;
+```
+
+In `crates/rdlp-extractor/src/lib.rs`, register it:
+
+```rust
+pub use extractors::mysite::MySiteExtractor;
+
+// In ExtractorRegistry::new():
+registry.register(Arc::new(MySiteExtractor::new()));
+```
+
+### Step 5: Add Tests
+
+```rust
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_url_pattern() {
-        let extractor = MyExtractor::new();
-        assert!(extractor.suitable("https://www.mysite.com/watch?v=abc123"));
-        assert!(!extractor.suitable("https://youtube.com/watch?v=abc123"));
+    fn test_extractor_creation() {
+        let extractor = MySiteExtractor::new();
+        assert_eq!(extractor.name(), "MySite");
+    }
+
+    #[test]
+    fn test_suitable_urls() {
+        let extractor = MySiteExtractor::new();
+
+        assert!(extractor.suitable("https://www.mysite.com/video/abc123"));
+        assert!(!extractor.suitable("https://youtube.com/watch?v=test"));
     }
 }
 ```
 
-### Register Your Extractor
-
-In `crates/rdlp-extractor/src/lib.rs`:
-
-```rust
-mod extractors;
-
-pub use extractors::mysite::MyExtractor;
-
-// In registry.rs
-impl ExtractorRegistry {
-    pub fn new() -> Self {
-        let mut extractors: Vec<Arc<dyn InfoExtractor>> = Vec::new();
-        extractors.push(Arc::new(MyExtractor::new()));
-        // ... other extractors
-        Self { extractors }
-    }
-}
-```
-
-### Testing Your Extractor
+### Step 6: Test Manually
 
 ```bash
 # Run extractor tests
 cargo test -p rdlp-extractor
 
 # Test with actual URL
-cargo run -- "https://www.mysite.com/watch?v=abc123"
+cargo run -- "https://www.mysite.com/video/abc123"
 
 # Test with verbose output
-cargo run -- -v "https://www.mysite.com/watch?v=abc123"
+cargo run -- -v "https://www.mysite.com/video/abc123"
 ```
 
-## 📐 Code Style Guide
+### JSON-LD Metadata
+
+Many sites embed structured metadata in JSON-LD `<script>` tags. The `json_ld` module in `base/tnaflix_network/` provides parsers for `VideoObject` schema. If your target site uses JSON-LD, consider reusing or extending these parsers for:
+
+- Title and description
+- Upload date and duration (ISO 8601)
+- Author/uploader (string or object format)
+- Thumbnails (single or array)
+- View/like counts (interaction statistics)
+- Tags and categories
+
+### Playlist Support
+
+To support playlists, override `extract_playlist` in your `InfoExtractor` implementation:
+
+```rust
+async fn extract_playlist(
+    &self,
+    url: &str,
+    ctx: &ExtractionContext,
+) -> Result<Vec<InfoDict>> {
+    if !is_playlist_url(url) {
+        // Single video - delegate to extract()
+        return Ok(vec![self.extract(url, ctx).await?]);
+    }
+
+    // Fetch playlist page, extract video URLs, extract each
+    let mut results = Vec::new();
+    for video_url in video_urls {
+        results.push(self.extract(&video_url, ctx).await?);
+    }
+    Ok(results)
+}
+```
+
+### HLS Format Detection
+
+If the site serves HLS streams (`.m3u8`), use the `hls::detect_format_sizes` helper to probe segment counts and estimate file sizes:
+
+```rust
+use crate::hls::detect_format_sizes;
+
+let formats_with_size = detect_format_sizes(formats, ctx, self.name()).await;
+```
+
+## InfoDict Fields
+
+The `InfoDict` struct holds all extracted metadata. Required fields are set via `InfoDict::new()`. All other fields are optional and should be populated when the data is available:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` | **Required.** Video ID |
+| `title` | `String` | **Required.** Video title |
+| `extractor` | `String` | **Required.** Extractor name |
+| `webpage_url` | `String` | **Required.** Source URL |
+| `formats` | `Vec<Format>` | Available download formats |
+| `description` | `Option<String>` | Video description |
+| `thumbnail` | `Option<String>` | Primary thumbnail URL |
+| `thumbnails` | `Option<Vec<Thumbnail>>` | All available thumbnails |
+| `uploader` | `Option<String>` | Uploader display name |
+| `uploader_id` | `Option<String>` | Uploader identifier |
+| `uploader_url` | `Option<String>` | Uploader profile URL |
+| `channel` | `Option<String>` | Channel name |
+| `channel_id` | `Option<String>` | Channel identifier |
+| `channel_url` | `Option<String>` | Channel URL |
+| `duration` | `Option<f64>` | Duration in seconds |
+| `upload_date` | `Option<String>` | Upload date (YYYYMMDD format) |
+| `view_count` | `Option<u64>` | View count |
+| `like_count` | `Option<u64>` | Like count |
+| `dislike_count` | `Option<u64>` | Dislike count |
+| `average_rating` | `Option<f64>` | Average rating (0-100) |
+| `age_limit` | `Option<u32>` | Age restriction |
+| `tags` | `Option<Vec<String>>` | Tags/keywords |
+| `categories` | `Option<Vec<String>>` | Content categories |
+| `is_live` | `Option<bool>` | Whether the stream is live |
+| `chapters` | `Option<Vec<Chapter>>` | Video chapters |
+
+## Code Style Guide
 
 ### General Principles
 
 - **Readability First**: Code is read more than written
 - **DRY**: Don't Repeat Yourself
-- **KISS**: Keep It Simple, Stupid
+- **KISS**: Keep It Simple
 - **YAGNI**: You Aren't Gonna Need It
 
 ### Rust Style
@@ -324,65 +446,56 @@ Follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/):
 - Use `cargo clippy` for linting
 - Prefer `?` operator over `.unwrap()`
 - Use descriptive variable names
-- Add documentation comments for public APIs
+- Add doc comments for public APIs
 - Use `Result<T>` for fallible operations
-- Use `Option<T>` for optional values
 
 ### Error Handling
 
 ```rust
-// Good: Propagate errors with context
+// Good: Propagate with context
 let html = response.text().await
-    .context("Failed to read response body")?;
+    .map_err(|e| RdlpError::Extraction(format!("Failed to read response: {e}")))?;
 
 // Bad: Panic
 let html = response.text().await.unwrap();
-
-// Bad: Ignore errors
-let html = response.text().await.ok();
 ```
 
 ### Async Code
 
 ```rust
-// Good: Use async/await
+// Good: Non-blocking
 async fn download(&self, url: &str) -> Result<Vec<u8>> {
     let response = self.client.get(url).send().await?;
     let bytes = response.bytes().await?;
     Ok(bytes.to_vec())
 }
 
-// Bad: Blocking in async
+// Bad: Blocking in async context
 async fn download(&self, url: &str) -> Result<Vec<u8>> {
-    std::thread::sleep(Duration::from_secs(1)); // Don't block!
+    std::thread::sleep(Duration::from_secs(1)); // Never block!
     // ...
 }
 ```
 
-### Testing
+### Html and Send Safety
+
+The `scraper::Html` type is not `Send`. Always scope it in a block before any `.await`:
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+// Good: Html dropped before await
+let title = {
+    let html = Html::parse_document(&webpage);
+    extract_title(&html)
+}; // html dropped here
+let formats = fetch_formats(ctx).await?; // safe to await
 
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1024), "1.0 KB");
-        assert_eq!(format_bytes(1048576), "1.0 MB");
-    }
-
-    #[tokio::test]
-    async fn test_download() {
-        let downloader = HttpDownloader::new();
-        let result = downloader.download("https://example.com").await;
-        assert!(result.is_ok());
-    }
-}
+// Bad: Html lives across await
+let html = Html::parse_document(&webpage);
+let title = extract_title(&html);
+let formats = fetch_formats(ctx).await?; // compile error!
 ```
 
-## 🔍 Pull Request Checklist
+## Pull Request Checklist
 
 Before submitting your PR, ensure:
 
@@ -391,45 +504,8 @@ Before submitting your PR, ensure:
 - [ ] Clippy is happy (`cargo clippy`)
 - [ ] Code is formatted (`cargo fmt`)
 - [ ] New functionality has tests
-- [ ] Documentation is updated
-- [ ] Commit messages follow conventions
-- [ ] PR description is clear and complete
+- [ ] Commit messages follow conventional commits
 
-## 🤝 Code Review Process
+## License
 
-### What to Expect
-
-1. **Automated Checks**: CI will run tests, clippy, and fmt
-2. **Initial Review**: A maintainer will review within 48 hours
-3. **Feedback**: You may be asked to make changes
-4. **Approval**: Once approved, your PR will be merged
-
-### Review Guidelines
-
-- Be respectful and constructive
-- Focus on the code, not the person
-- Explain your reasoning
-- Be open to feedback
-
-## 📚 Additional Resources
-
-### Documentation
-
-- [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - Project architecture and roadmap
-- [CLAUDE.md](CLAUDE.md) - Development guidelines for AI assistants
-- [Rust Book](https://doc.rust-lang.org/book/) - Learn Rust
-- [tokio Tutorial](https://tokio.rs/tokio/tutorial) - Async Rust
-
-### Community
-
-- [GitHub Discussions](https://github.com/yourusername/rdlp/discussions) - Ask questions
-- [GitHub Issues](https://github.com/yourusername/rdlp/issues) - Report bugs
-- [Matrix Chat](https://matrix.to/#/#rdlp:matrix.org) - Real-time chat (coming soon)
-
-## 📝 License
-
-By contributing to rdlp, you agree that your contributions will be dual-licensed under MIT OR Apache-2.0.
-
----
-
-Thank you for contributing to rdlp! 🦀❤️
+By contributing to rdlp, you agree that your contributions will be licensed under the MIT License.
