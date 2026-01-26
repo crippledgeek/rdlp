@@ -89,11 +89,21 @@ impl InfoExtractor for PornHubExtractor {
         let video_id = patterns::extract_video_id(url)
             .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
 
-        // Extract title
-        let title = {
+        // Parse HTML and extract all metadata before async operations
+        let (title, description, thumbnail, uploader, uploader_url, channel, channel_url, view_count, average_rating) = {
             let html = Html::parse_document(&webpage);
-            utils::extract_title(&html, &webpage)
-        };
+            (
+                utils::extract_title(&html, &webpage),
+                utils::extract_description(&html),
+                utils::extract_thumbnail(&html),
+                utils::extract_uploader(&html),
+                utils::extract_uploader_url(&html),
+                utils::extract_channel(&html),
+                utils::extract_channel_url(&html),
+                utils::extract_view_count(&html),
+                utils::extract_rating(&html),
+            )
+        }; // html is dropped here before await
 
         // Extract formats with fallback strategies
         let formats = formats::extract_all_formats(&webpage, ctx).await?;
@@ -107,8 +117,16 @@ impl InfoExtractor for PornHubExtractor {
         // Detect file sizes and segment counts
         let formats_with_size = detect_format_sizes(formats, ctx, self.name()).await;
 
-        // Build InfoDict
+        // Build InfoDict with all metadata
         let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
+        info.description = description;
+        info.thumbnail = thumbnail;
+        info.uploader = uploader;
+        info.uploader_url = uploader_url;
+        info.channel = channel;
+        info.channel_url = channel_url;
+        info.view_count = view_count;
+        info.average_rating = average_rating;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
 

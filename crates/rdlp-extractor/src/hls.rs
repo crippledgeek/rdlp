@@ -535,7 +535,6 @@ pub async fn detect_format_sizes(
     extractor_name: &str,
 ) -> Vec<rdlp_core::Format> {
     use futures::future::join_all;
-    use rdlp_core::Fragment;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -558,24 +557,21 @@ pub async fn detect_format_sizes(
 
                 if is_hls {
                     // Fast segment count only (parses m3u8, no size fetching)
+                    // Store segment count in filesize_approx for display in Size column
+                    // (negative value convention: segment count, not bytes)
                     let result =
                         timeout(Duration::from_secs(5), hls_detector.count_segments(&url)).await;
 
                     match result {
                         Ok(Ok(Some(segment_count))) => {
-                            format.fragments = Some(
-                                (0..segment_count)
-                                    .map(|_| Fragment {
-                                        url: String::new(),
-                                        duration: None,
-                                        filesize: None,
-                                    })
-                                    .collect(),
-                            );
+                            // Use a special marker: store segment count as approx size
+                            // The table_row() method will detect HLS and show "X segments"
+                            format.filesize_approx = Some(segment_count as u64);
+
                             if verbose {
                                 debug!(
                                     extractor:? = extractor_name,
-                                    format:? = format.format_note.as_deref().unwrap_or(&format.format_id),
+                                    format:? = format.format_id,
                                     segments = segment_count;
                                     "HLS segment count detected"
                                 );

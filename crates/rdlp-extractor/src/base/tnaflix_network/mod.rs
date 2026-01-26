@@ -78,16 +78,23 @@ static LINK_IMAGE_SELECTOR: Lazy<Selector> =
 // ============================================================================
 
 /// Container for all extracted metadata from HTML/JSON-LD
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ExtractedMetadata {
     pub title: String,
     pub description: Option<String>,
     pub uploader: Option<String>,
+    pub uploader_id: Option<String>,
+    pub uploader_url: Option<String>,
+    pub channel: Option<String>,
+    pub channel_id: Option<String>,
+    pub channel_url: Option<String>,
     pub thumbnail: Option<String>,
     pub thumbnails: Option<Vec<rdlp_core::Thumbnail>>,
     pub duration: Option<f64>,
     pub upload_date: Option<String>,
     pub view_count: Option<u64>,
+    pub like_count: Option<u64>,
+    pub average_rating: Option<f64>,
     pub tags: Option<Vec<String>>,
     pub categories: Option<Vec<String>>,
 }
@@ -254,38 +261,51 @@ impl TnaFlixNetworkBase {
 
         // Try to extract enhanced metadata from JSON-LD
         let json_ld_opt = json_ld::extract_json_ld(html);
-        let (thumbnails, duration, upload_date, view_count, tags, categories) =
-            if let Some(ref json_ld) = json_ld_opt {
-                (
-                    json_ld::extract_thumbnails(json_ld),
-                    json_ld
-                        .duration
-                        .as_ref()
-                        .and_then(|d| self.parse_iso8601_duration(d)),
-                    json_ld
-                        .upload_date
-                        .as_ref()
-                        .and_then(|d| self.parse_iso8601_date(d)),
-                    json_ld::extract_view_count(json_ld),
-                    json_ld::extract_tags(json_ld),
-                    json_ld::extract_categories(json_ld),
-                )
-            } else {
-                (None, None, None, None, None, None)
-            };
 
-        Ok(ExtractedMetadata {
+        let mut metadata = ExtractedMetadata {
             title,
             description,
             uploader,
             thumbnail,
-            thumbnails,
-            duration,
-            upload_date,
-            view_count,
-            tags,
-            categories,
-        })
+            ..Default::default()
+        };
+
+        if let Some(ref json_ld) = json_ld_opt {
+            // Thumbnails
+            metadata.thumbnails = json_ld::extract_thumbnails(json_ld);
+
+            // Duration
+            metadata.duration = json_ld
+                .duration
+                .as_ref()
+                .and_then(|d| self.parse_iso8601_duration(d));
+
+            // Upload date
+            metadata.upload_date = json_ld
+                .upload_date
+                .as_ref()
+                .and_then(|d| self.parse_iso8601_date(d));
+
+            // Interaction stats
+            metadata.view_count = json_ld::extract_view_count(json_ld);
+            metadata.like_count = json_ld::extract_like_count(json_ld);
+
+            // Tags and categories
+            metadata.tags = json_ld::extract_tags(json_ld);
+            metadata.categories = json_ld::extract_categories(json_ld);
+
+            // Author/uploader details
+            if let Some(ref author) = json_ld.author {
+                // Use author name as uploader if not already set
+                if metadata.uploader.is_none() {
+                    metadata.uploader = author.name.clone();
+                }
+                metadata.uploader_url = author.url.clone();
+                metadata.uploader_id = author.id.clone();
+            }
+        }
+
+        Ok(metadata)
     }
 
     // ========================================================================

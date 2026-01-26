@@ -54,6 +54,18 @@ pub struct InfoDict {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uploader_url: Option<String>,
 
+    /// Channel name (may differ from uploader)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+
+    /// Channel ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+
+    /// Channel URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_url: Option<String>,
+
     /// Upload date in YYYYMMDD format
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upload_date: Option<String>,
@@ -73,6 +85,10 @@ pub struct InfoDict {
     /// Comment count
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment_count: Option<u64>,
+
+    /// Average rating (scale depends on site, often 0-5 or 0-100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_rating: Option<f64>,
 
     /// Age restriction (0 = no restriction)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,11 +191,15 @@ impl InfoDict {
             uploader: None,
             uploader_id: None,
             uploader_url: None,
+            channel: None,
+            channel_id: None,
+            channel_url: None,
             upload_date: None,
             view_count: None,
             like_count: None,
             dislike_count: None,
             comment_count: None,
+            average_rating: None,
             age_limit: None,
             tags: None,
             categories: None,

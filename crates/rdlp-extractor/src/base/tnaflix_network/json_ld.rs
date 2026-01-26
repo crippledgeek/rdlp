@@ -54,6 +54,9 @@ pub(crate) struct JsonLdAuthor {
     #[allow(dead_code)] // Deserialized from JSON-LD but not currently used
     pub author_type: Option<String>,
     pub name: Option<String>,
+    pub url: Option<String>,
+    #[serde(rename = "@id")]
+    pub id: Option<String>,
 }
 
 /// JSON-LD interaction statistic for view counts, likes, etc.
@@ -111,6 +114,16 @@ pub(crate) fn extract_json_ld(html: &Html) -> Option<JsonLdVideo> {
 
 /// Extract view count from JSON-LD interaction statistics
 pub(crate) fn extract_view_count(json_ld: &JsonLdVideo) -> Option<u64> {
+    extract_interaction_count(json_ld, "WatchAction")
+}
+
+/// Extract like count from JSON-LD interaction statistics
+pub(crate) fn extract_like_count(json_ld: &JsonLdVideo) -> Option<u64> {
+    extract_interaction_count(json_ld, "LikeAction")
+}
+
+/// Extract interaction count by action type from JSON-LD
+fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str) -> Option<u64> {
     json_ld.interaction_statistic.as_ref().and_then(|stats| {
         let interactions = match stats {
             JsonLdInteractionStatistic::Single(interaction) => vec![interaction],
@@ -118,11 +131,11 @@ pub(crate) fn extract_view_count(json_ld: &JsonLdVideo) -> Option<u64> {
         };
 
         for interaction in interactions {
-            if interaction.interaction_type == "WatchAction"
+            if interaction.interaction_type == action_type
                 || interaction
                     .interaction_type_url
                     .as_ref()
-                    .is_some_and(|url| url.contains("WatchAction"))
+                    .is_some_and(|url| url.contains(action_type))
             {
                 return interaction.user_interaction_count;
             }

@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 ///
 /// Represents a single downloadable stream (video, audio, or combined).
 /// Sites often provide multiple formats with different qualities, codecs, and containers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Format {
     /// Unique format identifier
     pub format_id: String,
@@ -113,6 +113,82 @@ pub struct Format {
     /// Whether format has DRM protection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_drm: Option<bool>,
+}
+
+impl fmt::Debug for Format {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("Format");
+
+        // Always show required fields
+        d.field("format_id", &self.format_id);
+        d.field("url", &self.url);
+        d.field("ext", &self.ext);
+        d.field("protocol", &self.protocol);
+
+        // Only show optional fields that have values
+        if let Some(v) = &self.quality {
+            d.field("quality", v);
+        }
+        if let Some(v) = &self.width {
+            d.field("width", v);
+        }
+        if let Some(v) = &self.height {
+            d.field("height", v);
+        }
+        if let Some(v) = &self.fps {
+            d.field("fps", v);
+        }
+        if let Some(v) = &self.tbr {
+            d.field("tbr", v);
+        }
+        if let Some(v) = &self.vbr {
+            d.field("vbr", v);
+        }
+        if let Some(v) = &self.abr {
+            d.field("abr", v);
+        }
+        if let Some(v) = &self.asr {
+            d.field("asr", v);
+        }
+        if let Some(v) = &self.vcodec {
+            d.field("vcodec", v);
+        }
+        if let Some(v) = &self.acodec {
+            d.field("acodec", v);
+        }
+        if let Some(v) = &self.format_note {
+            d.field("format_note", v);
+        }
+        if let Some(v) = &self.container {
+            d.field("container", v);
+        }
+        if let Some(v) = &self.filesize {
+            d.field("filesize", v);
+        }
+        if let Some(v) = &self.filesize_approx {
+            d.field("filesize_approx", v);
+        }
+        if let Some(v) = &self.fragments {
+            d.field("fragments", &format!("[{} fragments]", v.len()));
+        }
+        if let Some(v) = &self.fragment_base_url {
+            d.field("fragment_base_url", v);
+        }
+        if let Some(v) = &self.http_headers {
+            d.field("http_headers", v);
+        }
+        if let Some(v) = &self.language {
+            d.field("language", v);
+        }
+        if let Some(v) = &self.dynamic_range {
+            d.field("dynamic_range", v);
+        }
+        if let Some(v) = &self.has_drm {
+            d.field("has_drm", v);
+        }
+
+        d.finish()
+    }
 }
 
 impl Format {
@@ -264,8 +340,11 @@ impl Format {
         // Size column: write directly to buffer
         let size_start = buf.len();
         if is_hls {
+            // For HLS: show segment count if available (stored in filesize_approx)
             if let Some(ref fragments) = self.fragments {
                 let _ = write!(buf, "{} segments", fragments.len());
+            } else if let Some(segment_count) = self.filesize_approx {
+                let _ = write!(buf, "{} segments", segment_count);
             } else {
                 buf.push_str("HLS stream");
             }

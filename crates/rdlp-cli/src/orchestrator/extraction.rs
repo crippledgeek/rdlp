@@ -24,7 +24,7 @@ impl Orchestrator {
             }
         })?;
 
-        info!(extractor:? = extractor.name(); "Using extractor");
+        info!("Using extractor: {}", extractor.name());
         info!("Extracting video information...");
 
         let info = extractor
@@ -32,8 +32,33 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
-        info!(title:? = info.title; "Title");
-        info!(formats = info.formats.len(); "Found formats");
+        // Log extracted metadata
+        info!("Title: {}", info.title);
+
+        if let Some(ref uploader) = info.uploader {
+            info!("Uploader: {}", uploader);
+        }
+        if let Some(ref channel) = info.channel {
+            info!("Channel: {}", channel);
+        }
+        if let Some(duration) = info.duration {
+            let mins = (duration / 60.0) as u32;
+            let secs = (duration % 60.0) as u32;
+            info!("Duration: {}:{:02}", mins, secs);
+        }
+        if let Some(views) = info.view_count {
+            info!("Views: {}", views);
+        }
+        if let Some(rating) = info.average_rating {
+            info!("Rating: {:.0}%", rating);
+        }
+        if let Some(ref tags) = info.tags {
+            if !tags.is_empty() {
+                info!("Tags: {}", tags.len());
+            }
+        }
+
+        info!("Found {} formats", info.formats.len());
 
         Ok(info)
     }
@@ -64,7 +89,7 @@ impl Orchestrator {
             }
         })?;
 
-        info!(extractor:? = extractor.name(); "Using extractor");
+        info!("Using extractor: {}", extractor.name());
         info!("Extracting playlist information...");
 
         let infos = extractor
@@ -73,14 +98,14 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         if infos.len() == 1 {
-            info!(title:? = infos[0].title; "Single video");
+            info!("Single video: {}", infos[0].title);
         } else {
             let playlist_title = infos[0]
                 .playlist_title
                 .as_deref()
                 .unwrap_or("Unnamed Playlist");
-            info!(title:? = playlist_title; "Playlist");
-            info!(count = infos.len(); "Found videos");
+            info!("Playlist: {}", playlist_title);
+            info!("Found {} videos", infos.len());
         }
 
         Ok(infos)

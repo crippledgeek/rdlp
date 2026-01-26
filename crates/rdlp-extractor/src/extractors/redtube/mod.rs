@@ -123,11 +123,18 @@ impl InfoExtractor for RedTubeExtractor {
         );
         info.description = metadata.description;
         info.uploader = metadata.uploader;
+        info.uploader_id = metadata.uploader_id;
+        info.uploader_url = metadata.uploader_url;
+        info.channel = metadata.channel;
+        info.channel_id = metadata.channel_id;
+        info.channel_url = metadata.channel_url;
         info.thumbnail = metadata.thumbnail;
         info.thumbnails = metadata.thumbnails;
         info.duration = metadata.duration;
         info.upload_date = metadata.upload_date;
         info.view_count = metadata.view_count;
+        info.like_count = metadata.like_count;
+        info.average_rating = metadata.average_rating;
         info.tags = metadata.tags;
         info.categories = metadata.categories;
         info.age_limit = Some(18); // RedTube is adult content

@@ -4,7 +4,9 @@
 
 use log::{debug, warn};
 use rdlp_core::{ExtractionContext, Format};
+use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 use crate::utils::{extract_extension_from_url, make_absolute_url};
@@ -27,13 +29,27 @@ pub fn parse_quality(item: &Value) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Extract bitrate from URL pattern like "1080P_4000K_378558032.mp4"
+/// Returns bitrate in kbps if found
+fn extract_bitrate_from_url(url: &str) -> Option<f64> {
+    // Pattern: digits followed by K (case insensitive) before file extension
+    // Example: 4000K, 2000K, 1500K
+    static BITRATE_PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(\d+)[Kk]_\d+\.[a-zA-Z0-9]+$").unwrap());
+
+    BITRATE_PATTERN
+        .captures(url)
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse::<f64>().ok())
+}
+
 /// Build Format from quality string and URL using BaseExtractor utilities
 pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format {
     let height = BaseExtractor::parse_quality_height(quality_str);
 
     let mut format = Format::new(
         quality_str.to_owned(),
-        url,
+        url.clone(),
         format_type.to_owned(),
         PROTOCOL_HTTPS.to_owned(),
     );
@@ -49,6 +65,12 @@ pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format
 
     format.vcodec = Some(CODEC_H264.to_owned());
     format.acodec = Some(CODEC_AAC.to_owned());
+    format.container = Some(format_type.to_owned());
+
+    // Extract bitrate from URL if available (e.g., "4000K" = 4000 kbps)
+    if let Some(bitrate) = extract_bitrate_from_url(&url) {
+        format.tbr = Some(bitrate);
+    }
 
     format
 }
@@ -401,5 +423,48 @@ mod tests {
             get_format_type_from_url("https://example.com/video"),
             "unknown"
         );
+    }
+
+    #[test]
+    fn test_extract_bitrate_from_url() {
+        // Standard RedTube URL pattern
+        assert_eq!(
+            extract_bitrate_from_url(
+                "https://example.com/videos/1080P_4000K_378558032.mp4"
+            ),
+            Some(4000.0)
+        );
+        assert_eq!(
+            extract_bitrate_from_url(
+                "https://example.com/videos/720P_2000K_123456.mp4"
+            ),
+            Some(2000.0)
+        );
+        // Lowercase k
+        assert_eq!(
+            extract_bitrate_from_url(
+                "https://example.com/videos/480P_1500k_789.mp4"
+            ),
+            Some(1500.0)
+        );
+        // No bitrate in URL
+        assert_eq!(
+            extract_bitrate_from_url("https://example.com/video.mp4"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_build_format_extracts_bitrate() {
+        let format = build_format(
+            "1080",
+            "https://example.com/1080P_4000K_12345.mp4".to_string(),
+            "mp4",
+        );
+
+        assert_eq!(format.tbr, Some(4000.0));
+        // vbr and abr not set - we only know total bitrate from URL
+        assert_eq!(format.vbr, None);
+        assert_eq!(format.abr, None);
     }
 }

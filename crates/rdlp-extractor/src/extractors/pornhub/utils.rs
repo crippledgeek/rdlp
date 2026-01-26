@@ -139,6 +139,125 @@ pub fn extract_title(html: &Html, webpage: &str) -> String {
     "Untitled".to_string()
 }
 
+/// Extract video description from HTML
+pub fn extract_description(html: &Html) -> Option<String> {
+    extract_meta_content(html, "meta[property='og:description']")
+        .or_else(|| extract_meta_content(html, "meta[name='description']"))
+}
+
+/// Extract thumbnail URL from HTML
+pub fn extract_thumbnail(html: &Html) -> Option<String> {
+    extract_meta_content(html, "meta[property='og:image']")
+        .or_else(|| extract_meta_content(html, "meta[name='twitter:image']"))
+}
+
+/// Extract uploader name from HTML
+pub fn extract_uploader(html: &Html) -> Option<String> {
+    // Try multiple selectors for uploader
+    extract_element_text(html, ".usernameBadgesWrapper a")
+        .or_else(|| extract_element_text(html, ".usernameWrap a"))
+        .or_else(|| extract_element_text(html, ".video-info-row .usernameLink"))
+}
+
+/// Extract uploader URL from HTML
+pub fn extract_uploader_url(html: &Html) -> Option<String> {
+    let selectors = [
+        ".usernameBadgesWrapper a",
+        ".usernameWrap a",
+        ".video-info-row .usernameLink",
+    ];
+
+    for selector_str in selectors {
+        if let Ok(selector) = Selector::parse(selector_str) {
+            if let Some(element) = html.select(&selector).next() {
+                if let Some(href) = element.value().attr("href") {
+                    if !href.is_empty() {
+                        // Make absolute if relative
+                        if href.starts_with('/') {
+                            return Some(format!("https://www.pornhub.com{href}"));
+                        }
+                        return Some(href.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract channel name (may differ from uploader on some videos)
+pub fn extract_channel(html: &Html) -> Option<String> {
+    extract_element_text(html, ".video-info-row .channel-name a")
+        .or_else(|| extract_element_text(html, ".channel-link"))
+}
+
+/// Extract channel URL
+pub fn extract_channel_url(html: &Html) -> Option<String> {
+    let selectors = [".video-info-row .channel-name a", ".channel-link"];
+
+    for selector_str in selectors {
+        if let Ok(selector) = Selector::parse(selector_str) {
+            if let Some(element) = html.select(&selector).next() {
+                if let Some(href) = element.value().attr("href") {
+                    if !href.is_empty() {
+                        if href.starts_with('/') {
+                            return Some(format!("https://www.pornhub.com{href}"));
+                        }
+                        return Some(href.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract view count from HTML
+pub fn extract_view_count(html: &Html) -> Option<u64> {
+    // Try to find view count element
+    if let Some(text) = extract_element_text(html, ".count") {
+        return parse_view_count(&text);
+    }
+    if let Some(text) = extract_element_text(html, ".views") {
+        return parse_view_count(&text);
+    }
+    None
+}
+
+/// Parse view count string (handles "1.5M", "500K", etc.)
+fn parse_view_count(text: &str) -> Option<u64> {
+    let text = text.trim().to_uppercase();
+    let text = text.replace(',', "").replace(" ", "");
+
+    if text.ends_with('K') {
+        let num: f64 = text.trim_end_matches('K').parse().ok()?;
+        Some((num * 1000.0) as u64)
+    } else if text.ends_with('M') {
+        let num: f64 = text.trim_end_matches('M').parse().ok()?;
+        Some((num * 1_000_000.0) as u64)
+    } else if text.ends_with('B') {
+        let num: f64 = text.trim_end_matches('B').parse().ok()?;
+        Some((num * 1_000_000_000.0) as u64)
+    } else {
+        text.parse().ok()
+    }
+}
+
+/// Extract rating percentage from HTML
+pub fn extract_rating(html: &Html) -> Option<f64> {
+    // Try percent element
+    if let Some(text) = extract_element_text(html, ".percent") {
+        let text = text.trim().trim_end_matches('%');
+        return text.parse().ok();
+    }
+    // Try rating-value element
+    if let Some(text) = extract_element_text(html, ".rating-value") {
+        let text = text.trim().trim_end_matches('%');
+        return text.parse().ok();
+    }
+    None
+}
+
 /// Extract content from meta tag
 fn extract_meta_content(html: &Html, selector_str: &str) -> Option<String> {
     let selector = Selector::parse(selector_str).ok()?;

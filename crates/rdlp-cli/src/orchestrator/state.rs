@@ -122,7 +122,7 @@ impl DownloadPhase {
     /// # Errors
     ///
     /// Returns an error if any phase transition fails (extraction error, download error, etc.)
-    #[instrument(skip(orchestrator), fields(phase = %self))]
+    #[instrument(skip_all, fields(phase = %self))]
     pub(super) async fn advance(
         self,
         orchestrator: &Orchestrator,
@@ -231,8 +231,8 @@ impl DownloadPhase {
 
                 // Report success
                 info!("Downloaded successfully!");
-                info!(path:? = output_path.display(); "   File");
-                info!(stats:?; "   Stats");
+                info!("   File: {}", output_path.display());
+                info!("   Stats: {:?}", stats);
 
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_path = orchestrator
