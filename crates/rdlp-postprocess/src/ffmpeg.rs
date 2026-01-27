@@ -154,6 +154,15 @@ pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
         .map(|(_, config)| config)
 }
 
+/// Options for remux and merge operations.
+#[derive(Debug, Clone, Default)]
+pub struct RemuxOptions {
+    /// Enable MP4 faststart (moov atom at beginning of file).
+    pub faststart: bool,
+    /// Force output format (e.g., "mp4", "mkv").
+    pub output_format: Option<String>,
+}
+
 /// Media file information from FFprobe.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MediaInfo {
@@ -496,6 +505,324 @@ impl FFmpegRunner {
         }
 
         Ok(info)
+    }
+
+    /// Remux a file (stream copy, no re-encoding) with optional faststart.
+    ///
+    /// This performs a container-level copy without transcoding, useful for:
+    /// - Moving the moov atom to the start of MP4 files (faststart)
+    /// - Fixing timestamps and container structure
+    /// - Converting between container formats
+    pub async fn remux(
+        &self,
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        opts: &RemuxOptions,
+    ) -> Result<()> {
+        let input = input.as_ref().to_path_buf();
+        let output = output.as_ref().to_path_buf();
+        let opts = opts.clone();
+        tokio::task::spawn_blocking(move || Self::remux_sync(&input, &output, &opts))
+            .await
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("remux task join error: {e}"),
+            })?
+    }
+
+    /// Remux a single input file synchronously (stream copy).
+    fn remux_sync(input: &Path, output: &Path, opts: &RemuxOptions) -> Result<()> {
+        ensure_init()?;
+
+        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open input {}: {e}", input.display()),
+            }
+        })?;
+
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
+
+        let stream_count = ictx.streams().count();
+        let mut stream_mapping: Vec<i32> = vec![-1; stream_count];
+        let mut ist_time_bases =
+            vec![ffmpeg_the_third::Rational(0, 1); stream_count];
+        let mut ost_index: i32 = 0;
+
+        for (ist_index, ist) in ictx.streams().enumerate() {
+            let medium = ist.parameters().medium();
+            if medium != ffmpeg_the_third::media::Type::Video
+                && medium != ffmpeg_the_third::media::Type::Audio
+            {
+                continue;
+            }
+
+            stream_mapping[ist_index] = ost_index;
+            ist_time_bases[ist_index] = ist.time_base();
+            ost_index += 1;
+
+            let mut ost = octx
+                .add_stream(ffmpeg_the_third::encoder::find(
+                    ffmpeg_the_third::codec::Id::None,
+                ))
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add output stream: {e}"),
+                })?;
+            ost.set_parameters(ist.parameters());
+            // Reset codec tag for container compatibility
+            unsafe {
+                (*(ost.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                    .codec_tag = 0;
+            }
+        }
+
+        // Copy format-level metadata
+        octx.set_metadata(ictx.metadata().to_owned());
+
+        // Write header (with faststart if requested)
+        if opts.faststart {
+            let mut dict = ffmpeg_the_third::Dictionary::new();
+            dict.set("movflags", "+faststart");
+            octx.write_header_with(dict).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                }
+            })?;
+        } else {
+            octx.write_header().map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                }
+            })?;
+        }
+
+        // Copy packets
+        for result in ictx.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read packet: {e}"),
+                }
+            })?;
+            let ist_index = stream.index();
+            let ost_idx = stream_mapping[ist_index];
+            if ost_idx < 0 {
+                continue;
+            }
+            let ost_idx = ost_idx as usize;
+            let ost_time_base = octx.stream(ost_idx).unwrap().time_base();
+            packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
+            packet.set_position(-1);
+            packet.set_stream(ost_idx);
+            packet.write_interleaved(&mut octx).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write packet: {e}"),
+                }
+            })?;
+        }
+
+        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output trailer: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    /// Merge separate video and audio files into a single container (stream copy).
+    ///
+    /// Takes two input files (one containing video, one containing audio) and
+    /// combines them into a single output file without re-encoding.
+    /// The MP4 muxer automatically handles AAC ADTS→ASC conversion when needed.
+    pub async fn merge(
+        &self,
+        video_input: impl AsRef<Path>,
+        audio_input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        opts: &RemuxOptions,
+    ) -> Result<()> {
+        let video_input = video_input.as_ref().to_path_buf();
+        let audio_input = audio_input.as_ref().to_path_buf();
+        let output = output.as_ref().to_path_buf();
+        let opts = opts.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::merge_sync(&video_input, &audio_input, &output, &opts)
+        })
+        .await
+        .map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("merge task join error: {e}"),
+        })?
+    }
+
+    /// Merge separate video and audio files synchronously (stream copy).
+    fn merge_sync(
+        video_input: &Path,
+        audio_input: &Path,
+        output: &Path,
+        opts: &RemuxOptions,
+    ) -> Result<()> {
+        ensure_init()?;
+
+        let mut ictx_video =
+            ffmpeg_the_third::format::input(video_input).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!(
+                        "failed to open video input {}: {e}",
+                        video_input.display()
+                    ),
+                }
+            })?;
+
+        let mut ictx_audio =
+            ffmpeg_the_third::format::input(audio_input).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!(
+                        "failed to open audio input {}: {e}",
+                        audio_input.display()
+                    ),
+                }
+            })?;
+
+        let mut octx =
+            ffmpeg_the_third::format::output(output).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!(
+                        "failed to create output {}: {e}",
+                        output.display()
+                    ),
+                }
+            })?;
+
+        // Find best video stream from video input
+        let video_ist_index = ictx_video
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Video)
+            .map(|s| s.index())
+            .ok_or(PostProcessError::NoVideoStream)?;
+
+        let video_ist_time_base = ictx_video
+            .stream(video_ist_index)
+            .unwrap()
+            .time_base();
+
+        let mut ost_video = octx
+            .add_stream(ffmpeg_the_third::encoder::find(
+                ffmpeg_the_third::codec::Id::None,
+            ))
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add video output stream: {e}"),
+            })?;
+        ost_video.set_parameters(
+            ictx_video
+                .stream(video_ist_index)
+                .unwrap()
+                .parameters(),
+        );
+        unsafe {
+            (*(ost_video.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                    .codec_tag = 0;
+        }
+        let video_ost_index = ost_video.index();
+
+        // Find best audio stream from audio input
+        let audio_ist_index = ictx_audio
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Audio)
+            .map(|s| s.index())
+            .ok_or(PostProcessError::NoAudioStream)?;
+
+        let audio_ist_time_base = ictx_audio
+            .stream(audio_ist_index)
+            .unwrap()
+            .time_base();
+
+        let mut ost_audio = octx
+            .add_stream(ffmpeg_the_third::encoder::find(
+                ffmpeg_the_third::codec::Id::None,
+            ))
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add audio output stream: {e}"),
+            })?;
+        ost_audio.set_parameters(
+            ictx_audio
+                .stream(audio_ist_index)
+                .unwrap()
+                .parameters(),
+        );
+        unsafe {
+            (*(ost_audio.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                    .codec_tag = 0;
+        }
+        let audio_ost_index = ost_audio.index();
+
+        // Write header (with faststart if requested)
+        if opts.faststart {
+            let mut dict = ffmpeg_the_third::Dictionary::new();
+            dict.set("movflags", "+faststart");
+            octx.write_header_with(dict).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                }
+            })?;
+        } else {
+            octx.write_header().map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                }
+            })?;
+        }
+
+        // Copy video packets
+        for result in ictx_video.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read video packet: {e}"),
+                }
+            })?;
+            if stream.index() != video_ist_index {
+                continue;
+            }
+            let ost_time_base =
+                octx.stream(video_ost_index).unwrap().time_base();
+            packet.rescale_ts(video_ist_time_base, ost_time_base);
+            packet.set_position(-1);
+            packet.set_stream(video_ost_index);
+            packet.write_interleaved(&mut octx).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write video packet: {e}"),
+                }
+            })?;
+        }
+
+        // Copy audio packets
+        for result in ictx_audio.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read audio packet: {e}"),
+                }
+            })?;
+            if stream.index() != audio_ist_index {
+                continue;
+            }
+            let ost_time_base =
+                octx.stream(audio_ost_index).unwrap().time_base();
+            packet.rescale_ts(audio_ist_time_base, ost_time_base);
+            packet.set_position(-1);
+            packet.set_stream(audio_ost_index);
+            packet.write_interleaved(&mut octx).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write audio packet: {e}"),
+                }
+            })?;
+        }
+
+        octx.write_trailer().map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            }
+        })?;
+
+        Ok(())
     }
 
     /// Run FFmpeg with the given arguments.

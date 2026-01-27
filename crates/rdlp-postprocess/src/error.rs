@@ -134,6 +134,15 @@ impl PostProcessError {
 /// Result type for post-processing operations.
 pub type Result<T> = std::result::Result<T, PostProcessError>;
 
+/// Convert ffmpeg-the-third errors into PostProcessError.
+impl From<ffmpeg_the_third::Error> for PostProcessError {
+    fn from(e: ffmpeg_the_third::Error) -> Self {
+        PostProcessError::FFmpegLibraryError {
+            message: e.to_string(),
+        }
+    }
+}
+
 /// Convert PostProcessError to RdlpError for use at trait boundaries.
 impl From<PostProcessError> for RdlpError {
     fn from(error: PostProcessError) -> Self {

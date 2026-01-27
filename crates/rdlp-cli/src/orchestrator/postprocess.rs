@@ -124,7 +124,7 @@ impl Orchestrator {
 
     /// Run FFmpeg remux on downloaded files to fix container format
     ///
-    /// This performs a stream copy (no re-encoding) to:
+    /// This performs a stream copy (no re-encoding) via library bindings to:
     /// - Move moov atom to beginning of file (faststart)
     /// - Fix timestamps
     /// - Ensure proper MP4 container structure
@@ -132,8 +132,8 @@ impl Orchestrator {
     /// Applied to both HLS and HTTP downloads for consistent output quality.
     pub(super) async fn ffmpeg_remux(&self, files: &[PathBuf]) -> Option<Vec<PathBuf>> {
         let registry = self.postprocessor_registry.as_ref()?;
-        let ffmpeg = registry.list_processors(); // Just to verify FFmpeg is available
-        if ffmpeg.is_empty() {
+        let processors = registry.list_processors();
+        if processors.is_empty() {
             return None;
         }
 
@@ -143,27 +143,9 @@ impl Orchestrator {
             let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
             let temp_path = file.with_extension(format!("fixed.{ext}"));
 
-            // Run FFmpeg remux: -c copy -movflags +faststart
-            let result = tokio::process::Command::new("ffmpeg")
-                .args([
-                    "-y", // Overwrite output
-                    "-i",
-                    &file.to_string_lossy(),
-                    "-c",
-                    "copy", // Stream copy (no re-encoding)
-                    "-movflags",
-                    "+faststart", // Move moov atom to start
-                    "-f",
-                    "mp4", // Force MP4 format
-                    &temp_path.to_string_lossy(),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .output()
-                .await;
-
-            match result {
-                Ok(output) if output.status.success() => {
+            // Remux using library bindings (stream copy + faststart)
+            match registry.remux_faststart(file, &temp_path).await {
+                Ok(()) => {
                     // Replace original with fixed file
                     if let Err(e) = tokio::fs::remove_file(file).await {
                         warn!("Could not remove original file: {e}");
@@ -176,15 +158,10 @@ impl Orchestrator {
                         output_files.push(file.clone());
                     }
                 }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    debug!("FFmpeg remux failed: {stderr}");
+                Err(e) => {
+                    debug!("FFmpeg remux failed: {e}");
                     // Clean up temp file
                     let _ = tokio::fs::remove_file(&temp_path).await;
-                    output_files.push(file.clone());
-                }
-                Err(e) => {
-                    debug!("FFmpeg not available: {e}");
                     output_files.push(file.clone());
                 }
             }

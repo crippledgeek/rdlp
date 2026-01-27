@@ -1,17 +1,18 @@
 //! FFmpeg merger post-processor.
 //!
-//! Merges separate video and audio streams into a single container.
+//! Merges separate video and audio streams into a single container
+//! using `ffmpeg-the-third` library bindings (no CLI process spawning).
 //! This is typically needed when downloading from sites that serve
 //! video and audio separately (like HLS/DASH streams).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::FFmpegRunner;
+use crate::ffmpeg::{FFmpegRunner, RemuxOptions};
 
 /// Post-processor that merges video and audio streams.
 ///
@@ -59,44 +60,6 @@ impl FFmpegMerger {
             _ => "mp4",
         }
     }
-
-    /// Build FFmpeg arguments for merging.
-    fn build_merge_args<'a>(
-        &self,
-        inputs: &[&'a Path],
-        output: &'a Path,
-        video_index: usize,
-        audio_index: usize,
-    ) -> Vec<String> {
-        let mut args = Vec::new();
-
-        // Add input files
-        for input in inputs {
-            args.push("-i".to_string());
-            args.push(input.to_string_lossy().to_string());
-        }
-
-        // Map video from first input
-        args.push("-map".to_string());
-        args.push(format!("{video_index}:v:0"));
-
-        // Map audio from second input (or first if only one input)
-        args.push("-map".to_string());
-        args.push(format!("{audio_index}:a:0"));
-
-        // Copy streams without re-encoding
-        args.push("-c".to_string());
-        args.push("copy".to_string());
-
-        // Handle AAC in MPEG-TS (HLS) - needs ADTS to ASC conversion
-        args.push("-bsf:a".to_string());
-        args.push("aac_adtstoasc".to_string());
-
-        // Output file
-        args.push(output.to_string_lossy().to_string());
-
-        args
-    }
 }
 
 #[async_trait]
@@ -136,24 +99,24 @@ impl PostProcessor for FFmpegMerger {
         info!(streams = files.len(); "Merging streams into single file");
 
         // Determine which file is video and which is audio
-        let (video_file, audio_file, video_idx, audio_idx) = if files.len() == 2 {
+        let (video_file, audio_file) = if files.len() == 2 {
             // Probe files to determine which is which
             let info1 = self.ffmpeg.probe(&files[0]).await?;
             let info2 = self.ffmpeg.probe(&files[1]).await?;
 
             if info1.has_video && !info1.has_audio && info2.has_audio {
-                (&files[0], &files[1], 0, 1)
+                (&files[0], &files[1])
             } else if info2.has_video && !info2.has_audio && info1.has_audio {
-                (&files[1], &files[0], 1, 0)
+                (&files[1], &files[0])
             } else if info1.has_video {
                 // Both have video, prefer first as video
-                (&files[0], &files[1], 0, 1)
+                (&files[0], &files[1])
             } else {
-                (&files[1], &files[0], 1, 0)
+                (&files[1], &files[0])
             }
         } else {
             // More than 2 files - assume first is video, second is audio
-            (&files[0], &files[1], 0, 1)
+            (&files[0], &files[1])
         };
 
         debug!(
@@ -170,13 +133,16 @@ impl PostProcessor for FFmpegMerger {
         // Create output filename
         let output_path = video_file.with_extension(output_format);
 
-        // Build merge command
-        let inputs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
-        let args = self.build_merge_args(&inputs, &output_path, video_idx, audio_idx);
-
-        // Run FFmpeg
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.ffmpeg.run(&args_refs).await?;
+        // Merge using library bindings (stream copy, no re-encoding).
+        // The MP4 muxer automatically handles AAC ADTS→ASC conversion,
+        // so we no longer need the unconditional aac_adtstoasc BSF.
+        let opts = RemuxOptions {
+            faststart: output_format == "mp4" || output_format == "mov",
+            ..Default::default()
+        };
+        self.ffmpeg
+            .merge(video_file, audio_file, &output_path, &opts)
+            .await?;
 
         info!(output:? = output_path.display(); "Merged output");
 

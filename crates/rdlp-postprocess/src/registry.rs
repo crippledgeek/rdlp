@@ -33,7 +33,7 @@
 //! # }
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 
 use crate::error::Result;
-use crate::ffmpeg::FFmpegRunner;
+use crate::ffmpeg::{FFmpegRunner, RemuxOptions};
 use crate::processors::*;
 
 /// Trait for post-processor registry operations.
@@ -54,6 +54,12 @@ pub trait PostProcessorRegistryTrait: Send + Sync {
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
     ) -> anyhow::Result<PostProcessResult>;
+
+    /// Remux a file with faststart enabled (stream copy, no re-encoding).
+    ///
+    /// Moves the moov atom to the beginning of the file for progressive
+    /// playback and fixes container structure/timestamps.
+    async fn remux_faststart(&self, input: &Path, output: &Path) -> anyhow::Result<()>;
 
     /// List all registered post-processors.
     fn list_processors(&self) -> Vec<String>;
@@ -206,6 +212,17 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             files: current_files,
             temp_files: Vec::new(), // Already cleaned up
         })
+    }
+
+    async fn remux_faststart(&self, input: &Path, output: &Path) -> anyhow::Result<()> {
+        let opts = RemuxOptions {
+            faststart: true,
+            ..Default::default()
+        };
+        self.ffmpeg
+            .remux(input, output, &opts)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn list_processors(&self) -> Vec<String> {
