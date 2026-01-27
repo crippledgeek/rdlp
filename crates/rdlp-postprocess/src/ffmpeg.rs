@@ -163,6 +163,22 @@ pub struct RemuxOptions {
     pub output_format: Option<String>,
 }
 
+/// Options for audio extraction and transcoding.
+#[derive(Debug, Clone, Default)]
+pub struct AudioExtractOptions {
+    /// Encoder name (e.g., "libmp3lame", "aac", "libopus").
+    /// If None, uses the default encoder for the output format.
+    pub encoder_name: Option<String>,
+    /// If true, copy audio stream without re-encoding.
+    pub copy: bool,
+    /// Target bitrate in kbps (e.g., 192 for 192kbps).
+    pub bitrate_kbps: Option<u32>,
+    /// VBR quality scale value (codec-specific).
+    /// For MP3: 0 (best) to 9 (worst).
+    /// For Vorbis: 0 (worst) to 10 (best).
+    pub quality_scale: Option<i32>,
+}
+
 /// Media file information from FFprobe.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MediaInfo {
@@ -822,6 +838,442 @@ impl FFmpegRunner {
             }
         })?;
 
+        Ok(())
+    }
+
+    /// Extract audio from a media file, either by stream copy or transcoding.
+    ///
+    /// Uses `opts.copy` to determine whether to copy or transcode.
+    /// For transcoding, supports bitrate (CBR) and quality scale (VBR) modes.
+    pub async fn extract_audio(
+        &self,
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        opts: &AudioExtractOptions,
+    ) -> Result<()> {
+        let input = input.as_ref().to_path_buf();
+        let output = output.as_ref().to_path_buf();
+        let opts = opts.clone();
+        tokio::task::spawn_blocking(move || Self::extract_audio_sync(&input, &output, &opts))
+            .await
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("extract_audio task join error: {e}"),
+            })?
+    }
+
+    /// Extract audio synchronously (dispatches to copy or transcode).
+    fn extract_audio_sync(input: &Path, output: &Path, opts: &AudioExtractOptions) -> Result<()> {
+        if opts.copy {
+            Self::extract_audio_copy_sync(input, output)
+        } else {
+            Self::extract_audio_transcode_sync(input, output, opts)
+        }
+    }
+
+    /// Extract audio by stream copy (no re-encoding).
+    ///
+    /// Maps only the best audio stream from input to output without transcoding.
+    fn extract_audio_copy_sync(input: &Path, output: &Path) -> Result<()> {
+        ensure_init()?;
+
+        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open input {}: {e}", input.display()),
+            }
+        })?;
+
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
+
+        // Find best audio stream
+        let ist_index = ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Audio)
+            .map(|s| s.index())
+            .ok_or(PostProcessError::NoAudioStream)?;
+
+        let ist_time_base = ictx.stream(ist_index).unwrap().time_base();
+
+        // Add output stream (stream copy mode)
+        let mut ost = octx
+            .add_stream(ffmpeg_the_third::encoder::find(
+                ffmpeg_the_third::codec::Id::None,
+            ))
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add output stream: {e}"),
+            })?;
+        ost.set_parameters(ictx.stream(ist_index).unwrap().parameters());
+        unsafe {
+            (*(ost.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                .codec_tag = 0;
+        }
+
+        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output header: {e}"),
+        })?;
+
+        // Copy only audio packets
+        for result in ictx.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read packet: {e}"),
+                }
+            })?;
+            if stream.index() != ist_index {
+                continue;
+            }
+            let ost_time_base = octx.stream(0).unwrap().time_base();
+            packet.rescale_ts(ist_time_base, ost_time_base);
+            packet.set_position(-1);
+            packet.set_stream(0);
+            packet.write_interleaved(&mut octx).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write packet: {e}"),
+                }
+            })?;
+        }
+
+        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output trailer: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    /// Extract audio by transcoding to a target codec.
+    ///
+    /// Decodes the input audio, optionally converts sample format/rate through
+    /// a filter graph, and encodes to the target codec.
+    fn extract_audio_transcode_sync(
+        input: &Path,
+        output: &Path,
+        opts: &AudioExtractOptions,
+    ) -> Result<()> {
+        ensure_init()?;
+
+        // Open input and find audio stream
+        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open input {}: {e}", input.display()),
+            }
+        })?;
+
+        let ist_index = ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Audio)
+            .map(|s| s.index())
+            .ok_or(PostProcessError::NoAudioStream)?;
+
+        let ist_time_base = ictx.stream(ist_index).unwrap().time_base();
+
+        // Create decoder (bind stream to extend its lifetime for parameters())
+        let ist = ictx.stream(ist_index).unwrap();
+        let decoder_ctx =
+            ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())?;
+        let mut decoder = decoder_ctx.decoder().audio()?;
+
+        // Open output
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
+
+        // Find encoder codec
+        let enc_codec = if let Some(ref name) = opts.encoder_name {
+            ffmpeg_the_third::encoder::find_by_name(name).ok_or_else(|| {
+                PostProcessError::UnsupportedCodec {
+                    codec: name.clone(),
+                    operation: "audio extraction".into(),
+                }
+            })?
+        } else {
+            let codec_id = octx
+                .format()
+                .codec(output, ffmpeg_the_third::media::Type::Audio);
+            ffmpeg_the_third::encoder::find(codec_id).ok_or_else(|| {
+                PostProcessError::ffmpeg_failed("no default encoder for output format")
+            })?
+        };
+
+        // Check global header flag BEFORE taking mutable stream borrow
+        let needs_global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg_the_third::format::Flags::GLOBAL_HEADER);
+
+        // Add output stream and create encoder context (scoped to release octx borrow)
+        let ost_index;
+        let enc_context;
+        {
+            let ost = octx.add_stream(enc_codec).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add output stream: {e}"),
+                }
+            })?;
+            ost_index = ost.index();
+            enc_context =
+                ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
+        }
+        // ost dropped — octx no longer mutably borrowed
+
+        // Configure encoder
+        let mut audio_encoder = enc_context.encoder().audio()?;
+
+        let target_format = Self::pick_audio_sample_format(&enc_codec, decoder.format());
+        audio_encoder.set_format(target_format);
+        audio_encoder.set_rate(decoder.rate() as i32);
+        audio_encoder.set_time_base(ffmpeg_the_third::Rational(1, decoder.rate() as i32));
+
+        // Set channel layout from decoder (default layout matching channel count)
+        let channels = decoder.ch_layout().channels();
+        unsafe {
+            ffmpeg_the_third::ffi::av_channel_layout_default(
+                &mut (*audio_encoder.as_mut_ptr()).ch_layout,
+                channels as i32,
+            );
+        }
+
+        // Set bitrate (CBR)
+        if let Some(br_kbps) = opts.bitrate_kbps {
+            audio_encoder.set_bit_rate((br_kbps as usize) * 1000);
+        }
+
+        // Set VBR quality
+        if let Some(quality) = opts.quality_scale {
+            unsafe {
+                let ctx = audio_encoder.as_mut_ptr();
+                (*ctx).flags |= ffmpeg_the_third::ffi::AV_CODEC_FLAG_QSCALE as i32;
+                (*ctx).global_quality = quality * ffmpeg_the_third::ffi::FF_QP2LAMBDA;
+            }
+        }
+
+        // Set global header flag if required by output format
+        if needs_global_header {
+            unsafe {
+                (*audio_encoder.as_mut_ptr()).flags |=
+                    ffmpeg_the_third::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+            }
+        }
+
+        // Open encoder
+        let mut audio_encoder = audio_encoder.open_as(enc_codec).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open audio encoder: {e}"),
+            }
+        })?;
+
+        // Copy encoder parameters back to output stream via FFI
+        unsafe {
+            let stream_ptr = *(*octx.as_mut_ptr()).streams.add(ost_index);
+            ffmpeg_the_third::ffi::avcodec_parameters_from_context(
+                (*stream_ptr).codecpar,
+                audio_encoder.as_ptr(),
+            );
+        }
+
+        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output header: {e}"),
+        })?;
+
+        // Build filter graph for sample format/rate conversion
+        let mut filter_graph =
+            Self::build_audio_filter(&decoder, &audio_encoder, ist_time_base)?;
+
+        // Transcode loop: read → decode → filter → encode → write
+        for result in ictx.packets() {
+            let (stream, packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read packet: {e}"),
+                }
+            })?;
+            if stream.index() != ist_index {
+                continue;
+            }
+            decoder.send_packet(&packet)?;
+            Self::receive_and_process_audio(
+                &mut decoder,
+                &mut filter_graph,
+                &mut audio_encoder,
+                &mut octx,
+                ost_index,
+            )?;
+        }
+
+        // Flush decoder
+        decoder.send_eof()?;
+        Self::receive_and_process_audio(
+            &mut decoder,
+            &mut filter_graph,
+            &mut audio_encoder,
+            &mut octx,
+            ost_index,
+        )?;
+
+        // Flush filter graph (signal EOF to source)
+        filter_graph.get("in").unwrap().source().flush()?;
+        Self::drain_filter_to_encoder(
+            &mut filter_graph,
+            &mut audio_encoder,
+            &mut octx,
+            ost_index,
+        )?;
+
+        // Flush encoder
+        audio_encoder.send_eof()?;
+        Self::drain_encoder_packets(&mut audio_encoder, &mut octx, ost_index)?;
+
+        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output trailer: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    /// Pick a sample format supported by the encoder, preferring the decoder's format.
+    fn pick_audio_sample_format(
+        codec: &ffmpeg_the_third::Codec,
+        preferred: ffmpeg_the_third::format::Sample,
+    ) -> ffmpeg_the_third::format::Sample {
+        // Check codec's supported sample formats
+        unsafe {
+            let ptr = codec.as_ptr();
+            let sample_fmts = (*ptr).sample_fmts;
+            if sample_fmts.is_null() {
+                // Codec accepts any format
+                return preferred;
+            }
+
+            let mut i = 0;
+            let mut first = None;
+            loop {
+                let fmt = *sample_fmts.offset(i);
+                if fmt == ffmpeg_the_third::ffi::AVSampleFormat::AV_SAMPLE_FMT_NONE {
+                    break;
+                }
+                let sample = ffmpeg_the_third::format::Sample::from(fmt);
+                if first.is_none() {
+                    first = Some(sample);
+                }
+                if sample == preferred {
+                    return preferred;
+                }
+                i += 1;
+            }
+
+            first.unwrap_or(preferred)
+        }
+    }
+
+    /// Build an audio filter graph for sample format/rate/channel conversion.
+    ///
+    /// Uses `abuffer` → `anull` → `abuffersink` to let FFmpeg handle any
+    /// necessary sample format, sample rate, or channel layout conversions.
+    fn build_audio_filter(
+        decoder: &ffmpeg_the_third::decoder::Audio,
+        encoder: &ffmpeg_the_third::encoder::audio::Audio,
+        ist_time_base: ffmpeg_the_third::Rational,
+    ) -> Result<ffmpeg_the_third::filter::Graph> {
+        let mut graph = ffmpeg_the_third::filter::Graph::new();
+
+        let abuffer = ffmpeg_the_third::filter::find("abuffer").ok_or_else(|| {
+            PostProcessError::ffmpeg_failed("abuffer filter not found")
+        })?;
+        let abuffersink = ffmpeg_the_third::filter::find("abuffersink").ok_or_else(|| {
+            PostProcessError::ffmpeg_failed("abuffersink filter not found")
+        })?;
+
+        // Build abuffer args with decoder's output parameters
+        let channels = decoder.ch_layout().channels();
+        let args = format!(
+            "time_base={}/{}:sample_rate={}:sample_fmt={}:chlayout={}c",
+            ist_time_base.numerator(),
+            ist_time_base.denominator(),
+            decoder.rate(),
+            decoder.format().name(),
+            channels,
+        );
+
+        graph.add(&abuffer, "in", &args).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add abuffer filter: {e}"),
+            }
+        })?;
+        graph.add(&abuffersink, "out", "").map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add abuffersink filter: {e}"),
+            }
+        })?;
+
+        // Build aformat spec to convert to encoder's expected format
+        let enc_channels = encoder.ch_layout().channels();
+        let aformat_spec = format!(
+            "aformat=sample_fmts={}:sample_rates={}:channel_layouts={}c",
+            encoder.format().name(),
+            encoder.rate(),
+            enc_channels,
+        );
+
+        graph
+            .output("out", 0)?
+            .input("in", 0)?
+            .parse(&aformat_spec)?;
+        graph.validate()?;
+
+        Ok(graph)
+    }
+
+    /// Receive decoded frames from decoder, push through filter, encode, and write.
+    fn receive_and_process_audio(
+        decoder: &mut ffmpeg_the_third::decoder::Audio,
+        filter: &mut ffmpeg_the_third::filter::Graph,
+        encoder: &mut ffmpeg_the_third::encoder::audio::Audio,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut frame = ffmpeg_the_third::frame::Audio::empty();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            filter.get("in").unwrap().source().add(&frame)?;
+            Self::drain_filter_to_encoder(filter, encoder, octx, ost_index)?;
+        }
+        Ok(())
+    }
+
+    /// Pull filtered frames from filter graph, encode, and write.
+    fn drain_filter_to_encoder(
+        filter: &mut ffmpeg_the_third::filter::Graph,
+        encoder: &mut ffmpeg_the_third::encoder::audio::Audio,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut filtered = ffmpeg_the_third::frame::Audio::empty();
+        while filter
+            .get("out")
+            .unwrap()
+            .sink()
+            .frame(&mut filtered)
+            .is_ok()
+        {
+            encoder.send_frame(&filtered)?;
+            Self::drain_encoder_packets(encoder, octx, ost_index)?;
+        }
+        Ok(())
+    }
+
+    /// Receive encoded packets from encoder and write to output.
+    fn drain_encoder_packets(
+        encoder: &mut ffmpeg_the_third::encoder::audio::Audio,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut packet = ffmpeg_the_third::Packet::empty();
+        while encoder.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(ost_index);
+            packet.write_interleaved(octx)?;
+        }
         Ok(())
     }
 
