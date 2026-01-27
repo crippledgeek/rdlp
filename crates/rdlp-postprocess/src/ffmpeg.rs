@@ -1,9 +1,14 @@
-//! FFmpeg and FFprobe integration.
+//! FFmpeg integration via `ffmpeg-the-third` library bindings.
 //!
 //! This module provides utilities for:
-//! - Detecting FFmpeg/FFprobe executables
-//! - Running FFmpeg commands with proper argument handling
 //! - Probing media files for codec and format information
+//! - Remuxing and merging streams (stream copy)
+//! - Audio extraction and transcoding
+//! - Video conversion and transcoding
+//! - Metadata and chapter embedding
+//! - Thumbnail embedding (container-specific strategies)
+//!
+//! All FFmpeg operations use direct library calls (no CLI process spawning).
 //!
 //! # Example
 //!
@@ -17,22 +22,17 @@
 //! let info = ffmpeg.probe("video.mp4").await?;
 //! println!("Duration: {:?}", info.duration);
 //! println!("Video codec: {:?}", info.video_codec);
-//!
-//! // Run FFmpeg command
-//! ffmpeg.run(&["-i", "input.mp4", "-c:v", "copy", "output.mkv"]).await?;
+//! println!("Resolution: {:?}", info.resolution_string());
 //! # Ok(())
 //! # }
 //! ```
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 use std::sync::OnceLock;
 
-use log::{debug, trace};
-use regex::Regex;
+use log::debug;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 
 use crate::error::{PostProcessError, Result};
 
@@ -265,137 +265,29 @@ pub struct StreamInfo {
 
 /// FFmpeg runner.
 ///
-/// Provides media probing via `ffmpeg-the-third` library bindings and
-/// CLI execution for operations not yet migrated to library calls.
+/// Provides media operations via `ffmpeg-the-third` library bindings:
+/// probing, remuxing, merging, audio extraction, video conversion,
+/// metadata embedding, and thumbnail embedding.
 #[derive(Debug, Clone)]
-pub struct FFmpegRunner {
-    /// Path to FFmpeg executable (used for CLI operations not yet migrated)
-    ffmpeg_path: PathBuf,
-    /// FFmpeg version string
-    version: Option<String>,
-}
+pub struct FFmpegRunner;
 
 impl FFmpegRunner {
-    /// Create a new FFmpeg runner, auto-detecting executables from PATH.
+    /// Create a new FFmpeg runner.
+    ///
+    /// Initializes the FFmpeg library (idempotent — safe to call multiple times).
     pub fn new() -> Result<Self> {
-        Self::with_location(None)
+        ensure_init()?;
+        debug!("FFmpeg library initialized");
+        Ok(Self)
     }
 
     /// Create a new FFmpeg runner with a custom location.
     ///
-    /// If `location` is `Some`, it should be either:
-    /// - A path to a directory containing ffmpeg
-    /// - A path to the ffmpeg executable
-    pub fn with_location(location: Option<&Path>) -> Result<Self> {
-        let ffmpeg_path = Self::find_ffmpeg(location)?;
-
-        Ok(Self {
-            ffmpeg_path,
-            version: None,
-        })
-    }
-
-    /// Find the FFmpeg executable.
-    fn find_ffmpeg(location: Option<&Path>) -> Result<PathBuf> {
-        let ffmpeg_names = if cfg!(windows) {
-            vec!["ffmpeg.exe", "ffmpeg"]
-        } else {
-            vec!["ffmpeg"]
-        };
-
-        let ffmpeg_path = if let Some(loc) = location {
-            Self::find_in_location(loc, &ffmpeg_names)?
-        } else {
-            Self::find_in_path(&ffmpeg_names).ok_or(PostProcessError::FFmpegNotFound)?
-        };
-
-        debug!(path:? = ffmpeg_path.display(); "Found FFmpeg");
-
-        Ok(ffmpeg_path)
-    }
-
-    /// Find executable in a specific location.
-    fn find_in_location(location: &Path, names: &[&str]) -> Result<PathBuf> {
-        // If location is a file, check if it's one of the executables
-        if location.is_file() {
-            if let Some(name) = location.file_name().and_then(|n| n.to_str()) {
-                if names
-                    .iter()
-                    .any(|n| name.contains(n.trim_end_matches(".exe")))
-                {
-                    return Ok(location.to_path_buf());
-                }
-            }
-            // If it's a file but not the right one, check its directory
-            if let Some(dir) = location.parent() {
-                for name in names {
-                    let path = dir.join(name);
-                    if path.exists() {
-                        return Ok(path);
-                    }
-                }
-            }
-        }
-
-        // If location is a directory, search in it
-        if location.is_dir() {
-            for name in names {
-                let path = location.join(name);
-                if path.exists() {
-                    return Ok(path);
-                }
-            }
-        }
-
-        Err(PostProcessError::FFmpegNotFound)
-    }
-
-    /// Find executable in PATH.
-    fn find_in_path(names: &[&str]) -> Option<PathBuf> {
-        for name in names {
-            if let Ok(path) = which::which(name) {
-                return Some(path);
-            }
-        }
-        None
-    }
-
-    /// Check if FFmpeg is available.
-    pub fn available(&self) -> bool {
-        self.ffmpeg_path.exists()
-    }
-
-    /// Get the FFmpeg version.
-    pub async fn version(&mut self) -> Result<&str> {
-        if self.version.is_none() {
-            let output = Command::new(&self.ffmpeg_path)
-                .arg("-version")
-                .output()
-                .await
-                .map_err(|e| {
-                    PostProcessError::ffmpeg_failed_with_source("Failed to get version", e)
-                })?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let version = stdout
-                .lines()
-                .next()
-                .and_then(|line| {
-                    // Parse "ffmpeg version N.N.N ..." or "ffmpeg version N.N ..."
-                    let re = Regex::new(r"ffmpeg version (\S+)").ok()?;
-                    re.captures(line).map(|c| c[1].to_string())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-
-            self.version = Some(version);
-        }
-
-        Ok(self.version.as_ref().unwrap())
-    }
-
-    /// Get the path to the FFmpeg executable.
-    pub fn ffmpeg_path(&self) -> &Path {
-        &self.ffmpeg_path
+    /// The `location` parameter is accepted for API compatibility but is
+    /// ignored — all operations use `ffmpeg-the-third` library bindings
+    /// which link against system FFmpeg shared libraries.
+    pub fn with_location(_location: Option<&Path>) -> Result<Self> {
+        Self::new()
     }
 
     /// Probe a media file using the FFmpeg library and return its information.
@@ -2135,107 +2027,6 @@ impl FFmpegRunner {
         Ok(())
     }
 
-    /// Run FFmpeg with the given arguments.
-    ///
-    /// This method automatically adds `-y` (overwrite) and sets an appropriate loglevel.
-    pub async fn run(&self, args: &[&str]) -> Result<Output> {
-        self.run_with_options(args, true, "error").await
-    }
-
-    /// Run FFmpeg with custom options.
-    pub async fn run_with_options(
-        &self,
-        args: &[&str],
-        overwrite: bool,
-        loglevel: &str,
-    ) -> Result<Output> {
-        let mut cmd = Command::new(&self.ffmpeg_path);
-
-        if overwrite {
-            cmd.arg("-y");
-        }
-
-        cmd.args(["-loglevel", loglevel]);
-        cmd.args(args);
-
-        trace!(
-            "Running FFmpeg: {} {}",
-            self.ffmpeg_path.display(),
-            args.join(" ")
-        );
-
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| PostProcessError::ffmpeg_failed_with_source("Failed to run FFmpeg", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(PostProcessError::FFmpegExitCode {
-                code: output.status.code().unwrap_or(-1),
-                stderr: stderr.to_string(),
-            });
-        }
-
-        Ok(output)
-    }
-
-    /// Run FFmpeg with input and output file paths.
-    ///
-    /// Handles special characters in filenames by using the `file:` protocol.
-    pub async fn run_with_files(
-        &self,
-        inputs: &[&Path],
-        output: &Path,
-        opts: &[&str],
-    ) -> Result<Output> {
-        let mut args = Vec::new();
-
-        // Add input files
-        for input in inputs {
-            args.push("-i".to_string());
-            args.push(Self::filename_arg(input));
-        }
-
-        // Add options
-        args.extend(opts.iter().map(|s| s.to_string()));
-
-        // Add output
-        args.push(Self::filename_arg(output));
-
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.run(&args_refs).await
-    }
-
-    /// Create a filename argument with proper escaping.
-    fn filename_arg(path: &Path) -> String {
-        let path_str = path.to_string_lossy();
-
-        // Use file: protocol for paths that might contain special characters
-        if path_str.starts_with('-') || path_str.contains(':') && !path_str.starts_with("file:") {
-            format!("file:{path_str}")
-        } else {
-            path_str.to_string()
-        }
-    }
-
-    /// Get the audio codec from a file.
-    pub async fn get_audio_codec(&self, path: impl AsRef<Path>) -> Result<Option<String>> {
-        let info = self.probe(path).await?;
-        Ok(info.audio_codec)
-    }
-
-    /// Check if a file has an audio stream.
-    pub async fn has_audio(&self, path: impl AsRef<Path>) -> Result<bool> {
-        let info = self.probe(path).await?;
-        Ok(info.has_audio)
-    }
-
-    /// Check if a file has a video stream.
-    pub async fn has_video(&self, path: impl AsRef<Path>) -> Result<bool> {
-        let info = self.probe(path).await?;
-        Ok(info.has_video)
-    }
 }
 
 impl MediaInfo {
@@ -2280,21 +2071,6 @@ mod tests {
         let flac = get_audio_codec("flac").unwrap();
         assert!(flac.encoder.is_none()); // Native codec
         assert!(flac.bitrate_range.is_none()); // Lossless
-    }
-
-    #[test]
-    fn test_filename_arg() {
-        // Normal path
-        assert_eq!(
-            FFmpegRunner::filename_arg(Path::new("video.mp4")),
-            "video.mp4"
-        );
-
-        // Path starting with dash
-        assert_eq!(
-            FFmpegRunner::filename_arg(Path::new("-output.mp4")),
-            "file:-output.mp4"
-        );
     }
 
     #[test]

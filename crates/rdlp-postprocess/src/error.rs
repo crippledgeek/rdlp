@@ -8,29 +8,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[allow(missing_docs)] // Field names are self-explanatory, variant docs describe them
 pub enum PostProcessError {
-    /// FFmpeg executable not found
-    #[error(
-        "FFmpeg not found. Please install FFmpeg and ensure it's in your PATH, or specify the location with --ffmpeg-location"
-    )]
-    FFmpegNotFound,
-
-    /// FFprobe executable not found
-    #[error(
-        "FFprobe not found. Please install FFmpeg (includes FFprobe) and ensure it's in your PATH"
-    )]
-    FFprobeNotFound,
-
-    /// FFmpeg execution failed
+    /// FFmpeg operation failed
     #[error("FFmpeg failed: {message}")]
     FFmpegFailed {
         message: String,
         #[source]
         source: Option<std::io::Error>,
     },
-
-    /// FFmpeg returned non-zero exit code
-    #[error("FFmpeg exited with code {code}: {stderr}")]
-    FFmpegExitCode { code: i32, stderr: String },
 
     /// Input file not found
     #[error("Input file not found: {}", path.display())]
@@ -88,10 +72,6 @@ pub enum PostProcessError {
     #[error("FFmpeg library error: {message}")]
     FFmpegLibraryError { message: String },
 
-    /// Failed to parse FFprobe output
-    #[error("Failed to parse media info: {message}")]
-    ParseError { message: String },
-
     /// Post-processor not found in registry
     #[error("Post-processor not found: {name}")]
     ProcessorNotFound { name: String },
@@ -111,14 +91,6 @@ impl PostProcessError {
         Self::FFmpegFailed {
             message: message.into(),
             source: None,
-        }
-    }
-
-    /// Create an FFmpeg failed error with source
-    pub fn ffmpeg_failed_with_source(message: impl Into<String>, source: std::io::Error) -> Self {
-        Self::FFmpegFailed {
-            message: message.into(),
-            source: Some(source),
         }
     }
 
@@ -147,10 +119,7 @@ impl From<ffmpeg_the_third::Error> for PostProcessError {
 impl From<PostProcessError> for RdlpError {
     fn from(error: PostProcessError) -> Self {
         match error {
-            PostProcessError::FFmpegNotFound
-            | PostProcessError::FFprobeNotFound
-            | PostProcessError::FFmpegFailed { .. }
-            | PostProcessError::FFmpegExitCode { .. }
+            PostProcessError::FFmpegFailed { .. }
             | PostProcessError::FFmpegInitFailed { .. }
             | PostProcessError::FFmpegLibraryError { .. } => RdlpError::FFmpeg(error.to_string()),
 

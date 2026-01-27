@@ -99,14 +99,15 @@ impl PostProcessorRegistry {
     }
 
     /// Create a registry without FFmpeg (for testing or non-FFmpeg operations).
+    ///
+    /// Note: FFmpeg library initialization will still be attempted.
+    /// Operations will fail at runtime if the library is not available.
     pub fn without_ffmpeg() -> Self {
         Self {
             processors: Vec::new(),
-            ffmpeg: Arc::new(FFmpegRunner::new().unwrap_or_else(|_| {
-                // Create a dummy runner that will fail if used
-                FFmpegRunner::with_location(Some(std::path::Path::new("/nonexistent")))
-                    .unwrap_or_else(|_| panic!("Cannot create FFmpeg runner"))
-            })),
+            ffmpeg: Arc::new(
+                FFmpegRunner::new().unwrap_or_else(|_| panic!("Cannot initialize FFmpeg library")),
+            ),
         }
     }
 
@@ -255,9 +256,8 @@ mod tests {
 
     #[test]
     fn test_registry_creation() {
-        // This test only works if FFmpeg is installed
-        if which::which("ffmpeg").is_ok() {
-            let registry = PostProcessorRegistry::new().unwrap();
+        // This test only works if FFmpeg library is available
+        if let Ok(registry) = PostProcessorRegistry::new() {
             let processors = registry.list_processors();
             assert!(!processors.is_empty());
         }
@@ -265,8 +265,7 @@ mod tests {
 
     #[test]
     fn test_processor_priority_order() {
-        if which::which("ffmpeg").is_ok() {
-            let registry = PostProcessorRegistry::new().unwrap();
+        if let Ok(registry) = PostProcessorRegistry::new() {
             let sorted = registry.sorted_processors();
 
             // Verify processors are sorted by priority (highest first)

@@ -82,7 +82,7 @@
 //!
 //! ## FFmpeg Integration
 //!
-//! The crate provides a comprehensive FFmpeg wrapper:
+//! The crate provides comprehensive FFmpeg operations via library bindings:
 //!
 //! ```no_run
 //! use rdlp_postprocess::ffmpeg::FFmpegRunner;
@@ -96,9 +96,6 @@
 //! println!("Video codec: {:?}", info.video_codec);
 //! println!("Audio codec: {:?}", info.audio_codec);
 //! println!("Resolution: {:?}", info.resolution_string());
-//!
-//! // Run custom FFmpeg command
-//! ffmpeg.run(&["-i", "input.mp4", "-c:v", "copy", "-an", "video_only.mp4"]).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -122,7 +119,9 @@
 //!
 //! fn example() -> Result<()> {
 //!     // Errors are descriptive and actionable
-//!     Err(PostProcessError::FFmpegNotFound)
+//!     Err(PostProcessError::FFmpegInitFailed {
+//!         message: "FFmpeg library not available".to_string(),
+//!     })
 //! }
 //! ```
 
