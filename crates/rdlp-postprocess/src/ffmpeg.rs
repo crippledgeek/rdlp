@@ -46,7 +46,11 @@ static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// Safe to call multiple times — only the first call performs initialization.
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
-        ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))
+        ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
+        // Suppress FFmpeg's internal diagnostic messages (e.g. mpegts stream timing warnings).
+        // Only show actual errors — we handle logging ourselves.
+        ffmpeg_the_third::log::set_level(ffmpeg_the_third::log::Level::Error);
+        Ok(())
     });
 
     match result {
