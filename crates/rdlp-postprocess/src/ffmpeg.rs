@@ -179,6 +179,21 @@ pub struct AudioExtractOptions {
     pub quality_scale: Option<i32>,
 }
 
+/// Options for video conversion/transcoding.
+#[derive(Debug, Clone, Default)]
+pub struct VideoConvertOptions {
+    /// If true, remux only (stream copy, no re-encoding).
+    pub remux_only: bool,
+    /// Video encoder name (e.g., "libx264", "libx265", "libvpx-vp9").
+    pub video_codec: Option<String>,
+    /// Encoder preset (e.g., "medium", "fast", "slow").
+    pub preset: Option<String>,
+    /// Constant Rate Factor for quality-based encoding.
+    pub crf: Option<u32>,
+    /// If true, copy audio stream without re-encoding.
+    pub audio_copy: bool,
+}
+
 /// Media file information from FFprobe.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MediaInfo {
@@ -1266,6 +1281,443 @@ impl FFmpegRunner {
     /// Receive encoded packets from encoder and write to output.
     fn drain_encoder_packets(
         encoder: &mut ffmpeg_the_third::encoder::audio::Audio,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut packet = ffmpeg_the_third::Packet::empty();
+        while encoder.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(ost_index);
+            packet.write_interleaved(octx)?;
+        }
+        Ok(())
+    }
+
+    /// Convert a video file, either by remuxing or transcoding.
+    ///
+    /// Uses `opts.remux_only` to determine whether to stream-copy or transcode.
+    /// For transcoding, encodes video with the specified codec while optionally
+    /// copying the audio stream unchanged.
+    pub async fn convert_video(
+        &self,
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        opts: &VideoConvertOptions,
+    ) -> Result<()> {
+        let input = input.as_ref().to_path_buf();
+        let output = output.as_ref().to_path_buf();
+        let opts = opts.clone();
+        tokio::task::spawn_blocking(move || Self::convert_video_sync(&input, &output, &opts))
+            .await
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("convert_video task join error: {e}"),
+            })?
+    }
+
+    /// Convert video synchronously (dispatches to remux or transcode).
+    fn convert_video_sync(
+        input: &Path,
+        output: &Path,
+        opts: &VideoConvertOptions,
+    ) -> Result<()> {
+        if opts.remux_only {
+            // Determine if output is MP4/MOV for faststart
+            let ext = output
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let remux_opts = RemuxOptions {
+                faststart: ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mov"),
+                ..Default::default()
+            };
+            Self::remux_sync(input, output, &remux_opts)
+        } else {
+            Self::convert_video_transcode_sync(input, output, opts)
+        }
+    }
+
+    /// Transcode video to a target codec, optionally copying audio.
+    ///
+    /// Decodes video frames, converts pixel format through a filter graph,
+    /// and encodes with the target video codec. Audio is stream-copied if
+    /// `opts.audio_copy` is true.
+    fn convert_video_transcode_sync(
+        input: &Path,
+        output: &Path,
+        opts: &VideoConvertOptions,
+    ) -> Result<()> {
+        ensure_init()?;
+
+        // Open input
+        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open input {}: {e}", input.display()),
+            }
+        })?;
+
+        // Find video and audio stream indices
+        let video_ist_index = ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Video)
+            .map(|s| s.index())
+            .ok_or(PostProcessError::NoVideoStream)?;
+
+        let audio_ist_index = ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Audio)
+            .map(|s| s.index());
+
+        // Capture stream time bases before any mutable borrows
+        let video_ist_time_base = ictx.stream(video_ist_index).unwrap().time_base();
+        let video_ist_frame_rate = ictx.stream(video_ist_index).unwrap().avg_frame_rate();
+        let audio_ist_time_base =
+            audio_ist_index.map(|i| ictx.stream(i).unwrap().time_base());
+
+        // Create video decoder
+        let video_ist = ictx.stream(video_ist_index).unwrap();
+        let video_dec_ctx =
+            ffmpeg_the_third::codec::context::Context::from_parameters(video_ist.parameters())?;
+        let mut video_decoder = video_dec_ctx.decoder().video()?;
+
+        // Open output
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
+
+        // Find video encoder
+        let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
+        let video_enc_codec =
+            ffmpeg_the_third::encoder::find_by_name(video_codec_name).ok_or_else(|| {
+                PostProcessError::UnsupportedCodec {
+                    codec: video_codec_name.to_string(),
+                    operation: "video conversion".into(),
+                }
+            })?;
+
+        // Check global header flag before mutable stream borrows
+        let needs_global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg_the_third::format::Flags::GLOBAL_HEADER);
+
+        // Add video output stream (scoped to release octx borrow)
+        let video_ost_index;
+        let video_enc_context;
+        {
+            let ost = octx.add_stream(video_enc_codec).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add video output stream: {e}"),
+                }
+            })?;
+            video_ost_index = ost.index();
+            video_enc_context =
+                ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
+        }
+
+        // Configure video encoder
+        let mut video_encoder = video_enc_context.encoder().video()?;
+        video_encoder.set_width(video_decoder.width());
+        video_encoder.set_height(video_decoder.height());
+
+        let target_pix_fmt =
+            Self::pick_video_pixel_format(&video_enc_codec, video_decoder.format());
+        video_encoder.set_format(target_pix_fmt);
+
+        // Set time base from frame rate (inverse of fps)
+        if video_ist_frame_rate.numerator() > 0 && video_ist_frame_rate.denominator() > 0 {
+            video_encoder.set_time_base(ffmpeg_the_third::Rational(
+                video_ist_frame_rate.denominator(),
+                video_ist_frame_rate.numerator(),
+            ));
+        } else {
+            video_encoder.set_time_base(video_ist_time_base);
+        }
+
+        // Set frame rate
+        video_encoder.set_frame_rate(Some(video_ist_frame_rate));
+
+        if needs_global_header {
+            unsafe {
+                (*video_encoder.as_mut_ptr()).flags |=
+                    ffmpeg_the_third::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+            }
+        }
+
+        // Open encoder with preset/CRF options
+        let mut enc_opts = ffmpeg_the_third::Dictionary::new();
+        if let Some(ref preset) = opts.preset {
+            enc_opts.set("preset", preset);
+        }
+        if let Some(crf) = opts.crf {
+            enc_opts.set("crf", &crf.to_string());
+        }
+
+        // For VP9: set bitrate to 0 for pure CRF mode
+        if video_codec_name.contains("vpx") && opts.crf.is_some() {
+            video_encoder.set_bit_rate(0);
+        }
+
+        let mut video_encoder = video_encoder.open_as_with(video_enc_codec, enc_opts).map_err(
+            |e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open video encoder: {e}"),
+            },
+        )?;
+
+        // Copy encoder parameters back to output stream
+        unsafe {
+            let stream_ptr = *(*octx.as_mut_ptr()).streams.add(video_ost_index);
+            ffmpeg_the_third::ffi::avcodec_parameters_from_context(
+                (*stream_ptr).codecpar,
+                video_encoder.as_ptr(),
+            );
+        }
+
+        // Add audio output stream (stream copy) if audio exists and copy requested
+        let audio_ost_index = if opts.audio_copy {
+            if let Some(audio_idx) = audio_ist_index {
+                let audio_ost_idx;
+                {
+                    let mut ost = octx
+                        .add_stream(ffmpeg_the_third::encoder::find(
+                            ffmpeg_the_third::codec::Id::None,
+                        ))
+                        .map_err(|e| PostProcessError::FFmpegLibraryError {
+                            message: format!("failed to add audio output stream: {e}"),
+                        })?;
+                    ost.set_parameters(ictx.stream(audio_idx).unwrap().parameters());
+                    audio_ost_idx = ost.index();
+                    unsafe {
+                        (*(ost.parameters().as_ptr()
+                            as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                            .codec_tag = 0;
+                    }
+                }
+                Some(audio_ost_idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output header: {e}"),
+        })?;
+
+        // Build video filter graph for pixel format conversion
+        let mut filter_graph =
+            Self::build_video_filter(&video_decoder, &video_encoder, video_ist_time_base)?;
+
+        // Process packets: video → decode/filter/encode, audio → copy
+        for result in ictx.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read packet: {e}"),
+                }
+            })?;
+            let ist_index = stream.index();
+
+            if ist_index == video_ist_index {
+                // Video: decode → filter → encode → write
+                video_decoder.send_packet(&packet)?;
+                Self::receive_and_process_video(
+                    &mut video_decoder,
+                    &mut filter_graph,
+                    &mut video_encoder,
+                    &mut octx,
+                    video_ost_index,
+                )?;
+            } else if Some(ist_index) == audio_ist_index {
+                // Audio: stream copy
+                if let Some(audio_ost_idx) = audio_ost_index {
+                    let ost_time_base = octx.stream(audio_ost_idx).unwrap().time_base();
+                    packet.rescale_ts(audio_ist_time_base.unwrap(), ost_time_base);
+                    packet.set_position(-1);
+                    packet.set_stream(audio_ost_idx);
+                    packet.write_interleaved(&mut octx).map_err(|e| {
+                        PostProcessError::FFmpegLibraryError {
+                            message: format!("failed to write audio packet: {e}"),
+                        }
+                    })?;
+                }
+            }
+        }
+
+        // Flush video decoder
+        video_decoder.send_eof()?;
+        Self::receive_and_process_video(
+            &mut video_decoder,
+            &mut filter_graph,
+            &mut video_encoder,
+            &mut octx,
+            video_ost_index,
+        )?;
+
+        // Flush video filter graph
+        filter_graph.get("in").unwrap().source().flush()?;
+        Self::drain_video_filter_to_encoder(
+            &mut filter_graph,
+            &mut video_encoder,
+            &mut octx,
+            video_ost_index,
+        )?;
+
+        // Flush video encoder
+        video_encoder.send_eof()?;
+        Self::drain_video_encoder_packets(&mut video_encoder, &mut octx, video_ost_index)?;
+
+        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output trailer: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    /// Pick a pixel format supported by the video encoder, preferring the decoder's format.
+    fn pick_video_pixel_format(
+        codec: &ffmpeg_the_third::Codec,
+        preferred: ffmpeg_the_third::format::Pixel,
+    ) -> ffmpeg_the_third::format::Pixel {
+        unsafe {
+            let ptr = codec.as_ptr();
+            let pix_fmts = (*ptr).pix_fmts;
+            if pix_fmts.is_null() {
+                return preferred;
+            }
+
+            let mut i = 0;
+            let mut first = None;
+            loop {
+                let fmt = *pix_fmts.offset(i);
+                if fmt == ffmpeg_the_third::ffi::AVPixelFormat::AV_PIX_FMT_NONE {
+                    break;
+                }
+                let pixel = ffmpeg_the_third::format::Pixel::from(fmt);
+                if first.is_none() {
+                    first = Some(pixel);
+                }
+                if pixel == preferred {
+                    return preferred;
+                }
+                i += 1;
+            }
+
+            first.unwrap_or(preferred)
+        }
+    }
+
+    /// Build a video filter graph for pixel format conversion.
+    ///
+    /// Uses `buffer` → `format` → `buffersink` to convert pixel format
+    /// from decoder output to encoder input format.
+    fn build_video_filter(
+        decoder: &ffmpeg_the_third::decoder::Video,
+        encoder: &ffmpeg_the_third::encoder::video::Video,
+        ist_time_base: ffmpeg_the_third::Rational,
+    ) -> Result<ffmpeg_the_third::filter::Graph> {
+        let mut graph = ffmpeg_the_third::filter::Graph::new();
+
+        let buffer = ffmpeg_the_third::filter::find("buffer").ok_or_else(|| {
+            PostProcessError::ffmpeg_failed("buffer filter not found")
+        })?;
+        let buffersink = ffmpeg_the_third::filter::find("buffersink").ok_or_else(|| {
+            PostProcessError::ffmpeg_failed("buffersink filter not found")
+        })?;
+
+        // Pixel aspect ratio (default 1:1 if unknown)
+        let sar = decoder.aspect_ratio();
+        let sar_num = if sar.numerator() > 0 {
+            sar.numerator()
+        } else {
+            1
+        };
+        let sar_den = if sar.denominator() > 0 {
+            sar.denominator()
+        } else {
+            1
+        };
+
+        let args = format!(
+            "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
+            decoder.width(),
+            decoder.height(),
+            decoder.format() as i32,
+            ist_time_base.numerator(),
+            ist_time_base.denominator(),
+            sar_num,
+            sar_den,
+        );
+
+        graph.add(&buffer, "in", &args).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add buffer filter: {e}"),
+            }
+        })?;
+        graph.add(&buffersink, "out", "").map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to add buffersink filter: {e}"),
+            }
+        })?;
+
+        // Convert pixel format to match encoder's requirement
+        let enc_pix_fmt_name = encoder
+            .format()
+            .descriptor()
+            .map(|d| d.name().to_string())
+            .unwrap_or_else(|| "yuv420p".to_string());
+
+        let format_spec = format!("format=pix_fmts={enc_pix_fmt_name}");
+
+        graph
+            .output("out", 0)?
+            .input("in", 0)?
+            .parse(&format_spec)?;
+        graph.validate()?;
+
+        Ok(graph)
+    }
+
+    /// Receive decoded video frames, push through filter, encode, and write.
+    fn receive_and_process_video(
+        decoder: &mut ffmpeg_the_third::decoder::Video,
+        filter: &mut ffmpeg_the_third::filter::Graph,
+        encoder: &mut ffmpeg_the_third::encoder::video::Video,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut frame = ffmpeg_the_third::frame::Video::empty();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            filter.get("in").unwrap().source().add(&frame)?;
+            Self::drain_video_filter_to_encoder(filter, encoder, octx, ost_index)?;
+        }
+        Ok(())
+    }
+
+    /// Pull filtered video frames from filter graph, encode, and write.
+    fn drain_video_filter_to_encoder(
+        filter: &mut ffmpeg_the_third::filter::Graph,
+        encoder: &mut ffmpeg_the_third::encoder::video::Video,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        ost_index: usize,
+    ) -> Result<()> {
+        let mut filtered = ffmpeg_the_third::frame::Video::empty();
+        while filter
+            .get("out")
+            .unwrap()
+            .sink()
+            .frame(&mut filtered)
+            .is_ok()
+        {
+            encoder.send_frame(&filtered)?;
+            Self::drain_video_encoder_packets(encoder, octx, ost_index)?;
+        }
+        Ok(())
+    }
+
+    /// Receive encoded video packets from encoder and write to output.
+    fn drain_video_encoder_packets(
+        encoder: &mut ffmpeg_the_third::encoder::video::Video,
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
     ) -> Result<()> {
