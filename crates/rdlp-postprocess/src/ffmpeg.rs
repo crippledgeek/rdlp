@@ -210,13 +210,14 @@ pub struct StreamInfo {
     pub metadata: HashMap<String, String>,
 }
 
-/// FFmpeg/FFprobe runner.
+/// FFmpeg runner.
+///
+/// Provides media probing via `ffmpeg-the-third` library bindings and
+/// CLI execution for operations not yet migrated to library calls.
 #[derive(Debug, Clone)]
 pub struct FFmpegRunner {
-    /// Path to FFmpeg executable
+    /// Path to FFmpeg executable (used for CLI operations not yet migrated)
     ffmpeg_path: PathBuf,
-    /// Path to FFprobe executable
-    ffprobe_path: PathBuf,
     /// FFmpeg version string
     version: Option<String>,
 }
@@ -230,30 +231,23 @@ impl FFmpegRunner {
     /// Create a new FFmpeg runner with a custom location.
     ///
     /// If `location` is `Some`, it should be either:
-    /// - A path to a directory containing ffmpeg and ffprobe
-    /// - A path to the ffmpeg executable (ffprobe will be in the same directory)
+    /// - A path to a directory containing ffmpeg
+    /// - A path to the ffmpeg executable
     pub fn with_location(location: Option<&Path>) -> Result<Self> {
-        let (ffmpeg_path, ffprobe_path) = Self::find_executables(location)?;
+        let ffmpeg_path = Self::find_ffmpeg(location)?;
 
         Ok(Self {
             ffmpeg_path,
-            ffprobe_path,
             version: None,
         })
     }
 
-    /// Find FFmpeg and FFprobe executables.
-    fn find_executables(location: Option<&Path>) -> Result<(PathBuf, PathBuf)> {
+    /// Find the FFmpeg executable.
+    fn find_ffmpeg(location: Option<&Path>) -> Result<PathBuf> {
         let ffmpeg_names = if cfg!(windows) {
             vec!["ffmpeg.exe", "ffmpeg"]
         } else {
             vec!["ffmpeg"]
-        };
-
-        let ffprobe_names = if cfg!(windows) {
-            vec!["ffprobe.exe", "ffprobe"]
-        } else {
-            vec!["ffprobe"]
         };
 
         let ffmpeg_path = if let Some(loc) = location {
@@ -262,27 +256,9 @@ impl FFmpegRunner {
             Self::find_in_path(&ffmpeg_names).ok_or(PostProcessError::FFmpegNotFound)?
         };
 
-        let ffprobe_path = if let Some(loc) = location {
-            Self::find_in_location(loc, &ffprobe_names)?
-        } else {
-            // Try to find ffprobe in same directory as ffmpeg first
-            let ffmpeg_dir = ffmpeg_path.parent();
-            let in_ffmpeg_dir = ffmpeg_dir.and_then(|dir| {
-                ffprobe_names
-                    .iter()
-                    .map(|name| dir.join(name))
-                    .find(|p| p.exists())
-            });
-
-            in_ffmpeg_dir
-                .or_else(|| Self::find_in_path(&ffprobe_names))
-                .ok_or(PostProcessError::FFprobeNotFound)?
-        };
-
         debug!(path:? = ffmpeg_path.display(); "Found FFmpeg");
-        debug!(path:? = ffprobe_path.display(); "Found FFprobe");
 
-        Ok((ffmpeg_path, ffprobe_path))
+        Ok(ffmpeg_path)
     }
 
     /// Find executable in a specific location.
@@ -333,7 +309,7 @@ impl FFmpegRunner {
 
     /// Check if FFmpeg is available.
     pub fn available(&self) -> bool {
-        self.ffmpeg_path.exists() && self.ffprobe_path.exists()
+        self.ffmpeg_path.exists()
     }
 
     /// Get the FFmpeg version.
@@ -369,196 +345,157 @@ impl FFmpegRunner {
         &self.ffmpeg_path
     }
 
-    /// Get the path to the FFprobe executable.
-    pub fn ffprobe_path(&self) -> &Path {
-        &self.ffprobe_path
-    }
-
-    /// Probe a media file and return its information.
+    /// Probe a media file using the FFmpeg library and return its information.
     pub async fn probe(&self, path: impl AsRef<Path>) -> Result<MediaInfo> {
-        let path = path.as_ref();
+        let path = path.as_ref().to_path_buf();
 
         if !path.exists() {
-            return Err(PostProcessError::InputNotFound {
-                path: path.to_path_buf(),
-            });
+            return Err(PostProcessError::InputNotFound { path });
         }
 
-        let output = Command::new(&self.ffprobe_path)
-            .args([
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-            ])
-            .arg(path)
-            .output()
+        tokio::task::spawn_blocking(move || Self::probe_sync(&path))
             .await
-            .map_err(|e| PostProcessError::ffmpeg_failed_with_source("Failed to run FFprobe", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(PostProcessError::FFmpegExitCode {
-                code: output.status.code().unwrap_or(-1),
-                stderr: stderr.to_string(),
-            });
-        }
-
-        let json_str = String::from_utf8_lossy(&output.stdout);
-        self.parse_probe_output(path, &json_str)
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("probe task join error: {e}"),
+            })?
     }
 
-    /// Parse FFprobe JSON output into MediaInfo.
-    fn parse_probe_output(&self, path: &Path, json: &str) -> Result<MediaInfo> {
-        let data: serde_json::Value =
-            serde_json::from_str(json).map_err(|e| PostProcessError::ParseError {
-                message: format!("Invalid JSON from FFprobe: {e}"),
-            })?;
+    /// Probe a media file synchronously using ffmpeg-the-third library.
+    fn probe_sync(path: &Path) -> Result<MediaInfo> {
+        ensure_init()?;
+
+        let ictx = ffmpeg_the_third::format::input(path).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open {}: {e}", path.display()),
+            }
+        })?;
 
         let mut info = MediaInfo {
             path: path.to_path_buf(),
             ..Default::default()
         };
 
-        // Parse format information
-        if let Some(format) = data.get("format") {
-            info.format = format
-                .get("format_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.split(',').next().unwrap_or(s).to_string());
+        // Duration (stored in AV_TIME_BASE units)
+        let duration_ts = ictx.duration();
+        if duration_ts > 0 {
+            info.duration =
+                Some(duration_ts as f64 / f64::from(ffmpeg_the_third::ffi::AV_TIME_BASE));
+        }
 
-            info.duration = format
-                .get("duration")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok());
+        // Format name
+        if let Some(fmt) = ictx.format().name().split(',').next() {
+            info.format = Some(fmt.to_string());
+        }
 
-            info.bitrate = format
-                .get("bit_rate")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<u64>().ok())
-                .map(|b| (b / 1000) as u32);
+        // Bit rate
+        let bit_rate = ictx.bit_rate();
+        if bit_rate > 0 {
+            info.bitrate = Some((bit_rate as u64 / 1000) as u32);
+        }
 
-            info.filesize = format
-                .get("size")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok());
+        // File size from metadata or filesystem
+        info.filesize = std::fs::metadata(path).ok().map(|m| m.len());
 
-            // Parse format metadata
-            if let Some(tags) = format.get("tags").and_then(|t| t.as_object()) {
-                for (key, value) in tags {
-                    if let Some(v) = value.as_str() {
-                        info.metadata.insert(key.to_lowercase(), v.to_string());
-                    }
-                }
-            }
+        // Format-level metadata
+        for (key, value) in ictx.metadata().iter() {
+            info.metadata.insert(key.to_lowercase(), value.to_string());
         }
 
         // Parse streams
-        if let Some(streams) = data.get("streams").and_then(|s| s.as_array()) {
-            info.stream_count = streams.len();
+        info.stream_count = ictx.streams().count();
 
-            for (i, stream) in streams.iter().enumerate() {
-                let codec_type = stream
-                    .get("codec_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+        for stream in ictx.streams() {
+            let params = stream.parameters();
+            let medium = params.medium();
 
-                let codec_name = stream
-                    .get("codec_name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+            let codec_name = stream.parameters().id().name().to_string();
+            let codec_type_str = match medium {
+                ffmpeg_the_third::media::Type::Video => "video",
+                ffmpeg_the_third::media::Type::Audio => "audio",
+                ffmpeg_the_third::media::Type::Subtitle => "subtitle",
+                ffmpeg_the_third::media::Type::Data => "data",
+                _ => "unknown",
+            };
 
-                let mut stream_info = StreamInfo {
-                    index: i,
-                    codec_type: codec_type.to_string(),
-                    codec_name: codec_name.clone(),
-                    metadata: HashMap::new(),
-                };
+            let mut stream_info = StreamInfo {
+                index: stream.index(),
+                codec_type: codec_type_str.to_string(),
+                codec_name: Some(codec_name.clone()),
+                metadata: HashMap::new(),
+            };
 
-                // Parse stream metadata
-                if let Some(tags) = stream.get("tags").and_then(|t| t.as_object()) {
-                    for (key, value) in tags {
-                        if let Some(v) = value.as_str() {
-                            stream_info
-                                .metadata
-                                .insert(key.to_lowercase(), v.to_string());
-                        }
-                    }
-                }
-
-                match codec_type {
-                    "video" => {
-                        info.has_video = true;
-                        info.video_codec = codec_name;
-                        info.width = stream
-                            .get("width")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as u32);
-                        info.height = stream
-                            .get("height")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as u32);
-
-                        // Parse frame rate (could be "30/1" or "29.97")
-                        if let Some(fps_str) = stream.get("r_frame_rate").and_then(|v| v.as_str()) {
-                            info.fps = Self::parse_frame_rate(fps_str);
-                        }
-
-                        info.video_bitrate = stream
-                            .get("bit_rate")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .map(|b| (b / 1000) as u32);
-                    }
-                    "audio" => {
-                        info.has_audio = true;
-                        if info.audio_codec.is_none() {
-                            info.audio_codec = codec_name;
-                        }
-
-                        info.sample_rate = stream
-                            .get("sample_rate")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse().ok());
-
-                        info.channels = stream
-                            .get("channels")
-                            .and_then(|v| v.as_u64())
-                            .map(|c| c as u8);
-
-                        if info.audio_bitrate.is_none() {
-                            info.audio_bitrate = stream
-                                .get("bit_rate")
-                                .and_then(|v| v.as_str())
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .map(|b| (b / 1000) as u32);
-                        }
-                    }
-                    _ => {}
-                }
-
-                info.streams.push(stream_info);
+            // Stream-level metadata
+            for (key, value) in stream.metadata().iter() {
+                stream_info
+                    .metadata
+                    .insert(key.to_lowercase(), value.to_string());
             }
+
+            match medium {
+                ffmpeg_the_third::media::Type::Video => {
+                    info.has_video = true;
+                    if info.video_codec.is_none() {
+                        info.video_codec = Some(codec_name);
+                    }
+
+                    if let Ok(codec_ctx) =
+                        ffmpeg_the_third::codec::context::Context::from_parameters(params)
+                    {
+                        if let Ok(video) = codec_ctx.decoder().video() {
+                            info.width = Some(video.width());
+                            info.height = Some(video.height());
+                        }
+                    }
+
+                    // Frame rate from avg_frame_rate
+                    let rate = stream.avg_frame_rate();
+                    if rate.denominator() > 0 {
+                        let fps =
+                            rate.numerator() as f64 / rate.denominator() as f64;
+                        if fps > 0.0 && fps < 1000.0 {
+                            info.fps = Some(fps);
+                        }
+                    }
+
+                    // Video bitrate from stream metadata
+                    if let Some(br_str) = stream_info.metadata.get("bps") {
+                        if let Ok(bps) = br_str.parse::<u64>() {
+                            info.video_bitrate = Some((bps / 1000) as u32);
+                        }
+                    }
+                }
+                ffmpeg_the_third::media::Type::Audio => {
+                    info.has_audio = true;
+                    if info.audio_codec.is_none() {
+                        info.audio_codec = Some(codec_name);
+                    }
+
+                    if let Ok(codec_ctx) =
+                        ffmpeg_the_third::codec::context::Context::from_parameters(params)
+                    {
+                        if let Ok(audio) = codec_ctx.decoder().audio() {
+                            info.sample_rate = Some(audio.rate());
+                            info.channels =
+                                Some(audio.ch_layout().channels() as u8);
+                        }
+                    }
+
+                    // Audio bitrate from stream metadata
+                    if info.audio_bitrate.is_none() {
+                        if let Some(br_str) = stream_info.metadata.get("bps") {
+                            if let Ok(bps) = br_str.parse::<u64>() {
+                                info.audio_bitrate = Some((bps / 1000) as u32);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            info.streams.push(stream_info);
         }
 
         Ok(info)
-    }
-
-    /// Parse frame rate string like "30/1" or "29.97".
-    fn parse_frame_rate(fps_str: &str) -> Option<f64> {
-        if fps_str.contains('/') {
-            let parts: Vec<&str> = fps_str.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().ok()?;
-                let den: f64 = parts[1].parse().ok()?;
-                if den > 0.0 {
-                    return Some(num / den);
-                }
-            }
-        }
-        fps_str.parse().ok()
     }
 
     /// Run FFmpeg with the given arguments.
@@ -706,17 +643,6 @@ mod tests {
         let flac = get_audio_codec("flac").unwrap();
         assert!(flac.encoder.is_none()); // Native codec
         assert!(flac.bitrate_range.is_none()); // Lossless
-    }
-
-    #[test]
-    fn test_parse_frame_rate() {
-        assert_eq!(FFmpegRunner::parse_frame_rate("30/1"), Some(30.0));
-        assert_eq!(
-            FFmpegRunner::parse_frame_rate("30000/1001"),
-            Some(29.97002997002997)
-        );
-        assert_eq!(FFmpegRunner::parse_frame_rate("24"), Some(24.0));
-        assert!(FFmpegRunner::parse_frame_rate("invalid").is_none());
     }
 
     #[test]
