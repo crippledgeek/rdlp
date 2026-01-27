@@ -143,7 +143,12 @@ impl PostProcessor for FFmpegMetadata {
         config.embed_metadata
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        _config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
         }

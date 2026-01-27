@@ -73,7 +73,7 @@
 //!         true
 //!     }
 //!
-//!     async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+//!     async fn process(&self, info: &InfoDict, files: Vec<PathBuf>, _config: &PostProcessConfig) -> Result<PostProcessResult> {
 //!         // Custom processing logic
 //!         Ok(PostProcessResult::new(info.clone(), files))
 //!     }

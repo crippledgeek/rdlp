@@ -165,7 +165,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             info!(name:? = processor.name(); "Running post-processor");
 
             match processor
-                .process(&current_info, current_files.clone())
+                .process(&current_info, current_files.clone(), config)
                 .await
             {
                 Ok(result) => {

@@ -86,7 +86,12 @@ impl PostProcessor for FFmpegExtractAudio {
         config.extract_audio
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
         }
@@ -100,7 +105,6 @@ impl PostProcessor for FFmpegExtractAudio {
         }
 
         // Determine target format
-        let config = PostProcessConfig::default();
         let target_format = config.audio_format.as_deref().unwrap_or("mp3");
         let codec_config =
             get_audio_codec(target_format).ok_or_else(|| PostProcessError::UnsupportedFormat {

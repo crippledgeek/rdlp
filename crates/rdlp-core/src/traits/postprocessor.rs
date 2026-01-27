@@ -17,10 +17,16 @@ pub trait PostProcessor: Send + Sync {
     /// # Arguments
     /// * `info` - Video metadata
     /// * `files` - List of downloaded file paths to process
+    /// * `config` - Post-processing configuration
     ///
     /// # Returns
     /// Updated InfoDict and potentially new file paths after processing
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult>;
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult>;
 
     /// Check if this post-processor should run based on config
     ///

@@ -122,7 +122,12 @@ impl PostProcessor for FFmpegMerger {
         false
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.len() < 2 {
             // Nothing to merge
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -160,8 +165,7 @@ impl PostProcessor for FFmpegMerger {
         // Determine output format
         let video_ext = video_file.extension().and_then(|e| e.to_str());
         let audio_ext = audio_file.extension().and_then(|e| e.to_str());
-        let config = PostProcessConfig::default();
-        let output_format = self.determine_output_format(&config, video_ext, audio_ext);
+        let output_format = self.determine_output_format(config, video_ext, audio_ext);
 
         // Create output filename
         let output_path = video_file.with_extension(output_format);

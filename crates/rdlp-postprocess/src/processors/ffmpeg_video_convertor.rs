@@ -92,13 +92,17 @@ impl PostProcessor for FFmpegVideoConvertor {
         config.recode_video.is_some()
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
         let input_file = &files[0];
-        let config = PostProcessConfig::default();
 
         let target_format = config.recode_video.as_deref().unwrap_or("mp4");
 
