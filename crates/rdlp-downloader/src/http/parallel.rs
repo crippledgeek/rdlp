@@ -104,7 +104,7 @@ impl HttpDownloader {
 
         let url_shared: Arc<str> = Arc::from(url);
 
-        let chunk_results: Vec<u64> = stream::iter(0..total_chunks)
+        let chunk_results: Vec<u64> = match stream::iter(0..total_chunks)
             .map(|chunk_id| {
                 let start = chunk_id as u64 * chunk_size as u64;
                 let end = if chunk_id == total_chunks - 1 {
@@ -138,17 +138,14 @@ impl HttpDownloader {
             .buffer_unordered(self.config.concurrent_fragments)
             .try_collect::<Vec<_>>()
             .await
-            .inspect_err(|e| {
+        {
+            Ok(results) => results.into_iter().map(|(_, bytes, _)| bytes).collect(),
+            Err(e) => {
                 error!("Download failed: {e}");
-                let temp_dir = temp_dir.to_path_buf();
-                let filename = filename.clone();
-                tokio::spawn(async move {
-                    cleanup_chunk_files(&temp_dir, &filename, download_id, total_chunks).await;
-                });
-            })?
-            .into_iter()
-            .map(|(_, bytes, _)| bytes)
-            .collect();
+                cleanup_chunk_files(temp_dir, &filename, download_id, total_chunks).await;
+                return Err(e);
+            }
+        };
 
         let total_downloaded: u64 = chunk_results.iter().sum();
         info!(
@@ -228,7 +225,7 @@ impl HttpDownloader {
 
         let url_shared: Arc<str> = Arc::from(url);
 
-        let chunk_results: Vec<u64> = stream::iter(0..total_chunks)
+        let chunk_results: Vec<u64> = match stream::iter(0..total_chunks)
             .map(|chunk_id| {
                 let start = resume_from + (chunk_id as u64 * chunk_size as u64);
                 let end = if chunk_id == total_chunks - 1 {
@@ -262,20 +259,17 @@ impl HttpDownloader {
             .buffer_unordered(self.config.concurrent_fragments)
             .try_collect::<Vec<_>>()
             .await
-            .inspect_err(|e| {
+        {
+            Ok(results) => results.into_iter().map(|(_, bytes, _)| bytes).collect(),
+            Err(e) => {
                 error!("Resume failed: {e}");
                 if let Some(task) = &progress_task {
                     task.abort();
                 }
-                let temp_dir = temp_dir.to_path_buf();
-                let filename = filename.clone();
-                tokio::spawn(async move {
-                    cleanup_chunk_files(&temp_dir, &filename, download_id, total_chunks).await;
-                });
-            })?
-            .into_iter()
-            .map(|(_, bytes, _)| bytes)
-            .collect();
+                cleanup_chunk_files(temp_dir, &filename, download_id, total_chunks).await;
+                return Err(e);
+            }
+        };
 
         let newly_downloaded: u64 = chunk_results.iter().sum();
         info!(

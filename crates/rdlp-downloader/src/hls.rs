@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use backon::Retryable;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use tracing::instrument;
 use rdlp_core::{
@@ -65,6 +65,8 @@ pub struct HlsDownloader {
     download_timeout: Duration,
     /// Merge operation timeout (segment merge must complete within this)
     merge_timeout: Duration,
+    /// Maximum number of segment failures before aborting the download
+    max_segment_failures: usize,
 }
 
 impl HlsDownloader {
@@ -78,6 +80,7 @@ impl HlsDownloader {
             expected_size: None,
             download_timeout: Duration::from_secs(3600), // 1 hour
             merge_timeout: Duration::from_secs(1800),    // 30 min
+            max_segment_failures: 3,
         }
     }
 
@@ -130,6 +133,13 @@ impl HlsDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_merge_timeout(mut self, timeout: Duration) -> Self {
         self.merge_timeout = timeout;
+        self
+    }
+
+    /// Set maximum number of segment failures before aborting
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_max_segment_failures(mut self, max: usize) -> Self {
+        self.max_segment_failures = max;
         self
     }
 
@@ -378,7 +388,8 @@ impl HlsDownloader {
         let base_filename_owned = base_filename.to_string();
         let output_path_owned = output_path.to_path_buf();
 
-        let results: Vec<(usize, PathBuf, u64)> = stream::iter(to_download.into_iter())
+        let max_failures = self.max_segment_failures;
+        let mut stream = stream::iter(to_download.into_iter())
             .map(|(idx, url)| {
                 let segment_path = temp_dir_owned.join(format!("{base_filename_owned}.part{idx}"));
                 let downloader = downloader.clone();
@@ -388,25 +399,23 @@ impl HlsDownloader {
                 let output_path = output_path_owned.clone();
 
                 async move {
-                    // Check if segment file already exists and is non-empty
-                    if segment_path.exists() {
-                        if let Ok(meta) = tokio::fs::metadata(&segment_path).await {
-                            if meta.len() > 0 {
-                                debug!(
-                                    segment = idx,
-                                    bytes = meta.len();
-                                    "Segment already exists, skipping"
-                                );
-                                let bytes = meta.len();
-                                // Mark as completed in state
-                                {
-                                    let mut state_guard = state.lock().await;
-                                    state_guard.mark_completed(idx, bytes);
-                                }
-                                segments.fetch_add(1, Ordering::Relaxed);
-                                progress.fetch_add(bytes, Ordering::Relaxed);
-                                return Ok((idx, segment_path, bytes));
+                    // Check if segment file already exists and is non-empty (single async stat)
+                    if let Ok(meta) = tokio::fs::metadata(&segment_path).await {
+                        if meta.len() > 0 {
+                            debug!(
+                                segment = idx,
+                                bytes = meta.len();
+                                "Segment already exists, skipping"
+                            );
+                            let bytes = meta.len();
+                            // Mark as completed in state
+                            {
+                                let mut state_guard = state.lock().await;
+                                state_guard.mark_completed(idx, bytes);
                             }
+                            segments.fetch_add(1, Ordering::Relaxed);
+                            progress.fetch_add(bytes, Ordering::Relaxed);
+                            return Ok((idx, segment_path, bytes));
                         }
                     }
 
@@ -454,9 +463,35 @@ impl HlsDownloader {
                     result
                 }
             })
-            .buffer_unordered(self.concurrent_segments)
-            .try_collect()
-            .await?;
+            .buffer_unordered(self.concurrent_segments);
+
+        // Collect results, tolerating up to max_segment_failures errors
+        let mut results: Vec<(usize, PathBuf, u64)> = Vec::new();
+        let mut segment_failures = 0usize;
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(item) => results.push(item),
+                Err(e) => {
+                    segment_failures += 1;
+                    warn!(
+                        failures = segment_failures,
+                        max = max_failures;
+                        "Segment failed: {e}"
+                    );
+                    if segment_failures >= max_failures {
+                        let snapshot = state.lock().await.clone();
+                        let _ = snapshot.save(output_path).await;
+                        return Err(RdlpError::Download(format!(
+                            "Too many segment failures ({segment_failures}), aborting"
+                        )));
+                    }
+                }
+            }
+        }
+        if segment_failures > 0 {
+            warn!(failures = segment_failures; "Completed with segment failures");
+        }
 
         // Save final state (clone under lock, then save outside lock)
         let snapshot = state.lock().await.clone();
@@ -483,11 +518,12 @@ impl HlsDownloader {
         // Sort by index for correct merge order
         all_segment_paths.sort_by_key(|(idx, _)| *idx);
 
-        // Verify we have all segments
+        // Verify we have the expected number of segments (accounting for tolerated failures)
+        let expected_count = total_segments - segment_failures;
         let actual_count = all_segment_paths.len();
-        if actual_count != total_segments {
+        if actual_count != expected_count {
             return Err(RdlpError::Download(format!(
-                "Missing segments: expected {total_segments}, got {actual_count}"
+                "Missing segments: expected {expected_count}, got {actual_count}"
             )));
         }
 
