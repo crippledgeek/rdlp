@@ -344,7 +344,7 @@ impl Format {
             if let Some(ref fragments) = self.fragments {
                 let _ = write!(buf, "{} segments", fragments.len());
             } else if let Some(segment_count) = self.filesize_approx {
-                let _ = write!(buf, "{} segments", segment_count);
+                let _ = write!(buf, "{segment_count} segments");
             } else {
                 buf.push_str("HLS stream");
             }

@@ -232,7 +232,7 @@ impl DownloadPhase {
                 // Report success
                 info!("Downloaded successfully!");
                 info!("   File: {}", output_path.display());
-                info!("   Stats: {:?}", stats);
+                info!("   Stats: {stats:?}");
 
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_path = orchestrator
