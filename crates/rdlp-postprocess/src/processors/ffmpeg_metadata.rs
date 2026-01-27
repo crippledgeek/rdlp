@@ -1,17 +1,18 @@
 //! FFmpeg metadata embedding post-processor.
 //!
 //! Embeds metadata (title, artist, album, etc.) and chapters into media files
-//! using FFmpeg's metadata capabilities.
+//! using `ffmpeg-the-third` library bindings (no CLI process spawning).
+//! No temporary FFMETADATA1 file is needed.
 
-use std::io::Write;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info};
+use log::info;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::FFmpegRunner;
+use crate::ffmpeg::{ChapterEntry, FFmpegRunner};
 
 /// Post-processor that embeds metadata into media files.
 ///
@@ -35,33 +36,28 @@ impl FFmpegMetadata {
         Self { ffmpeg }
     }
 
-    /// Build FFmpeg metadata arguments from InfoDict.
-    fn build_metadata_args(&self, info: &InfoDict) -> Vec<String> {
-        let mut args = Vec::new();
+    /// Build a metadata `HashMap` from `InfoDict`.
+    fn build_metadata(info: &InfoDict) -> HashMap<String, String> {
+        let mut meta = HashMap::new();
 
         // Title
-        args.push("-metadata".to_string());
-        args.push(format!("title={}", info.title));
+        meta.insert("title".to_string(), info.title.clone());
 
         // Artist/Uploader
         if let Some(ref artist) = info.artist {
-            args.push("-metadata".to_string());
-            args.push(format!("artist={artist}"));
+            meta.insert("artist".to_string(), artist.clone());
         } else if let Some(ref uploader) = info.uploader {
-            args.push("-metadata".to_string());
-            args.push(format!("artist={uploader}"));
+            meta.insert("artist".to_string(), uploader.clone());
         }
 
         // Album
         if let Some(ref album) = info.album {
-            args.push("-metadata".to_string());
-            args.push(format!("album={album}"));
+            meta.insert("album".to_string(), album.clone());
         }
 
         // Track
         if let Some(ref track) = info.track {
-            args.push("-metadata".to_string());
-            args.push(format!("track={track}"));
+            meta.insert("track".to_string(), track.clone());
         }
 
         // Date
@@ -72,60 +68,57 @@ impl FFmpegMetadata {
             } else {
                 date.clone()
             };
-            args.push("-metadata".to_string());
-            args.push(format!("date={formatted}"));
+            meta.insert("date".to_string(), formatted);
         }
 
         // Year
         if let Some(year) = info.release_year {
-            args.push("-metadata".to_string());
-            args.push(format!("year={year}"));
+            meta.insert("year".to_string(), year.to_string());
         }
 
-        // Description/Comment
+        // Description/Comment — truncate safely at UTF-8 char boundary
         if let Some(ref description) = info.description {
-            // Truncate very long descriptions
             let desc = if description.len() > 1000 {
-                format!("{}...", &description[..997])
+                let truncated = match description.char_indices().nth(997) {
+                    Some((byte_idx, _)) => &description[..byte_idx],
+                    None => description, // fewer than 997 chars, no truncation needed
+                };
+                format!("{truncated}...")
             } else {
                 description.clone()
             };
-            args.push("-metadata".to_string());
-            args.push(format!("comment={desc}"));
-
-            args.push("-metadata".to_string());
-            args.push(format!("description={desc}"));
+            meta.insert("comment".to_string(), desc.clone());
+            meta.insert("description".to_string(), desc);
         }
 
         // Webpage URL
-        args.push("-metadata".to_string());
-        args.push(format!("purl={}", info.webpage_url));
+        meta.insert("purl".to_string(), info.webpage_url.clone());
 
         // Extractor
-        args.push("-metadata".to_string());
-        args.push(format!("encoder=rdlp via {}", info.extractor));
+        meta.insert(
+            "encoder".to_string(),
+            format!("rdlp via {}", info.extractor),
+        );
 
-        args
+        meta
     }
 
-    /// Generate FFMETADATA1 format file content for chapters.
-    fn generate_chapters_metadata(&self, info: &InfoDict) -> Option<String> {
-        let chapters = info.chapters.as_ref()?;
-        if chapters.is_empty() {
-            return None;
-        }
+    /// Build chapter entries from `InfoDict`.
+    fn build_chapters(info: &InfoDict) -> Vec<ChapterEntry> {
+        let Some(chapters) = info.chapters.as_ref() else {
+            return Vec::new();
+        };
 
-        let mut content = String::from(";FFMETADATA1\n");
-
-        for chapter in chapters {
-            content.push_str("\n[CHAPTER]\n");
-            content.push_str("TIMEBASE=1/1000\n");
-            content.push_str(&format!("START={}\n", (chapter.start_time * 1000.0) as i64));
-            content.push_str(&format!("END={}\n", (chapter.end_time * 1000.0) as i64));
-            content.push_str(&format!("title={}\n", chapter.title));
-        }
-
-        Some(content)
+        chapters
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| ChapterEntry {
+                id: i as i64,
+                start_ms: (ch.start_time * 1000.0) as i64,
+                end_ms: (ch.end_time * 1000.0) as i64,
+                title: ch.title.clone(),
+            })
+            .collect()
     }
 }
 
@@ -164,49 +157,17 @@ impl PostProcessor for FFmpegMetadata {
         // Create temp output file
         let temp_output = input_file.with_extension(format!("temp.{extension}"));
 
-        // Build base arguments
-        let mut args = vec!["-i".to_string(), input_file.to_string_lossy().to_string()];
+        // Build metadata and chapters
+        let metadata = Self::build_metadata(info);
+        let chapters = Self::build_chapters(info);
 
-        // Handle chapters if present
-        let mut temp_metadata_file = None;
-        if let Some(chapters_content) = self.generate_chapters_metadata(info) {
-            debug!("Generating chapter metadata file");
-
-            // Write chapters to temp file
-            let chapters_path = input_file.with_extension("ffmetadata");
-            let mut file = std::fs::File::create(&chapters_path)?;
-            file.write_all(chapters_content.as_bytes())?;
-
-            args.push("-i".to_string());
-            args.push(chapters_path.to_string_lossy().to_string());
-            args.push("-map_metadata".to_string());
-            args.push("1".to_string());
-
-            temp_metadata_file = Some(chapters_path);
-        }
-
-        // Add metadata arguments
-        let metadata_args = self.build_metadata_args(info);
-        args.extend(metadata_args);
-
-        // Copy streams
-        args.push("-c".to_string());
-        args.push("copy".to_string());
-
-        // Output
-        args.push(temp_output.to_string_lossy().to_string());
-
-        // Run FFmpeg
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.ffmpeg.run(&args_refs).await?;
+        // Embed via library bindings (stream copy + metadata + chapters)
+        self.ffmpeg
+            .embed_metadata(input_file, &temp_output, &metadata, &chapters)
+            .await?;
 
         // Replace original with temp
         tokio::fs::rename(&temp_output, input_file).await?;
-
-        // Cleanup chapter metadata file
-        if let Some(chapters_file) = temp_metadata_file {
-            let _ = tokio::fs::remove_file(&chapters_file).await;
-        }
 
         info!(file:? = input_file.display(); "Metadata embedded");
 
@@ -219,60 +180,118 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_metadata_args() {
-        if let Ok(ffmpeg) = FFmpegRunner::new() {
-            let processor = FFmpegMetadata::new(Arc::new(ffmpeg));
+    fn test_build_metadata() {
+        let mut info = InfoDict::new(
+            "test123".to_string(),
+            "Test Video".to_string(),
+            "TestExtractor".to_string(),
+            "https://example.com/video".to_string(),
+        );
+        info.artist = Some("Test Artist".to_string());
+        info.upload_date = Some("20240115".to_string());
 
-            let mut info = InfoDict::new(
-                "test123".to_string(),
-                "Test Video".to_string(),
-                "TestExtractor".to_string(),
-                "https://example.com/video".to_string(),
-            );
-            info.artist = Some("Test Artist".to_string());
-            info.upload_date = Some("20240115".to_string());
+        let meta = FFmpegMetadata::build_metadata(&info);
 
-            let args = processor.build_metadata_args(&info);
-
-            assert!(args.contains(&"-metadata".to_string()));
-            assert!(args.iter().any(|a| a.starts_with("title=")));
-            assert!(args.iter().any(|a| a.starts_with("artist=")));
-            assert!(args.iter().any(|a| a.starts_with("date=")));
-        }
+        assert_eq!(meta.get("title").unwrap(), "Test Video");
+        assert_eq!(meta.get("artist").unwrap(), "Test Artist");
+        assert_eq!(meta.get("date").unwrap(), "2024-01-15");
+        assert_eq!(meta.get("purl").unwrap(), "https://example.com/video");
+        assert!(meta.get("encoder").unwrap().contains("TestExtractor"));
     }
 
     #[test]
-    fn test_generate_chapters_metadata() {
-        if let Ok(ffmpeg) = FFmpegRunner::new() {
-            let processor = FFmpegMetadata::new(Arc::new(ffmpeg));
+    fn test_build_metadata_description_truncation() {
+        let mut info = InfoDict::new(
+            "test".to_string(),
+            "Test".to_string(),
+            "Test".to_string(),
+            "https://example.com".to_string(),
+        );
+        // Create a long description (> 1000 chars)
+        info.description = Some("a".repeat(2000));
 
-            let mut info = InfoDict::new(
-                "test".to_string(),
-                "Test".to_string(),
-                "Test".to_string(),
-                "https://example.com".to_string(),
-            );
-            info.chapters = Some(vec![
-                rdlp_core::Chapter {
-                    title: "Intro".to_string(),
-                    start_time: 0.0,
-                    end_time: 30.0,
-                },
-                rdlp_core::Chapter {
-                    title: "Main".to_string(),
-                    start_time: 30.0,
-                    end_time: 120.0,
-                },
-            ]);
+        let meta = FFmpegMetadata::build_metadata(&info);
+        let desc = meta.get("description").unwrap();
+        assert!(desc.len() <= 1003); // 997 chars + "..."
+        assert!(desc.ends_with("..."));
+    }
 
-            let metadata = processor.generate_chapters_metadata(&info);
-            assert!(metadata.is_some());
+    #[test]
+    fn test_build_metadata_description_utf8_safe() {
+        let mut info = InfoDict::new(
+            "test".to_string(),
+            "Test".to_string(),
+            "Test".to_string(),
+            "https://example.com".to_string(),
+        );
+        // Use multi-byte UTF-8 characters (each '日' is 3 bytes)
+        info.description = Some("日".repeat(500)); // 1500 bytes, 500 chars
 
-            let content = metadata.unwrap();
-            assert!(content.contains(";FFMETADATA1"));
-            assert!(content.contains("[CHAPTER]"));
-            assert!(content.contains("title=Intro"));
-            assert!(content.contains("title=Main"));
-        }
+        let meta = FFmpegMetadata::build_metadata(&info);
+        let desc = meta.get("description").unwrap();
+        // Should truncate at char boundary, not byte boundary
+        assert!(desc.ends_with("..."));
+        // Verify it's valid UTF-8 (would panic if not)
+        let _ = desc.chars().count();
+    }
+
+    #[test]
+    fn test_build_metadata_uploader_fallback() {
+        let mut info = InfoDict::new(
+            "test".to_string(),
+            "Test".to_string(),
+            "Test".to_string(),
+            "https://example.com".to_string(),
+        );
+        info.uploader = Some("Uploader Name".to_string());
+
+        let meta = FFmpegMetadata::build_metadata(&info);
+        assert_eq!(meta.get("artist").unwrap(), "Uploader Name");
+    }
+
+    #[test]
+    fn test_build_chapters() {
+        let mut info = InfoDict::new(
+            "test".to_string(),
+            "Test".to_string(),
+            "Test".to_string(),
+            "https://example.com".to_string(),
+        );
+        info.chapters = Some(vec![
+            rdlp_core::Chapter {
+                title: "Intro".to_string(),
+                start_time: 0.0,
+                end_time: 30.0,
+            },
+            rdlp_core::Chapter {
+                title: "Main".to_string(),
+                start_time: 30.0,
+                end_time: 120.0,
+            },
+        ]);
+
+        let chapters = FFmpegMetadata::build_chapters(&info);
+        assert_eq!(chapters.len(), 2);
+        assert_eq!(chapters[0].id, 0);
+        assert_eq!(chapters[0].start_ms, 0);
+        assert_eq!(chapters[0].end_ms, 30000);
+        assert_eq!(chapters[0].title, "Intro");
+        assert_eq!(chapters[1].id, 1);
+        assert_eq!(chapters[1].start_ms, 30000);
+        assert_eq!(chapters[1].end_ms, 120000);
+        assert_eq!(chapters[1].title, "Main");
+    }
+
+    #[test]
+    fn test_build_chapters_none() {
+        let info = InfoDict::new(
+            "test".to_string(),
+            "Test".to_string(),
+            "Test".to_string(),
+            "https://example.com".to_string(),
+        );
+
+        let chapters = FFmpegMetadata::build_chapters(&info);
+        assert!(chapters.is_empty());
     }
 }

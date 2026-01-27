@@ -137,7 +137,8 @@ pub mod registry;
 // Re-export main types
 pub use error::{PostProcessError, Result};
 pub use ffmpeg::{
-    AudioExtractOptions, FFmpegRunner, MediaInfo, RemuxOptions, StreamInfo, VideoConvertOptions,
+    AudioExtractOptions, ChapterEntry, FFmpegRunner, MediaInfo, RemuxOptions, StreamInfo,
+    VideoConvertOptions,
 };
 pub use registry::{PostProcessorRegistry, PostProcessorRegistryTrait};
 
