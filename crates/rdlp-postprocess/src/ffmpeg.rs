@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::OnceLock;
 
 use log::{debug, trace};
 use regex::Regex;
@@ -34,6 +35,27 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use crate::error::{PostProcessError, Result};
+
+/// Global initialization state for the FFmpeg library.
+/// Ensures `ffmpeg_the_third::init()` is called exactly once.
+static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+/// Initialize the FFmpeg library (idempotent).
+///
+/// This must be called before any `ffmpeg-the-third` library operations.
+/// Safe to call multiple times — only the first call performs initialization.
+pub fn ensure_init() -> Result<()> {
+    let result = FFMPEG_INIT.get_or_init(|| {
+        ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))
+    });
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(msg) => Err(PostProcessError::FFmpegInitFailed {
+            message: msg.clone(),
+        }),
+    }
+}
 
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone)]

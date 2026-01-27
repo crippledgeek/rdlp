@@ -80,6 +80,14 @@ pub enum PostProcessError {
         source: std::io::Error,
     },
 
+    /// FFmpeg library initialization failed
+    #[error("FFmpeg library initialization failed: {message}")]
+    FFmpegInitFailed { message: String },
+
+    /// FFmpeg library operation failed
+    #[error("FFmpeg library error: {message}")]
+    FFmpegLibraryError { message: String },
+
     /// Failed to parse FFprobe output
     #[error("Failed to parse media info: {message}")]
     ParseError { message: String },
@@ -133,7 +141,9 @@ impl From<PostProcessError> for RdlpError {
             PostProcessError::FFmpegNotFound
             | PostProcessError::FFprobeNotFound
             | PostProcessError::FFmpegFailed { .. }
-            | PostProcessError::FFmpegExitCode { .. } => RdlpError::FFmpeg(error.to_string()),
+            | PostProcessError::FFmpegExitCode { .. }
+            | PostProcessError::FFmpegInitFailed { .. }
+            | PostProcessError::FFmpegLibraryError { .. } => RdlpError::FFmpeg(error.to_string()),
 
             PostProcessError::InputNotFound { .. }
             | PostProcessError::OutputExists { .. }
