@@ -102,13 +102,11 @@ impl PostProcessorRegistry {
     ///
     /// Note: FFmpeg library initialization will still be attempted.
     /// Operations will fail at runtime if the library is not available.
-    pub fn without_ffmpeg() -> Self {
-        Self {
+    pub fn without_ffmpeg() -> Result<Self> {
+        Ok(Self {
             processors: Vec::new(),
-            ffmpeg: Arc::new(
-                FFmpegRunner::new().unwrap_or_else(|_| panic!("Cannot initialize FFmpeg library")),
-            ),
-        }
+            ffmpeg: Arc::new(FFmpegRunner::new()?),
+        })
     }
 
     /// Register default post-processors.
