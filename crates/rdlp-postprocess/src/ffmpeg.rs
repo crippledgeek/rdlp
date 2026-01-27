@@ -1453,6 +1453,251 @@ impl FFmpegRunner {
         Ok(())
     }
 
+    /// Embed a thumbnail image into a media file via stream copy (remux).
+    ///
+    /// Opens both the media file and thumbnail image, copies all media streams,
+    /// and adds the thumbnail as a video stream with `ATTACHED_PIC` disposition.
+    /// Container-specific handling for MKV (attachment) and MP3 (ID3v2).
+    pub async fn embed_thumbnail(
+        &self,
+        media: impl AsRef<Path>,
+        thumbnail: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        container: &str,
+    ) -> Result<()> {
+        let media = media.as_ref().to_path_buf();
+        let thumbnail = thumbnail.as_ref().to_path_buf();
+        let output = output.as_ref().to_path_buf();
+        let container = container.to_string();
+        tokio::task::spawn_blocking(move || {
+            Self::embed_thumbnail_sync(&media, &thumbnail, &output, &container)
+        })
+        .await
+        .map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("embed_thumbnail task join error: {e}"),
+        })?
+    }
+
+    /// Embed thumbnail synchronously.
+    ///
+    /// Strategy varies by container:
+    /// - **MP4/MOV/M4A/M4V**: Map all streams + thumbnail as video with `ATTACHED_PIC`
+    /// - **MKV/MKA**: Map all streams + thumbnail as attachment with mimetype metadata
+    /// - **MP3**: Map audio only + thumbnail as video with ID3v2 metadata
+    /// - **FLAC/OGG/Opus**: Map all streams + thumbnail with `ATTACHED_PIC`
+    fn embed_thumbnail_sync(
+        media: &Path,
+        thumbnail: &Path,
+        output: &Path,
+        container: &str,
+    ) -> Result<()> {
+        ensure_init()?;
+
+        // Open media input
+        let mut ictx = ffmpeg_the_third::format::input(media).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open media input {}: {e}", media.display()),
+            }
+        })?;
+
+        // Open thumbnail input
+        let mut thumb_ictx = ffmpeg_the_third::format::input(thumbnail).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open thumbnail {}: {e}", thumbnail.display()),
+            }
+        })?;
+
+        // Create output
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
+
+        let is_mp3 = container.eq_ignore_ascii_case("mp3");
+        let is_mkv = matches!(
+            container.to_lowercase().as_str(),
+            "mkv" | "mka"
+        );
+
+        // Map media streams to output
+        let stream_count = ictx.streams().count();
+        let mut stream_mapping: Vec<i32> = vec![-1; stream_count];
+        let mut ist_time_bases = vec![ffmpeg_the_third::Rational(0, 1); stream_count];
+        let mut ost_index: i32 = 0;
+
+        for (ist_index, ist) in ictx.streams().enumerate() {
+            let medium = ist.parameters().medium();
+
+            // For MP3: only map audio streams (thumbnail replaces any video)
+            if is_mp3 && medium != ffmpeg_the_third::media::Type::Audio {
+                continue;
+            }
+
+            if medium != ffmpeg_the_third::media::Type::Video
+                && medium != ffmpeg_the_third::media::Type::Audio
+            {
+                continue;
+            }
+
+            stream_mapping[ist_index] = ost_index;
+            ist_time_bases[ist_index] = ist.time_base();
+            ost_index += 1;
+
+            let mut ost = octx
+                .add_stream(ffmpeg_the_third::encoder::find(
+                    ffmpeg_the_third::codec::Id::None,
+                ))
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add output stream: {e}"),
+                })?;
+            ost.set_parameters(ist.parameters());
+            unsafe {
+                (*(ost.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters))
+                    .codec_tag = 0;
+            }
+        }
+
+        // Add thumbnail stream
+        let thumb_ist = thumb_ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Video)
+            .ok_or(PostProcessError::ffmpeg_failed(
+                "no video stream found in thumbnail",
+            ))?;
+        let thumb_ist_index = thumb_ist.index();
+        let thumb_ist_time_base = thumb_ist.time_base();
+        let thumb_params = thumb_ist.parameters();
+
+        let thumb_ost_index;
+        if is_mkv {
+            // MKV: add as attachment stream
+            let mut ost = octx
+                .add_stream(ffmpeg_the_third::encoder::find(
+                    ffmpeg_the_third::codec::Id::None,
+                ))
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add thumbnail attachment stream: {e}"),
+                })?;
+            thumb_ost_index = ost.index();
+            // Set codec parameters from thumbnail
+            ost.set_parameters(thumb_params);
+            // Override to attachment type for MKV
+            unsafe {
+                let codecpar =
+                    ost.parameters().as_ptr() as *mut ffmpeg_the_third::ffi::AVCodecParameters;
+                (*codecpar).codec_type =
+                    ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
+                (*codecpar).codec_tag = 0;
+            }
+            // Set attachment metadata
+            {
+                let mut dict = ffmpeg_the_third::Dictionary::new();
+                dict.set("mimetype", Self::thumbnail_mimetype(thumbnail));
+                dict.set("filename", "cover.jpg");
+                ost.set_metadata(dict);
+            }
+        } else {
+            // All other containers: add as video stream with ATTACHED_PIC
+            let mut ost = octx
+                .add_stream(ffmpeg_the_third::encoder::find(
+                    ffmpeg_the_third::codec::Id::None,
+                ))
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to add thumbnail stream: {e}"),
+                })?;
+            thumb_ost_index = ost.index();
+            ost.set_parameters(thumb_params);
+            unsafe {
+                let stream_ptr = ost.as_mut_ptr();
+                (*stream_ptr).disposition =
+                    ffmpeg_the_third::ffi::AV_DISPOSITION_ATTACHED_PIC;
+                (*((*stream_ptr).codecpar)).codec_tag = 0;
+            }
+
+            // For MP3: set ID3v2 metadata on the thumbnail stream
+            if is_mp3 {
+                let mut dict = ffmpeg_the_third::Dictionary::new();
+                dict.set("title", "Album cover");
+                dict.set("comment", "Cover (front)");
+                ost.set_metadata(dict);
+            }
+        }
+
+        // Copy format-level metadata from media input
+        octx.set_metadata(ictx.metadata().to_owned());
+
+        // Write header
+        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output header: {e}"),
+        })?;
+
+        // Copy media packets
+        for result in ictx.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read media packet: {e}"),
+                }
+            })?;
+            let ist_index = stream.index();
+            let ost_idx = stream_mapping[ist_index];
+            if ost_idx < 0 {
+                continue;
+            }
+            let ost_idx = ost_idx as usize;
+            let ost_time_base = octx.stream(ost_idx).unwrap().time_base();
+            packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
+            packet.set_position(-1);
+            packet.set_stream(ost_idx);
+            packet.write_interleaved(&mut octx).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write media packet: {e}"),
+                }
+            })?;
+        }
+
+        // Copy thumbnail packet(s)
+        let thumb_ost_time_base = octx.stream(thumb_ost_index).unwrap().time_base();
+        for result in thumb_ictx.packets() {
+            let (stream, mut packet) = result.map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read thumbnail packet: {e}"),
+                }
+            })?;
+            if stream.index() == thumb_ist_index {
+                packet.rescale_ts(thumb_ist_time_base, thumb_ost_time_base);
+                packet.set_position(-1);
+                packet.set_stream(thumb_ost_index);
+                packet.write_interleaved(&mut octx).map_err(|e| {
+                    PostProcessError::FFmpegLibraryError {
+                        message: format!("failed to write thumbnail packet: {e}"),
+                    }
+                })?;
+            }
+        }
+
+        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output trailer: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    /// Determine MIME type from thumbnail file extension.
+    fn thumbnail_mimetype(path: &Path) -> &'static str {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str()
+        {
+            "png" => "image/png",
+            "webp" => "image/webp",
+            _ => "image/jpeg",
+        }
+    }
+
     /// Convert a video file, either by remuxing or transcoding.
     ///
     /// Uses `opts.remux_only` to determine whether to stream-copy or transcode.
