@@ -402,13 +402,19 @@ impl HlsDownloader {
 
                     match &result {
                         Ok((_, _, bytes)) => {
-                            // Update state on success
-                            let mut state_guard = state.lock().await;
-                            state_guard.mark_completed(idx, *bytes);
-
-                            // Save state every 50 segments for crash recovery
-                            if state_guard.completed_segments.len() % 50 == 0 {
-                                if let Err(e) = state_guard.save(&output_path).await {
+                            // Update state on success; clone if periodic save needed
+                            let snapshot = {
+                                let mut guard = state.lock().await;
+                                guard.mark_completed(idx, *bytes);
+                                if guard.completed_segments.len() % 50 == 0 {
+                                    Some(guard.clone())
+                                } else {
+                                    None
+                                }
+                            };
+                            // Save outside the lock to avoid holding it across I/O
+                            if let Some(snapshot) = snapshot {
+                                if let Err(e) = snapshot.save(&output_path).await {
                                     warn!("Failed to save HLS state: {e}");
                                 }
                             }
@@ -417,7 +423,8 @@ impl HlsDownloader {
                         }
                         Err(e) => {
                             // Save state on error before propagating
-                            if let Err(save_err) = state.lock().await.save(&output_path).await {
+                            let snapshot = state.lock().await.clone();
+                            if let Err(save_err) = snapshot.save(&output_path).await {
                                 warn!("Failed to save HLS state on error: {save_err}");
                             }
                             warn!(segment = idx; "Segment download failed: {e}");
@@ -431,8 +438,9 @@ impl HlsDownloader {
             .try_collect()
             .await?;
 
-        // Save final state
-        if let Err(e) = state.lock().await.save(output_path).await {
+        // Save final state (clone under lock, then save outside lock)
+        let snapshot = state.lock().await.clone();
+        if let Err(e) = snapshot.save(output_path).await {
             warn!("Failed to save final HLS state: {e}");
         }
 
@@ -662,7 +670,8 @@ impl Downloader for HlsDownloader {
             Ok(paths) => paths,
             Err(e) => {
                 // Save state on error (so we can resume later)
-                if let Err(save_err) = state.lock().await.save(path).await {
+                let snapshot = state.lock().await.clone();
+                if let Err(save_err) = snapshot.save(path).await {
                     warn!("Failed to save HLS state: {save_err}");
                 }
                 if let Some(task) = progress_task {

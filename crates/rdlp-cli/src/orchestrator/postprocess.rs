@@ -246,13 +246,13 @@ impl Orchestrator {
             return;
         }
 
-        let entries = match std::fs::read_dir(dir) {
+        let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(entries) => entries,
             Err(_) => return,
         };
 
         let mut deleted = 0;
-        for entry in entries.filter_map(|e| e.ok()) {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
                 // Match pattern: base_name.part{number}
@@ -261,7 +261,7 @@ impl Orchestrator {
                     if let Some(part_idx) = filename.rfind(".part") {
                         let suffix = &filename[part_idx + 5..];
                         if suffix.chars().all(|c| c.is_ascii_digit())
-                            && std::fs::remove_file(&path).is_ok()
+                            && tokio::fs::remove_file(&path).await.is_ok()
                         {
                             deleted += 1;
                         }

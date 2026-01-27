@@ -14,13 +14,13 @@ impl Orchestrator {
     /// Returns an error if:
     /// - Format selector string is invalid
     /// - No suitable format is found (automatic mode)
-    pub(super) fn select_format(
+    pub(super) async fn select_format(
         &self,
         formats: &[Format],
         interactive: bool,
     ) -> Result<Option<Format>> {
         let format = if interactive {
-            match self.select_format_interactive(formats)? {
+            match self.select_format_interactive(formats).await? {
                 Some(format) => format,
                 None => {
                     info!("Selection cancelled by user");
@@ -48,7 +48,7 @@ impl Orchestrator {
     /// Displays a menu of available formats and lets the user select one.
     ///
     /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (ESC pressed)
-    pub(super) fn select_format_interactive(&self, formats: &[Format]) -> Result<Option<Format>> {
+    pub(super) async fn select_format_interactive(&self, formats: &[Format]) -> Result<Option<Format>> {
         if formats.is_empty() {
             return Err(OrchestratorError::NoFormat);
         }
@@ -63,12 +63,16 @@ impl Orchestrator {
         );
         println!("{}", "-".repeat(79));
 
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Select a format to download (ESC to cancel)")
-            .items(&items)
-            .default(0)
-            .interact_opt()
-            .map_err(|e| OrchestratorError::Io(e.into()))?;
+        let selection = tokio::task::spawn_blocking(move || {
+            Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("Select a format to download (ESC to cancel)")
+                .items(&items)
+                .default(0)
+                .interact_opt()
+        })
+        .await
+        .map_err(|e| OrchestratorError::Io(std::io::Error::other(e)))?
+        .map_err(|e| OrchestratorError::Io(e.into()))?;
 
         match selection {
             Some(index) => Ok(Some(formats[index].clone())),

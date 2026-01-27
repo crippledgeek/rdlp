@@ -137,7 +137,7 @@ impl DownloadPhase {
             }
 
             Self::SelectingFormat { info } => {
-                let format = match orchestrator.select_format(&info.formats, interactive)? {
+                let format = match orchestrator.select_format(&info.formats, interactive).await? {
                     Some(format) => format,
                     None => return Ok(Self::Cancelled),
                 };
