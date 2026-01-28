@@ -54,6 +54,32 @@ pub struct HlsInfo {
     pub total_size: Option<u64>,
     /// Number of segments in the playlist
     pub segment_count: usize,
+    /// Total duration in seconds (sum of segment durations)
+    pub total_duration: Option<f64>,
+    /// Video resolution (width, height) from master playlist variant
+    pub resolution: Option<(u64, u64)>,
+    /// Parsed video codec name (e.g., "h264", "hevc", "vp9")
+    pub video_codec: Option<String>,
+    /// Parsed audio codec name (e.g., "aac", "ac3", "opus")
+    pub audio_codec: Option<String>,
+    /// Frame rate from master playlist variant
+    pub frame_rate: Option<f64>,
+    /// Peak bandwidth in bits per second from variant
+    pub bandwidth: Option<u64>,
+    /// Average bandwidth in bits per second from variant
+    pub average_bandwidth: Option<u64>,
+    /// Whether the stream is live (no EXT-X-ENDLIST tag)
+    pub is_live: bool,
+    /// Whether any segment uses encryption (EXT-X-KEY)
+    pub has_encryption: bool,
+}
+
+/// Media playlist metadata extracted without additional HTTP requests
+struct MediaPlaylistInfo {
+    segment_count: usize,
+    total_duration: f64,
+    is_live: bool,
+    has_encryption: bool,
 }
 
 /// HLS playlist size detector
@@ -226,7 +252,222 @@ impl HlsSizeDetector {
         Ok(Some(HlsInfo {
             total_size: Some(total_size),
             segment_count,
+            total_duration: None,
+            resolution: None,
+            video_codec: None,
+            audio_codec: None,
+            frame_rate: None,
+            bandwidth: None,
+            average_bandwidth: None,
+            is_live: false,
+            has_encryption: false,
         }))
+    }
+
+    /// Detect comprehensive HLS metadata from an M3U8 playlist
+    ///
+    /// Fetches and parses the M3U8 playlist, extracting all available metadata:
+    /// - From master playlists: resolution, codecs, frame rate, bandwidth
+    /// - From media playlists: segment count, total duration, live/VOD, encryption
+    ///
+    /// This is more comprehensive than `count_segments()` but does not fetch segment
+    /// sizes (no HEAD requests). Performance is similar: 1-2 HTTP requests.
+    ///
+    /// # Arguments
+    /// * `m3u8_url` - URL of the HLS m3u8 playlist
+    ///
+    /// # Returns
+    /// * `Ok(Some(HlsInfo))` - Metadata extracted from the playlist
+    /// * `Ok(None)` - Metadata could not be determined (non-fatal)
+    /// * `Err(_)` - Fatal error (network failure, invalid playlist, etc.)
+    pub async fn detect_hls_metadata(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
+        BaseExtractor::validate_url_security(m3u8_url)?;
+
+        if self.verbose {
+            debug!(url:? = m3u8_url; "HLS detecting metadata");
+        }
+
+        let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
+            Ok(text) => text,
+            Err(e) => {
+                if self.verbose {
+                    debug!("HLS failed to fetch playlist: {e}");
+                }
+                return Ok(None);
+            }
+        };
+
+        let playlist = match m3u8_rs::parse_playlist_res(playlist_text.as_bytes()) {
+            Ok(p) => p,
+            Err(e) => {
+                if self.verbose {
+                    debug!("HLS failed to parse playlist: {e:?}");
+                }
+                return Ok(None);
+            }
+        };
+
+        match playlist {
+            m3u8_rs::Playlist::MasterPlaylist(master) => {
+                if master.variants.is_empty() {
+                    return Ok(None);
+                }
+
+                let variant = &master.variants[0];
+
+                // Extract variant metadata
+                let resolution = variant.resolution.as_ref().map(|r| (r.width, r.height));
+                let (video_codec, audio_codec) = variant
+                    .codecs
+                    .as_deref()
+                    .map(rdlp_core::parse_hls_codecs)
+                    .unwrap_or((None, None));
+                let frame_rate = variant.frame_rate;
+                let bandwidth = Some(variant.bandwidth);
+                let average_bandwidth = variant.average_bandwidth;
+
+                if self.verbose {
+                    debug!(
+                        variants = master.variants.len(),
+                        bandwidth = variant.bandwidth,
+                        resolution:? = resolution,
+                        codecs:? = variant.codecs,
+                        frame_rate:? = frame_rate;
+                        "HLS master playlist metadata extracted"
+                    );
+                }
+
+                // Resolve and fetch the media playlist for segment info
+                let base_url = url::Url::parse(m3u8_url)
+                    .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+                let media_url = base_url
+                    .join(&variant.uri)
+                    .map_err(|e| {
+                        RdlpError::Extraction(format!("Failed to join media playlist URL: {e}"))
+                    })?
+                    .to_string();
+
+                BaseExtractor::validate_url_security(&media_url)?;
+
+                let media_info = match self.fetch_and_extract_media_info(&media_url).await {
+                    Ok(Some(info)) => info,
+                    Ok(None) | Err(_) => {
+                        // Return what we have from the master playlist
+                        return Ok(Some(HlsInfo {
+                            total_size: None,
+                            segment_count: 0,
+                            total_duration: None,
+                            resolution,
+                            video_codec: video_codec.map(String::from),
+                            audio_codec: audio_codec.map(String::from),
+                            frame_rate,
+                            bandwidth,
+                            average_bandwidth,
+                            is_live: false,
+                            has_encryption: false,
+                        }));
+                    }
+                };
+
+                Ok(Some(HlsInfo {
+                    total_size: None,
+                    segment_count: media_info.segment_count,
+                    total_duration: Some(media_info.total_duration),
+                    resolution,
+                    video_codec: video_codec.map(String::from),
+                    audio_codec: audio_codec.map(String::from),
+                    frame_rate,
+                    bandwidth,
+                    average_bandwidth,
+                    is_live: media_info.is_live,
+                    has_encryption: media_info.has_encryption,
+                }))
+            }
+            m3u8_rs::Playlist::MediaPlaylist(media) => {
+                let info = Self::extract_media_playlist_info(&media);
+
+                if self.verbose {
+                    debug!(
+                        segments = info.segment_count,
+                        duration = info.total_duration,
+                        is_live = info.is_live,
+                        encrypted = info.has_encryption;
+                        "HLS media playlist metadata extracted"
+                    );
+                }
+
+                Ok(Some(HlsInfo {
+                    total_size: None,
+                    segment_count: info.segment_count,
+                    total_duration: Some(info.total_duration),
+                    resolution: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    frame_rate: None,
+                    bandwidth: None,
+                    average_bandwidth: None,
+                    is_live: info.is_live,
+                    has_encryption: info.has_encryption,
+                }))
+            }
+        }
+    }
+
+    /// Fetch M3U8 playlist text from a URL
+    async fn fetch_playlist_text(&self, m3u8_url: &str) -> Result<String> {
+        let response = self.http_client.get(m3u8_url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                RdlpError::Network(format!("Timeout fetching playlist: {m3u8_url}"))
+            } else if e.is_connect() {
+                RdlpError::Network(format!("Connection failed for playlist: {m3u8_url}: {e}"))
+            } else {
+                RdlpError::Network(format!("Failed to fetch playlist: {e}"))
+            }
+        })?;
+
+        if !response.status().is_success() {
+            return Err(RdlpError::Network(format!(
+                "HTTP {} for playlist: {m3u8_url}",
+                response.status()
+            )));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| RdlpError::Network(format!("Failed to read playlist response: {e}")))
+    }
+
+    /// Fetch a media playlist and extract its metadata
+    async fn fetch_and_extract_media_info(
+        &self,
+        media_url: &str,
+    ) -> Result<Option<MediaPlaylistInfo>> {
+        let text = self.fetch_playlist_text(media_url).await?;
+        let playlist = m3u8_rs::parse_playlist_res(text.as_bytes())
+            .map_err(|e| RdlpError::Extraction(format!("M3U8 parse error: {e:?}")))?;
+
+        match playlist {
+            m3u8_rs::Playlist::MediaPlaylist(media) => {
+                Ok(Some(Self::extract_media_playlist_info(&media)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Extract metadata from a parsed media playlist (no HTTP requests)
+    fn extract_media_playlist_info(media: &m3u8_rs::MediaPlaylist) -> MediaPlaylistInfo {
+        let segment_count = media.segments.len();
+        let total_duration = media.segments.iter().map(|s| s.duration as f64).sum();
+        let is_live = !media.end_list;
+        let has_encryption = media.segments.iter().any(|s| s.key.is_some());
+
+        MediaPlaylistInfo {
+            segment_count,
+            total_duration,
+            is_live,
+            has_encryption,
+        }
     }
 
     /// Parse m3u8 playlist and extract segment URLs
@@ -245,28 +486,7 @@ impl HlsSizeDetector {
             debug!(url:? = m3u8_url; "HLS fetching playlist");
         }
 
-        // Fetch playlist text
-        let response = self.http_client.get(m3u8_url).send().await.map_err(|e| {
-            if e.is_timeout() {
-                RdlpError::Network(format!("Timeout fetching playlist: {m3u8_url}"))
-            } else if e.is_connect() {
-                RdlpError::Network(format!("Connection failed for playlist: {m3u8_url}: {e}"))
-            } else {
-                RdlpError::Network(format!("Failed to fetch playlist: {e}"))
-            }
-        })?;
-
-        if !response.status().is_success() {
-            return Err(RdlpError::Network(format!(
-                "HTTP {} for playlist: {m3u8_url}",
-                response.status()
-            )));
-        }
-
-        let playlist_text = response
-            .text()
-            .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read playlist response: {e}")))?;
+        let playlist_text = self.fetch_playlist_text(m3u8_url).await?;
 
         if self.verbose {
             debug!(bytes = playlist_text.len(); "HLS playlist size");
@@ -556,30 +776,55 @@ pub async fn detect_format_sizes(
                 let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
 
                 if is_hls {
-                    // Fast segment count only (parses m3u8, no size fetching)
-                    // Store segment count in filesize_approx for display in Size column
-                    // (negative value convention: segment count, not bytes)
-                    let result =
-                        timeout(Duration::from_secs(5), hls_detector.count_segments(&url)).await;
+                    // Detect HLS metadata (segment count, codecs, resolution, etc.)
+                    let result = timeout(
+                        Duration::from_secs(5),
+                        hls_detector.detect_hls_metadata(&url),
+                    )
+                    .await;
 
                     match result {
-                        Ok(Ok(Some(segment_count))) => {
-                            // Use a special marker: store segment count as approx size
-                            // The table_row() method will detect HLS and show "X segments"
-                            format.filesize_approx = Some(segment_count as u64);
+                        Ok(Ok(Some(info))) => {
+                            format.filesize_approx = Some(info.segment_count as u64);
+
+                            // Enrich format with M3U8 metadata (overrides hardcoded values)
+                            if let Some((w, h)) = info.resolution {
+                                format.width = Some(w as u32);
+                                format.height = Some(h as u32);
+                            }
+                            if let Some(vc) = info.video_codec {
+                                format.vcodec = Some(vc);
+                            }
+                            if let Some(ac) = info.audio_codec {
+                                format.acodec = Some(ac);
+                            }
+                            if let Some(fr) = info.frame_rate {
+                                format.fps = Some(fr);
+                            }
+                            if let Some(bw) = info.average_bandwidth.or(info.bandwidth) {
+                                format.tbr = Some(bw as f64 / 1000.0);
+                            }
+                            if info.has_encryption {
+                                format.has_drm = Some(true);
+                            }
 
                             if verbose {
                                 debug!(
                                     extractor:? = extractor_name,
                                     format:? = format.format_id,
-                                    segments = segment_count;
-                                    "HLS segment count detected"
+                                    segments = info.segment_count,
+                                    resolution:? = info.resolution,
+                                    video_codec:? = format.vcodec,
+                                    audio_codec:? = format.acodec,
+                                    fps:? = format.fps,
+                                    tbr:? = format.tbr;
+                                    "HLS metadata detected"
                                 );
                             }
                         }
                         Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
                             if verbose {
-                                debug!(extractor:? = extractor_name, url:? = url; "Could not count HLS segments");
+                                debug!(extractor:? = extractor_name, url:? = url; "Could not detect HLS metadata");
                             }
                         }
                     }
