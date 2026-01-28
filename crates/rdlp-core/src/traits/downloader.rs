@@ -134,6 +134,12 @@ pub struct DownloadProgress {
 
     /// Total segments (for HLS/segmented downloads)
     pub total_segments: Option<u64>,
+
+    /// Duration downloaded in seconds (for HLS with duration tracking)
+    pub duration_downloaded: Option<f64>,
+
+    /// Total stream duration in seconds (for HLS with duration tracking)
+    pub total_duration: Option<f64>,
 }
 
 impl DownloadProgress {
@@ -164,6 +170,8 @@ impl DownloadProgress {
             percentage,
             segments_downloaded: None,
             total_segments: None,
+            duration_downloaded: None,
+            total_duration: None,
         }
     }
 
@@ -202,6 +210,55 @@ impl DownloadProgress {
             percentage,
             segments_downloaded: Some(segments_downloaded),
             total_segments: Some(total_segments),
+            duration_downloaded: None,
+            total_duration: None,
+        }
+    }
+
+    /// Create a new duration-based progress update (for HLS with duration tracking)
+    ///
+    /// Uses stream duration for more accurate progress/ETA than segment count,
+    /// since segments can have variable lengths.
+    pub fn new_with_duration(
+        bytes_downloaded: u64,
+        speed: f64,
+        segments_downloaded: u64,
+        total_segments: u64,
+        duration_downloaded: f64,
+        total_duration: f64,
+    ) -> Self {
+        let percentage = if total_duration > 0.0 {
+            Some((duration_downloaded / total_duration) * 100.0)
+        } else {
+            None
+        };
+
+        let eta = if speed > 0.0 && total_duration > 0.0 && duration_downloaded < total_duration {
+            // Estimate remaining bytes based on duration ratio and current progress
+            let remaining_duration = total_duration - duration_downloaded;
+            let duration_ratio = if duration_downloaded > 0.0 {
+                remaining_duration / duration_downloaded
+            } else {
+                1.0
+            };
+            let estimated_remaining_bytes = (bytes_downloaded as f64 * duration_ratio) as u64;
+            Some(Duration::from_secs_f64(
+                estimated_remaining_bytes as f64 / speed,
+            ))
+        } else {
+            None
+        };
+
+        Self {
+            bytes_downloaded,
+            total_bytes: None,
+            speed,
+            eta,
+            percentage,
+            segments_downloaded: Some(segments_downloaded),
+            total_segments: Some(total_segments),
+            duration_downloaded: Some(duration_downloaded),
+            total_duration: Some(total_duration),
         }
     }
 

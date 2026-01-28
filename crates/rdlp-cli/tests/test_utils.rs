@@ -169,6 +169,8 @@ impl Downloader for MockDownloader {
                 percentage: Some(100.0),
                 segments_downloaded: None,
                 total_segments: None,
+                duration_downloaded: None,
+                total_duration: None,
             };
             callback.on_progress(&progress);
         }
@@ -226,6 +228,8 @@ impl Downloader for MockDownloader {
                 percentage: Some(100.0),
                 segments_downloaded: None,
                 total_segments: None,
+                duration_downloaded: None,
+                total_duration: None,
             };
             callback.on_progress(&progress);
         }

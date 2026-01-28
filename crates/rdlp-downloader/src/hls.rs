@@ -18,6 +18,15 @@ use tokio::sync::Mutex;
 use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
 
+/// Information about an HLS segment including its duration
+#[derive(Clone, Debug)]
+struct SegmentInfo {
+    /// Segment URL
+    url: String,
+    /// Segment duration in seconds (from EXTINF)
+    duration: f64,
+}
+
 /// HLS (HTTP Live Streaming) downloader
 ///
 /// Downloads HLS streams by parsing m3u8 playlists and downloading segments
@@ -244,9 +253,9 @@ impl HlsDownloader {
     /// * `m3u8_url` - URL of the m3u8 playlist
     ///
     /// # Returns
-    /// * `Ok(Vec<String>)` - List of segment URLs
+    /// * `Ok(Vec<SegmentInfo>)` - List of segment URLs with durations
     /// * `Err(_)` - Network error, parse error, or empty playlist
-    async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<String>> {
+    async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<SegmentInfo>> {
         // Fetch playlist text
         let playlist_text = self
             .http_downloader
@@ -274,19 +283,23 @@ impl HlsDownloader {
                     warn!("HLS stream appears to be live (no EXT-X-ENDLIST) — may not download completely");
                 }
 
-                // Direct media playlist - extract segments
+                // Direct media playlist - extract segments with durations
                 let base_url = url::Url::parse(m3u8_url)
                     .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
 
-                let segments: Vec<String> = media
+                let segments: Vec<SegmentInfo> = media
                     .segments
                     .iter()
                     .map(|seg| {
                         // Join relative URLs with base URL
-                        base_url
+                        let url = base_url
                             .join(&seg.uri)
                             .map(|u| u.to_string())
-                            .unwrap_or_else(|_| seg.uri.clone())
+                            .unwrap_or_else(|_| seg.uri.clone());
+                        SegmentInfo {
+                            url,
+                            duration: seg.duration as f64,
+                        }
                     })
                     .collect();
 
@@ -342,11 +355,12 @@ impl HlsDownloader {
     /// Saves state periodically for crash recovery.
     ///
     /// # Arguments
-    /// * `segment_urls` - List of segment URLs to download
+    /// * `segments` - List of segments with URLs and durations
     /// * `temp_dir` - Directory to save temporary segment files
     /// * `base_filename` - Base filename for temporary files
     /// * `progress_counter` - Shared atomic counter for bytes downloaded
     /// * `segments_counter` - Shared atomic counter for segments completed
+    /// * `duration_counter` - Shared atomic counter for duration completed (in centiseconds for precision)
     /// * `state` - Shared download state for resume tracking
     /// * `output_path` - Final output path (for state file location)
     ///
@@ -354,27 +368,37 @@ impl HlsDownloader {
     /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
     /// * `Err(_)` - Download error (network, I/O, etc.)
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self, segment_urls, progress_counter, segments_counter, state), fields(segments = segment_urls.len()))]
+    #[instrument(skip(self, segments, progress_counter, segments_counter, duration_counter, state), fields(segments = segments.len()))]
     async fn download_segments_with_resume(
         &self,
-        segment_urls: Vec<String>,
+        segments: Vec<SegmentInfo>,
         temp_dir: &Path,
         base_filename: &str,
         progress_counter: Arc<AtomicU64>,
         segments_counter: Arc<AtomicU64>,
+        duration_counter: Arc<AtomicU64>,
         state: Arc<Mutex<HlsDownloadState>>,
         output_path: &Path,
     ) -> Result<Vec<PathBuf>> {
-        let total_segments = segment_urls.len();
+        let total_segments = segments.len();
 
         // Get already completed segments
         let completed: HashSet<usize> = state.lock().await.completed_segments.clone();
-        let to_download: Vec<(usize, String)> = segment_urls
+        let to_download: Vec<(usize, SegmentInfo)> = segments
             .iter()
             .enumerate()
             .filter(|(idx, _)| !completed.contains(idx))
-            .map(|(idx, url)| (idx, url.clone()))
+            .map(|(idx, seg)| (idx, seg.clone()))
             .collect();
+
+        // Calculate duration already downloaded from completed segments
+        let completed_duration: f64 = segments
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| completed.contains(idx))
+            .map(|(_, seg)| seg.duration)
+            .sum();
+        duration_counter.store((completed_duration * 100.0) as u64, Ordering::Relaxed);
 
         let already_downloaded = completed.len();
         let remaining = to_download.len();
@@ -399,13 +423,16 @@ impl HlsDownloader {
 
         let max_failures = self.max_segment_failures;
         let mut stream = stream::iter(to_download.into_iter())
-            .map(|(idx, url)| {
+            .map(|(idx, seg)| {
                 let segment_path = temp_dir_owned.join(format!("{base_filename_owned}.part{idx}"));
                 let downloader = downloader.clone();
                 let progress = progress_counter.clone();
                 let segments = segments_counter.clone();
+                let duration = duration_counter.clone();
                 let state = state.clone();
                 let output_path = output_path_owned.clone();
+                let seg_duration = seg.duration;
+                let seg_url = seg.url;
 
                 async move {
                     // Check if segment file already exists and is non-empty (single async stat)
@@ -424,6 +451,7 @@ impl HlsDownloader {
                             }
                             segments.fetch_add(1, Ordering::Relaxed);
                             progress.fetch_add(bytes, Ordering::Relaxed);
+                            duration.fetch_add((seg_duration * 100.0) as u64, Ordering::Relaxed);
                             return Ok((idx, segment_path, bytes));
                         }
                     }
@@ -432,7 +460,7 @@ impl HlsDownloader {
                     let result = downloader
                         .download_segment_with_retry(
                             idx,
-                            url,
+                            seg_url,
                             segment_path.clone(),
                             progress.clone(),
                         )
@@ -458,6 +486,7 @@ impl HlsDownloader {
                             }
 
                             segments.fetch_add(1, Ordering::Relaxed);
+                            duration.fetch_add((seg_duration * 100.0) as u64, Ordering::Relaxed);
                         }
                         Err(e) => {
                             // Save state on error before propagating
@@ -654,9 +683,14 @@ impl Downloader for HlsDownloader {
             let start_time = Instant::now();
 
             // Step 1: Parse playlist
-            let segment_urls = self.parse_playlist(url).await?;
-            let total_segments = segment_urls.len();
-            info!(segments = total_segments; "Parsed HLS playlist");
+            let segments = self.parse_playlist(url).await?;
+            let total_segments = segments.len();
+            let total_duration: f64 = segments.iter().map(|s| s.duration).sum();
+            info!(
+                segments = total_segments,
+                duration_secs = total_duration;
+                "Parsed HLS playlist"
+            );
 
             // Step 2: Load or create state for resume support
             let state = match HlsDownloadState::load(path, url, total_segments).await {
@@ -685,12 +719,15 @@ impl Downloader for HlsDownloader {
             let segments_completed = Arc::new(AtomicU64::new(
                 state.lock().await.completed_segments.len() as u64,
             ));
+            // Duration in centiseconds for atomic precision (f64 -> u64)
+            let duration_completed = Arc::new(AtomicU64::new(0));
             let total_segments_u64 = total_segments as u64;
 
-            // Spawn progress reporter task with segment-based progress
+            // Spawn progress reporter task with duration-based progress
             let progress_task = if let Some(callback) = progress {
                 let downloaded_clone = downloaded.clone();
                 let segments_clone = segments_completed.clone();
+                let duration_clone = duration_completed.clone();
                 let start_time_clone = start_time;
                 Some(tokio::spawn(async move {
                     let mut last_update = Instant::now();
@@ -702,6 +739,8 @@ impl Downloader for HlsDownloader {
                         if now.duration_since(last_update) >= update_interval {
                             let bytes = downloaded_clone.load(Ordering::Relaxed);
                             let segments = segments_clone.load(Ordering::Relaxed);
+                            let dur_centis = duration_clone.load(Ordering::Relaxed);
+                            let dur_downloaded = dur_centis as f64 / 100.0;
                             let elapsed = now.duration_since(start_time_clone).as_secs_f64();
                             let speed = if elapsed > 0.0 {
                                 bytes as f64 / elapsed
@@ -709,12 +748,14 @@ impl Downloader for HlsDownloader {
                                 0.0
                             };
 
-                            // Use segment-based progress for HLS
-                            let progress_info = DownloadProgress::new_with_segments(
+                            // Use duration-based progress for more accurate percentage/ETA
+                            let progress_info = DownloadProgress::new_with_duration(
                                 bytes,
                                 speed,
                                 segments,
                                 total_segments_u64,
+                                dur_downloaded,
+                                total_duration,
                             );
                             callback.on_progress(&progress_info);
                             last_update = now;
@@ -734,11 +775,12 @@ impl Downloader for HlsDownloader {
 
             let segment_paths = match self
                 .download_segments_with_resume(
-                    segment_urls.clone(),
+                    segments.clone(),
                     temp_dir,
                     base_filename,
                     downloaded.clone(),
                     segments_completed.clone(),
+                    duration_completed.clone(),
                     state.clone(),
                     path,
                 )

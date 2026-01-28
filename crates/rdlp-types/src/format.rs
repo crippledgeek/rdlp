@@ -515,6 +515,7 @@ impl FormatSelector {
         match self.expression.as_str() {
             "best" => {
                 // Find best format with both video and audio, excluding DRM
+                // Ranking: quality > height > tbr > fps
                 if let Some(best) = formats
                     .iter()
                     .filter(|f| f.has_video() && f.has_audio() && f.has_drm != Some(true))
@@ -527,6 +528,11 @@ impl FormatSelector {
                                     .partial_cmp(&b.tbr)
                                     .unwrap_or(std::cmp::Ordering::Equal),
                             )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
                     })
                 {
                     vec![best]
@@ -535,16 +541,25 @@ impl FormatSelector {
                 }
             }
             "bestvideo" => {
+                // Ranking: height > vbr > fps
                 if let Some(best) = formats
                     .iter()
                     .filter(|f| f.has_video() && f.has_drm != Some(true))
                     .max_by(|a, b| {
-                    a.height.cmp(&b.height).then(
-                        a.vbr
-                            .partial_cmp(&b.vbr)
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                    )
-                }) {
+                        a.height
+                            .cmp(&b.height)
+                            .then(
+                                a.vbr
+                                    .partial_cmp(&b.vbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                    })
+                {
                     vec![best]
                 } else {
                     Vec::new()
@@ -566,19 +581,26 @@ impl FormatSelector {
             }
             _ => {
                 // Default: return best format, excluding DRM
+                // Ranking: quality > height > tbr > fps
                 if let Some(best) = formats
                     .iter()
                     .filter(|f| f.has_drm != Some(true))
                     .max_by(|a, b| {
-                    a.quality
-                        .cmp(&b.quality)
-                        .then(a.height.cmp(&b.height))
-                        .then(
-                            a.tbr
-                                .partial_cmp(&b.tbr)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        )
-                }) {
+                        a.quality
+                            .cmp(&b.quality)
+                            .then(a.height.cmp(&b.height))
+                            .then(
+                                a.tbr
+                                    .partial_cmp(&b.tbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                    })
+                {
                     vec![best]
                 } else {
                     Vec::new()
