@@ -804,6 +804,9 @@ pub async fn detect_format_sizes(
                             if let Some(bw) = info.average_bandwidth.or(info.bandwidth) {
                                 format.tbr = Some(bw as f64 / 1000.0);
                             }
+                            if let Some(dur) = info.total_duration {
+                                format.duration = Some(dur);
+                            }
                             if info.has_encryption {
                                 format.has_drm = Some(true);
                             }
