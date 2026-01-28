@@ -265,6 +265,15 @@ impl HlsDownloader {
 
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
+                // Warn about encryption (not yet supported)
+                if media.segments.iter().any(|s| s.key.is_some()) {
+                    warn!("HLS stream uses encryption (AES-128/SAMPLE-AES) — decryption not yet supported");
+                }
+                // Warn about live streams
+                if !media.end_list {
+                    warn!("HLS stream appears to be live (no EXT-X-ENDLIST) — may not download completely");
+                }
+
                 // Direct media playlist - extract segments
                 let base_url = url::Url::parse(m3u8_url)
                     .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;

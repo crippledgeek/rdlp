@@ -26,6 +26,8 @@
 
 #![warn(missing_docs)]
 
+/// HLS codec parsing utilities
+pub mod codecs;
 /// Configuration file I/O utilities
 pub mod config_io;
 /// Error types and result aliases
@@ -39,6 +41,9 @@ pub mod traits;
 pub use rdlp_types::{
     Chapter, Config, Format, FormatSelector, Fragment, InfoDict, Subtitle, Thumbnail,
 };
+
+// Re-export codec utilities
+pub use codecs::parse_hls_codecs;
 
 // Re-export error types and utilities
 pub use error::{RdlpError, Result, check_http_response};
