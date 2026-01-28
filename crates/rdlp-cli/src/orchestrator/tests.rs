@@ -1,13 +1,25 @@
 //! Tests for the orchestrator module
 
 use super::*;
-use rdlp_core::{Config, Format};
+use rdlp_core::{Config, Format, InfoDict};
 use std::path::Path;
 
 /// Helper function to create a test orchestrator
 pub(crate) fn create_test_orchestrator() -> Orchestrator {
     let config = Config::default();
     Orchestrator::new(config)
+}
+
+/// Helper function to wrap formats in an InfoDict for testing
+fn create_test_info_dict(formats: Vec<Format>) -> InfoDict {
+    let mut info = InfoDict::new(
+        "test_id".to_string(),
+        "Test Video".to_string(),
+        "TestExtractor".to_string(),
+        "https://example.com/video".to_string(),
+    );
+    info.formats = formats;
+    info
 }
 
 /// Helper function to create a test format
@@ -232,9 +244,10 @@ async fn test_select_format_automatic_mode() {
         create_test_format("720p", "720p", Some(1000000)),
         create_test_format("1080p", "1080p", Some(2000000)),
     ];
+    let info = create_test_info_dict(formats);
 
     // Non-interactive mode should use format selector
-    let result = orchestrator.select_format(&formats, false).await;
+    let result = orchestrator.select_format(&info, false).await;
     assert!(result.is_ok());
     let selected = result.unwrap();
     assert!(selected.is_some());
@@ -246,10 +259,10 @@ async fn test_select_format_automatic_mode() {
 #[tokio::test]
 async fn test_select_format_empty_formats() {
     let orchestrator = create_test_orchestrator();
-    let formats = vec![];
+    let info = create_test_info_dict(vec![]);
 
     // Should fail with empty formats in automatic mode
-    let result = orchestrator.select_format(&formats, false).await;
+    let result = orchestrator.select_format(&info, false).await;
     assert!(result.is_err());
 }
 

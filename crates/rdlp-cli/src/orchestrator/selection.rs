@@ -2,8 +2,8 @@
 
 use super::{Orchestrator, errors::*};
 use dialoguer::{Select, theme::ColorfulTheme};
-use log::info;
-use rdlp_core::{Format, FormatSelector};
+use log::{info, warn};
+use rdlp_core::{Format, FormatSelector, InfoDict};
 
 impl Orchestrator {
     /// Select format from available formats
@@ -16,11 +16,12 @@ impl Orchestrator {
     /// - No suitable format is found (automatic mode)
     pub(super) async fn select_format(
         &self,
-        formats: &[Format],
+        info: &InfoDict,
         interactive: bool,
     ) -> Result<Option<Format>> {
+        let formats = &info.formats;
         let format = if interactive {
-            match self.select_format_interactive(formats).await? {
+            match self.select_format_interactive(info).await? {
                 Some(format) => format,
                 None => {
                     info!("Selection cancelled by user");
@@ -48,9 +49,16 @@ impl Orchestrator {
     /// Displays a menu of available formats and lets the user select one.
     ///
     /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (ESC pressed)
-    pub(super) async fn select_format_interactive(&self, formats: &[Format]) -> Result<Option<Format>> {
+    pub(super) async fn select_format_interactive(&self, info: &InfoDict) -> Result<Option<Format>> {
+        let formats = &info.formats;
         if formats.is_empty() {
             return Err(OrchestratorError::NoFormat);
+        }
+
+        // Warn about live streams before showing format table
+        if info.is_live == Some(true) {
+            warn!("This appears to be a LIVE stream — download may be incomplete");
+            println!();
         }
 
         // Build menu items with format details

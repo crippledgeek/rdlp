@@ -350,7 +350,7 @@ impl Orchestrator {
         output_dir: &std::path::Path,
     ) -> Result<Option<PathBuf>> {
         // Select format
-        let format = match self.select_format(&info.formats, interactive).await? {
+        let format = match self.select_format(info, interactive).await? {
             Some(format) => format,
             None => return Ok(None),
         };

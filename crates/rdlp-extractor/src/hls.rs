@@ -47,6 +47,19 @@ const MAX_SEGMENTS: usize = 10_000;
 /// Default number of concurrent HTTP requests
 const DEFAULT_CONCURRENCY: usize = 8;
 
+/// Stream-level flags aggregated from HLS format detection
+///
+/// These flags represent properties of the entire stream, not individual formats.
+/// They are aggregated during `detect_format_sizes()` and can be used to set
+/// `InfoDict.is_live` or warn users about encrypted content.
+#[derive(Debug, Clone, Default)]
+pub struct HlsStreamFlags {
+    /// True if any HLS format is a live stream (no EXT-X-ENDLIST tag)
+    pub is_live: bool,
+    /// True if any HLS format uses encryption (EXT-X-KEY)
+    pub has_any_drm: bool,
+}
+
 /// Information about an HLS stream
 #[derive(Debug, Clone)]
 pub struct HlsInfo {
@@ -748,12 +761,12 @@ impl HlsSizeDetector {
 /// * `extractor_name` - Name of the extractor for logging (e.g., "PornHub", "RedTube")
 ///
 /// # Returns
-/// Vector of formats with sizes/segment counts populated
+/// Tuple of (formats with sizes/segment counts populated, stream-level flags)
 pub async fn detect_format_sizes(
     formats: Vec<rdlp_core::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
-) -> Vec<rdlp_core::Format> {
+) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
     use futures::future::join_all;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -774,6 +787,10 @@ pub async fn detect_format_sizes(
                 let mut format = format;
                 let url = format.url.clone();
                 let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
+
+                // Track stream-level flags from HLS detection
+                let mut detected_is_live = None;
+                let mut detected_has_encryption = None;
 
                 if is_hls {
                     // Detect HLS metadata (segment count, codecs, resolution, etc.)
@@ -811,6 +828,10 @@ pub async fn detect_format_sizes(
                                 format.has_drm = Some(true);
                             }
 
+                            // Capture stream-level flags for aggregation
+                            detected_is_live = Some(info.is_live);
+                            detected_has_encryption = Some(info.has_encryption);
+
                             if verbose {
                                 debug!(
                                     extractor:? = extractor_name,
@@ -820,7 +841,8 @@ pub async fn detect_format_sizes(
                                     video_codec:? = format.vcodec,
                                     audio_codec:? = format.acodec,
                                     fps:? = format.fps,
-                                    tbr:? = format.tbr;
+                                    tbr:? = format.tbr,
+                                    is_live = info.is_live;
                                     "HLS metadata detected"
                                 );
                             }
@@ -844,12 +866,28 @@ pub async fn detect_format_sizes(
                     }
                 }
 
-                format
+                (format, detected_is_live, detected_has_encryption)
             }
         })
         .collect();
 
-    join_all(detection_futures).await
+    let results = join_all(detection_futures).await;
+
+    // Separate formats from flags and aggregate stream-level properties
+    let mut formats = Vec::with_capacity(results.len());
+    let mut flags = HlsStreamFlags::default();
+
+    for (format, is_live, has_encryption) in results {
+        formats.push(format);
+        if is_live == Some(true) {
+            flags.is_live = true;
+        }
+        if has_encryption == Some(true) {
+            flags.has_any_drm = true;
+        }
+    }
+
+    (formats, flags)
 }
 
 #[cfg(test)]
