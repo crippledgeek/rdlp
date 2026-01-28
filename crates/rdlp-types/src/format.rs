@@ -113,6 +113,10 @@ pub struct Format {
     /// Whether format has DRM protection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_drm: Option<bool>,
+
+    /// Total duration in seconds (for HLS: sum of segment durations)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
 
 impl fmt::Debug for Format {
@@ -186,6 +190,9 @@ impl fmt::Debug for Format {
         if let Some(v) = &self.has_drm {
             d.field("has_drm", v);
         }
+        if let Some(v) = &self.duration {
+            d.field("duration", v);
+        }
 
         d.finish()
     }
@@ -220,6 +227,7 @@ impl Format {
             dynamic_range: None,
             cached_description: OnceLock::new(),
             has_drm: None,
+            duration: None,
         }
     }
 
@@ -317,8 +325,21 @@ impl Format {
         // Pre-allocate buffer for typical row length (~80 chars)
         let mut buf = String::with_capacity(80);
 
-        let quality = self.format_note.as_deref().unwrap_or("unknown");
-        let _ = write!(buf, "{quality:<12} | ");
+        // Quality column: append fps when non-standard (e.g. "1080p60")
+        let quality_base = self.format_note.as_deref().unwrap_or("unknown");
+        match self.fps {
+            Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
+                let _ = write!(buf, "{quality_base}{fps:.0}");
+                let col_len = quality_base.len() + format!("{fps:.0}").len();
+                for _ in col_len..12 {
+                    buf.push(' ');
+                }
+                buf.push_str(" | ");
+            }
+            _ => {
+                let _ = write!(buf, "{quality_base:<12} | ");
+            }
+        }
 
         // Resolution: avoid intermediate String allocation
         match (self.width, self.height) {
@@ -340,13 +361,30 @@ impl Format {
         // Size column: write directly to buffer
         let size_start = buf.len();
         if is_hls {
-            // For HLS: show segment count if available (stored in filesize_approx)
-            if let Some(ref fragments) = self.fragments {
-                let _ = write!(buf, "{} segments", fragments.len());
-            } else if let Some(segment_count) = self.filesize_approx {
-                let _ = write!(buf, "{segment_count} segments");
-            } else {
-                buf.push_str("HLS stream");
+            // For HLS: show duration + segment count when available
+            let seg_count = self
+                .fragments
+                .as_ref()
+                .map(|f| f.len() as u64)
+                .or(self.filesize_approx);
+
+            match (self.duration, seg_count) {
+                (Some(dur), Some(segs)) => {
+                    let mins = dur as u64 / 60;
+                    let secs = dur as u64 % 60;
+                    let _ = write!(buf, "{mins}:{secs:02} ({segs} seg)");
+                }
+                (Some(dur), None) => {
+                    let mins = dur as u64 / 60;
+                    let secs = dur as u64 % 60;
+                    let _ = write!(buf, "{mins}:{secs:02}");
+                }
+                (None, Some(segs)) => {
+                    let _ = write!(buf, "{segs} segments");
+                }
+                (None, None) => {
+                    buf.push_str("HLS stream");
+                }
             }
         } else if let Some(filesize) = self.filesize {
             let _ = write!(buf, "{:.1} MB", filesize as f64 / (1024.0 * 1024.0));
@@ -391,6 +429,10 @@ impl Format {
                 let _ = write!(buf, "{a} (audio only)");
             }
             (None, None) => buf.push_str("Unknown"),
+        }
+
+        if self.has_drm.unwrap_or(false) {
+            buf.push_str(" [DRM]");
         }
 
         buf
@@ -472,10 +514,11 @@ impl FormatSelector {
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
         match self.expression.as_str() {
             "best" => {
-                // Find best format with both video and audio
+                // Find best format with both video and audio, excluding DRM
+                // Ranking: quality > height > tbr > fps
                 if let Some(best) = formats
                     .iter()
-                    .filter(|f| f.has_video() && f.has_audio())
+                    .filter(|f| f.has_video() && f.has_audio() && !f.has_drm.unwrap_or(false))
                     .max_by(|a, b| {
                         a.quality
                             .cmp(&b.quality)
@@ -483,6 +526,11 @@ impl FormatSelector {
                             .then(
                                 a.tbr
                                     .partial_cmp(&b.tbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
                                     .unwrap_or(std::cmp::Ordering::Equal),
                             )
                     })
@@ -493,20 +541,35 @@ impl FormatSelector {
                 }
             }
             "bestvideo" => {
-                if let Some(best) = formats.iter().filter(|f| f.has_video()).max_by(|a, b| {
-                    a.height.cmp(&b.height).then(
-                        a.vbr
-                            .partial_cmp(&b.vbr)
-                            .unwrap_or(std::cmp::Ordering::Equal),
-                    )
-                }) {
+                // Ranking: height > vbr > fps
+                if let Some(best) = formats
+                    .iter()
+                    .filter(|f| f.has_video() && !f.has_drm.unwrap_or(false))
+                    .max_by(|a, b| {
+                        a.height
+                            .cmp(&b.height)
+                            .then(
+                                a.vbr
+                                    .partial_cmp(&b.vbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                    })
+                {
                     vec![best]
                 } else {
                     Vec::new()
                 }
             }
             "bestaudio" => {
-                if let Some(best) = formats.iter().filter(|f| f.has_audio()).max_by(|a, b| {
+                if let Some(best) = formats
+                    .iter()
+                    .filter(|f| f.has_audio() && !f.has_drm.unwrap_or(false))
+                    .max_by(|a, b| {
                     a.abr
                         .partial_cmp(&b.abr)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -517,17 +580,27 @@ impl FormatSelector {
                 }
             }
             _ => {
-                // Default: return best format
-                if let Some(best) = formats.iter().max_by(|a, b| {
-                    a.quality
-                        .cmp(&b.quality)
-                        .then(a.height.cmp(&b.height))
-                        .then(
-                            a.tbr
-                                .partial_cmp(&b.tbr)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        )
-                }) {
+                // Default: return best format, excluding DRM
+                // Ranking: quality > height > tbr > fps
+                if let Some(best) = formats
+                    .iter()
+                    .filter(|f| !f.has_drm.unwrap_or(false))
+                    .max_by(|a, b| {
+                        a.quality
+                            .cmp(&b.quality)
+                            .then(a.height.cmp(&b.height))
+                            .then(
+                                a.tbr
+                                    .partial_cmp(&b.tbr)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                            .then(
+                                a.fps
+                                    .partial_cmp(&b.fps)
+                                    .unwrap_or(std::cmp::Ordering::Equal),
+                            )
+                    })
+                {
                     vec![best]
                 } else {
                     Vec::new()

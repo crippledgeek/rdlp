@@ -112,7 +112,7 @@ impl InfoExtractor for RedTubeExtractor {
         }
 
         // Fetch sizes/segments for all formats in parallel
-        formats = detect_format_sizes(formats, ctx, self.name()).await;
+        let (formats, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all extracted metadata
         let mut info = InfoDict::new(
@@ -139,6 +139,11 @@ impl InfoExtractor for RedTubeExtractor {
         info.categories = metadata.categories;
         info.age_limit = Some(18); // RedTube is adult content
         info.formats = formats;
+
+        // Set stream-level flags from HLS detection
+        if hls_flags.is_live {
+            info.is_live = Some(true);
+        }
 
         Ok(info)
     }

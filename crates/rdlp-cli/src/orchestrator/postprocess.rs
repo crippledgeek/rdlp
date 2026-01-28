@@ -87,7 +87,7 @@ impl Orchestrator {
 
         if self.config.verbose {
             let processors = registry.list_processors();
-            println!("   Available processors: {}", processors.join(", "));
+            debug!("Available processors: {}", processors.join(", "));
         }
 
         // Run FFmpeg remux to fix container (faststart, timestamps)

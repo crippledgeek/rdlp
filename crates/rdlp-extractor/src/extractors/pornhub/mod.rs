@@ -115,7 +115,7 @@ impl InfoExtractor for PornHubExtractor {
         }
 
         // Detect file sizes and segment counts
-        let formats_with_size = detect_format_sizes(formats, ctx, self.name()).await;
+        let (formats_with_size, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all metadata
         let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
@@ -129,6 +129,11 @@ impl InfoExtractor for PornHubExtractor {
         info.average_rating = average_rating;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
+
+        // Set stream-level flags from HLS detection
+        if hls_flags.is_live {
+            info.is_live = Some(true);
+        }
 
         Ok(info)
     }

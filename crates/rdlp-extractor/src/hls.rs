@@ -47,6 +47,19 @@ const MAX_SEGMENTS: usize = 10_000;
 /// Default number of concurrent HTTP requests
 const DEFAULT_CONCURRENCY: usize = 8;
 
+/// Stream-level flags aggregated from HLS format detection
+///
+/// These flags represent properties of the entire stream, not individual formats.
+/// They are aggregated during `detect_format_sizes()` and can be used to set
+/// `InfoDict.is_live` or warn users about encrypted content.
+#[derive(Debug, Clone, Default)]
+pub struct HlsStreamFlags {
+    /// True if any HLS format is a live stream (no EXT-X-ENDLIST tag)
+    pub is_live: bool,
+    /// True if any HLS format uses encryption (EXT-X-KEY)
+    pub has_any_drm: bool,
+}
+
 /// Information about an HLS stream
 #[derive(Debug, Clone)]
 pub struct HlsInfo {
@@ -72,6 +85,8 @@ pub struct HlsInfo {
     pub is_live: bool,
     /// Whether any segment uses encryption (EXT-X-KEY)
     pub has_encryption: bool,
+    /// Detected segment container format (e.g., "ts", "mp4", "m4s")
+    pub segment_container: Option<String>,
 }
 
 /// Media playlist metadata extracted without additional HTTP requests
@@ -80,6 +95,15 @@ struct MediaPlaylistInfo {
     total_duration: f64,
     is_live: bool,
     has_encryption: bool,
+    segment_container: Option<String>,
+}
+
+/// Detect container format from segment URL extension
+fn detect_segment_container(segment_uri: &str) -> Option<String> {
+    let path = segment_uri.split('?').next().unwrap_or(segment_uri);
+    path.rfind('.')
+        .map(|pos| path[pos + 1..].to_lowercase())
+        .filter(|ext| !ext.is_empty())
 }
 
 /// HLS playlist size detector
@@ -227,6 +251,9 @@ impl HlsSizeDetector {
 
         let segment_count = segment_urls.len();
 
+        // Detect container from first segment URL
+        let segment_container = segment_urls.first().and_then(|url| detect_segment_container(url));
+
         // Step 2: Calculate total size from all segments
         let total_size = match self.sum_segment_sizes(segment_urls).await {
             Ok(size) => size,
@@ -261,6 +288,7 @@ impl HlsSizeDetector {
             average_bandwidth: None,
             is_live: false,
             has_encryption: false,
+            segment_container,
         }))
     }
 
@@ -365,6 +393,7 @@ impl HlsSizeDetector {
                             average_bandwidth,
                             is_live: false,
                             has_encryption: false,
+                            segment_container: None,
                         }));
                     }
                 };
@@ -381,6 +410,7 @@ impl HlsSizeDetector {
                     average_bandwidth,
                     is_live: media_info.is_live,
                     has_encryption: media_info.has_encryption,
+                    segment_container: media_info.segment_container,
                 }))
             }
             m3u8_rs::Playlist::MediaPlaylist(media) => {
@@ -408,6 +438,7 @@ impl HlsSizeDetector {
                     average_bandwidth: None,
                     is_live: info.is_live,
                     has_encryption: info.has_encryption,
+                    segment_container: info.segment_container,
                 }))
             }
         }
@@ -462,11 +493,18 @@ impl HlsSizeDetector {
         let is_live = !media.end_list;
         let has_encryption = media.segments.iter().any(|s| s.key.is_some());
 
+        // Detect container from first segment URL
+        let segment_container = media
+            .segments
+            .first()
+            .and_then(|seg| detect_segment_container(&seg.uri));
+
         MediaPlaylistInfo {
             segment_count,
             total_duration,
             is_live,
             has_encryption,
+            segment_container,
         }
     }
 
@@ -748,12 +786,12 @@ impl HlsSizeDetector {
 /// * `extractor_name` - Name of the extractor for logging (e.g., "PornHub", "RedTube")
 ///
 /// # Returns
-/// Vector of formats with sizes/segment counts populated
+/// Tuple of (formats with sizes/segment counts populated, stream-level flags)
 pub async fn detect_format_sizes(
     formats: Vec<rdlp_core::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
-) -> Vec<rdlp_core::Format> {
+) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
     use futures::future::join_all;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -774,6 +812,10 @@ pub async fn detect_format_sizes(
                 let mut format = format;
                 let url = format.url.clone();
                 let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
+
+                // Track stream-level flags from HLS detection
+                let mut detected_is_live = None;
+                let mut detected_has_encryption = None;
 
                 if is_hls {
                     // Detect HLS metadata (segment count, codecs, resolution, etc.)
@@ -804,9 +846,19 @@ pub async fn detect_format_sizes(
                             if let Some(bw) = info.average_bandwidth.or(info.bandwidth) {
                                 format.tbr = Some(bw as f64 / 1000.0);
                             }
+                            if let Some(dur) = info.total_duration {
+                                format.duration = Some(dur);
+                            }
                             if info.has_encryption {
                                 format.has_drm = Some(true);
                             }
+                            if let Some(container) = info.segment_container {
+                                format.container = Some(container);
+                            }
+
+                            // Capture stream-level flags for aggregation
+                            detected_is_live = Some(info.is_live);
+                            detected_has_encryption = Some(info.has_encryption);
 
                             if verbose {
                                 debug!(
@@ -817,7 +869,8 @@ pub async fn detect_format_sizes(
                                     video_codec:? = format.vcodec,
                                     audio_codec:? = format.acodec,
                                     fps:? = format.fps,
-                                    tbr:? = format.tbr;
+                                    tbr:? = format.tbr,
+                                    is_live = info.is_live;
                                     "HLS metadata detected"
                                 );
                             }
@@ -841,12 +894,28 @@ pub async fn detect_format_sizes(
                     }
                 }
 
-                format
+                (format, detected_is_live, detected_has_encryption)
             }
         })
         .collect();
 
-    join_all(detection_futures).await
+    let results = join_all(detection_futures).await;
+
+    // Separate formats from flags and aggregate stream-level properties
+    let mut formats = Vec::with_capacity(results.len());
+    let mut flags = HlsStreamFlags::default();
+
+    for (format, is_live, has_encryption) in results {
+        formats.push(format);
+        if is_live.unwrap_or(false) {
+            flags.is_live = true;
+        }
+        if has_encryption.unwrap_or(false) {
+            flags.has_any_drm = true;
+        }
+    }
+
+    (formats, flags)
 }
 
 #[cfg(test)]

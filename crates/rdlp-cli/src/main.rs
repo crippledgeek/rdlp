@@ -153,17 +153,17 @@ async fn async_main() -> Result<()> {
 
     // List extractors if requested
     if args.list_extractors {
-        println!("Available extractors:");
+        info!("Available extractors:");
         for extractor in orchestrator.list_extractors() {
-            println!("  - {extractor}");
+            info!("  - {extractor}");
         }
         return Ok(());
     }
 
     if args.list_downloaders {
-        println!("Available download protocols:");
+        info!("Available download protocols:");
         for downloader in orchestrator.list_downloaders() {
-            println!("  - {downloader}");
+            info!("  - {downloader}");
         }
         return Ok(());
     }

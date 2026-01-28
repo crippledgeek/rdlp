@@ -70,7 +70,7 @@ impl Orchestrator {
         let already_downloaded = existing_files.len();
         let remaining = total - already_downloaded;
 
-        println!("\n{}", "=".repeat(60));
+        info!("{}", "=".repeat(60));
         info!(title:? = playlist_title; "Playlist");
         info!(path:? = playlist_dir.display(); "Folder");
         info!(total; "Total videos");
@@ -85,8 +85,7 @@ impl Orchestrator {
             info!(remaining; "Remaining");
         }
 
-        println!("{}", "=".repeat(60));
-        println!();
+        info!("{}", "=".repeat(60));
 
         // If all videos are already downloaded, return early
         if remaining == 0 {
@@ -116,10 +115,9 @@ impl Orchestrator {
             .unwrap_or(false);
 
             if !proceed {
-                println!("Cancelled by user");
+                info!("Cancelled by user");
                 return Ok(None);
             }
-            println!();
         }
 
         // Create playlist directory if it doesn't exist
@@ -155,9 +153,9 @@ impl Orchestrator {
                 continue;
             }
 
-            println!("\n{}", "─".repeat(60));
+            info!("{}", "─".repeat(60));
             info!(position, total, title:? = info.title; "Downloading");
-            println!("{}", "─".repeat(60));
+            info!("{}", "─".repeat(60));
 
             // Race download against Ctrl+C signal
             tokio::select! {
@@ -201,7 +199,7 @@ impl Orchestrator {
         info!(downloaded = downloaded.len(), total; "Total downloaded");
 
         if already_downloaded > 0 {
-            println!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
+            info!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
         }
 
         if !failed.is_empty() {
@@ -219,7 +217,7 @@ impl Orchestrator {
             info!("Run the same command again to resume");
         }
 
-        println!("{}", "=".repeat(60));
+        info!("{}", "=".repeat(60));
 
         if downloaded.is_empty() {
             Err(OrchestratorError::ExtractionFailed(
@@ -350,7 +348,7 @@ impl Orchestrator {
         output_dir: &std::path::Path,
     ) -> Result<Option<PathBuf>> {
         // Select format
-        let format = match self.select_format(&info.formats, interactive).await? {
+        let format = match self.select_format(info, interactive).await? {
             Some(format) => format,
             None => return Ok(None),
         };
