@@ -26,6 +26,9 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Machine-specific Cargo config (contains local paths)
+.cargo/config.toml
+
 # Plugin build artifacts
 plugins/*/target/
 docs/

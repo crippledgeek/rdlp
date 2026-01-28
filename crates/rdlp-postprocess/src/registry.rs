@@ -33,7 +33,7 @@
 //! # }
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 
 use crate::error::Result;
-use crate::ffmpeg::FFmpegRunner;
+use crate::ffmpeg::{FFmpegRunner, RemuxOptions};
 use crate::processors::*;
 
 /// Trait for post-processor registry operations.
@@ -54,6 +54,12 @@ pub trait PostProcessorRegistryTrait: Send + Sync {
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
     ) -> anyhow::Result<PostProcessResult>;
+
+    /// Remux a file with faststart enabled (stream copy, no re-encoding).
+    ///
+    /// Moves the moov atom to the beginning of the file for progressive
+    /// playback and fixes container structure/timestamps.
+    async fn remux_faststart(&self, input: &Path, output: &Path) -> anyhow::Result<()>;
 
     /// List all registered post-processors.
     fn list_processors(&self) -> Vec<String>;
@@ -93,15 +99,14 @@ impl PostProcessorRegistry {
     }
 
     /// Create a registry without FFmpeg (for testing or non-FFmpeg operations).
-    pub fn without_ffmpeg() -> Self {
-        Self {
+    ///
+    /// Note: FFmpeg library initialization will still be attempted.
+    /// Operations will fail at runtime if the library is not available.
+    pub fn without_ffmpeg() -> Result<Self> {
+        Ok(Self {
             processors: Vec::new(),
-            ffmpeg: Arc::new(FFmpegRunner::new().unwrap_or_else(|_| {
-                // Create a dummy runner that will fail if used
-                FFmpegRunner::with_location(Some(std::path::Path::new("/nonexistent")))
-                    .unwrap_or_else(|_| panic!("Cannot create FFmpeg runner"))
-            })),
-        }
+            ffmpeg: Arc::new(FFmpegRunner::new()?),
+        })
     }
 
     /// Register default post-processors.
@@ -165,7 +170,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             info!(name:? = processor.name(); "Running post-processor");
 
             match processor
-                .process(&current_info, current_files.clone())
+                .process(&current_info, current_files.clone(), config)
                 .await
             {
                 Ok(result) => {
@@ -208,6 +213,17 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         })
     }
 
+    async fn remux_faststart(&self, input: &Path, output: &Path) -> anyhow::Result<()> {
+        let opts = RemuxOptions {
+            faststart: true,
+            ..Default::default()
+        };
+        self.ffmpeg
+            .remux(input, output, &opts)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     fn list_processors(&self) -> Vec<String> {
         self.processors
             .iter()
@@ -238,9 +254,8 @@ mod tests {
 
     #[test]
     fn test_registry_creation() {
-        // This test only works if FFmpeg is installed
-        if which::which("ffmpeg").is_ok() {
-            let registry = PostProcessorRegistry::new().unwrap();
+        // This test only works if FFmpeg library is available
+        if let Ok(registry) = PostProcessorRegistry::new() {
             let processors = registry.list_processors();
             assert!(!processors.is_empty());
         }
@@ -248,8 +263,7 @@ mod tests {
 
     #[test]
     fn test_processor_priority_order() {
-        if which::which("ffmpeg").is_ok() {
-            let registry = PostProcessorRegistry::new().unwrap();
+        if let Ok(registry) = PostProcessorRegistry::new() {
             let sorted = registry.sorted_processors();
 
             // Verify processors are sorted by priority (highest first)

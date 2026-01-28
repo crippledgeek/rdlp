@@ -1,7 +1,7 @@
 //! FFmpeg video conversion/remuxing post-processor.
 //!
 //! Converts video files to different formats or remuxes them to different
-//! containers without re-encoding.
+//! containers using `ffmpeg-the-third` library bindings (no CLI process spawning).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::FFmpegRunner;
+use crate::ffmpeg::{FFmpegRunner, VideoConvertOptions};
 
 /// Supported video container formats.
 const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "flv", "ts"];
@@ -75,6 +75,39 @@ impl FFmpegVideoConvertor {
             _ => false,
         }
     }
+
+    /// Build `VideoConvertOptions` from the target format and remux decision.
+    fn build_convert_options(target_format: &str, can_remux: bool) -> VideoConvertOptions {
+        if can_remux {
+            return VideoConvertOptions {
+                remux_only: true,
+                audio_copy: true,
+                ..Default::default()
+            };
+        }
+
+        // Determine target codec from container
+        let target_codec = match target_format {
+            "webm" => "vp9",
+            "mp4" | "mov" | "mkv" => "h264",
+            _ => "h264",
+        };
+
+        let encoder = Self::get_encoder(target_codec);
+        let (preset, crf) = match target_codec {
+            "h264" | "h265" | "hevc" => (Some("medium".to_string()), Some(23)),
+            "vp9" => (None, Some(30)),
+            _ => (None, None),
+        };
+
+        VideoConvertOptions {
+            remux_only: false,
+            video_codec: encoder.map(String::from),
+            preset,
+            crf,
+            audio_copy: true,
+        }
+    }
 }
 
 #[async_trait]
@@ -92,13 +125,17 @@ impl PostProcessor for FFmpegVideoConvertor {
         config.recode_video.is_some()
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
         }
 
         let input_file = &files[0];
-        let config = PostProcessConfig::default();
 
         let target_format = config.recode_video.as_deref().unwrap_or("mp4");
 
@@ -136,61 +173,22 @@ impl PostProcessor for FFmpegVideoConvertor {
         let can_remux =
             Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
 
+        if can_remux {
+            debug!("Remuxing (stream copy)");
+        } else {
+            debug!("Transcoding video");
+        }
+
         // Build output path
         let output_path = input_file.with_extension(target_format);
 
-        // Build FFmpeg arguments
-        let mut args = vec!["-i".to_string(), input_file.to_string_lossy().to_string()];
+        // Build conversion options
+        let opts = Self::build_convert_options(target_format, can_remux);
 
-        if can_remux {
-            debug!("Remuxing (stream copy)");
-            args.push("-c".to_string());
-            args.push("copy".to_string());
-        } else {
-            debug!("Transcoding video");
-
-            // Get appropriate encoder
-            let target_codec = match target_format {
-                "webm" => "vp9",
-                "mp4" | "mov" | "mkv" => "h264",
-                _ => "h264",
-            };
-
-            if let Some(encoder) = Self::get_encoder(target_codec) {
-                args.push("-c:v".to_string());
-                args.push(encoder.to_string());
-
-                // Add reasonable default encoding settings
-                match target_codec {
-                    "h264" | "h265" | "hevc" => {
-                        args.push("-preset".to_string());
-                        args.push("medium".to_string());
-                        args.push("-crf".to_string());
-                        args.push("23".to_string());
-                    }
-                    "vp9" => {
-                        args.push("-crf".to_string());
-                        args.push("30".to_string());
-                        args.push("-b:v".to_string());
-                        args.push("0".to_string());
-                    }
-                    _ => {}
-                }
-            }
-
-            // Copy audio stream
-            args.push("-c:a".to_string());
-            args.push("copy".to_string());
-        }
-
-        // Add any custom FFmpeg args
-        args.extend(config.ffmpeg_args.iter().cloned());
-
-        args.push(output_path.to_string_lossy().to_string());
-
-        // Run FFmpeg
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.ffmpeg.run(&args_refs).await?;
+        // Convert via library bindings
+        self.ffmpeg
+            .convert_video(input_file, &output_path, &opts)
+            .await?;
 
         info!(output:? = output_path.display(); "Converted");
 
@@ -242,5 +240,33 @@ mod tests {
         // Anything to MKV - can remux
         assert!(FFmpegVideoConvertor::can_remux("mp4", "mkv", Some("h264")));
         assert!(FFmpegVideoConvertor::can_remux("webm", "mkv", Some("vp9")));
+    }
+
+    #[test]
+    fn test_build_convert_options_remux() {
+        let opts = FFmpegVideoConvertor::build_convert_options("mp4", true);
+        assert!(opts.remux_only);
+        assert!(opts.audio_copy);
+        assert!(opts.video_codec.is_none());
+    }
+
+    #[test]
+    fn test_build_convert_options_transcode_mp4() {
+        let opts = FFmpegVideoConvertor::build_convert_options("mp4", false);
+        assert!(!opts.remux_only);
+        assert_eq!(opts.video_codec, Some("libx264".to_string()));
+        assert_eq!(opts.preset, Some("medium".to_string()));
+        assert_eq!(opts.crf, Some(23));
+        assert!(opts.audio_copy);
+    }
+
+    #[test]
+    fn test_build_convert_options_transcode_webm() {
+        let opts = FFmpegVideoConvertor::build_convert_options("webm", false);
+        assert!(!opts.remux_only);
+        assert_eq!(opts.video_codec, Some("libvpx-vp9".to_string()));
+        assert_eq!(opts.preset, None); // VP9 has no preset
+        assert_eq!(opts.crf, Some(30));
+        assert!(opts.audio_copy);
     }
 }

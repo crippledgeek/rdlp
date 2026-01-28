@@ -5,6 +5,7 @@
 
 use crate::chunking::ChunkSizeStrategy;
 use rdlp_core::RetryConfig;
+use std::time::Duration;
 
 /// Downloader configuration (shared across clones via Arc)
 ///
@@ -21,6 +22,12 @@ pub(crate) struct DownloaderConfig {
     pub retry_config: RetryConfig,
     pub concurrent_fragments: usize,
     pub chunk_strategy: ChunkSizeStrategy,
+    /// Per-read idle timeout (no data received for this long = abort)
+    pub read_timeout: Duration,
+    /// Total download timeout (entire operation must complete within this)
+    pub download_timeout: Duration,
+    /// Merge operation timeout (chunk/segment merge must complete within this)
+    pub merge_timeout: Duration,
 }
 
 impl Default for DownloaderConfig {
@@ -37,10 +44,13 @@ impl Default for DownloaderConfig {
             .unwrap_or(4);
 
         Self {
-            buffer_size: 8192,
+            buffer_size: 2 * 1024 * 1024, // 2 MB
             retry_config: RetryConfig::default_config(),
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
+            read_timeout: Duration::from_secs(60),
+            download_timeout: Duration::from_secs(3600), // 1 hour
+            merge_timeout: Duration::from_secs(1800),    // 30 min
         }
     }
 }

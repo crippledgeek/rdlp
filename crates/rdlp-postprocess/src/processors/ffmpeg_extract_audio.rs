@@ -1,6 +1,7 @@
 //! FFmpeg audio extraction post-processor.
 //!
-//! Extracts and optionally converts audio from video files.
+//! Extracts and optionally converts audio from video files using
+//! `ffmpeg-the-third` library bindings (no CLI process spawning).
 //! Supports various output formats including MP3, AAC, Opus, FLAC, etc.
 
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{FFmpegRunner, get_audio_codec};
+use crate::ffmpeg::{get_audio_codec, AudioCodecConfig, AudioExtractOptions, FFmpegRunner};
 
 /// Post-processor that extracts audio from video files.
 ///
@@ -31,44 +32,40 @@ impl FFmpegExtractAudio {
         Self { ffmpeg }
     }
 
-    /// Build quality arguments for the specified codec.
-    fn build_quality_args(&self, codec: &str, quality: Option<&str>) -> Vec<String> {
-        let mut args = Vec::new();
-
-        let codec_config = match get_audio_codec(codec) {
-            Some(c) => c,
-            None => return args,
+    /// Build extraction options from codec config and quality string.
+    fn build_extract_options(
+        codec_config: &AudioCodecConfig,
+        can_copy: bool,
+        quality: Option<&str>,
+    ) -> AudioExtractOptions {
+        let mut opts = AudioExtractOptions {
+            encoder_name: codec_config.encoder.map(String::from),
+            copy: can_copy,
+            ..Default::default()
         };
 
-        let quality = match quality {
-            Some(q) => q,
-            None => return args,
-        };
-
-        // Parse quality as number
-        if let Ok(q_num) = quality.parse::<u32>() {
-            // If it's a bitrate (e.g., "192" for 192kbps)
-            if let Some((min, max)) = codec_config.bitrate_range {
-                let bitrate = q_num.clamp(min, max);
-                args.push("-b:a".to_string());
-                args.push(format!("{bitrate}k"));
-            }
-        } else if let Some((worst, best)) = codec_config.quality_scale {
-            // Quality scale (VBR)
-            // Map quality string to scale
-            let scale = match quality.to_lowercase().as_str() {
-                "best" | "0" => best,
-                "worst" | "9" | "10" => worst,
-                _ => {
-                    // Try to parse as scale value
-                    quality.parse().unwrap_or((worst + best) / 2)
-                }
-            };
-            args.push("-q:a".to_string());
-            args.push(scale.to_string());
+        if can_copy {
+            return opts;
         }
 
-        args
+        if let Some(q) = quality {
+            // Try to parse as numeric bitrate (e.g., "192" for 192kbps)
+            if let Ok(q_num) = q.parse::<u32>() {
+                if let Some((min, max)) = codec_config.bitrate_range {
+                    opts.bitrate_kbps = Some(q_num.clamp(min, max));
+                }
+            } else if let Some((worst, best)) = codec_config.quality_scale {
+                // Non-numeric = VBR quality string (e.g., "best", "worst")
+                let scale = match q.to_lowercase().as_str() {
+                    "best" | "0" => best,
+                    "worst" | "9" | "10" => worst,
+                    _ => q.parse().unwrap_or((worst + best) / 2),
+                };
+                opts.quality_scale = Some(scale as i32);
+            }
+        }
+
+        opts
     }
 }
 
@@ -86,7 +83,12 @@ impl PostProcessor for FFmpegExtractAudio {
         config.extract_audio
     }
 
-    async fn process(&self, info: &InfoDict, files: Vec<PathBuf>) -> Result<PostProcessResult> {
+    async fn process(
+        &self,
+        info: &InfoDict,
+        files: Vec<PathBuf>,
+        config: &PostProcessConfig,
+    ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
         }
@@ -100,7 +102,6 @@ impl PostProcessor for FFmpegExtractAudio {
         }
 
         // Determine target format
-        let config = PostProcessConfig::default();
         let target_format = config.audio_format.as_deref().unwrap_or("mp3");
         let codec_config =
             get_audio_codec(target_format).ok_or_else(|| PostProcessError::UnsupportedFormat {
@@ -120,38 +121,24 @@ impl PostProcessor for FFmpegExtractAudio {
             .as_ref()
             .is_some_and(|c| c == target_format || (c == "aac" && target_format == "m4a"));
 
+        if can_copy {
+            debug!(format:? = target_format; "Audio codec matches target, copying stream");
+        }
+
         // Build output path
         let output_path = input_file.with_extension(codec_config.extension);
 
-        // Build FFmpeg arguments
-        let mut args = vec![
-            "-i".to_string(),
-            input_file.to_string_lossy().to_string(),
-            "-vn".to_string(), // No video
-        ];
+        // Build extraction options
+        let opts = Self::build_extract_options(
+            codec_config,
+            can_copy,
+            config.audio_quality.as_deref(),
+        );
 
-        if can_copy {
-            debug!(format:? = target_format; "Audio codec matches target, copying stream");
-            args.push("-c:a".to_string());
-            args.push("copy".to_string());
-        } else {
-            // Transcode
-            if let Some(encoder) = codec_config.encoder {
-                args.push("-c:a".to_string());
-                args.push(encoder.to_string());
-            }
-
-            // Add quality arguments
-            let quality_args =
-                self.build_quality_args(target_format, config.audio_quality.as_deref());
-            args.extend(quality_args);
-        }
-
-        args.push(output_path.to_string_lossy().to_string());
-
-        // Run FFmpeg
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        self.ffmpeg.run(&args_refs).await?;
+        // Extract audio via library bindings
+        self.ffmpeg
+            .extract_audio(input_file, &output_path, &opts)
+            .await?;
 
         info!(output:? = output_path.display(); "Audio extracted");
 
@@ -175,31 +162,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_quality_args_mp3() {
-        if let Ok(ffmpeg) = FFmpegRunner::new() {
-            let extractor = FFmpegExtractAudio::new(Arc::new(ffmpeg));
-
-            // Bitrate
-            let args = extractor.build_quality_args("mp3", Some("192"));
-            assert!(args.contains(&"-b:a".to_string()));
-            assert!(args.contains(&"192k".to_string()));
-
-            // VBR quality
-            let args = extractor.build_quality_args("mp3", Some("best"));
-            assert!(args.contains(&"-q:a".to_string()));
-            assert!(args.contains(&"0".to_string())); // Best quality for MP3
-        }
+    fn test_build_extract_options_mp3_bitrate() {
+        let codec_config = get_audio_codec("mp3").unwrap();
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, Some("192"));
+        assert_eq!(opts.bitrate_kbps, Some(192));
+        assert_eq!(opts.quality_scale, None);
+        assert!(!opts.copy);
     }
 
     #[test]
-    fn test_build_quality_args_opus() {
-        if let Ok(ffmpeg) = FFmpegRunner::new() {
-            let extractor = FFmpegExtractAudio::new(Arc::new(ffmpeg));
+    fn test_build_extract_options_mp3_vbr() {
+        let codec_config = get_audio_codec("mp3").unwrap();
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, Some("best"));
+        assert_eq!(opts.quality_scale, Some(0)); // Best quality for MP3 = 0
+        assert_eq!(opts.bitrate_kbps, None);
+    }
 
-            // Opus uses bitrate only
-            let args = extractor.build_quality_args("opus", Some("128"));
-            assert!(args.contains(&"-b:a".to_string()));
-            assert!(args.contains(&"128k".to_string()));
-        }
+    #[test]
+    fn test_build_extract_options_copy() {
+        let codec_config = get_audio_codec("mp3").unwrap();
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, true, Some("192"));
+        assert!(opts.copy);
+        // Quality settings should be ignored when copying
+        assert_eq!(opts.bitrate_kbps, None);
+        assert_eq!(opts.quality_scale, None);
+    }
+
+    #[test]
+    fn test_build_extract_options_opus_bitrate() {
+        let codec_config = get_audio_codec("opus").unwrap();
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, Some("128"));
+        assert_eq!(opts.bitrate_kbps, Some(128));
+        assert_eq!(opts.quality_scale, None); // Opus has no quality scale
+    }
+
+    #[test]
+    fn test_build_extract_options_bitrate_clamping() {
+        let codec_config = get_audio_codec("mp3").unwrap();
+        // Over max (320)
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, Some("999"));
+        assert_eq!(opts.bitrate_kbps, Some(320));
+        // Under min (32)
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, Some("1"));
+        assert_eq!(opts.bitrate_kbps, Some(32));
+    }
+
+    #[test]
+    fn test_build_extract_options_no_quality() {
+        let codec_config = get_audio_codec("mp3").unwrap();
+        let opts = FFmpegExtractAudio::build_extract_options(codec_config, false, None);
+        assert_eq!(opts.bitrate_kbps, None);
+        assert_eq!(opts.quality_scale, None);
+        assert_eq!(opts.encoder_name, Some("libmp3lame".to_string()));
     }
 }

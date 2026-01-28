@@ -224,8 +224,8 @@ fn test_generate_output_path_hls_extension() {
     );
 }
 
-#[test]
-fn test_select_format_automatic_mode() {
+#[tokio::test]
+async fn test_select_format_automatic_mode() {
     let orchestrator = create_test_orchestrator();
     let formats = vec![
         create_test_format("360p", "360p", Some(500000)),
@@ -234,7 +234,7 @@ fn test_select_format_automatic_mode() {
     ];
 
     // Non-interactive mode should use format selector
-    let result = orchestrator.select_format(&formats, false);
+    let result = orchestrator.select_format(&formats, false).await;
     assert!(result.is_ok());
     let selected = result.unwrap();
     assert!(selected.is_some());
@@ -243,13 +243,13 @@ fn test_select_format_automatic_mode() {
     assert_eq!(format.format_id, "1080p");
 }
 
-#[test]
-fn test_select_format_empty_formats() {
+#[tokio::test]
+async fn test_select_format_empty_formats() {
     let orchestrator = create_test_orchestrator();
     let formats = vec![];
 
     // Should fail with empty formats in automatic mode
-    let result = orchestrator.select_format(&formats, false);
+    let result = orchestrator.select_format(&formats, false).await;
     assert!(result.is_err());
 }
 

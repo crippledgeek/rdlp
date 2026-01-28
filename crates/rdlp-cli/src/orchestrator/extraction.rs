@@ -36,21 +36,21 @@ impl Orchestrator {
         info!("Title: {}", info.title);
 
         if let Some(ref uploader) = info.uploader {
-            info!("Uploader: {}", uploader);
+            info!("Uploader: {uploader}");
         }
         if let Some(ref channel) = info.channel {
-            info!("Channel: {}", channel);
+            info!("Channel: {channel}");
         }
         if let Some(duration) = info.duration {
             let mins = (duration / 60.0) as u32;
             let secs = (duration % 60.0) as u32;
-            info!("Duration: {}:{:02}", mins, secs);
+            info!("Duration: {mins}:{secs:02}");
         }
         if let Some(views) = info.view_count {
-            info!("Views: {}", views);
+            info!("Views: {views}");
         }
         if let Some(rating) = info.average_rating {
-            info!("Rating: {:.0}%", rating);
+            info!("Rating: {rating:.0}%");
         }
         if let Some(ref tags) = info.tags {
             if !tags.is_empty() {
@@ -104,7 +104,7 @@ impl Orchestrator {
                 .playlist_title
                 .as_deref()
                 .unwrap_or("Unnamed Playlist");
-            info!("Playlist: {}", playlist_title);
+            info!("Playlist: {playlist_title}");
             info!("Found {} videos", infos.len());
         }
 

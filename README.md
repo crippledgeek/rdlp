@@ -26,7 +26,7 @@
 
 - **🚀 Performance** - 37x faster downloads (10.5 MB/s) with 7-layer optimization stack
 - **🔒 Memory Safety** - No segfaults or data races guaranteed by Rust
-- **🧩 Extensibility** - Modular 8-crate workspace architecture with plugin support
+- **🧩 Extensibility** - Modular 11-crate workspace architecture with plugin support
 - **📦 Small Binary** - ~8MB release binary with no runtime dependencies
 - **⚡ Async Everything** - Built on tokio for efficient I/O operations
 - **⚖️ ToS Compliance** - Only supports sites with permissive Terms of Service
@@ -40,8 +40,8 @@
 | **Reliability** | Auto-resume • Ctrl+C interrupt handling • Backward-compatible chunks |
 | **Site Support** | 5 sites • TNAFlix • EMPFlix • MovieFap • RedTube • PornHub (with playlists) |
 | **User Experience** | Interactive format selection • Segment-based progress bars • Verbose mode |
-| **Post-Processing** | FFmpeg integration • Audio extraction • Metadata embedding • Thumbnail embedding |
-| **Code Quality** | 100% Rust • 213+ tests • 0 unsafe code • 0 compiler warnings |
+| **Post-Processing** | FFmpeg library bindings • Audio extraction • Metadata embedding • Thumbnail embedding |
+| **Code Quality** | 100% Rust • 270+ tests • unsafe only in FFmpeg FFI • 0 compiler warnings |
 
 ### ⚙️ Current Status
 
@@ -335,9 +335,9 @@ Quality      | Resolution | Size            | Type | Codecs
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Build Status** | ✅ Passing | Zero compiler warnings (release builds) |
-| **Test Coverage** | 213+ tests | All passing (unit + integration tests) |
-| **Architecture** | 8 crates | Clean separation of concerns |
-| **Type Safety** | 100% | No unsafe code |
+| **Test Coverage** | 270+ tests | All passing (unit + integration + property tests) |
+| **Architecture** | 11 crates | Clean separation of concerns |
+| **Type Safety** | 100% | `unsafe` only in FFmpeg FFI (18 sites, all documented) |
 | **Documentation** | Full | Inline docs + comprehensive guides |
 | **Rust Files** | 50+ files | Pure Rust (2024 Edition) |
 
@@ -345,16 +345,19 @@ Quality      | Resolution | Size            | Type | Codecs
 
 ### Workspace Structure
 
-rdlp uses a modular workspace with 8 specialized crates:
+rdlp uses a modular workspace with 11 specialized crates:
 
 ```
 rdlp/
 ├── crates/
-│   ├── rdlp-core/         # Foundation: traits, types, errors
+│   ├── rdlp-types/        # Pure data types (no I/O) - Foundation
+│   ├── rdlp-core/         # Traits, errors - Contracts
+│   ├── rdlp-security/     # SSRF protection, URL validation
+│   ├── rdlp-http/         # Centralized HTTP client factory
 │   ├── rdlp-extractor/    # Site-specific extractors
-│   ├── rdlp-downloader/   # Protocol handlers (HTTP, HLS, DASH)
+│   ├── rdlp-downloader/   # Protocol handlers (HTTP, HLS)
 │   ├── rdlp-jsinterp/     # JavaScript execution (boa)
-│   ├── rdlp-postprocess/  # FFmpeg integration
+│   ├── rdlp-postprocess/  # FFmpeg library bindings pipeline
 │   ├── rdlp-cookies/      # Browser cookie extraction
 │   ├── rdlp-plugin/       # Dynamic plugin loading
 │   └── rdlp-cli/          # User-facing CLI
@@ -366,7 +369,7 @@ rdlp/
 ```
 URL → Extraction → Download → Post-Processing → Video File
       ↓            ↓           ↓
-      Metadata     Streaming   FFmpeg (future)
+      Metadata     Streaming   FFmpeg library bindings
 ```
 
 **Extraction Stage:**
@@ -551,9 +554,18 @@ cargo doc --no-deps --open
 - [x] FFmpegMetadata - Embed title, artist, chapters
 - [x] EmbedThumbnail - Cover art for MP4/MKV/MP3
 - [x] Priority-based processor registry
-- [x] **Status**: Production-ready, 25 tests passing
+- [x] **Status**: Production-ready, 26 tests passing
 
-### Phases 8-10: Future
+### Phase 8: FFmpeg Library Migration ✅ COMPLETE (2026-01-28)
+- [x] Migrated all FFmpeg operations from CLI process spawning to `ffmpeg-the-third` v4.0 library bindings
+- [x] Replaced `ffprobe` CLI with library-based `probe_sync()`
+- [x] Replaced all 5 processor CLI invocations with library calls (remux, audio extract, video convert, metadata, thumbnail)
+- [x] Removed `which`, `regex`, `serde_json` CLI dependencies
+- [x] Fixed 5 bugs during migration (config ignored, unconditional AAC BSF, MP3 thumbnail, description truncation, lost InfoDict)
+- [x] Post-migration quality fixes: unwrap panic elimination (28 sites), async I/O correctness, download timeouts, resilience improvements
+- [x] **Status**: Production-ready, 270+ tests passing, 0 clippy warnings
+
+### Phases 9-11: Future
 - Additional site extractors (Vimeo, Dailymotion, Archive.org)
 - Enhanced CLI features
 - Format selection DSL parser
@@ -579,7 +591,7 @@ overwrite = false
 # Download options
 format = "best"
 concurrent_fragments = 5
-buffer_size = 8192
+buffer_size = 2097152  # 2 MB
 
 # Display options
 quiet = false
@@ -695,7 +707,7 @@ All downloads use streaming to maintain constant memory usage regardless of vide
 
 Perfect for newcomers to the Rust ecosystem:
 
-- [ ] Add retry logic with exponential backoff (`rdlp-downloader`)
+- [x] ~~Add retry logic with exponential backoff~~ (done — `backon` crate)
 - [ ] Add rate limiting to HTTP downloader (`rdlp-downloader`)
 - [ ] Improve error messages with suggestions (`rdlp-core`)
 - [ ] Add more unit tests for edge cases (all crates)
@@ -1003,11 +1015,11 @@ We take security seriously and will respond within 48 hours.
 
 ### Security Features
 
-- ✅ No unsafe code (100% safe Rust)
+- ✅ Minimal unsafe (only FFmpeg FFI in `ffmpeg.rs`, all with SAFETY comments)
 - ✅ Input validation on all URLs
 - ✅ Sanitized filenames (no path traversal)
 - ✅ HTTPS by default (rustls)
-- ✅ No shell command execution (except FFmpeg when added)
+- ✅ No shell command execution (FFmpeg uses library bindings, not CLI)
 - ✅ Dependency auditing with `cargo audit`
 
 ## 📜 License
@@ -1049,19 +1061,19 @@ This project wouldn't be possible without these amazing open source projects:
 |--------|-------|
 | **Language** | 100% Rust (2024 Edition) |
 | **Rust Files** | 50+ source files |
-| **Crates** | 8 (modular workspace) |
-| **Dependencies** | 26 (workspace-level, including m3u8-rs, futures) |
-| **Tests** | 213+ tests (all passing) |
+| **Crates** | 11 (modular workspace) |
+| **Dependencies** | 30+ (workspace-level, including ffmpeg-the-third, m3u8-rs, futures) |
+| **Tests** | 270+ tests (all passing) |
 | **Build Time** | ~10s (clean release), ~2s (incremental) |
 | **Binary Size** | ~8 MB (release, no runtime dependencies) |
-| **Unsafe Code** | 0% (100% safe Rust) |
+| **Unsafe Code** | FFmpeg FFI only (18 sites in `ffmpeg.rs`, all SAFETY-documented) |
 | **Download Speed** | 10.5 MB/s (37x faster than baseline) |
 | **Status** | Alpha (Production-ready for 5 sites) |
 
 ## 🗺️ Roadmap
 
-### ✅ Completed (2026-01-24)
-- **Phase 1: Foundation** - Core traits, error handling, 8-crate workspace architecture
+### ✅ Completed (2026-01-28)
+- **Phase 1: Foundation** - Core traits, error handling, 11-crate workspace architecture
 - **Phase 2: TNAFlix Support** - HTTP downloader, streaming, resume, progress tracking
 - **Phase 2.5: Power-of-Two Chunking** - 37x faster downloads with memory-aligned chunks
 - **Phase 3: Resume Compatibility** - Backward-compatible with old chunk format
@@ -1069,14 +1081,15 @@ This project wouldn't be possible without these amazing open source projects:
 - **Phase 5: PornHub Playlist Support** - Full playlist extraction with pagination
 - **Phase 6: CLI Playlist Integration** - Batch downloads with [N/total] progress
 - **Phase 6.5: HLS Progress & Segment Counting** - Fast segment counting, segment-based progress
-- **Phase 7: Post-Processing Pipeline** - FFmpeg integration (remux, audio, metadata, thumbnails)
+- **Phase 7: Post-Processing Pipeline** - FFmpeg library bindings (remux, audio, metadata, thumbnails)
+- **Phase 8: FFmpeg Library Migration** - Replaced all CLI FFmpeg with `ffmpeg-the-third` library calls
+- **Quality Fixes** - Unwrap elimination, async I/O correctness, download timeouts, resilience improvements
 - **TNAFlix Network** - Support for TNAFlix, EMPFlix, MovieFap (MP4 downloads)
 - **RedTube Support** - HLS + MP4 formats with segment counting
 - **PornHub Support** - HLS streaming with full playlist support
 - **Interactive CLI** - Format selection with arrow keys + ESC cancellation
 - **Smart Filesize** - HEAD/Range request detection with CDN fallback
 - **Performance Optimizations** - 7-layer optimization stack (10.5 MB/s downloads)
-- **FFmpeg Post-Processing** - Remux HLS→MP4, audio extraction, metadata embedding
 
 ### 📅 Planned
 - **More Extractors** - Vimeo, Dailymotion, Archive.org, and more

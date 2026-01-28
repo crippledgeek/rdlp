@@ -166,8 +166,8 @@ impl HlsDownloadState {
         let state_path = Self::state_file_path(output_path);
         let temp_path = state_path.with_extension("json.tmp");
 
-        // Serialize to JSON
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        // Serialize to compact JSON (saved every 50 segments, not human-read during operation)
+        let json = serde_json::to_string(self).map_err(std::io::Error::other)?;
 
         // Write to temp file
         let mut file = File::create(&temp_path).await?;

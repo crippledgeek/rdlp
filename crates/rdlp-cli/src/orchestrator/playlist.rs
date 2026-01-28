@@ -66,7 +66,7 @@ impl Orchestrator {
 
         // Check for existing files (resume detection)
         let (existing_files, partial_count) =
-            self.detect_existing_playlist_files(&playlist_dir, &infos);
+            self.detect_existing_playlist_files(&playlist_dir, &infos).await;
         let already_downloaded = existing_files.len();
         let remaining = total - already_downloaded;
 
@@ -105,11 +105,15 @@ impl Orchestrator {
                 format!("Download {total} videos to '{playlist_folder_name}'?")
             };
 
-            let proceed = Confirm::new()
-                .with_prompt(prompt)
-                .default(true)
-                .interact()
-                .unwrap_or(false);
+            let proceed = tokio::task::spawn_blocking(move || {
+                Confirm::new()
+                    .with_prompt(prompt)
+                    .default(true)
+                    .interact()
+                    .unwrap_or(false)
+            })
+            .await
+            .unwrap_or(false);
 
             if !proceed {
                 println!("Cancelled by user");
@@ -120,7 +124,7 @@ impl Orchestrator {
 
         // Create playlist directory if it doesn't exist
         if !playlist_dir.exists() {
-            std::fs::create_dir_all(&playlist_dir).map_err(|e| {
+            tokio::fs::create_dir_all(&playlist_dir).await.map_err(|e| {
                 OrchestratorError::IoError(format!(
                     "Failed to create playlist folder '{}': {e}",
                     playlist_dir.display()
@@ -241,7 +245,7 @@ impl Orchestrator {
     ///
     /// Since HLS segments are cleaned up before each download, we just report
     /// the count for user information.
-    pub(super) fn detect_existing_playlist_files(
+    pub(super) async fn detect_existing_playlist_files(
         &self,
         playlist_dir: &std::path::Path,
         infos: &[rdlp_core::InfoDict],
@@ -254,16 +258,18 @@ impl Orchestrator {
         }
 
         // Get all files in the playlist directory
-        let dir_entries = match std::fs::read_dir(playlist_dir) {
+        let mut dir_entries = match tokio::fs::read_dir(playlist_dir).await {
             Ok(entries) => entries,
             Err(_) => return (completed, partial_count),
         };
 
-        let files: Vec<PathBuf> = dir_entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.is_file())
-            .collect();
+        let mut files: Vec<PathBuf> = Vec::new();
+        while let Ok(Some(entry)) = dir_entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path);
+            }
+        }
 
         // Check each video in the playlist
         for info in infos {
@@ -344,7 +350,7 @@ impl Orchestrator {
         output_dir: &std::path::Path,
     ) -> Result<Option<PathBuf>> {
         // Select format
-        let format = match self.select_format(&info.formats, interactive)? {
+        let format = match self.select_format(&info.formats, interactive).await? {
             Some(format) => format,
             None => return Ok(None),
         };
