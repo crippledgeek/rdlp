@@ -106,6 +106,7 @@
 //! |-----------|----------|-------------|
 //! | `FFmpegMerger` | 100 | Merge video + audio streams |
 //! | `FFmpegExtractAudio` | 50 | Extract and convert audio |
+//! | `FFmpegRemuxer` | 45 | Remux to MP4/MKV for better seeking |
 //! | `FFmpegVideoConvertor` | 40 | Convert/remux video formats |
 //! | `FFmpegMetadata` | 30 | Embed metadata and chapters |
 //! | `EmbedThumbnail` | 20 | Embed cover art/thumbnails |
@@ -143,7 +144,8 @@ pub use registry::{PostProcessorRegistry, PostProcessorRegistryTrait};
 
 // Re-export processor types
 pub use processors::{
-    EmbedThumbnail, FFmpegExtractAudio, FFmpegMerger, FFmpegMetadata, FFmpegVideoConvertor,
+    EmbedThumbnail, FFmpegExtractAudio, FFmpegMerger, FFmpegMetadata, FFmpegRemuxer,
+    FFmpegVideoConvertor,
 };
 
 // Re-export core types for convenience

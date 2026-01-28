@@ -92,6 +92,10 @@ pub struct PostProcessConfig {
     /// Video format to recode to
     pub recode_video: Option<String>,
 
+    /// Remux to container format (stream copy, no re-encoding)
+    /// Use "mp4" or "mkv" for better seeking than TS
+    pub remux_container: Option<String>,
+
     /// Merge output format (when combining video+audio)
     pub merge_output_format: Option<String>,
 
@@ -121,6 +125,7 @@ impl Default for PostProcessConfig {
             audio_format: None,
             audio_quality: None,
             recode_video: None,
+            remux_container: None,
             merge_output_format: Some("mp4".to_string()),
             embed_thumbnail: false,
             embed_metadata: false,
