@@ -85,6 +85,8 @@ pub struct HlsInfo {
     pub is_live: bool,
     /// Whether any segment uses encryption (EXT-X-KEY)
     pub has_encryption: bool,
+    /// Detected segment container format (e.g., "ts", "mp4", "m4s")
+    pub segment_container: Option<String>,
 }
 
 /// Media playlist metadata extracted without additional HTTP requests
@@ -93,6 +95,15 @@ struct MediaPlaylistInfo {
     total_duration: f64,
     is_live: bool,
     has_encryption: bool,
+    segment_container: Option<String>,
+}
+
+/// Detect container format from segment URL extension
+fn detect_segment_container(segment_uri: &str) -> Option<String> {
+    let path = segment_uri.split('?').next().unwrap_or(segment_uri);
+    path.rfind('.')
+        .map(|pos| path[pos + 1..].to_lowercase())
+        .filter(|ext| !ext.is_empty())
 }
 
 /// HLS playlist size detector
@@ -240,6 +251,9 @@ impl HlsSizeDetector {
 
         let segment_count = segment_urls.len();
 
+        // Detect container from first segment URL
+        let segment_container = segment_urls.first().and_then(|url| detect_segment_container(url));
+
         // Step 2: Calculate total size from all segments
         let total_size = match self.sum_segment_sizes(segment_urls).await {
             Ok(size) => size,
@@ -274,6 +288,7 @@ impl HlsSizeDetector {
             average_bandwidth: None,
             is_live: false,
             has_encryption: false,
+            segment_container,
         }))
     }
 
@@ -378,6 +393,7 @@ impl HlsSizeDetector {
                             average_bandwidth,
                             is_live: false,
                             has_encryption: false,
+                            segment_container: None,
                         }));
                     }
                 };
@@ -394,6 +410,7 @@ impl HlsSizeDetector {
                     average_bandwidth,
                     is_live: media_info.is_live,
                     has_encryption: media_info.has_encryption,
+                    segment_container: media_info.segment_container,
                 }))
             }
             m3u8_rs::Playlist::MediaPlaylist(media) => {
@@ -421,6 +438,7 @@ impl HlsSizeDetector {
                     average_bandwidth: None,
                     is_live: info.is_live,
                     has_encryption: info.has_encryption,
+                    segment_container: info.segment_container,
                 }))
             }
         }
@@ -475,11 +493,18 @@ impl HlsSizeDetector {
         let is_live = !media.end_list;
         let has_encryption = media.segments.iter().any(|s| s.key.is_some());
 
+        // Detect container from first segment URL
+        let segment_container = media
+            .segments
+            .first()
+            .and_then(|seg| detect_segment_container(&seg.uri));
+
         MediaPlaylistInfo {
             segment_count,
             total_duration,
             is_live,
             has_encryption,
+            segment_container,
         }
     }
 
@@ -827,6 +852,9 @@ pub async fn detect_format_sizes(
                             if info.has_encryption {
                                 format.has_drm = Some(true);
                             }
+                            if let Some(container) = info.segment_container {
+                                format.container = Some(container);
+                            }
 
                             // Capture stream-level flags for aggregation
                             detected_is_live = Some(info.is_live);
@@ -879,10 +907,10 @@ pub async fn detect_format_sizes(
 
     for (format, is_live, has_encryption) in results {
         formats.push(format);
-        if is_live == Some(true) {
+        if is_live.unwrap_or(false) {
             flags.is_live = true;
         }
-        if has_encryption == Some(true) {
+        if has_encryption.unwrap_or(false) {
             flags.has_any_drm = true;
         }
     }

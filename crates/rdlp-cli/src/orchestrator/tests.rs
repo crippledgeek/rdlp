@@ -210,8 +210,8 @@ fn test_generate_output_path_hls_extension() {
         "HLS Test Video.mp4"
     );
 
-    // HLS with MPEG-TS segments (detected from URL)
-    format.url = "https://example.com/segment0.ts".to_string();
+    // HLS with MPEG-TS segments (detected from segment metadata)
+    format.container = Some("ts".to_string());
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),

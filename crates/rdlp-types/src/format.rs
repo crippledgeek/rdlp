@@ -431,7 +431,7 @@ impl Format {
             (None, None) => buf.push_str("Unknown"),
         }
 
-        if self.has_drm == Some(true) {
+        if self.has_drm.unwrap_or(false) {
             buf.push_str(" [DRM]");
         }
 
@@ -518,7 +518,7 @@ impl FormatSelector {
                 // Ranking: quality > height > tbr > fps
                 if let Some(best) = formats
                     .iter()
-                    .filter(|f| f.has_video() && f.has_audio() && f.has_drm != Some(true))
+                    .filter(|f| f.has_video() && f.has_audio() && !f.has_drm.unwrap_or(false))
                     .max_by(|a, b| {
                         a.quality
                             .cmp(&b.quality)
@@ -544,7 +544,7 @@ impl FormatSelector {
                 // Ranking: height > vbr > fps
                 if let Some(best) = formats
                     .iter()
-                    .filter(|f| f.has_video() && f.has_drm != Some(true))
+                    .filter(|f| f.has_video() && !f.has_drm.unwrap_or(false))
                     .max_by(|a, b| {
                         a.height
                             .cmp(&b.height)
@@ -568,7 +568,7 @@ impl FormatSelector {
             "bestaudio" => {
                 if let Some(best) = formats
                     .iter()
-                    .filter(|f| f.has_audio() && f.has_drm != Some(true))
+                    .filter(|f| f.has_audio() && !f.has_drm.unwrap_or(false))
                     .max_by(|a, b| {
                     a.abr
                         .partial_cmp(&b.abr)
@@ -584,7 +584,7 @@ impl FormatSelector {
                 // Ranking: quality > height > tbr > fps
                 if let Some(best) = formats
                     .iter()
-                    .filter(|f| f.has_drm != Some(true))
+                    .filter(|f| !f.has_drm.unwrap_or(false))
                     .max_by(|a, b| {
                         a.quality
                             .cmp(&b.quality)

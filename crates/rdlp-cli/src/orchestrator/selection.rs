@@ -56,20 +56,19 @@ impl Orchestrator {
         }
 
         // Warn about live streams before showing format table
-        if info.is_live == Some(true) {
-            warn!("This appears to be a LIVE stream — download may be incomplete");
-            println!();
+        if info.is_live.unwrap_or(false) {
+            warn!("LIVE stream detected — download may be incomplete");
         }
 
         // Build menu items with format details
         let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();
 
         info!("Available formats:");
-        println!(
+        info!(
             "{:<12} | {:<10} | {:<12} | {:<6} | Codecs",
             "Quality", "Resolution", "Size", "Type"
         );
-        println!("{}", "-".repeat(79));
+        info!("{}", "-".repeat(79));
 
         let selection = tokio::task::spawn_blocking(move || {
             Select::with_theme(&ColorfulTheme::default())

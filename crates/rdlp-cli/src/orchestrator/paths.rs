@@ -25,34 +25,21 @@ impl Orchestrator {
 
     /// Determine the actual file extension for a format
     ///
-    /// For streaming protocols (HLS, DASH), detects the actual container format
-    /// from the format metadata or segment URLs.
+    /// For streaming protocols (HLS, DASH), uses the detected container format
+    /// from segment metadata. Falls back to URL-based detection if not available.
     pub(super) fn determine_file_extension(&self, format: &rdlp_core::Format) -> String {
-        // Priority 1: Use container field if explicitly set
+        // Priority 1: Use container field from HLS/DASH metadata
         if let Some(ref container) = format.container {
-            // Clean up container names (e.g., "mp4_dash" -> "mp4")
-            return container.split('_').next().unwrap_or(container).to_string();
+            return match container.as_str() {
+                "m4s" | "m4v" | "m4a" => "mp4".to_string(), // fMP4 variants → mp4
+                other => other.split('_').next().unwrap_or(other).to_string(),
+            };
         }
 
-        // Priority 2: For HLS/DASH, detect from URL or default to mp4
+        // Priority 2: Fallback for formats without detected container
         match format.ext.as_str() {
-            "hls" | "m3u8" => {
-                // Try to detect from URL (e.g., .../segment.ts)
-                if format.url.contains(".ts") {
-                    "ts".to_string() // MPEG-TS segments
-                } else {
-                    "mp4".to_string() // fMP4 segments (.m4s/.mp4) or default
-                }
-            }
-            "dash" | "mpd" => {
-                // DASH typically uses fMP4
-                if format.url.contains(".webm") {
-                    "webm".to_string()
-                } else {
-                    "mp4".to_string() // Default to MP4 for DASH
-                }
-            }
-            ext => ext.to_string(), // Use extension as-is for direct formats
+            "hls" | "m3u8" | "dash" | "mpd" => "mp4".to_string(),
+            ext => ext.to_string(),
         }
     }
 
