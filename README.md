@@ -36,7 +36,7 @@
 | Category | Features |
 |----------|----------|
 | **Performance** | 37x faster • 10.5 MB/s downloads • Power-of-two chunking • Fine-grained parallelism |
-| **Protocols** | HTTP/HTTPS • HLS streaming with segment progress • DASH (planned) |
+| **Protocols** | HTTP/HTTPS • HLS with duration/fps/DRM metadata • DASH (planned) |
 | **Reliability** | Auto-resume • Ctrl+C interrupt handling • Backward-compatible chunks |
 | **Site Support** | 5 sites • TNAFlix • EMPFlix • MovieFap • RedTube • PornHub (with playlists) |
 | **User Experience** | Interactive format selection • Segment-based progress bars • Verbose mode |
@@ -171,6 +171,45 @@ Supported extractors:
 Total: 5 extractors
 ```
 
+### 📦 Container Remux
+
+MPEG-TS (.ts) files from HLS streams have poor seeking. Use `--remux` to convert to a container with better seeking support:
+
+```bash
+# Interactive container selection
+rdlp --remux "https://www.redtube.com/12345678"
+
+# Direct: remux to MP4 (best compatibility, faststart)
+rdlp --remux=mp4 "https://www.redtube.com/12345678"
+
+# Direct: remux to MKV (supports all codecs)
+rdlp --remux=mkv "https://www.redtube.com/12345678"
+
+# Combine with interactive format selection
+rdlp -i --remux "https://www.redtube.com/12345678"
+```
+
+**Interactive menu:**
+```
+? Select remux container (ESC to cancel)
+> mp4    Best compatibility, faststart for streaming
+  mkv    Supports all codecs, efficient cues index
+  webm   Web-optimized, VP8/VP9/AV1 + Opus/Vorbis
+  mov    Apple QuickTime, good for editing
+  avi    Legacy format, wide support
+  ts     MPEG-TS, broadcast/streaming
+```
+
+**Supported containers:**
+| Container | Seeking | Use Case |
+|-----------|---------|----------|
+| **MP4** | Excellent (moov atom) | Best compatibility, streaming |
+| **MKV** | Excellent (cues index) | All codecs, editing |
+| **WebM** | Good | Web browsers, VP9/AV1 |
+| **MOV** | Excellent | Apple ecosystem, editing |
+| **AVI** | Fair | Legacy compatibility |
+| **TS** | Poor | Broadcast, live streaming |
+
 ### 📋 Playlist Downloads
 
 ```bash
@@ -280,15 +319,31 @@ Quality      | Resolution | Size         | Codecs       | Protocol
   ...
 ```
 
-**Example: RedTube/PornHub (HLS formats with segment counting)**
+**Example: RedTube/PornHub (HLS formats with duration and fps)**
 ```
 📋 Available formats:
 Quality      | Resolution | Size            | Type | Codecs
 -------------------------------------------------------------------------
-1080p        | 1920x1080  | 754 segments    | HLS  | h264/aac
-720p         | 1280x720   | 612 segments    | HLS  | h264/aac
-480p         | 854x480    | 398 segments    | HLS  | h264/aac
-240p         | 426x240    | 198 segments    | HLS  | h264/aac
+1080p60      | 1920x1080  | 16:39 (250 seg) | HLS  | h264/aac
+720p30       | 1280x720   | 16:39 (250 seg) | HLS  | h264/aac
+480p30       | 854x480    | 16:39 (250 seg) | HLS  | h264/aac
+240p30       | 426x240    | 16:39 (250 seg) | HLS  | h264/aac
+```
+
+**Example: DRM-protected stream**
+```
+Quality      | Resolution | Size            | Type | Codecs
+-------------------------------------------------------------------------
+1080p60      | 1920x1080  | 16:39 (250 seg) | HLS  | h264/aac [DRM]
+```
+
+**Example: Live stream warning**
+```
+⚠ LIVE stream detected — download may be incomplete
+
+Quality      | Resolution | Size            | Type | Codecs
+-------------------------------------------------------------------------
+1080p        | 1920x1080  | LIVE            | HLS  | h264/aac
 ```
 
 **Controls:**
@@ -307,8 +362,8 @@ Quality      | Resolution | Size            | Type | Codecs
 | **Power-of-Two Chunking** | Memory-aligned chunks (64 KB - 8 MB) targeting ~1024 chunks | ✅ |
 | **Fine-Grained Parallelism** | Up to 591 concurrent chunks processed 4 at a time | ✅ |
 | **37x Faster Downloads** | 590 MB in 56.4s (10.5 MB/s) with 7-layer optimization stack | ✅ |
-| **HLS Streaming** | Full HLS downloads with segment-based progress tracking | ✅ |
-| **Fast Segment Counting** | M3U8 parsing in ~100-500ms (no size fetching) | ✅ |
+| **HLS Streaming** | Full HLS with duration-based progress and rich metadata | ✅ |
+| **HLS Metadata** | Duration, fps, DRM badge, live detection, container detection | ✅ |
 | **Playlist Support** | Batch downloads with pagination and progress tracking | ✅ |
 | **Multi-Quality** | Automatic detection of 144p to 1080p formats | ✅ |
 | **Smart Filesize** | HEAD/Range requests with CDN fallback | ✅ |
@@ -323,6 +378,7 @@ Quality      | Resolution | Size            | Type | Codecs
 | Feature | Description | Example |
 |---------|-------------|---------|
 | **Interactive Menu** | Arrow keys to select, ESC to cancel | `-i` |
+| **Remux Container** | Convert to MP4/MKV for better seeking | `--remux` or `--remux=mp4` |
 | **Verbose Mode** | Shows HEAD requests, debug info | `-v` |
 | **Quiet Mode** | Minimal output for scripts | `-q` |
 | **Simulate Mode** | Test extraction without downloading | `-s` |
@@ -388,10 +444,11 @@ URL → Extraction → Download → Post-Processing → Video File
 
 **Post-Processing Stage:**
 - Remux HLS segments to MP4 container (automatic for HLS downloads)
+- Container remux for better seeking (TS → MP4/MKV/WebM/MOV/AVI)
 - Extract audio to MP3/AAC/Opus/FLAC/WAV
 - Embed metadata (title, artist, date, chapters)
 - Embed thumbnail as cover art (MP4/MKV/MP3/FLAC)
-- Priority-based processor pipeline (100→50→40→30→20)
+- Priority-based processor pipeline (100→50→45→40→30→20)
 
 ### Key Design Decisions
 
@@ -565,7 +622,19 @@ cargo doc --no-deps --open
 - [x] Post-migration quality fixes: unwrap panic elimination (28 sites), async I/O correctness, download timeouts, resilience improvements
 - [x] **Status**: Production-ready, 270+ tests passing, 0 clippy warnings
 
-### Phases 9-11: Future
+### Phase 9: HLS Metadata Surface ✅ COMPLETE (2026-01-28)
+- [x] Duration field with mm:ss display alongside segment count
+- [x] FPS in quality column (e.g., 1080p60) for non-standard frame rates
+- [x] DRM badge [DRM] for encrypted streams
+- [x] DRM formats filtered from automatic "best" selection
+- [x] LIVE stream warning before format selection
+- [x] is_live flag propagation from M3U8 to InfoDict
+- [x] Duration-based progress tracking (more accurate than segment count)
+- [x] FPS as fourth-tier ranking tiebreaker (quality > height > bitrate > fps)
+- [x] Container detection from segment URLs (ts/mp4/m4s)
+- [x] **Status**: Production-ready, 270+ tests passing
+
+### Phases 10-12: Future
 - Additional site extractors (Vimeo, Dailymotion, Archive.org)
 - Enhanced CLI features
 - Format selection DSL parser
@@ -921,17 +990,20 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 ### Does rdlp support HLS/DASH?
 
 **Full HLS support**:
-- ✅ **HLS Streaming** - Complete download with segment-based progress (Phase 5-6.5)
-- ✅ **Fast Segment Counting** - M3U8 parsing in ~100-500ms (no size fetching)
-- ✅ **FFmpeg Remux** - Automatic HLS→MP4 conversion (Phase 7)
+- ✅ **HLS Streaming** - Complete download with duration-based progress
+- ✅ **Rich Metadata** - Duration (mm:ss), fps, DRM badge, live stream detection
+- ✅ **Smart Format Selection** - Ranking: quality > height > bitrate > fps
+- ✅ **Container Detection** - Automatic detection from segment URLs (ts/mp4/m4s)
+- ✅ **FFmpeg Remux** - Automatic HLS→MP4 conversion
 - ❌ **DASH** - Not yet supported (planned for future phases)
 
 **Current capabilities:**
 - RedTube and PornHub extractors with full HLS download support
-- Segment-based progress tracking (195/198 segments)
-- Format table shows segment count for HLS formats
-- Automatic FFmpeg remux to MP4 container after download
-- Fast detection (~100-500ms per format)
+- Duration-based progress tracking with accurate ETA
+- Format table shows duration, fps, and DRM status
+- LIVE stream warning before download
+- DRM formats filtered from automatic "best" selection
+- Automatic container detection from segment metadata
 
 **Coming soon:** DASH/MPD support, AES-128 decryption
 
@@ -1083,6 +1155,7 @@ This project wouldn't be possible without these amazing open source projects:
 - **Phase 6.5: HLS Progress & Segment Counting** - Fast segment counting, segment-based progress
 - **Phase 7: Post-Processing Pipeline** - FFmpeg library bindings (remux, audio, metadata, thumbnails)
 - **Phase 8: FFmpeg Library Migration** - Replaced all CLI FFmpeg with `ffmpeg-the-third` library calls
+- **Phase 9: HLS Metadata Surface** - Duration, fps, DRM badge, live warning, container detection
 - **Quality Fixes** - Unwrap elimination, async I/O correctness, download timeouts, resilience improvements
 - **TNAFlix Network** - Support for TNAFlix, EMPFlix, MovieFap (MP4 downloads)
 - **RedTube Support** - HLS + MP4 formats with segment counting

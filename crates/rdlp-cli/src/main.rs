@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use dialoguer::{Select, theme::ColorfulTheme};
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::path::PathBuf;
@@ -86,6 +87,11 @@ struct Args {
     #[arg(long)]
     recode_video: Option<String>,
 
+    /// Remux to container for better seeking - no re-encoding
+    /// Use --remux for interactive, --remux=mp4 for direct
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
+    remux: Option<String>,
+
     /// Keep original video file after post-processing
     #[arg(long)]
     keep_video: bool,
@@ -105,6 +111,31 @@ fn main() -> Result<()> {
     runtime.block_on(async_main())
 }
 
+/// Interactive remux container selection
+fn select_remux_container() -> Result<Option<String>> {
+    let containers = vec![
+        ("mp4", "Best compatibility, faststart for streaming"),
+        ("mkv", "Supports all codecs, efficient cues index"),
+        ("webm", "Web-optimized, VP8/VP9/AV1 + Opus/Vorbis"),
+        ("mov", "Apple QuickTime, good for editing"),
+        ("avi", "Legacy format, wide support"),
+        ("ts", "MPEG-TS, broadcast/streaming"),
+    ];
+
+    let items: Vec<String> = containers
+        .iter()
+        .map(|(name, desc)| format!("{name:<6} {desc}"))
+        .collect();
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select remux container (ESC to cancel)")
+        .items(&items)
+        .default(0)
+        .interact_opt()?;
+
+    Ok(selection.map(|idx| containers[idx].0.to_string()))
+}
+
 async fn async_main() -> Result<()> {
     let args = Args::parse();
 
@@ -121,6 +152,13 @@ async fn async_main() -> Result<()> {
             .with_target(true)
             .init();
     }
+
+    // Handle interactive remux selection
+    let remux_container = match args.remux.as_deref() {
+        Some("interactive") => select_remux_container()?,
+        Some(container) => Some(container.to_string()),
+        None => None,
+    };
 
     // Create configuration
     let config = Config {
@@ -141,6 +179,7 @@ async fn async_main() -> Result<()> {
         embed_metadata: args.embed_metadata,
         embed_thumbnail: args.embed_thumbnail,
         recode_video: args.recode_video,
+        remux_container,
         keep_video: args.keep_video,
         ffmpeg_location: args.ffmpeg_location,
         ..Default::default()

@@ -92,6 +92,9 @@ pub struct Config {
     /// Video format to recode to
     pub recode_video: Option<String>,
 
+    /// Remux to container format for better seeking (mp4, mkv)
+    pub remux_container: Option<String>,
+
     /// Embed thumbnail in video file
     pub embed_thumbnail: bool,
 
@@ -227,6 +230,7 @@ impl Default for Config {
             audio_format: None,
             audio_quality: None,
             recode_video: None,
+            remux_container: None,
             embed_thumbnail: false,
             embed_metadata: false,
             embed_subtitles: false,

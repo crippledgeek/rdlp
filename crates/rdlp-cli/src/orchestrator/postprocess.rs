@@ -15,6 +15,7 @@ impl Orchestrator {
             audio_format: self.config.audio_format.clone(),
             audio_quality: self.config.audio_quality.clone(),
             recode_video: self.config.recode_video.clone(),
+            remux_container: self.config.remux_container.clone(),
             merge_output_format: self.config.merge_output_format.clone(),
             embed_thumbnail: self.config.embed_thumbnail,
             embed_metadata: self.config.embed_metadata,
@@ -31,6 +32,7 @@ impl Orchestrator {
             || self.config.embed_metadata
             || self.config.embed_thumbnail
             || self.config.recode_video.is_some()
+            || self.config.remux_container.is_some()
     }
 
     /// Run post-processing pipeline on downloaded file(s)

@@ -1,0 +1,14 @@
+# Cargo configuration template
+#
+# Copy this file to config.toml and adjust paths for your machine.
+#   cp .cargo/config.toml.example .cargo/config.toml
+
+[env]
+# Path to FFmpeg shared build with include/ and lib/ subdirectories.
+# Required for building the ffmpeg-the-third dev-dependency (used in tests).
+#
+# Windows (WinGet):  winget install Gyan.FFmpeg.Shared
+# Windows (Choco):   choco install ffmpeg-shared
+#
+# Then set the path below to the directory containing include/ and lib/:
+FFMPEG_DIR = "C:/path/to/ffmpeg-shared"
