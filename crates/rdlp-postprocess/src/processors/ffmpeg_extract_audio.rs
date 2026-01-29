@@ -28,6 +28,7 @@ pub struct FFmpegExtractAudio {
 
 impl FFmpegExtractAudio {
     /// Create a new audio extraction processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

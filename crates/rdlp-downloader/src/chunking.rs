@@ -79,6 +79,7 @@ impl fmt::Display for ChunkSizeStrategy {
 /// assert_eq!(chunk_size_for_file(1024 * 1024 * 1024), 1024 * 1024);   // 1 GB → 1 MB
 /// assert_eq!(chunk_size_for_file(5 * 1024 * 1024 * 1024), 8 * 1024 * 1024); // 5 GB → 8 MB
 /// ```
+#[must_use]
 pub fn chunk_size_for_file(file_size: u64) -> usize {
     const MIN_CHUNK: u64 = 64 * 1024; // 64 KB (NTFS cluster size)
     const MAX_CHUNK: u64 = 8 * 1024 * 1024; // 8 MB (reasonable upper bound)
@@ -96,6 +97,7 @@ pub fn chunk_size_for_file(file_size: u64) -> usize {
 /// Calculate chunk information for a file
 ///
 /// Returns (chunk_size, total_chunks)
+#[must_use]
 pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, usize) {
     let chunk_size = match strategy {
         ChunkSizeStrategy::Auto => chunk_size_for_file(file_size),
@@ -230,7 +232,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be power of two")]
     fn test_calculate_chunks_fixed_non_power_of_two() {
-        calculate_chunks(1024 * 1024, ChunkSizeStrategy::Fixed(1000)); // Not power of two
+        let _ = calculate_chunks(1024 * 1024, ChunkSizeStrategy::Fixed(1000)); // Not power of two
     }
 
     #[test]

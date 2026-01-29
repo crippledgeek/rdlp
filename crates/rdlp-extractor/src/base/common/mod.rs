@@ -361,6 +361,7 @@ impl BaseExtractor {
     ///
     /// let id = BaseExtractor::extract_id_from_url(url, &VIDEO_PATTERN, "id");
     /// ```
+    #[must_use]
     pub fn extract_id_from_url(url: &str, pattern: &Regex, group_name: &str) -> Option<String> {
         pattern
             .captures(url)
@@ -391,6 +392,7 @@ impl BaseExtractor {
     ///
     /// let id = BaseExtractor::extract_id_positional(url, &PATTERN, &[1, 2]);
     /// ```
+    #[must_use]
     pub fn extract_id_positional(
         url: &str,
         pattern: &Regex,
@@ -421,6 +423,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// The content attribute value if found and non-empty
+    #[must_use]
     pub fn extract_meta_content(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
@@ -437,6 +440,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// The href attribute value if found and non-empty
+    #[must_use]
     pub fn extract_link_href(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
@@ -453,6 +457,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// The text content if found and non-empty
+    #[must_use]
     pub fn extract_element_text(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
@@ -473,6 +478,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Title from the first successful strategy, `None` if all fail
+    #[must_use]
     pub fn extract_title_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(title) = Self::extract_meta_content(html, &OG_TITLE_SELECTOR) {
@@ -505,6 +511,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Description from the first successful strategy, `None` if all fail
+    #[must_use]
     pub fn extract_description_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(desc) = Self::extract_meta_content(html, &OG_DESCRIPTION_SELECTOR) {
@@ -527,6 +534,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Thumbnail URL from the first successful strategy, `None` if all fail
+    #[must_use]
     pub fn extract_thumbnail_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(thumb) = Self::extract_meta_content(html, &OG_IMAGE_SELECTOR) {
@@ -687,6 +695,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Calculated width in pixels
+    #[must_use]
     #[inline]
     pub fn width_from_height(height: u32) -> u32 {
         (height * 16) / 9
@@ -699,6 +708,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Parsed height as u32, `None` if parsing fails
+    #[must_use]
     pub fn parse_quality_height(quality_str: &str) -> Option<u32> {
         quality_str.trim_end_matches(['p', 'P']).parse::<u32>().ok()
     }
@@ -731,6 +741,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// A Format struct with quality metadata populated
+    #[must_use]
     pub fn build_format(
         format_id: String,
         url: String,
@@ -820,6 +831,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Truncated string (or original if already shorter)
+    #[must_use]
     pub fn truncate_string(s: String, max_len: usize) -> String {
         if s.chars().count() <= max_len {
             s
@@ -839,6 +851,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Sanitized string with sensitive data redacted
+    #[must_use]
     pub fn sanitize_for_logging(s: &str) -> String {
         rdlp_security::sanitize_for_logging(s)
     }

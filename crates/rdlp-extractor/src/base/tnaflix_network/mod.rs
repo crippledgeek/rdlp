@@ -114,6 +114,7 @@ pub struct TnaFlixNetworkBase;
 
 impl TnaFlixNetworkBase {
     /// Create a new base extractor
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -322,6 +323,7 @@ impl TnaFlixNetworkBase {
     /// assert_eq!(base.parse_iso8601_duration("PT30M"), Some(1800.0));
     /// assert_eq!(base.parse_iso8601_duration("PT45S"), Some(45.0));
     /// ```
+    #[must_use]
     pub fn parse_iso8601_duration(&self, duration_str: &str) -> Option<f64> {
         if !duration_str.starts_with("PT") {
             return None;
@@ -370,6 +372,7 @@ impl TnaFlixNetworkBase {
     /// assert_eq!(base.parse_iso8601_date("2024-01-15"), Some("20240115".to_string()));
     /// assert_eq!(base.parse_iso8601_date("2024-01-15T10:30:00Z"), Some("20240115".to_string()));
     /// ```
+    #[must_use]
     pub fn parse_iso8601_date(&self, date_str: &str) -> Option<String> {
         let date_part = date_str.split('T').next().unwrap_or(date_str);
         let parts: Vec<&str> = date_part.split('-').collect();

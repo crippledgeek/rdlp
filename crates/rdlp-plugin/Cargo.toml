@@ -10,3 +10,6 @@ rdlp-core = { path = "../rdlp-core" }
 libloading = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

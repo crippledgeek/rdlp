@@ -178,6 +178,7 @@ pub struct InfoDict {
 
 impl InfoDict {
     /// Create a new InfoDict with required fields
+    #[must_use]
     pub fn new(id: String, title: String, extractor: String, webpage_url: String) -> Self {
         Self {
             id,
@@ -224,6 +225,7 @@ impl InfoDict {
     }
 
     /// Get the best format (highest quality video with audio, or best video+audio)
+    #[must_use]
     pub fn best_format(&self) -> Option<&Format> {
         self.formats
             .iter()
@@ -242,6 +244,7 @@ impl InfoDict {
     }
 
     /// Get the best video-only format
+    #[must_use]
     pub fn best_video(&self) -> Option<&Format> {
         self.formats
             .iter()
@@ -259,6 +262,7 @@ impl InfoDict {
     }
 
     /// Get the best audio-only format
+    #[must_use]
     pub fn best_audio(&self) -> Option<&Format> {
         self.formats
             .iter()

@@ -24,6 +24,7 @@ pub struct RetryConfig {
 
 impl RetryConfig {
     /// Create a new retry configuration
+    #[must_use]
     pub fn new(
         max_retries: usize,
         initial_delay: Duration,
@@ -40,6 +41,7 @@ impl RetryConfig {
     }
 
     /// Create default retry configuration (10 retries, 1s-60s backoff, jitter enabled)
+    #[must_use]
     pub fn default_config() -> Self {
         Self {
             max_retries: 10,
@@ -77,6 +79,7 @@ impl RetryConfig {
     ///         .await;
     /// }
     /// ```
+    #[must_use]
     pub fn to_backoff(&self) -> ExponentialBuilder {
         let mut builder = ExponentialBuilder::default()
             .with_min_delay(self.initial_delay)
@@ -118,6 +121,7 @@ impl Default for RetryConfig {
 ///         .await;
 /// }
 /// ```
+#[must_use]
 pub fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
         // Network errors are generally retryable

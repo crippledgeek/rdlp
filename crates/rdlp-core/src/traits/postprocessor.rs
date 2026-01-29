@@ -62,6 +62,7 @@ pub struct PostProcessResult {
 
 impl PostProcessResult {
     /// Create a new post-process result
+    #[must_use]
     pub fn new(info: InfoDict, files: Vec<PathBuf>) -> Self {
         Self {
             info,
@@ -71,6 +72,7 @@ impl PostProcessResult {
     }
 
     /// Add temporary files that can be cleaned up
+    #[must_use]
     pub fn with_temp_files(mut self, temp_files: Vec<PathBuf>) -> Self {
         self.temp_files = temp_files;
         self

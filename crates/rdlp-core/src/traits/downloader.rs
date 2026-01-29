@@ -144,6 +144,7 @@ pub struct DownloadProgress {
 
 impl DownloadProgress {
     /// Create a new progress update
+    #[must_use]
     pub fn new(bytes_downloaded: u64, total_bytes: Option<u64>, speed: f64) -> Self {
         let percentage = total_bytes.map(|total| {
             if total > 0 {
@@ -176,6 +177,7 @@ impl DownloadProgress {
     }
 
     /// Create a new segment-based progress update (for HLS downloads)
+    #[must_use]
     pub fn new_with_segments(
         bytes_downloaded: u64,
         speed: f64,
@@ -219,6 +221,7 @@ impl DownloadProgress {
     ///
     /// Uses stream duration for more accurate progress/ETA than segment count,
     /// since segments can have variable lengths.
+    #[must_use]
     pub fn new_with_duration(
         bytes_downloaded: u64,
         speed: f64,
@@ -263,21 +266,25 @@ impl DownloadProgress {
     }
 
     /// Check if this is a segment-based progress (HLS)
+    #[must_use]
     pub fn is_segmented(&self) -> bool {
         self.total_segments.is_some()
     }
 
     /// Format speed as human-readable string (e.g., "1.5 MB/s")
+    #[must_use]
     pub fn speed_string(&self) -> String {
         format_bytes_per_second(self.speed)
     }
 
     /// Format bytes downloaded as human-readable string (e.g., "15.3 MB")
+    #[must_use]
     pub fn bytes_string(&self) -> String {
         format_bytes(self.bytes_downloaded)
     }
 
     /// Format total size as human-readable string (e.g., "100.0 MB")
+    #[must_use]
     pub fn total_string(&self) -> String {
         self.total_bytes
             .map(format_bytes)
@@ -321,6 +328,7 @@ pub struct DownloadStats {
 
 impl DownloadStats {
     /// Create new download statistics
+    #[must_use]
     pub fn new(bytes_downloaded: u64, duration: Duration, retries: usize) -> Self {
         let average_speed = if duration.as_secs_f64() > 0.0 {
             bytes_downloaded as f64 / duration.as_secs_f64()
@@ -338,17 +346,20 @@ impl DownloadStats {
     }
 
     /// Create new stats with fragment information
+    #[must_use]
     pub fn with_fragments(mut self, fragments: usize) -> Self {
         self.fragments = Some(fragments);
         self
     }
 
     /// Format average speed as human-readable string
+    #[must_use]
     pub fn speed_string(&self) -> String {
         format_bytes_per_second(self.average_speed)
     }
 
     /// Format bytes downloaded as human-readable string
+    #[must_use]
     pub fn bytes_string(&self) -> String {
         format_bytes(self.bytes_downloaded)
     }

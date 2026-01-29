@@ -120,6 +120,7 @@ impl HlsSizeDetector {
     /// # Arguments
     /// * `http_client` - Shared HTTP client for making requests
     /// * `verbose` - Enable detailed logging
+    #[must_use]
     pub fn new(http_client: Arc<reqwest::Client>, verbose: bool) -> Self {
         Self {
             http_client,

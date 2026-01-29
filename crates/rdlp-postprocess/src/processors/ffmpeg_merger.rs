@@ -29,6 +29,7 @@ pub struct FFmpegMerger {
 
 impl FFmpegMerger {
     /// Create a new merger processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

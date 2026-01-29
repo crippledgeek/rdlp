@@ -40,6 +40,7 @@ pub struct FFmpegVideoConvertor {
 
 impl FFmpegVideoConvertor {
     /// Create a new video converter processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

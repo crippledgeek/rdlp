@@ -274,11 +274,13 @@ pub struct DownloaderRegistry {
 
 impl DownloaderRegistry {
     /// Create a new registry with default downloaders
+    #[must_use]
     pub fn new() -> Self {
         Self::with_config(&Config::default())
     }
 
     /// Create a new registry with custom configuration
+    #[must_use]
     pub fn with_config(config: &Config) -> Self {
         let mut registry = Self {
             downloaders: Vec::new(),
@@ -333,6 +335,7 @@ impl DownloaderRegistry {
     /// let downloader = registry.find_downloader("https://example.com/video.mp4");
     /// assert!(downloader.is_some());
     /// ```
+    #[must_use]
     pub fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
         self.downloaders.iter().find(|d| d.supports(url)).cloned()
     }
@@ -341,6 +344,7 @@ impl DownloaderRegistry {
     ///
     /// # Returns
     /// A vector of protocol names (e.g., ["http", "hls", "dash"])
+    #[must_use]
     pub fn list_downloaders(&self) -> Vec<String> {
         self.downloaders
             .iter()

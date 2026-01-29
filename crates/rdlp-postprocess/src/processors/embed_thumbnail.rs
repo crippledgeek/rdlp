@@ -39,6 +39,7 @@ pub struct EmbedThumbnail {
 
 impl EmbedThumbnail {
     /// Create a new thumbnail embedding processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

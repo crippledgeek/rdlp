@@ -21,3 +21,6 @@ ffmpeg-the-third = "4.0"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -62,6 +62,7 @@ impl HlsDownloadState {
     ///
     /// The playlist URL is normalized (query parameters stripped) to handle
     /// dynamic tokens that change on each request.
+    #[must_use]
     pub fn new(playlist_url: String, segment_count: usize) -> Self {
         let now = Utc::now();
         Self {
@@ -76,6 +77,7 @@ impl HlsDownloadState {
     }
 
     /// Get the state file path for a given output path
+    #[must_use]
     pub fn state_file_path(output_path: &Path) -> PathBuf {
         let mut state_path = output_path.to_path_buf();
         let filename = state_path
@@ -193,11 +195,13 @@ impl HlsDownloadState {
     }
 
     /// Check if a segment is already completed
+    #[must_use]
     pub fn is_completed(&self, segment_index: usize) -> bool {
         self.completed_segments.contains(&segment_index)
     }
 
     /// Get list of segments that still need to be downloaded
+    #[must_use]
     pub fn pending_segments(&self) -> Vec<usize> {
         (0..self.segment_count)
             .filter(|idx| !self.completed_segments.contains(idx))
@@ -205,6 +209,7 @@ impl HlsDownloadState {
     }
 
     /// Get progress as a fraction (0.0 to 1.0)
+    #[must_use]
     pub fn progress(&self) -> f64 {
         if self.segment_count == 0 {
             return 1.0;

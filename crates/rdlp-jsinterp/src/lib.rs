@@ -17,6 +17,7 @@ pub struct SimpleJsEngine {
 
 impl SimpleJsEngine {
     /// Create a new JavaScript engine instance
+    #[must_use]
     pub fn new() -> Self {
         Self {}
     }

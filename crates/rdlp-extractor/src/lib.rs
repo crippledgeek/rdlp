@@ -64,6 +64,7 @@ pub struct ExtractorRegistry {
 
 impl ExtractorRegistry {
     /// Create a new registry with default extractors
+    #[must_use]
     pub fn new() -> Self {
         let mut registry = Self {
             extractors: Vec::new(),
@@ -110,6 +111,7 @@ impl ExtractorRegistry {
     /// let extractor = registry.find_extractor("https://www.tnaflix.com/video/123");
     /// assert!(extractor.is_some());
     /// ```
+    #[must_use]
     pub fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>> {
         self.extractors
             .iter()
@@ -122,6 +124,7 @@ impl ExtractorRegistry {
     ///
     /// # Returns
     /// A vector of extractor names (e.g., ["TNAFlix", "EMPFlix", "MovieFap"])
+    #[must_use]
     pub fn list_extractors(&self) -> Vec<String> {
         self.extractors
             .iter()

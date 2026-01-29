@@ -18,6 +18,7 @@ pub enum DownloadState {
 
 impl DownloadState {
     /// Get the resume offset (0 for fresh downloads)
+    #[must_use]
     pub fn offset(&self) -> u64 {
         match self {
             Self::Fresh => 0,

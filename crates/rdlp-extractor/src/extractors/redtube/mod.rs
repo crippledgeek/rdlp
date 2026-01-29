@@ -34,6 +34,7 @@ pub struct RedTubeExtractor {
 
 impl RedTubeExtractor {
     /// Create a new RedTube extractor
+    #[must_use]
     pub fn new() -> Self {
         Self {
             base: TnaFlixNetworkBase::new(),

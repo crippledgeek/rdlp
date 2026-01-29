@@ -200,6 +200,7 @@ impl fmt::Debug for Format {
 
 impl Format {
     /// Create a new format with required fields
+    #[must_use]
     pub fn new(format_id: String, url: String, ext: String, protocol: String) -> Self {
         Self {
             format_id,
@@ -503,6 +504,7 @@ impl FormatSelector {
     }
 
     /// Get the expression string
+    #[must_use]
     pub fn expression(&self) -> &str {
         &self.expression
     }
