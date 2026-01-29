@@ -5,11 +5,15 @@
 use anyhow::Result;
 use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
+use indicatif::MultiProgress;
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// Get optimal number of worker threads for I/O-heavy workloads
 fn optimal_worker_threads() -> usize {
@@ -113,7 +117,7 @@ fn main() -> Result<()> {
 
 /// Interactive remux container selection
 fn select_remux_container() -> Result<Option<String>> {
-    let containers = vec![
+    let containers = [
         ("mp4", "Best compatibility, faststart for streaming"),
         ("mkv", "Supports all codecs, efficient cues index"),
         ("webm", "Web-optimized, VP8/VP9/AV1 + Opus/Vorbis"),
@@ -136,20 +140,51 @@ fn select_remux_container() -> Result<Option<String>> {
     Ok(selection.map(|idx| containers[idx].0.to_string()))
 }
 
+/// Writer that suspends progress bars while writing to prevent visual duplication
+#[derive(Clone)]
+struct SuspendingWriter {
+    multi_progress: Arc<MultiProgress>,
+}
+
+impl std::io::Write for SuspendingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.multi_progress.suspend(|| std::io::stderr().write(buf))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
+    type Writer = SuspendingWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 async fn async_main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize tracing subscriber
-    // Use RUST_LOG environment variable or default based on verbose/quiet flags
+    // Create shared MultiProgress for managing progress bars with log output
+    let multi_progress = Arc::new(MultiProgress::new());
+
     if !args.quiet {
         let default_level = if args.verbose { "debug" } else { "info" };
 
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(default_level));
 
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_target(true)
+        // Use SuspendingWriter to properly handle logs while progress bars are active
+        // This prevents progress bar duplication caused by log messages
+        let writer = SuspendingWriter {
+            multi_progress: Arc::clone(&multi_progress),
+        };
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer().with_writer(writer))
             .init();
     }
 
@@ -187,8 +222,8 @@ async fn async_main() -> Result<()> {
 
     let interactive = args.interactive;
 
-    // Create orchestrator
-    let orchestrator = Orchestrator::new(config);
+    // Create orchestrator with shared MultiProgress
+    let orchestrator = Orchestrator::new(config, (*multi_progress).clone());
 
     // List extractors if requested
     if args.list_extractors {

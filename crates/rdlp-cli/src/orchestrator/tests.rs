@@ -7,7 +7,7 @@ use std::path::Path;
 /// Helper function to create a test orchestrator
 pub(crate) fn create_test_orchestrator() -> Orchestrator {
     let config = Config::default();
-    Orchestrator::new(config)
+    Orchestrator::new(config, MultiProgress::new())
 }
 
 /// Helper function to wrap formats in an InfoDict for testing
@@ -272,7 +272,7 @@ fn test_create_progress_bar_disabled() {
         progress: false,
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config);
+    let orchestrator = Orchestrator::new(config, MultiProgress::new());
 
     let result = orchestrator.create_progress_bar(Some(1000000), 0);
     assert!(result.is_ok());
@@ -285,7 +285,7 @@ fn test_create_progress_bar_enabled() {
         progress: true,
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config);
+    let orchestrator = Orchestrator::new(config, MultiProgress::new());
 
     let result = orchestrator.create_progress_bar(Some(1000000), 0);
     assert!(result.is_ok());
@@ -298,7 +298,7 @@ fn test_create_progress_bar_with_resume() {
         progress: true,
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config);
+    let orchestrator = Orchestrator::new(config, MultiProgress::new());
 
     let result = orchestrator.create_progress_bar(Some(1000000), 500000);
     assert!(result.is_ok());

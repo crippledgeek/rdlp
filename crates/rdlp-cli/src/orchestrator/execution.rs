@@ -1,7 +1,7 @@
 //! Download execution and progress tracking
 
 use super::{Orchestrator, errors::*};
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
@@ -79,6 +79,7 @@ impl Orchestrator {
     /// Create a progress bar for download tracking
     ///
     /// Uses steady tick for smooth animation regardless of download speed.
+    /// Progress bar is added to MultiProgress for proper log integration.
     ///
     /// # Errors
     /// Returns an error if progress bar template is invalid
@@ -91,8 +92,12 @@ impl Orchestrator {
             return Ok(None);
         }
 
-        // Use higher refresh rate (30 fps) for smoother animation
-        let pb = ProgressBar::with_draw_target(filesize, ProgressDrawTarget::stderr_with_hz(30));
+        // Create progress bar and add to MultiProgress for proper log handling
+        let pb = self.multi_progress.add(ProgressBar::new(filesize.unwrap_or(0)));
+        if let Some(size) = filesize {
+            pb.set_length(size);
+        }
+
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(
@@ -117,6 +122,7 @@ impl Orchestrator {
     /// Unlike byte-based progress bars, this tracks segment completion.
     /// The message shows bytes and speed, while the bar shows segment progress.
     /// Uses steady tick for smooth animation between segment completions.
+    /// Progress bar is added to MultiProgress for proper log integration.
     ///
     /// # Errors
     /// Returns an error if progress bar template is invalid
@@ -125,11 +131,9 @@ impl Orchestrator {
             return Ok(None);
         }
 
-        // Use higher refresh rate (30 fps) for smoother animation
-        let pb = ProgressBar::with_draw_target(
-            Some(0), // Will be set when we know total segments
-            ProgressDrawTarget::stderr_with_hz(30),
-        );
+        // Create progress bar and add to MultiProgress for proper log handling
+        let pb = self.multi_progress.add(ProgressBar::new(0));
+
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}")

@@ -4,6 +4,7 @@
 
 mod test_utils;
 
+use indicatif::MultiProgress;
 use rdlp_cli::Orchestrator;
 use rdlp_core::Config;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ fn test_orchestrator_creation() {
     let config = create_test_config(&temp_dir);
 
     // Create orchestrator
-    let orch = Orchestrator::new(config);
+    let orch = Orchestrator::new(config, MultiProgress::new());
 
     // Verify orchestrator was created successfully
     // The orchestrator should have registered extractors
@@ -44,7 +45,7 @@ fn test_orchestrator_creation() {
 fn test_list_extractors() {
     let temp_dir = tempfile::tempdir().unwrap();
     let config = create_test_config(&temp_dir);
-    let orch = Orchestrator::new(config);
+    let orch = Orchestrator::new(config, MultiProgress::new());
 
     let extractors = orch.list_extractors();
 
@@ -104,7 +105,7 @@ fn test_orchestrator_with_custom_config() {
     assert!(!config.progress);
 
     // Create orchestrator with custom config
-    let orch = Orchestrator::new(config);
+    let orch = Orchestrator::new(config, MultiProgress::new());
 
     // Verify orchestrator works with custom config
     assert!(!orch.list_extractors().is_empty());
@@ -119,8 +120,8 @@ fn test_multiple_orchestrators() {
     let config1 = create_test_config(&temp_dir1);
     let config2 = create_test_config(&temp_dir2);
 
-    let orch1 = Orchestrator::new(config1);
-    let orch2 = Orchestrator::new(config2);
+    let orch1 = Orchestrator::new(config1, MultiProgress::new());
+    let orch2 = Orchestrator::new(config2, MultiProgress::new());
 
     // Both should work independently
     assert!(!orch1.list_extractors().is_empty());
