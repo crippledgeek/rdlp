@@ -41,6 +41,7 @@ pub struct FFmpegRemuxer {
 
 impl FFmpegRemuxer {
     /// Create a new remuxer processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

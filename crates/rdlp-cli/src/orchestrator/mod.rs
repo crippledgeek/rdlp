@@ -43,6 +43,7 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Create a new orchestrator with default registries
+    #[must_use]
     pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
         let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
         let js_engine = Arc::new(SimpleJsEngine::new());
@@ -185,11 +186,13 @@ impl Orchestrator {
     }
 
     /// List all available extractors
+    #[must_use]
     pub fn list_extractors(&self) -> Vec<String> {
         self.extractor_registry.list_extractors()
     }
 
     /// List all available download protocols
+    #[must_use]
     pub fn list_downloaders(&self) -> Vec<String> {
         self.downloader_registry.list_downloaders()
     }

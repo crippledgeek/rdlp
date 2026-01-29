@@ -9,3 +9,6 @@ license.workspace = true
 rdlp-types = { path = "../rdlp-types" }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

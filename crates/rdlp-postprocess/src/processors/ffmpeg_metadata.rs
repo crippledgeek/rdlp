@@ -32,6 +32,7 @@ pub struct FFmpegMetadata {
 
 impl FFmpegMetadata {
     /// Create a new metadata embedding processor.
+    #[must_use]
     pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }

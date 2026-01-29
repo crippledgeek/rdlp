@@ -37,11 +37,13 @@ pub struct HttpDownloader {
 
 impl HttpDownloader {
     /// Create a new HTTP downloader
+    #[must_use]
     pub fn new() -> Self {
         Self::with_client(reqwest::Client::new())
     }
 
     /// Create with custom client
+    #[must_use]
     pub fn with_client(client: reqwest::Client) -> Self {
         Self {
             client,
@@ -50,6 +52,7 @@ impl HttpDownloader {
     }
 
     /// Get reference to the HTTP client
+    #[must_use]
     pub fn client(&self) -> &reqwest::Client {
         &self.client
     }

@@ -25,3 +25,6 @@ futures = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 mockito = { workspace = true }
+
+[lints]
+workspace = true

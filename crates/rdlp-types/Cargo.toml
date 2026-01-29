@@ -13,3 +13,6 @@ url = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true
