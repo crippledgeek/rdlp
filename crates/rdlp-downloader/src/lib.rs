@@ -246,10 +246,13 @@ pub mod hls;
 pub mod hls_state;
 /// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
+/// Shared progress reporting infrastructure
+pub mod progress;
 
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
+pub use progress::{ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 
 use rdlp_core::{Config, Downloader};
 use rdlp_http::HttpClientFactory;

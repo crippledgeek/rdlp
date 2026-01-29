@@ -4,40 +4,21 @@
 
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info};
-use rdlp_core::{DownloadProgress, DownloadStats, RdlpError, Result};
+use rdlp_core::{DownloadStats, RdlpError, Result};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 use super::HttpDownloader;
 use super::config::DownloaderConfig;
 use crate::chunking::calculate_chunks;
+use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 
 /// Global atomic counter for generating unique download IDs
 pub(super) static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// RAII guard for progress reporter tasks
-///
-/// Ensures the progress reporter task is aborted when the guard goes out of scope,
-/// preventing task leaks on early returns or errors.
-pub(super) struct ProgressGuard(pub Option<tokio::task::JoinHandle<()>>);
-
-impl ProgressGuard {
-    pub fn new(task: Option<tokio::task::JoinHandle<()>>) -> Self {
-        Self(task)
-    }
-}
-
-impl Drop for ProgressGuard {
-    fn drop(&mut self) {
-        if let Some(task) = self.0.take() {
-            task.abort();
-        }
-    }
-}
 
 /// Cleanup chunk files on error
 pub(super) async fn cleanup_chunk_files(
@@ -89,13 +70,11 @@ impl HttpDownloader {
 
         let downloaded = Arc::new(AtomicU64::new(0));
 
-        let _progress_guard = ProgressGuard::new(create_progress_reporter(
+        let _progress_guard = spawn_progress_reporter(
             progress,
-            downloaded.clone(),
-            start_time,
-            total_size,
-            0,
-        ));
+            ProgressMetrics::bytes_only(downloaded.clone()),
+            ProgressReporterConfig::http(start_time, total_size, 0),
+        );
 
         info!(
             "Starting parallel download with {} concurrent connections",
@@ -210,12 +189,10 @@ impl HttpDownloader {
 
         let downloaded = Arc::new(AtomicU64::new(resume_from));
 
-        let progress_task = create_progress_reporter(
+        let mut progress_guard = spawn_progress_reporter(
             progress,
-            downloaded.clone(),
-            start_time,
-            total_size,
-            resume_from,
+            ProgressMetrics::bytes_only(downloaded.clone()),
+            ProgressReporterConfig::http(start_time, total_size, resume_from),
         );
 
         info!(
@@ -263,9 +240,7 @@ impl HttpDownloader {
             Ok(results) => results.into_iter().map(|(_, bytes, _)| bytes).collect(),
             Err(e) => {
                 error!("Resume failed: {e}");
-                if let Some(task) = &progress_task {
-                    task.abort();
-                }
+                progress_guard.abort();
                 cleanup_chunk_files(temp_dir, &filename, download_id, total_chunks).await;
                 return Err(e);
             }
@@ -278,9 +253,7 @@ impl HttpDownloader {
             newly_downloaded / 1024 / 1024
         );
 
-        if let Some(task) = progress_task {
-            task.abort();
-        }
+        // Progress guard will be dropped and abort the task automatically
 
         // Append chunks to existing file
         append_chunks(
@@ -307,45 +280,6 @@ impl HttpDownloader {
 
         Ok(stats)
     }
-}
-
-/// Create a progress reporter task
-fn create_progress_reporter(
-    callback: Option<Box<dyn rdlp_core::ProgressCallback>>,
-    downloaded: Arc<AtomicU64>,
-    start_time: Instant,
-    total_size: u64,
-    resume_from: u64,
-) -> Option<tokio::task::JoinHandle<()>> {
-    callback.map(|cb| {
-        tokio::spawn(async move {
-            let mut last_update = Instant::now();
-            let update_interval = Duration::from_millis(100);
-
-            loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                let now = Instant::now();
-                if now.duration_since(last_update) >= update_interval {
-                    let bytes_downloaded = downloaded.load(Ordering::Relaxed);
-                    let elapsed = now.duration_since(start_time).as_secs_f64();
-                    let speed = if elapsed > 0.0 {
-                        (bytes_downloaded - resume_from) as f64 / elapsed
-                    } else {
-                        0.0
-                    };
-
-                    let progress_info =
-                        DownloadProgress::new(bytes_downloaded, Some(total_size), speed);
-                    cb.on_progress(&progress_info);
-                    last_update = now;
-
-                    if bytes_downloaded >= total_size {
-                        break;
-                    }
-                }
-            }
-        })
-    })
 }
 
 /// Merge chunks into final file
