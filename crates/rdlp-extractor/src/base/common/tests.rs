@@ -67,9 +67,16 @@ fn test_parse_quality_from_url() {
 
 #[test]
 fn test_width_from_height() {
+    // Standard resolutions (lookup table)
+    assert_eq!(BaseExtractor::width_from_height(240), 426);
+    assert_eq!(BaseExtractor::width_from_height(360), 640);
+    assert_eq!(BaseExtractor::width_from_height(480), 854);
     assert_eq!(BaseExtractor::width_from_height(720), 1280);
     assert_eq!(BaseExtractor::width_from_height(1080), 1920);
-    assert_eq!(BaseExtractor::width_from_height(480), 853);
+    assert_eq!(BaseExtractor::width_from_height(1440), 2560);
+    assert_eq!(BaseExtractor::width_from_height(2160), 3840);
+    // Non-standard height falls back to integer math
+    assert_eq!(BaseExtractor::width_from_height(900), (900 * 16) / 9);
 }
 
 // ========================================================================

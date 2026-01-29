@@ -13,11 +13,6 @@ use crate::utils::{extract_extension_from_url, make_absolute_url};
 
 use super::patterns::{MEDIA_DEF_PATTERN, SOURCES_PATTERN};
 
-// Common codec strings to avoid repeated allocations
-const CODEC_H264: &str = "h264";
-const CODEC_AAC: &str = "aac";
-const PROTOCOL_HTTPS: &str = "https";
-
 /// Extract quality string from JSON value (handles both string and number types)
 pub fn parse_quality(item: &Value) -> String {
     item.get("quality")
@@ -43,31 +38,30 @@ fn extract_bitrate_from_url(url: &str) -> Option<f64> {
         .and_then(|m| m.as_str().parse::<f64>().ok())
 }
 
-/// Build Format from quality string and URL using BaseExtractor utilities
+/// Build Format from quality string and URL using BaseExtractor utilities.
+///
+/// Delegates to `BaseExtractor::build_format()` for shared logic
+/// (height/width, format_note, codec defaults, quality score),
+/// then applies RedTube-specific fields (container, bitrate, fallback format_note).
 pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format {
     let height = BaseExtractor::parse_quality_height(quality_str);
 
-    let mut format = Format::new(
+    let mut format = BaseExtractor::build_format(
         quality_str.to_owned(),
         url.clone(),
         format_type.to_owned(),
-        PROTOCOL_HTTPS.to_owned(),
+        height,
     );
 
-    if let Some(h) = height {
-        format.height = Some(h);
-        format.width = Some(BaseExtractor::width_from_height(h));
-        format.quality = Some((h / 100) as i32);
-        format.format_note = Some(format!("{h}p"));
-    } else {
+    // RedTube-specific: set format_note to raw quality string when height is unknown
+    if height.is_none() {
         format.format_note = Some(quality_str.to_owned());
     }
 
-    format.vcodec = Some(CODEC_H264.to_owned());
-    format.acodec = Some(CODEC_AAC.to_owned());
+    // RedTube-specific: container field
     format.container = Some(format_type.to_owned());
 
-    // Extract bitrate from URL if available (e.g., "4000K" = 4000 kbps)
+    // RedTube-specific: extract bitrate from URL (e.g., "4000K" = 4000 kbps)
     if let Some(bitrate) = extract_bitrate_from_url(&url) {
         format.tbr = Some(bitrate);
     }

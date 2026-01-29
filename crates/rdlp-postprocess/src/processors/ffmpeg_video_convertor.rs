@@ -4,14 +4,13 @@
 //! containers using `ffmpeg-the-third` library bindings (no CLI process spawning).
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{FFmpegRunner, VideoConvertOptions};
+use crate::ffmpeg::VideoConvertOptions;
 
 /// Supported video container formats.
 const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "flv", "ts"];
@@ -26,25 +25,19 @@ const VIDEO_CODECS: &[(&str, &str)] = &[
     ("av1", "libaom-av1"),
 ];
 
-/// Post-processor that converts or remuxes video files.
-///
-/// # Priority
-/// This processor has priority 40 (runs after merging, before metadata).
-///
-/// # When it runs
-/// - When `recode_video` is specified in config (full transcode)
-/// - When container change is needed
-pub struct FFmpegVideoConvertor {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    FFmpegVideoConvertor,
+    "FFmpegVideoConvertor",
+    40,
+    "Post-processor that converts or remuxes video files.\n\n\
+     # Priority\n\
+     This processor has priority 40 (runs after merging, before metadata).\n\n\
+     # When it runs\n\
+     - When `recode_video` is specified in config (full transcode)\n\
+     - When container change is needed"
+);
 
 impl FFmpegVideoConvertor {
-    /// Create a new video converter processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Check if the format is a supported container.
     fn is_supported_container(format: &str) -> bool {
         SUPPORTED_CONTAINERS.contains(&format.to_lowercase().as_str())
@@ -114,11 +107,11 @@ impl FFmpegVideoConvertor {
 #[async_trait]
 impl PostProcessor for FFmpegVideoConvertor {
     fn name(&self) -> &str {
-        "FFmpegVideoConvertor"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        40 // After merging
+        self.processor_priority()
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {

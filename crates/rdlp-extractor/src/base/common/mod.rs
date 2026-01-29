@@ -465,6 +465,57 @@ impl BaseExtractor {
             .filter(|s| !s.is_empty())
     }
 
+    /// Extract content from a meta tag using a CSS selector string.
+    ///
+    /// Convenience wrapper around [`Self::extract_meta_content`] that parses
+    /// the selector from a string. Use this for site-specific selectors that
+    /// are not worth pre-compiling as statics.
+    #[must_use]
+    pub fn extract_meta_content_str(html: &Html, selector_str: &str) -> Option<String> {
+        let selector = Selector::parse(selector_str).ok()?;
+        Self::extract_meta_content(html, &selector)
+    }
+
+    /// Extract text content from an element using a CSS selector string.
+    ///
+    /// Convenience wrapper around [`Self::extract_element_text`] that parses
+    /// the selector from a string. Use this for site-specific selectors that
+    /// are not worth pre-compiling as statics.
+    #[must_use]
+    pub fn extract_element_text_str(html: &Html, selector_str: &str) -> Option<String> {
+        let selector = Selector::parse(selector_str).ok()?;
+        Self::extract_element_text(html, &selector)
+    }
+
+    /// Extract the first href from a list of CSS selector strings.
+    ///
+    /// Tries each selector in order, returning the first non-empty `href`
+    /// attribute found. Relative hrefs starting with `/` are made absolute
+    /// using the provided `base_url`.
+    #[must_use]
+    pub fn extract_first_href(
+        html: &Html,
+        selectors: &[&str],
+        base_url: &str,
+    ) -> Option<String> {
+        for selector_str in selectors {
+            let Ok(selector) = Selector::parse(selector_str) else {
+                continue;
+            };
+            if let Some(element) = html.select(&selector).next() {
+                if let Some(href) = element.value().attr("href") {
+                    if !href.is_empty() {
+                        if href.starts_with('/') {
+                            return Some(format!("{base_url}{href}"));
+                        }
+                        return Some(href.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Extract title using multiple fallback strategies
     ///
     /// Tries in order:
@@ -688,7 +739,11 @@ impl BaseExtractor {
     // Format Building
     // ========================================================================
 
-    /// Calculate width from height assuming 16:9 aspect ratio
+    /// Calculate width from height assuming 16:9 aspect ratio.
+    ///
+    /// Uses a lookup table for standard resolutions to return the exact
+    /// display width (e.g. 480p → 854, not 853). Falls back to integer
+    /// math for non-standard heights.
     ///
     /// # Arguments
     /// * `height` - Video height in pixels
@@ -698,7 +753,16 @@ impl BaseExtractor {
     #[must_use]
     #[inline]
     pub fn width_from_height(height: u32) -> u32 {
-        (height * 16) / 9
+        match height {
+            240 => 426,
+            360 => 640,
+            480 => 854,
+            720 => 1280,
+            1080 => 1920,
+            1440 => 2560,
+            2160 => 3840,
+            _ => (height * 16) / 9,
+        }
     }
 
     /// Parse quality height from a string (e.g., "720p" -> 720)

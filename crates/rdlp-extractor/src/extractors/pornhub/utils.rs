@@ -5,7 +5,9 @@
 use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
-use scraper::{Html, Selector};
+use scraper::Html;
+
+use crate::base::common::BaseExtractor;
 
 /// Age verification cookies required by PornHub
 const AGE_COOKIES: &[&str] = &[
@@ -114,19 +116,25 @@ fn clean_html(text: &str) -> String {
     cleaned.trim().chars().take(200).collect()
 }
 
-/// Extract video title from HTML
+/// PornHub base URL for making relative hrefs absolute.
+const PORNHUB_BASE_URL: &str = "https://www.pornhub.com";
+
+/// Extract video title from HTML.
+///
+/// Uses PornHub-specific strategies first (`h1.title`, `shareTitle` JS var),
+/// then falls back to `BaseExtractor::extract_title_multi_strategy`.
 pub fn extract_title(html: &Html, webpage: &str) -> String {
-    // Strategy 1: twitter:title meta tag
-    if let Some(title) = extract_meta_content(html, "meta[name='twitter:title']") {
+    // Strategy 1: PornHub-specific h1.title element
+    if let Some(title) = BaseExtractor::extract_element_text_str(html, "h1.title") {
         return title;
     }
 
-    // Strategy 2: h1.title element
-    if let Some(title) = extract_element_text(html, "h1.title") {
+    // Strategy 2: generic multi-strategy (og:title, twitter:title, <title>, h1)
+    if let Some(title) = BaseExtractor::extract_title_multi_strategy(html) {
         return title;
     }
 
-    // Strategy 3: shareTitle JavaScript variable
+    // Strategy 3: PornHub-specific shareTitle JavaScript variable
     if let Some(caps) = SHARE_TITLE_PATTERN.captures(webpage) {
         if let Some(m) = caps.get(1) {
             let title = m.as_str().trim();
@@ -139,89 +147,63 @@ pub fn extract_title(html: &Html, webpage: &str) -> String {
     "Untitled".to_string()
 }
 
-/// Extract video description from HTML
+/// Extract video description from HTML.
+///
+/// Delegates to `BaseExtractor::extract_description_multi_strategy`.
 pub fn extract_description(html: &Html) -> Option<String> {
-    extract_meta_content(html, "meta[property='og:description']")
-        .or_else(|| extract_meta_content(html, "meta[name='description']"))
+    BaseExtractor::extract_description_multi_strategy(html)
 }
 
-/// Extract thumbnail URL from HTML
+/// Extract thumbnail URL from HTML.
+///
+/// Delegates to `BaseExtractor::extract_thumbnail_multi_strategy`.
 pub fn extract_thumbnail(html: &Html) -> Option<String> {
-    extract_meta_content(html, "meta[property='og:image']")
-        .or_else(|| extract_meta_content(html, "meta[name='twitter:image']"))
+    BaseExtractor::extract_thumbnail_multi_strategy(html)
 }
 
 /// Extract uploader name from HTML
 pub fn extract_uploader(html: &Html) -> Option<String> {
-    // Try multiple selectors for uploader
-    extract_element_text(html, ".usernameBadgesWrapper a")
-        .or_else(|| extract_element_text(html, ".usernameWrap a"))
-        .or_else(|| extract_element_text(html, ".video-info-row .usernameLink"))
+    BaseExtractor::extract_element_text_str(html, ".usernameBadgesWrapper a")
+        .or_else(|| BaseExtractor::extract_element_text_str(html, ".usernameWrap a"))
+        .or_else(|| BaseExtractor::extract_element_text_str(html, ".video-info-row .usernameLink"))
 }
 
 /// Extract uploader URL from HTML
 pub fn extract_uploader_url(html: &Html) -> Option<String> {
-    let selectors = [
-        ".usernameBadgesWrapper a",
-        ".usernameWrap a",
-        ".video-info-row .usernameLink",
-    ];
-
-    for selector_str in selectors {
-        if let Ok(selector) = Selector::parse(selector_str) {
-            if let Some(element) = html.select(&selector).next() {
-                if let Some(href) = element.value().attr("href") {
-                    if !href.is_empty() {
-                        // Make absolute if relative
-                        if href.starts_with('/') {
-                            return Some(format!("https://www.pornhub.com{href}"));
-                        }
-                        return Some(href.to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
+    BaseExtractor::extract_first_href(
+        html,
+        &[
+            ".usernameBadgesWrapper a",
+            ".usernameWrap a",
+            ".video-info-row .usernameLink",
+        ],
+        PORNHUB_BASE_URL,
+    )
 }
 
 /// Extract channel name (may differ from uploader on some videos)
 pub fn extract_channel(html: &Html) -> Option<String> {
-    extract_element_text(html, ".video-info-row .channel-name a")
-        .or_else(|| extract_element_text(html, ".channel-link"))
+    BaseExtractor::extract_element_text_str(html, ".video-info-row .channel-name a")
+        .or_else(|| BaseExtractor::extract_element_text_str(html, ".channel-link"))
 }
 
 /// Extract channel URL
 pub fn extract_channel_url(html: &Html) -> Option<String> {
-    let selectors = [".video-info-row .channel-name a", ".channel-link"];
-
-    for selector_str in selectors {
-        if let Ok(selector) = Selector::parse(selector_str) {
-            if let Some(element) = html.select(&selector).next() {
-                if let Some(href) = element.value().attr("href") {
-                    if !href.is_empty() {
-                        if href.starts_with('/') {
-                            return Some(format!("https://www.pornhub.com{href}"));
-                        }
-                        return Some(href.to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
+    BaseExtractor::extract_first_href(
+        html,
+        &[".video-info-row .channel-name a", ".channel-link"],
+        PORNHUB_BASE_URL,
+    )
 }
 
 /// Extract view count from HTML
 pub fn extract_view_count(html: &Html) -> Option<u64> {
-    // Try to find view count element
-    if let Some(text) = extract_element_text(html, ".count") {
-        return parse_view_count(&text);
-    }
-    if let Some(text) = extract_element_text(html, ".views") {
-        return parse_view_count(&text);
-    }
-    None
+    BaseExtractor::extract_element_text_str(html, ".count")
+        .and_then(|t| parse_view_count(&t))
+        .or_else(|| {
+            BaseExtractor::extract_element_text_str(html, ".views")
+                .and_then(|t| parse_view_count(&t))
+        })
 }
 
 /// Parse view count string (handles "1.5M", "500K", etc.)
@@ -245,58 +227,9 @@ fn parse_view_count(text: &str) -> Option<u64> {
 
 /// Extract rating percentage from HTML
 pub fn extract_rating(html: &Html) -> Option<f64> {
-    // Try percent element
-    if let Some(text) = extract_element_text(html, ".percent") {
-        let text = text.trim().trim_end_matches('%');
-        return text.parse().ok();
-    }
-    // Try rating-value element
-    if let Some(text) = extract_element_text(html, ".rating-value") {
-        let text = text.trim().trim_end_matches('%');
-        return text.parse().ok();
-    }
-    None
-}
-
-/// Extract content from meta tag
-fn extract_meta_content(html: &Html, selector_str: &str) -> Option<String> {
-    let selector = Selector::parse(selector_str).ok()?;
-    let element = html.select(&selector).next()?;
-    let content = element.value().attr("content")?.trim();
-
-    if content.is_empty() {
-        None
-    } else {
-        Some(content.to_string())
-    }
-}
-
-/// Extract text from element
-fn extract_element_text(html: &Html, selector_str: &str) -> Option<String> {
-    let selector = Selector::parse(selector_str).ok()?;
-    let element = html.select(&selector).next()?;
-    let text: String = element.text().collect();
-    let text = text.trim();
-
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_string())
-    }
-}
-
-/// Build width from height assuming 16:9 aspect ratio
-pub fn width_from_height(height: u32) -> u32 {
-    match height {
-        240 => 426,
-        360 => 640,
-        480 => 854,
-        720 => 1280,
-        1080 => 1920,
-        1440 => 2560,
-        2160 => 3840,
-        _ => (height as f32 * 16.0 / 9.0) as u32,
-    }
+    BaseExtractor::extract_element_text_str(html, ".percent")
+        .or_else(|| BaseExtractor::extract_element_text_str(html, ".rating-value"))
+        .and_then(|text| text.trim().trim_end_matches('%').parse().ok())
 }
 
 #[cfg(test)]
@@ -332,12 +265,5 @@ mod tests {
         // Normal video
         let html = r#"<div class="video">Normal content</div>"#;
         assert!(detect_video_unavailable(html).is_none());
-    }
-
-    #[test]
-    fn test_width_from_height() {
-        assert_eq!(width_from_height(1080), 1920);
-        assert_eq!(width_from_height(720), 1280);
-        assert_eq!(width_from_height(480), 854);
     }
 }

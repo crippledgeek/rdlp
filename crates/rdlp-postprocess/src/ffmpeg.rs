@@ -295,6 +295,24 @@ impl FFmpegRunner {
         Self::new()
     }
 
+    /// Run a blocking FFmpeg operation on a background thread.
+    ///
+    /// All FFmpeg library calls are synchronous and must not run on the
+    /// Tokio runtime. This helper wraps `tokio::task::spawn_blocking`
+    /// with uniform error mapping.
+    async fn spawn_blocking<F, T>(task_name: &str, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let name = task_name.to_string();
+        tokio::task::spawn_blocking(f)
+            .await
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("{name} task join error: {e}"),
+            })?
+    }
+
     /// Probe a media file using the FFmpeg library and return its information.
     pub async fn probe(&self, path: impl AsRef<Path>) -> Result<MediaInfo> {
         let path = path.as_ref().to_path_buf();
@@ -303,11 +321,7 @@ impl FFmpegRunner {
             return Err(PostProcessError::InputNotFound { path });
         }
 
-        tokio::task::spawn_blocking(move || Self::probe_sync(&path))
-            .await
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("probe task join error: {e}"),
-            })?
+        Self::spawn_blocking("probe", move || Self::probe_sync(&path)).await
     }
 
     /// Probe a media file synchronously using ffmpeg-the-third library.
@@ -463,11 +477,7 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        tokio::task::spawn_blocking(move || Self::remux_sync(&input, &output, &opts))
-            .await
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("remux task join error: {e}"),
-            })?
+        Self::spawn_blocking("remux", move || Self::remux_sync(&input, &output, &opts)).await
     }
 
     /// Remux a single input file synchronously (stream copy).
@@ -584,13 +594,10 @@ impl FFmpegRunner {
         let audio_input = audio_input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        tokio::task::spawn_blocking(move || {
+        Self::spawn_blocking("merge", move || {
             Self::merge_sync(&video_input, &audio_input, &output, &opts)
         })
         .await
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("merge task join error: {e}"),
-        })?
     }
 
     /// Merge separate video and audio files synchronously (stream copy).
@@ -773,11 +780,10 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        tokio::task::spawn_blocking(move || Self::extract_audio_sync(&input, &output, &opts))
-            .await
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("extract_audio task join error: {e}"),
-            })?
+        Self::spawn_blocking("extract_audio", move || {
+            Self::extract_audio_sync(&input, &output, &opts)
+        })
+        .await
     }
 
     /// Extract audio synchronously (dispatches to copy or transcode).
@@ -1209,13 +1215,10 @@ impl FFmpegRunner {
         let output = output.as_ref().to_path_buf();
         let metadata = metadata.clone();
         let chapters: Vec<ChapterEntry> = chapters.to_vec();
-        tokio::task::spawn_blocking(move || {
+        Self::spawn_blocking("embed_metadata", move || {
             Self::embed_metadata_sync(&input, &output, &metadata, &chapters)
         })
         .await
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("embed_metadata task join error: {e}"),
-        })?
     }
 
     /// Embed metadata and chapters synchronously.
@@ -1355,13 +1358,10 @@ impl FFmpegRunner {
         let thumbnail = thumbnail.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let container = container.to_string();
-        tokio::task::spawn_blocking(move || {
+        Self::spawn_blocking("embed_thumbnail", move || {
             Self::embed_thumbnail_sync(&media, &thumbnail, &output, &container)
         })
         .await
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("embed_thumbnail task join error: {e}"),
-        })?
     }
 
     /// Embed thumbnail synchronously.
@@ -1589,11 +1589,10 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        tokio::task::spawn_blocking(move || Self::convert_video_sync(&input, &output, &opts))
-            .await
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("convert_video task join error: {e}"),
-            })?
+        Self::spawn_blocking("convert_video", move || {
+            Self::convert_video_sync(&input, &output, &opts)
+        })
+        .await
     }
 
     /// Convert video synchronously (dispatches to remux or transcode).

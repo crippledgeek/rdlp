@@ -160,6 +160,32 @@ let data = fetch_url(&url)
     .context("Failed to fetch playlist")?;
 ```
 
+## Code Reuse
+
+### Extractor Format Building
+All site extractors **must** use `BaseExtractor::build_format()` to construct `Format` structs. This centralises height/width calculation, format_note, codec defaults, and quality scoring.
+
+```rust
+// Correct — delegate to BaseExtractor, then add site-specific fields
+let mut format = BaseExtractor::build_format(format_id, url, ext, height);
+format.container = Some(container.to_owned()); // site-specific
+format.tbr = extract_bitrate_from_url(&url);   // site-specific
+```
+
+```rust
+// Wrong — duplicating Format construction in each extractor
+let mut format = Format::new(id, url, ext, "https".to_string());
+format.height = Some(h);
+format.width = Some(width_from_height(h));
+format.vcodec = Some("h264".to_string());
+// ...
+```
+
+### Shared Utilities
+- Use `BaseExtractor` methods (`parse_quality_height`, `width_from_height`, `extract_meta_content`, `extract_element_text`, etc.) instead of defining local equivalents.
+- Site-specific helpers belong in the extractor's own module but should compose on top of `BaseExtractor`, not replace it.
+- When adding a new extractor, check `BaseExtractor` and `crate::utils` for existing helpers before writing new ones.
+
 ## API Design
 
 ### Trait Design
