@@ -66,6 +66,7 @@ inventory = "0.3"
 
 # Cookie extraction
 aes = "0.8"
+aes-gcm = "0.10"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 

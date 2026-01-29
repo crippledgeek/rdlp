@@ -103,6 +103,15 @@ struct Args {
     /// Path to FFmpeg executable (if not in PATH)
     #[arg(long)]
     ffmpeg_location: Option<PathBuf>,
+
+    // === Cookie options ===
+    /// Load cookies from browser (chrome, firefox)
+    #[arg(long)]
+    cookies_from_browser: Option<String>,
+
+    /// Path to Netscape-format cookies file
+    #[arg(long)]
+    cookies: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -217,6 +226,8 @@ async fn async_main() -> Result<()> {
         remux_container,
         keep_video: args.keep_video,
         ffmpeg_location: args.ffmpeg_location,
+        cookies_from_browser: args.cookies_from_browser,
+        cookies_file: args.cookies,
         ..Default::default()
     };
 
@@ -224,6 +235,9 @@ async fn async_main() -> Result<()> {
 
     // Create orchestrator with shared MultiProgress
     let orchestrator = Orchestrator::new(config, (*multi_progress).clone());
+
+    // Load cookies from file or browser if configured
+    orchestrator.load_cookies().await?;
 
     // List extractors if requested
     if args.list_extractors {

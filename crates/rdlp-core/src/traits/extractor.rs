@@ -270,4 +270,13 @@ pub trait CookieJar: Send + Sync {
     /// # Returns
     /// Number of cookies loaded
     async fn load_from_browser(&self, browser: &str) -> Result<usize>;
+
+    /// Load cookies from a Netscape-format cookies file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the cookies file
+    ///
+    /// # Returns
+    /// Number of cookies loaded
+    async fn load_from_file(&self, path: &std::path::Path) -> Result<usize>;
 }

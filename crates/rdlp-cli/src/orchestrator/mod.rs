@@ -18,7 +18,7 @@ pub use errors::{OrchestratorError, Result};
 pub use state::{DownloadPhase, DownloadState};
 
 use indicatif::MultiProgress;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use tracing::instrument;
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext};
@@ -45,9 +45,10 @@ impl Orchestrator {
     /// Create a new orchestrator with default registries
     #[must_use]
     pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
-        let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
-        let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
+        let http_client = HttpClientFactory::from_rdlp_config(&config)
+            .build_arc_with_cookies(cookie_jar.jar());
+        let js_engine = Arc::new(SimpleJsEngine::new());
 
         // Wrap config in Arc once and share it
         let config = Arc::new(config);
@@ -108,9 +109,10 @@ impl Orchestrator {
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     ) -> Self {
-        let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
-        let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
+        let http_client = HttpClientFactory::from_rdlp_config(&config)
+            .build_arc_with_cookies(cookie_jar.jar());
+        let js_engine = Arc::new(SimpleJsEngine::new());
 
         let config = Arc::new(config);
 
@@ -132,6 +134,34 @@ impl Orchestrator {
             config,
             multi_progress: MultiProgress::new(),
         }
+    }
+
+    /// Load cookies from file or browser if configured.
+    ///
+    /// Should be called after construction and before any downloads.
+    pub async fn load_cookies(&self) -> Result<()> {
+        let cookie_jar = &self.extraction_context.cookie_jar;
+
+        if let Some(ref path) = self.config.cookies_file {
+            let count = cookie_jar.load_from_file(path).await.map_err(|e| {
+                OrchestratorError::Configuration(format!(
+                    "Failed to load cookies from {}: {e}",
+                    path.display()
+                ))
+            })?;
+            info!(count, file = path.display().to_string().as_str(); "Loaded cookies from file");
+        }
+
+        if let Some(ref browser) = self.config.cookies_from_browser {
+            let count = cookie_jar.load_from_browser(browser).await.map_err(|e| {
+                OrchestratorError::Configuration(format!(
+                    "Failed to load cookies from {browser}: {e}"
+                ))
+            })?;
+            info!(count, browser = browser.as_str(); "Loaded cookies from browser");
+        }
+
+        Ok(())
     }
 
     /// Download a video from URL using state machine pattern
