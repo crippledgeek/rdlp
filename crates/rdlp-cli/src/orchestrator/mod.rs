@@ -17,6 +17,7 @@ mod tests;
 pub use errors::{OrchestratorError, Result};
 pub use state::{DownloadPhase, DownloadState};
 
+use indicatif::MultiProgress;
 use log::{debug, warn};
 use tracing::instrument;
 use rdlp_cookies::SimpleCookieJar;
@@ -36,11 +37,13 @@ pub struct Orchestrator {
     pub(super) postprocessor_registry: Option<Arc<dyn PostProcessorRegistryTrait>>,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
+    /// MultiProgress for managing progress bars with log output
+    pub(super) multi_progress: MultiProgress,
 }
 
 impl Orchestrator {
     /// Create a new orchestrator with default registries
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
         let http_client = HttpClientFactory::from_rdlp_config(&config).build_arc();
         let js_engine = Arc::new(SimpleJsEngine::new());
         let cookie_jar = Arc::new(SimpleCookieJar::new());
@@ -64,6 +67,7 @@ impl Orchestrator {
             postprocessor_registry,
             extraction_context,
             config,
+            multi_progress,
         }
     }
 
@@ -125,6 +129,7 @@ impl Orchestrator {
             postprocessor_registry,
             extraction_context,
             config,
+            multi_progress: MultiProgress::new(),
         }
     }
 

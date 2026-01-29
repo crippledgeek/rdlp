@@ -4,7 +4,7 @@ use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use tracing::instrument;
 use rdlp_core::{
-    DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
+    DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
+use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 
 /// Information about an HLS segment including its duration
 #[derive(Clone, Debug)]
@@ -724,47 +725,15 @@ impl Downloader for HlsDownloader {
             let total_segments_u64 = total_segments as u64;
 
             // Spawn progress reporter task with duration-based progress
-            let progress_task = if let Some(callback) = progress {
-                let downloaded_clone = downloaded.clone();
-                let segments_clone = segments_completed.clone();
-                let duration_clone = duration_completed.clone();
-                let start_time_clone = start_time;
-                Some(tokio::spawn(async move {
-                    let mut last_update = Instant::now();
-                    let update_interval = Duration::from_millis(100);
-
-                    loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        let now = Instant::now();
-                        if now.duration_since(last_update) >= update_interval {
-                            let bytes = downloaded_clone.load(Ordering::Relaxed);
-                            let segments = segments_clone.load(Ordering::Relaxed);
-                            let dur_centis = duration_clone.load(Ordering::Relaxed);
-                            let dur_downloaded = dur_centis as f64 / 100.0;
-                            let elapsed = now.duration_since(start_time_clone).as_secs_f64();
-                            let speed = if elapsed > 0.0 {
-                                bytes as f64 / elapsed
-                            } else {
-                                0.0
-                            };
-
-                            // Use duration-based progress for more accurate percentage/ETA
-                            let progress_info = DownloadProgress::new_with_duration(
-                                bytes,
-                                speed,
-                                segments,
-                                total_segments_u64,
-                                dur_downloaded,
-                                total_duration,
-                            );
-                            callback.on_progress(&progress_info);
-                            last_update = now;
-                        }
-                    }
-                }))
-            } else {
-                None
-            };
+            let mut progress_guard = spawn_progress_reporter(
+                progress,
+                ProgressMetrics::with_duration(
+                    downloaded.clone(),
+                    segments_completed.clone(),
+                    duration_completed.clone(),
+                ),
+                ProgressReporterConfig::hls(start_time, total_segments_u64, total_duration),
+            );
 
             // Step 4: Download segments (with resume support)
             let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -793,17 +762,13 @@ impl Downloader for HlsDownloader {
                     if let Err(save_err) = snapshot.save(path).await {
                         warn!("Failed to save HLS state: {save_err}");
                     }
-                    if let Some(task) = progress_task {
-                        task.abort();
-                    }
+                    progress_guard.abort();
                     return Err(e);
                 }
             };
 
-            // Stop progress reporter
-            if let Some(task) = progress_task {
-                task.abort();
-            }
+            // Progress guard will be dropped and abort the task automatically
+            drop(progress_guard);
 
             // Step 5: Merge segments
             let total_bytes = self.merge_segments(segment_paths.clone(), path).await?;
