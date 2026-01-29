@@ -29,11 +29,13 @@ pub struct HttpClientFactory {
 
 impl HttpClientFactory {
     /// Create a new factory with default configuration
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a factory from an HttpClientConfig
+    #[must_use]
     pub fn from_config(config: &HttpClientConfig) -> Self {
         Self {
             config: config.clone(),
@@ -41,6 +43,7 @@ impl HttpClientFactory {
     }
 
     /// Create a factory from rdlp-types Config
+    #[must_use]
     pub fn from_rdlp_config(config: &rdlp_types::Config) -> Self {
         Self {
             config: HttpClientConfig::from_rdlp_config(config),
@@ -48,6 +51,7 @@ impl HttpClientFactory {
     }
 
     /// Build a reqwest::Client with the configured settings
+    #[must_use]
     pub fn build(&self) -> reqwest::Client {
         let mut builder = reqwest::Client::builder()
             .user_agent(&self.config.user_agent)
@@ -68,6 +72,7 @@ impl HttpClientFactory {
     }
 
     /// Build and wrap in Arc for sharing across async tasks
+    #[must_use]
     pub fn build_arc(&self) -> Arc<reqwest::Client> {
         Arc::new(self.build())
     }

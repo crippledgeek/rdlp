@@ -217,6 +217,7 @@ pub fn decode_html_entities(text: &str) -> String {
 /// assert_eq!(extract_extension_from_url("https://example.com/video.mp4?token=abc"), Some("mp4".to_string()));
 /// assert_eq!(extract_extension_from_url("https://example.com/video"), None);
 /// ```
+#[must_use]
 pub fn extract_extension_from_url(url: &str) -> Option<String> {
     // Parse URL to get path
     let parsed = url::Url::parse(url).ok()?;
@@ -259,6 +260,7 @@ pub fn extract_extension_from_url(url: &str) -> Option<String> {
 /// );
 /// assert_eq!(abs, "https://example.com/video/segment001.ts");
 /// ```
+#[must_use]
 pub fn make_absolute_url(base_url: &str, relative_url: &str) -> String {
     // If already absolute, return as-is
     if relative_url.starts_with("http://") || relative_url.starts_with("https://") {
@@ -299,6 +301,7 @@ pub fn make_absolute_url(base_url: &str, relative_url: &str) -> String {
 /// assert_eq!(format_filesize(1024 * 1024), "1.0 MiB");
 /// assert_eq!(format_filesize(1536 * 1024 * 1024), "1.5 GiB");
 /// ```
+#[must_use]
 pub fn format_filesize(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
@@ -324,6 +327,7 @@ pub fn format_filesize(bytes: u64) -> String {
 ///
 /// # Returns
 /// Formatted string (e.g., "1.5 GB", "256 MB", "128 KB")
+#[must_use]
 pub fn format_filesize_decimal(bytes: u64) -> String {
     const KB: u64 = 1000;
     const MB: u64 = KB * 1000;
@@ -357,6 +361,7 @@ pub fn format_filesize_decimal(bytes: u64) -> String {
 /// assert_eq!(format_duration(330.0), "5:30");
 /// assert_eq!(format_duration(5445.0), "1:30:45");
 /// ```
+#[must_use]
 pub fn format_duration(seconds: f64) -> String {
     let total_secs = seconds as u64;
     let hours = total_secs / 3600;

@@ -138,6 +138,7 @@ impl PostProcessorRegistry {
     }
 
     /// Get the FFmpeg runner.
+    #[must_use]
     pub fn ffmpeg(&self) -> &Arc<FFmpegRunner> {
         &self.ffmpeg
     }

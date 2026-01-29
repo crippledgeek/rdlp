@@ -17,6 +17,7 @@ pub struct ProgressGuard(Option<tokio::task::JoinHandle<()>>);
 
 impl ProgressGuard {
     /// Create a new progress guard wrapping an optional task handle.
+    #[must_use]
     pub fn new(task: Option<tokio::task::JoinHandle<()>>) -> Self {
         Self(task)
     }
@@ -88,6 +89,7 @@ pub struct ProgressReporterConfig {
 
 impl ProgressReporterConfig {
     /// Create config for HTTP byte-based progress.
+    #[must_use]
     pub fn http(start_time: Instant, total_size: u64, resume_from: u64) -> Self {
         Self {
             start_time,
@@ -100,6 +102,7 @@ impl ProgressReporterConfig {
     }
 
     /// Create config for HLS duration-based progress.
+    #[must_use]
     pub fn hls(start_time: Instant, total_segments: u64, total_duration: f64) -> Self {
         Self {
             start_time,
@@ -123,6 +126,7 @@ impl ProgressReporterConfig {
 ///
 /// # Returns
 /// A `ProgressGuard` that manages the spawned task's lifecycle.
+#[must_use]
 pub fn spawn_progress_reporter(
     callback: Option<Box<dyn ProgressCallback>>,
     metrics: ProgressMetrics,

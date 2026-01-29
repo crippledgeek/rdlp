@@ -175,6 +175,7 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// assert!(!is_private_host("example.com"));
 /// assert!(!is_private_host("8.8.8.8"));
 /// ```
+#[must_use]
 pub fn is_private_host(host: &str) -> bool {
     // Check for localhost variants
     if host == "localhost" || host == "127.0.0.1" || host == "::1" {
@@ -249,6 +250,7 @@ pub fn is_private_host(host: &str) -> bool {
 ///     "https://example.com/video.m3u8"
 /// );
 /// ```
+#[must_use]
 pub fn normalize_url(url: &str) -> String {
     match url::Url::parse(url) {
         Ok(mut parsed) => {
@@ -292,6 +294,7 @@ pub fn normalize_url(url: &str) -> String {
 ///     "/hls/video.m3u8"
 /// );
 /// ```
+#[must_use]
 pub fn extract_url_path(url: &str) -> String {
     match url::Url::parse(url) {
         Ok(parsed) => parsed.path().to_string(),
@@ -339,6 +342,7 @@ pub fn extract_url_path(url: &str) -> String {
 /// let safe = sanitize_for_logging(multi);
 /// assert_eq!(safe, "url?key=***&password=***");
 /// ```
+#[must_use]
 pub fn sanitize_for_logging(s: &str) -> String {
     // Common patterns to redact
     let patterns = [

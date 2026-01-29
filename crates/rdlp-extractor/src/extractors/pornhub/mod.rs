@@ -50,6 +50,7 @@ pub struct PornHubExtractor;
 
 impl PornHubExtractor {
     /// Create a new PornHub extractor
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

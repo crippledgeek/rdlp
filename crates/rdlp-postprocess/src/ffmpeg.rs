@@ -151,6 +151,7 @@ pub static AUDIO_CODECS: &[(&str, AudioCodecConfig)] = &[
 ];
 
 /// Get audio codec configuration by name.
+#[must_use]
 pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
     AUDIO_CODECS
         .iter()
@@ -2142,6 +2143,7 @@ impl FFmpegRunner {
 
 impl MediaInfo {
     /// Get a resolution string (e.g., "1920x1080").
+    #[must_use]
     pub fn resolution_string(&self) -> Option<String> {
         match (self.width, self.height) {
             (Some(w), Some(h)) => Some(format!("{w}x{h}")),
@@ -2150,11 +2152,13 @@ impl MediaInfo {
     }
 
     /// Get the video stream info.
+    #[must_use]
     pub fn video_stream(&self) -> Option<&StreamInfo> {
         self.streams.iter().find(|s| s.codec_type == "video")
     }
 
     /// Get the audio stream info.
+    #[must_use]
     pub fn audio_stream(&self) -> Option<&StreamInfo> {
         self.streams.iter().find(|s| s.codec_type == "audio")
     }

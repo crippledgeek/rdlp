@@ -33,6 +33,7 @@ pub struct TNAFlixExtractor {
 
 impl TNAFlixExtractor {
     /// Create extractor for TNAFlix
+    #[must_use]
     pub fn tnaflix() -> Self {
         Self {
             name: "TNAFlix".to_string(),
@@ -42,6 +43,7 @@ impl TNAFlixExtractor {
     }
 
     /// Create extractor for EMPFlix
+    #[must_use]
     pub fn empflix() -> Self {
         Self {
             name: "EMPFlix".to_string(),
@@ -51,6 +53,7 @@ impl TNAFlixExtractor {
     }
 
     /// Create extractor for MovieFap
+    #[must_use]
     pub fn moviefap() -> Self {
         Self {
             name: "MovieFap".to_string(),

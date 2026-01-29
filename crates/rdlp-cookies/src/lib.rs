@@ -19,6 +19,7 @@ pub struct SimpleCookieJar {
 
 impl SimpleCookieJar {
     /// Create a new empty cookie jar
+    #[must_use]
     pub fn new() -> Self {
         Self {}
     }

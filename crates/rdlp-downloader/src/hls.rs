@@ -81,6 +81,7 @@ pub struct HlsDownloader {
 
 impl HlsDownloader {
     /// Create a new HLS downloader with default settings
+    #[must_use]
     pub fn new() -> Self {
         Self {
             http_downloader: HttpDownloader::new(),
