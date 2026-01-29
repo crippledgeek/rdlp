@@ -6,34 +6,27 @@
 //! video and audio separately (like HLS/DASH streams).
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::{FFmpegRunner, RemuxOptions};
+use crate::ffmpeg::RemuxOptions;
 
-/// Post-processor that merges video and audio streams.
-///
-/// # Priority
-/// This processor has priority 100 (runs first) because other
-/// processors need a merged file to work with.
-///
-/// # When it runs
-/// - When there are multiple input files (video + audio)
-/// - When `requested_formats` contains multiple formats
-pub struct FFmpegMerger {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    FFmpegMerger,
+    "FFmpegMerger",
+    100,
+    "Post-processor that merges video and audio streams.\n\n\
+     # Priority\n\
+     This processor has priority 100 (runs first) because other\n\
+     processors need a merged file to work with.\n\n\
+     # When it runs\n\
+     - When there are multiple input files (video + audio)\n\
+     - When `requested_formats` contains multiple formats"
+);
 
 impl FFmpegMerger {
-    /// Create a new merger processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Determine the output format based on config and input formats.
     fn determine_output_format(
         &self,
@@ -66,11 +59,11 @@ impl FFmpegMerger {
 #[async_trait]
 impl PostProcessor for FFmpegMerger {
     fn name(&self) -> &str {
-        "FFmpegMerger"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        100 // High priority - runs first
+        self.processor_priority()
     }
 
     fn should_run(&self, info: &InfoDict, _config: &PostProcessConfig) -> bool {
@@ -158,7 +151,10 @@ impl PostProcessor for FFmpegMerger {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::ffmpeg::FFmpegRunner;
 
     #[test]
     fn test_determine_output_format() {

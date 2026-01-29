@@ -9,13 +9,10 @@
 //! - FLAC/OGG/Opus: Video stream with `ATTACHED_PIC` disposition
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
-
-use crate::ffmpeg::FFmpegRunner;
 
 /// Supported thumbnail formats.
 const THUMBNAIL_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
@@ -25,25 +22,19 @@ const SUPPORTED_CONTAINERS: &[&str] = &[
     "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
 ];
 
-/// Post-processor that embeds thumbnails into media files.
-///
-/// # Priority
-/// This processor has priority 20 (runs after most other processing).
-///
-/// # When it runs
-/// - When `embed_thumbnail` is true in config
-/// - When a thumbnail file exists alongside the media file
-pub struct EmbedThumbnail {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    EmbedThumbnail,
+    "EmbedThumbnail",
+    20,
+    "Post-processor that embeds thumbnails into media files.\n\n\
+     # Priority\n\
+     This processor has priority 20 (runs after most other processing).\n\n\
+     # When it runs\n\
+     - When `embed_thumbnail` is true in config\n\
+     - When a thumbnail file exists alongside the media file"
+);
 
 impl EmbedThumbnail {
-    /// Create a new thumbnail embedding processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Find a thumbnail file for the given media file.
     fn find_thumbnail(media_file: &Path) -> Option<PathBuf> {
         let stem = media_file.file_stem()?.to_str()?;
@@ -70,11 +61,11 @@ impl EmbedThumbnail {
 #[async_trait]
 impl PostProcessor for EmbedThumbnail {
     fn name(&self) -> &str {
-        "EmbedThumbnail"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        20 // Near the end
+        self.processor_priority()
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {

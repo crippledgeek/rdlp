@@ -5,47 +5,31 @@
 //! a centralized index.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{FFmpegRunner, RemuxOptions};
+use crate::ffmpeg::RemuxOptions;
 
 /// Supported remux target containers.
 const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "ts"];
 
-/// Post-processor that remuxes video files to a different container.
-///
-/// This performs stream copy (no re-encoding) for fast container conversion.
-/// Primary use case: remux MPEG-TS (.ts) to MP4 or MKV for better seeking.
-///
-/// # Priority
-/// This processor has priority 45 (runs after merging, before video conversion).
-///
-/// # When it runs
-/// When `remux_container` is specified in config.
-///
-/// # Supported Containers
-/// - **MP4**: Best compatibility, faststart for streaming
-/// - **MKV**: Supports all codecs, efficient cues index
-/// - **WebM**: Web-optimized (VP8/VP9/AV1 + Opus/Vorbis)
-/// - **MOV**: Apple QuickTime, good for editing
-/// - **AVI**: Legacy format, wide support
-/// - **TS**: MPEG-TS for broadcast/streaming
-pub struct FFmpegRemuxer {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    FFmpegRemuxer,
+    "FFmpegRemuxer",
+    45,
+    "Post-processor that remuxes video files to a different container.\n\n\
+     This performs stream copy (no re-encoding) for fast container conversion.\n\
+     Primary use case: remux MPEG-TS (.ts) to MP4 or MKV for better seeking.\n\n\
+     # Priority\n\
+     This processor has priority 45 (runs after merging, before video conversion).\n\n\
+     # When it runs\n\
+     When `remux_container` is specified in config."
+);
 
 impl FFmpegRemuxer {
-    /// Create a new remuxer processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Check if the format is a supported container for remuxing.
     fn is_supported_container(format: &str) -> bool {
         SUPPORTED_CONTAINERS.contains(&format.to_lowercase().as_str())
@@ -55,11 +39,11 @@ impl FFmpegRemuxer {
 #[async_trait]
 impl PostProcessor for FFmpegRemuxer {
     fn name(&self) -> &str {
-        "FFmpegRemuxer"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        45 // After merging (100), before video conversion (40)
+        self.processor_priority()
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {
@@ -151,7 +135,10 @@ impl PostProcessor for FFmpegRemuxer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::ffmpeg::FFmpegRunner;
 
     #[test]
     fn test_supported_containers() {

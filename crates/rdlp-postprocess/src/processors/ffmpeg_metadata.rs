@@ -6,37 +6,29 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::info;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::{ChapterEntry, FFmpegRunner};
+use crate::ffmpeg::ChapterEntry;
 
-/// Post-processor that embeds metadata into media files.
-///
-/// # Priority
-/// This processor has priority 30 (runs after merging and conversion).
-///
-/// # When it runs
-/// - When `embed_metadata` is true in config
-///
-/// # Supported metadata
-/// - title, artist, album, date, description
-/// - genre, track, comment
-/// - Chapters (if available in InfoDict)
-pub struct FFmpegMetadata {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    FFmpegMetadata,
+    "FFmpegMetadata",
+    30,
+    "Post-processor that embeds metadata into media files.\n\n\
+     # Priority\n\
+     This processor has priority 30 (runs after merging and conversion).\n\n\
+     # When it runs\n\
+     - When `embed_metadata` is true in config\n\n\
+     # Supported metadata\n\
+     - title, artist, album, date, description\n\
+     - genre, track, comment\n\
+     - Chapters (if available in InfoDict)"
+);
 
 impl FFmpegMetadata {
-    /// Create a new metadata embedding processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Build a metadata `HashMap` from `InfoDict`.
     fn build_metadata(info: &InfoDict) -> HashMap<String, String> {
         let mut meta = HashMap::new();
@@ -126,11 +118,11 @@ impl FFmpegMetadata {
 #[async_trait]
 impl PostProcessor for FFmpegMetadata {
     fn name(&self) -> &str {
-        "FFmpegMetadata"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        30 // After merging and conversion
+        self.processor_priority()
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {

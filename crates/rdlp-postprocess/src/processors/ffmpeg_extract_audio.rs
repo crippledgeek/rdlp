@@ -5,34 +5,27 @@
 //! Supports various output formats including MP3, AAC, Opus, FLAC, etc.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{get_audio_codec, AudioCodecConfig, AudioExtractOptions, FFmpegRunner};
+use crate::ffmpeg::{get_audio_codec, AudioCodecConfig, AudioExtractOptions};
 
-/// Post-processor that extracts audio from video files.
-///
-/// # Priority
-/// This processor has priority 50 (runs after merging).
-///
-/// # When it runs
-/// - When `extract_audio` is true in config
-/// - Optionally converts to specified `audio_format`
-pub struct FFmpegExtractAudio {
-    ffmpeg: Arc<FFmpegRunner>,
-}
+ffmpeg_processor!(
+    FFmpegExtractAudio,
+    "FFmpegExtractAudio",
+    50,
+    "Post-processor that extracts audio from video files.\n\n\
+     # Priority\n\
+     This processor has priority 50 (runs after merging).\n\n\
+     # When it runs\n\
+     - When `extract_audio` is true in config\n\
+     - Optionally converts to specified `audio_format`"
+);
 
 impl FFmpegExtractAudio {
-    /// Create a new audio extraction processor.
-    #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
-        Self { ffmpeg }
-    }
-
     /// Build extraction options from codec config and quality string.
     fn build_extract_options(
         codec_config: &AudioCodecConfig,
@@ -73,11 +66,11 @@ impl FFmpegExtractAudio {
 #[async_trait]
 impl PostProcessor for FFmpegExtractAudio {
     fn name(&self) -> &str {
-        "FFmpegExtractAudio"
+        self.processor_name()
     }
 
     fn priority(&self) -> i32 {
-        50 // After merging
+        self.processor_priority()
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {

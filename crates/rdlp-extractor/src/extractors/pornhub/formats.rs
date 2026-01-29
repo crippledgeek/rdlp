@@ -6,11 +6,11 @@ use log::debug;
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use serde_json::Value;
 
+use crate::base::common::BaseExtractor;
 use super::patterns::{
     DOWNLOAD_BTN_PATTERN, FLASHVARS_PATTERN, MEDIA_VAR_PATTERN, QUALITY_FROM_URL_PATTERN,
     QUALITY_ITEMS_PATTERN,
 };
-use super::utils::width_from_height;
 use std::collections::HashSet;
 
 /// Extract all formats using multiple strategies
@@ -155,30 +155,17 @@ fn build_format_from_definition(definition: &Value, url: &str, idx: usize) -> Op
     Some(build_format(url, quality, idx))
 }
 
-/// Build a Format struct with common settings
+/// Build a Format struct with common settings.
+///
+/// Delegates to `BaseExtractor::build_format()` for the shared logic
+/// (height/width, format_note, codec defaults, quality score).
 fn build_format(url: &str, quality: Option<u64>, idx: usize) -> Format {
+    let height = quality.map(|q| q as u32);
     let format_id = quality
         .map(|q| format!("{q}p"))
         .unwrap_or_else(|| format!("format_{idx}"));
 
-    let mut format = Format::new(
-        format_id,
-        url.to_string(),
-        "mp4".to_string(),
-        "https".to_string(),
-    );
-
-    if let Some(q) = quality {
-        let height = q as u32;
-        format.height = Some(height);
-        format.width = Some(width_from_height(height));
-        format.format_note = Some(format!("{q}p"));
-    }
-
-    format.vcodec = Some("h264".to_string());
-    format.acodec = Some("aac".to_string());
-
-    format
+    BaseExtractor::build_format(format_id, url.to_string(), "mp4".to_string(), height)
 }
 
 /// Parse quality from JSON value (handles string or number)
@@ -256,16 +243,13 @@ fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
                 .map(|q| format!("{q}p"))
                 .unwrap_or_else(|| "download".to_string());
 
-            let mut format = Format::new(
+            let height = quality.map(|q| q as u32);
+            let format = BaseExtractor::build_format(
                 format_id.clone(),
                 url.to_string(),
                 "mp4".to_string(),
-                "https".to_string(),
+                height,
             );
-
-            if let Some(q) = quality {
-                format.height = Some(q as u32);
-            }
 
             debug!(format_id:?; "[PornHub] Found format from download button");
 
