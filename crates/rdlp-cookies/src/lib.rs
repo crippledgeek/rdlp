@@ -12,6 +12,7 @@
 mod chrome;
 mod firefox;
 mod netscape;
+mod util;
 
 use std::path::Path;
 use std::sync::Arc;
