@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
-use log::debug;
 use reqwest::cookie::CookieStore;
+use url::Url;
 
 use crate::util;
 
@@ -107,15 +107,37 @@ fn parse_cookie_line(line: &str) -> Option<NetscapeCookie> {
 
 /// Insert a parsed cookie into the reqwest jar.
 fn insert_cookie(cookie: &NetscapeCookie, jar: &impl CookieStore) -> bool {
-    util::insert_cookie_into_jar(
-        jar,
-        &cookie.domain,
-        &cookie.name,
-        &cookie.value,
-        &cookie.path,
-        cookie.secure,
-        false,
-    )
+    let scheme = if cookie.secure { "https" } else { "http" };
+
+    // Build a URL from the cookie domain for the jar
+    let host = cookie.domain.trim_start_matches('.');
+    let url_str = format!("{scheme}://{host}{}", cookie.path);
+
+    let Ok(url) = Url::parse(&url_str) else {
+        warn!("Invalid URL from cookie domain: {url_str}");
+        return false;
+    };
+
+    // Build Set-Cookie header string
+    let mut set_cookie = format!("{}={}", cookie.name, cookie.value);
+    set_cookie.push_str(&format!("; Domain={}", cookie.domain));
+    set_cookie.push_str(&format!("; Path={}", cookie.path));
+    if cookie.secure {
+        set_cookie.push_str("; Secure");
+    }
+
+    // Use set_cookies to insert (same interface as HTTP response headers)
+    let header_value = reqwest::header::HeaderValue::from_str(&set_cookie);
+    match header_value {
+        Ok(val) => {
+            jar.set_cookies(&mut std::iter::once(&val), &url);
+            true
+        }
+        Err(e) => {
+            warn!("Invalid cookie header value for {}: {e}", cookie.name);
+            false
+        }
+    }
 }
 
 #[cfg(test)]
