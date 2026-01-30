@@ -80,6 +80,10 @@ pub enum OrchestratorError {
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Configuration error (invalid options, missing files, etc.)
+    #[error("{0}")]
+    Configuration(String),
 }
 
 /// Result type for orchestrator operations

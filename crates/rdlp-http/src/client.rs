@@ -53,6 +53,25 @@ impl HttpClientFactory {
     /// Build a reqwest::Client with the configured settings
     #[must_use]
     pub fn build(&self) -> reqwest::Client {
+        self.build_inner(None)
+    }
+
+    /// Build a reqwest::Client with a cookie provider.
+    ///
+    /// Cookies in the jar are automatically sent with every request and
+    /// `Set-Cookie` response headers are stored back into the jar.
+    #[must_use]
+    pub fn build_with_cookies(
+        &self,
+        jar: Arc<reqwest::cookie::Jar>,
+    ) -> reqwest::Client {
+        self.build_inner(Some(jar))
+    }
+
+    fn build_inner(
+        &self,
+        cookie_jar: Option<Arc<reqwest::cookie::Jar>>,
+    ) -> reqwest::Client {
         let mut builder = reqwest::Client::builder()
             .user_agent(&self.config.user_agent)
             .pool_max_idle_per_host(self.config.pool_max_idle_per_host)
@@ -61,6 +80,10 @@ impl HttpClientFactory {
             .tcp_nodelay(self.config.tcp_nodelay)
             .connect_timeout(Duration::from_secs(self.config.connect_timeout_secs))
             .read_timeout(Duration::from_secs(self.config.read_timeout_secs));
+
+        if let Some(jar) = cookie_jar {
+            builder = builder.cookie_provider(jar);
+        }
 
         if let Some(ref proxy_url) = self.config.proxy {
             if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
@@ -75,6 +98,15 @@ impl HttpClientFactory {
     #[must_use]
     pub fn build_arc(&self) -> Arc<reqwest::Client> {
         Arc::new(self.build())
+    }
+
+    /// Build with cookie provider and wrap in Arc for sharing across async tasks
+    #[must_use]
+    pub fn build_arc_with_cookies(
+        &self,
+        jar: Arc<reqwest::cookie::Jar>,
+    ) -> Arc<reqwest::Client> {
+        Arc::new(self.build_with_cookies(jar))
     }
 }
 

@@ -2,26 +2,47 @@
 //!
 //! Browser cookie extraction for rdlp.
 //!
-//! This crate provides cookie extraction from various browsers:
+//! This crate provides cookie storage and extraction from various browsers:
 //! - Chrome/Chromium
 //! - Firefox
 //! - Safari (macOS)
 
 #![warn(missing_docs)]
 
-use async_trait::async_trait;
-use rdlp_core::{CookieJar, Result};
+mod chrome;
+mod firefox;
+mod netscape;
 
-/// Simple cookie jar implementation (stub for now)
+use std::path::Path;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use log::{debug, warn};
+use rdlp_core::{CookieJar, Result};
+use reqwest::cookie::CookieStore;
+use url::Url;
+
+/// Cookie jar backed by `reqwest::cookie::Jar`.
+///
+/// Cookies added via `add_cookie()` are automatically sent by any
+/// `reqwest::Client` that was built with this jar's `cookie_provider()`.
 pub struct SimpleCookieJar {
-    // Will be implemented in Phase 8
+    jar: Arc<reqwest::cookie::Jar>,
 }
 
 impl SimpleCookieJar {
-    /// Create a new empty cookie jar
+    /// Create a new empty cookie jar.
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            jar: Arc::new(reqwest::cookie::Jar::default()),
+        }
+    }
+
+    /// Get the underlying `reqwest::cookie::Jar` for use with `cookie_provider()`.
+    #[must_use]
+    pub fn jar(&self) -> Arc<reqwest::cookie::Jar> {
+        Arc::clone(&self.jar)
     }
 }
 
@@ -33,18 +54,142 @@ impl Default for SimpleCookieJar {
 
 #[async_trait]
 impl CookieJar for SimpleCookieJar {
-    async fn get_cookies(&self, _url: &str) -> Result<Vec<String>> {
-        // Stub implementation - returns empty cookies
-        Ok(Vec::new())
+    async fn get_cookies(&self, url: &str) -> Result<Vec<String>> {
+        let parsed = match Url::parse(url) {
+            Ok(u) => u,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        // reqwest::cookie::Jar returns cookies as a single header value
+        match self.jar.cookies(&parsed) {
+            Some(header_value) => {
+                let cookie_str = header_value.to_str().unwrap_or("");
+                Ok(cookie_str
+                    .split("; ")
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect())
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
-    async fn add_cookie(&self, _url: &str, _cookie: &str) -> Result<()> {
-        // Stub implementation
+    async fn add_cookie(&self, url: &str, cookie: &str) -> Result<()> {
+        let parsed = match Url::parse(url) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("Invalid URL for cookie: {e}");
+                return Ok(());
+            }
+        };
+
+        debug!(cookie, url; "Adding cookie");
+        self.jar.add_cookie_str(cookie, &parsed);
         Ok(())
     }
 
-    async fn load_from_browser(&self, _browser: &str) -> Result<usize> {
-        // Stub implementation - returns 0 cookies loaded
-        Ok(0)
+    async fn load_from_browser(&self, browser: &str) -> Result<usize> {
+        let jar = Arc::clone(&self.jar);
+        let browser_name = browser.to_lowercase();
+
+        let count = tokio::task::spawn_blocking(move || match browser_name.as_str() {
+            "chrome" | "chromium" | "google-chrome" => chrome::extract_cookies(&*jar),
+            "firefox" | "mozilla" => firefox::extract_cookies(&*jar),
+            _ => {
+                warn!("Unsupported browser for cookie extraction: {browser_name}");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    format!("Unsupported browser: {browser_name}. Supported: chrome, firefox"),
+                ))
+            }
+        })
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        ?;
+
+        debug!("Loaded {count} cookies from browser: {browser}");
+        Ok(count)
+    }
+
+    async fn load_from_file(&self, path: &Path) -> Result<usize> {
+        let jar = Arc::clone(&self.jar);
+        let path = path.to_path_buf();
+        let count = tokio::task::spawn_blocking(move || {
+            netscape::load_cookie_file(&path, &*jar)
+        })
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        ?;
+
+        debug!(count; "Loaded cookies from file");
+        Ok(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_add_and_get_cookie() {
+        let jar = SimpleCookieJar::new();
+        jar.add_cookie("https://example.com", "session=abc123")
+            .await
+            .unwrap();
+
+        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0], "session=abc123");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_cookies() {
+        let jar = SimpleCookieJar::new();
+        jar.add_cookie("https://example.com", "a=1").await.unwrap();
+        jar.add_cookie("https://example.com", "b=2").await.unwrap();
+
+        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies.contains(&"a=1".to_string()));
+        assert!(cookies.contains(&"b=2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cookies_scoped_by_domain() {
+        let jar = SimpleCookieJar::new();
+        jar.add_cookie("https://example.com", "a=1").await.unwrap();
+        jar.add_cookie("https://other.com", "b=2").await.unwrap();
+
+        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0], "a=1");
+    }
+
+    #[tokio::test]
+    async fn test_empty_jar() {
+        let jar = SimpleCookieJar::new();
+        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        assert!(cookies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_url() {
+        let jar = SimpleCookieJar::new();
+        // Should not panic, just return empty
+        let cookies = jar.get_cookies("not-a-url").await.unwrap();
+        assert!(cookies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_jar_accessor() {
+        let jar = SimpleCookieJar::new();
+        let inner = jar.jar();
+        // Verify it's the same jar by adding via inner and reading via trait
+        let url = Url::parse("https://example.com").unwrap();
+        inner.add_cookie_str("test=value", &url);
+
+        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0], "test=value");
     }
 }
