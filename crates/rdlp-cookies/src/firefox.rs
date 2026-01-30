@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 
 use log::{debug, warn};
 use reqwest::cookie::CookieStore;
-use reqwest::header::HeaderValue;
-use url::Url;
 
 use crate::util;
 
@@ -19,17 +17,9 @@ pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> 
     let cookie_db = find_cookie_db()?;
     debug!("Firefox cookie DB: {}", cookie_db.display());
 
-    // Copy the DB to a temp file to avoid locking issues
-    let temp_dir = std::env::temp_dir();
-    let temp_db = temp_dir.join("rdlp_firefox_cookies.db");
-    std::fs::copy(&cookie_db, &temp_db)?;
-
-    let result = read_cookies_from_db(&temp_db, jar);
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_db);
-
-    result
+    util::with_temp_db_copy(&cookie_db, "rdlp_firefox_cookies.db", |temp_db| {
+        read_cookies_from_db(temp_db, jar)
+    })
 }
 
 /// Find Firefox's cookie database.
@@ -126,22 +116,12 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
         let line = line.trim();
 
         if line.starts_with('[') {
-            // Commit previous section if it was the default
             if current_is_default {
-                if let Some(ref path) = current_path {
-                    let profile_path = if current_is_relative {
-                        profiles_dir.join(path)
-                    } else {
-                        PathBuf::from(path)
-                    };
-                    if profile_path.join("cookies.sqlite").exists() {
-                        return Some(profile_path);
-                    }
-                }
+                if let Some(profile) = try_commit(&current_path, current_is_relative) {
+                    return Some(profile);
                 }
             }
 
-            // Reset for new section
             current_path = None;
             current_is_relative = true;
             current_is_default = false;
@@ -160,16 +140,7 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
 
     // Check last section
     if current_is_default {
-        if let Some(ref path) = current_path {
-            let profile_path = if current_is_relative {
-                profiles_dir.join(path)
-            } else {
-                PathBuf::from(path)
-            };
-            if profile_path.join("cookies.sqlite").exists() {
-                return Some(profile_path);
-            }
-        }
+        return try_commit(&current_path, current_is_relative);
     }
 
     None
@@ -190,22 +161,12 @@ fn firefox_profiles_dir() -> Result<PathBuf, std::io::Error> {
 
     #[cfg(target_os = "linux")]
     {
-        let home = std::env::var("HOME").map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set")
-        })?;
-        Ok(PathBuf::from(home).join(".mozilla").join("firefox"))
+        Ok(util::home_dir()?.join(".mozilla").join("firefox"))
     }
 
     #[cfg(target_os = "macos")]
     {
-        let home = std::env::var("HOME").map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set")
-        })?;
-        Ok(PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("Firefox")
-            .join("Profiles"))
+        Ok(util::home_dir()?
             .join("Library")
             .join("Application Support")
             .join("Firefox")
@@ -266,25 +227,7 @@ fn read_cookies_from_db(
             continue;
         }
 
-        let scheme = if is_secure { "https" } else { "http" };
-        let clean_host = host.trim_start_matches('.');
-        let url_str = format!("{scheme}://{clean_host}{path}");
-
-        let Ok(url) = Url::parse(&url_str) else {
-            continue;
-        };
-
-        let mut set_cookie = format!("{name}={value}; Domain={host}; Path={path}");
-        if is_secure {
-            set_cookie.push_str("; Secure");
-        }
-        if is_httponly {
-            set_cookie.push_str("; HttpOnly");
-        }
-
-        if let Ok(val) = HeaderValue::from_str(&set_cookie) {
-            jar.set_cookies(&mut std::iter::once(&val), &url);
-        }
+        if util::insert_cookie_into_jar(jar, &host, &name, &value, &path, is_secure, is_httponly) {
             count += 1;
         }
     }

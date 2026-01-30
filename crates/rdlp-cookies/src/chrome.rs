@@ -11,8 +11,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use log::{debug, warn};
 use reqwest::cookie::CookieStore;
-use reqwest::header::HeaderValue;
-use url::Url;
 
 use crate::util;
 
@@ -35,17 +33,9 @@ pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> 
     // Get the AES key from Local State (DPAPI-encrypted)
     let key = load_encryption_key(&local_state)?;
 
-    // Copy the DB to a temp file to avoid locking issues
-    let temp_dir = std::env::temp_dir();
-    let temp_db = temp_dir.join("rdlp_chrome_cookies.db");
-    std::fs::copy(&cookie_db, &temp_db)?;
-
-    let result = read_cookies_from_db(&temp_db, &key, jar);
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_db);
-
-    result
+    util::with_temp_db_copy(&cookie_db, "rdlp_chrome_cookies.db", |temp_db| {
+        read_cookies_from_db(temp_db, &key, jar)
+    })
 }
 
 /// Find Chrome's cookie database path.
@@ -95,20 +85,14 @@ fn chrome_user_data_dir() -> Result<PathBuf, std::io::Error> {
 
     #[cfg(target_os = "linux")]
     {
-        let home = std::env::var("HOME").map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set")
-        })?;
-        Ok(PathBuf::from(home)
+        Ok(util::home_dir()?
             .join(".config")
             .join("google-chrome"))
     }
 
     #[cfg(target_os = "macos")]
     {
-        let home = std::env::var("HOME").map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set")
-        })?;
-        Ok(PathBuf::from(home)
+        Ok(util::home_dir()?
             .join("Library")
             .join("Application Support")
             .join("Google")
@@ -308,25 +292,7 @@ fn read_cookies_from_db(
             continue;
         }
 
-        // Build URL and Set-Cookie header
-        let scheme = if is_secure { "https" } else { "http" };
-        let host = host_key.trim_start_matches('.');
-        let url_str = format!("{scheme}://{host}{path}");
-
-        let Ok(url) = Url::parse(&url_str) else {
-            continue;
-        };
-
-        let mut set_cookie = format!("{name}={value}; Domain={host_key}; Path={path}");
-        if is_secure {
-            set_cookie.push_str("; Secure");
-        }
-        if is_httponly {
-            set_cookie.push_str("; HttpOnly");
-        }
-
-        if let Ok(val) = HeaderValue::from_str(&set_cookie) {
-            jar.set_cookies(&mut std::iter::once(&val), &url);
+        if util::insert_cookie_into_jar(jar, &host_key, &name, &value, &path, is_secure, is_httponly) {
             count += 1;
         }
     }
