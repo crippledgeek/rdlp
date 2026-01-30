@@ -12,10 +12,10 @@
 mod chrome;
 mod firefox;
 mod netscape;
+mod util;
 
 use std::path::Path;
 use std::sync::Arc;
-
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
