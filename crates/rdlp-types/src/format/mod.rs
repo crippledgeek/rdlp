@@ -1,9 +1,13 @@
 //! Format types for video/audio streams
 
+pub mod selector;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 use std::sync::OnceLock;
+
+pub use selector::FormatSelector;
 
 /// Video/audio format information
 ///
@@ -481,137 +485,6 @@ pub struct Fragment {
     pub filesize: Option<u64>,
 }
 
-/// Format selector for parsing and evaluating format selection expressions
-///
-/// Supports yt-dlp format selection syntax:
-/// - "best" / "worst" - best/worst quality
-/// - "bestvideo" / "bestaudio" / "worstvideo" / "worstaudio"
-/// - "bestvideo+bestaudio" - merge best video and audio
-/// - "bestvideo[height<=1080]" - filters
-/// - "bestvideo*" - prefer but fallback if not available
-pub struct FormatSelector {
-    expression: String,
-}
-
-impl FormatSelector {
-    /// Parse a format selection expression
-    ///
-    /// Currently returns a placeholder. Full implementation in Phase 6.
-    pub fn parse(expression: &str) -> Result<Self, String> {
-        Ok(Self {
-            expression: expression.to_string(),
-        })
-    }
-
-    /// Get the expression string
-    #[must_use]
-    pub fn expression(&self) -> &str {
-        &self.expression
-    }
-
-    /// Select formats from available list
-    ///
-    /// Currently implements basic "best" selection.
-    /// Full DSL evaluation will be implemented in Phase 6.
-    pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
-        match self.expression.as_str() {
-            "best" => {
-                // Find best format with both video and audio, excluding DRM
-                // Ranking: quality > height > tbr > fps
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| f.has_video() && f.has_audio() && !f.has_drm.unwrap_or(false))
-                    .max_by(|a, b| {
-                        a.quality
-                            .cmp(&b.quality)
-                            .then(a.height.cmp(&b.height))
-                            .then(
-                                a.tbr
-                                    .partial_cmp(&b.tbr)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                            .then(
-                                a.fps
-                                    .partial_cmp(&b.fps)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                    })
-                {
-                    vec![best]
-                } else {
-                    Vec::new()
-                }
-            }
-            "bestvideo" => {
-                // Ranking: height > vbr > fps
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| f.has_video() && !f.has_drm.unwrap_or(false))
-                    .max_by(|a, b| {
-                        a.height
-                            .cmp(&b.height)
-                            .then(
-                                a.vbr
-                                    .partial_cmp(&b.vbr)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                            .then(
-                                a.fps
-                                    .partial_cmp(&b.fps)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                    })
-                {
-                    vec![best]
-                } else {
-                    Vec::new()
-                }
-            }
-            "bestaudio" => {
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| f.has_audio() && !f.has_drm.unwrap_or(false))
-                    .max_by(|a, b| {
-                    a.abr
-                        .partial_cmp(&b.abr)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }) {
-                    vec![best]
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => {
-                // Default: return best format, excluding DRM
-                // Ranking: quality > height > tbr > fps
-                if let Some(best) = formats
-                    .iter()
-                    .filter(|f| !f.has_drm.unwrap_or(false))
-                    .max_by(|a, b| {
-                        a.quality
-                            .cmp(&b.quality)
-                            .then(a.height.cmp(&b.height))
-                            .then(
-                                a.tbr
-                                    .partial_cmp(&b.tbr)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                            .then(
-                                a.fps
-                                    .partial_cmp(&b.fps)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                            )
-                    })
-                {
-                    vec![best]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-    }
-}
-
 /// Format bytes as human-readable string
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
@@ -642,7 +515,6 @@ mod tests {
             "mp4".to_string(),
             "https".to_string(),
         );
-
         format.vcodec = Some("h264".to_string());
         format.acodec = Some("none".to_string());
 
@@ -658,49 +530,10 @@ mod tests {
             "m4a".to_string(),
             "https".to_string(),
         );
-
         format.vcodec = Some("none".to_string());
         format.acodec = Some("aac".to_string());
 
         assert!(!format.has_video());
         assert!(format.has_audio());
-    }
-
-    #[test]
-    fn test_format_selector_best() {
-        let formats = vec![
-            {
-                let mut f = Format::new(
-                    "1".to_string(),
-                    "url1".to_string(),
-                    "mp4".to_string(),
-                    "https".to_string(),
-                );
-                f.quality = Some(1);
-                f.height = Some(720);
-                f.vcodec = Some("h264".to_string());
-                f.acodec = Some("aac".to_string());
-                f
-            },
-            {
-                let mut f = Format::new(
-                    "2".to_string(),
-                    "url2".to_string(),
-                    "mp4".to_string(),
-                    "https".to_string(),
-                );
-                f.quality = Some(2);
-                f.height = Some(1080);
-                f.vcodec = Some("h264".to_string());
-                f.acodec = Some("aac".to_string());
-                f
-            },
-        ];
-
-        let selector = FormatSelector::parse("best").unwrap();
-        let selected = selector.select(&formats);
-
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].format_id, "2");
     }
 }
