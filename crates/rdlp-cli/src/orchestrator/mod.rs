@@ -65,7 +65,7 @@ impl Orchestrator {
 
         Self {
             extractor_registry: Arc::new(ExtractorRegistry::new()),
-            downloader_registry: Arc::new(DownloaderRegistry::new()),
+            downloader_registry: Arc::new(DownloaderRegistry::with_config(&config)),
             postprocessor_registry,
             extraction_context,
             config,

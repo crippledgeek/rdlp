@@ -18,6 +18,7 @@ rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-postprocess = { path = "../rdlp-postprocess" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-plugin = { path = "../rdlp-plugin" }
+rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 
 tokio = { workspace = true }
 reqwest = { workspace = true }

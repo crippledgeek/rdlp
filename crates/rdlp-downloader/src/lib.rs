@@ -258,6 +258,7 @@ pub use progress::{
 
 use rdlp_core::{Config, Downloader};
 use rdlp_http::HttpClientFactory;
+use rdlp_ratelimit::RateLimiter;
 use std::sync::Arc;
 
 /// Trait for downloader registries to enable mocking in tests
@@ -291,10 +292,14 @@ impl DownloaderRegistry {
         // Create optimized HTTP client using shared factory
         let client = HttpClientFactory::from_rdlp_config(config).build();
 
+        // Create rate limiter if configured
+        let rate_limiter = config.rate_limit.map(|bps| Arc::new(RateLimiter::new(bps)));
+
         // Create HTTP downloader with optimized settings
         let http_downloader = HttpDownloader::with_client(client.clone())
             .with_buffer_size(config.buffer_size)
-            .with_concurrent_fragments(config.concurrent_fragments);
+            .with_concurrent_fragments(config.concurrent_fragments)
+            .with_rate_limiter(rate_limiter);
 
         // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
         let hls_downloader = HlsDownloader::new()

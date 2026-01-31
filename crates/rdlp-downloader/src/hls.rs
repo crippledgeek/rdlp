@@ -174,6 +174,7 @@ impl HlsDownloader {
         progress: Arc<AtomicU64>,
     ) -> Result<(usize, PathBuf, u64)> {
         let http_client = self.http_downloader.client().clone();
+        let rate_limiter = self.http_downloader.rate_limiter.clone();
         let buffer_size = self.buffer_size;
         let backoff = self.retry_config.to_backoff();
 
@@ -183,6 +184,7 @@ impl HlsDownloader {
             let url = url.clone();
             let segment_path = segment_path.clone();
             let progress = progress.clone();
+            let rate_limiter = rate_limiter.clone();
 
             async move {
                 // Download segment to file
@@ -225,6 +227,10 @@ impl HlsDownloader {
 
                     // Update shared progress counter (lock-free atomic)
                     progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+
+                    if let Some(ref limiter) = rate_limiter {
+                        limiter.acquire(chunk.len()).await;
+                    }
                 }
 
                 writer.flush().await.map_err(RdlpError::Io)?;

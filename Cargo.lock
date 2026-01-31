@@ -2211,6 +2211,7 @@ dependencies = [
  "rdlp-jsinterp",
  "rdlp-plugin",
  "rdlp-postprocess",
+ "rdlp-ratelimit",
  "regex",
  "reqwest",
  "serde_json",
@@ -2276,6 +2277,7 @@ dependencies = [
  "proptest",
  "rdlp-core",
  "rdlp-http",
+ "rdlp-ratelimit",
  "rdlp-security",
  "reqwest",
  "serde",
@@ -2350,6 +2352,13 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "rdlp-ratelimit"
+version = "0.1.0"
+dependencies = [
  "tokio",
 ]
 
