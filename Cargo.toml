@@ -70,6 +70,9 @@ aes-gcm = "0.10"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Parsing
+winnow = "0.7"
+
 # Utilities
 regex = "1.11"
 lazy_static = "1.5"

@@ -1,506 +1,23 @@
-//! Format types for video/audio streams
-
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt::{self, Write};
-use std::sync::OnceLock;
-
-/// Video/audio format information
-///
-/// Represents a single downloadable stream (video, audio, or combined).
-/// Sites often provide multiple formats with different qualities, codecs, and containers.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Format {
-    /// Unique format identifier
-    pub format_id: String,
-
-    /// Download URL for this format
-    pub url: String,
-
-    // === Quality indicators ===
-    /// Quality rating (higher is better, site-specific scale)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quality: Option<i32>,
-
-    /// Video width in pixels
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-
-    /// Video height in pixels
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub height: Option<u32>,
-
-    /// Frames per second
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fps: Option<f64>,
-
-    /// Total bitrate (video + audio) in kbps
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tbr: Option<f64>,
-
-    /// Video bitrate in kbps
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vbr: Option<f64>,
-
-    /// Audio bitrate in kbps
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub abr: Option<f64>,
-
-    /// Audio sampling rate in Hz
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub asr: Option<u32>,
-
-    // === Codec information ===
-    /// Video codec (e.g., "h264", "vp9", "av1")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vcodec: Option<String>,
-
-    /// Audio codec (e.g., "aac", "opus", "mp3")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub acodec: Option<String>,
-
-    /// File extension (e.g., "mp4", "webm", "m4a")
-    pub ext: String,
-
-    /// Human-readable format note
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub format_note: Option<String>,
-
-    // === Protocol ===
-    /// Download protocol (e.g., "https", "http", "m3u8", "m3u8_native", "http_dash_segments")
-    pub protocol: String,
-
-    /// Container format (e.g., "mp4", "webm", "mp4_dash")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub container: Option<String>,
-
-    // === File size ===
-    /// Exact file size in bytes (if known)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filesize: Option<u64>,
-
-    /// Approximate file size in bytes
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filesize_approx: Option<u64>,
-
-    // === Fragment information ===
-    /// List of fragments for segmented downloads (HLS, DASH, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fragments: Option<Vec<Fragment>>,
-
-    /// Fragment base URL (for relative fragment URLs)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fragment_base_url: Option<String>,
-
-    // === HTTP headers ===
-    /// HTTP headers required for download
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub http_headers: Option<HashMap<String, String>>,
-
-    // === Additional metadata ===
-    /// Format language (for audio tracks with multiple languages)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
-
-    /// Dynamic range (e.g., "SDR", "HDR10", "HDR10+")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dynamic_range: Option<String>,
-
-    /// Cached format description (lazy initialization)
-    #[serde(skip)]
-    cached_description: OnceLock<String>,
-
-    /// Whether format has DRM protection
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_drm: Option<bool>,
-
-    /// Total duration in seconds (for HLS: sum of segment durations)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-}
-
-impl fmt::Debug for Format {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut d = f.debug_struct("Format");
-
-        // Always show required fields
-        d.field("format_id", &self.format_id);
-        d.field("url", &self.url);
-        d.field("ext", &self.ext);
-        d.field("protocol", &self.protocol);
-
-        // Only show optional fields that have values
-        if let Some(v) = &self.quality {
-            d.field("quality", v);
-        }
-        if let Some(v) = &self.width {
-            d.field("width", v);
-        }
-        if let Some(v) = &self.height {
-            d.field("height", v);
-        }
-        if let Some(v) = &self.fps {
-            d.field("fps", v);
-        }
-        if let Some(v) = &self.tbr {
-            d.field("tbr", v);
-        }
-        if let Some(v) = &self.vbr {
-            d.field("vbr", v);
-        }
-        if let Some(v) = &self.abr {
-            d.field("abr", v);
-        }
-        if let Some(v) = &self.asr {
-            d.field("asr", v);
-        }
-        if let Some(v) = &self.vcodec {
-            d.field("vcodec", v);
-        }
-        if let Some(v) = &self.acodec {
-            d.field("acodec", v);
-        }
-        if let Some(v) = &self.format_note {
-            d.field("format_note", v);
-        }
-        if let Some(v) = &self.container {
-            d.field("container", v);
-        }
-        if let Some(v) = &self.filesize {
-            d.field("filesize", v);
-        }
-        if let Some(v) = &self.filesize_approx {
-            d.field("filesize_approx", v);
-        }
-        if let Some(v) = &self.fragments {
-            d.field("fragments", &format!("[{} fragments]", v.len()));
-        }
-        if let Some(v) = &self.fragment_base_url {
-            d.field("fragment_base_url", v);
-        }
-        if let Some(v) = &self.http_headers {
-            d.field("http_headers", v);
-        }
-        if let Some(v) = &self.language {
-            d.field("language", v);
-        }
-        if let Some(v) = &self.dynamic_range {
-            d.field("dynamic_range", v);
-        }
-        if let Some(v) = &self.has_drm {
-            d.field("has_drm", v);
-        }
-        if let Some(v) = &self.duration {
-            d.field("duration", v);
-        }
-
-        d.finish()
-    }
-}
-
-impl Format {
-    /// Create a new format with required fields
-    #[must_use]
-    pub fn new(format_id: String, url: String, ext: String, protocol: String) -> Self {
-        Self {
-            format_id,
-            url,
-            quality: None,
-            width: None,
-            height: None,
-            fps: None,
-            tbr: None,
-            vbr: None,
-            abr: None,
-            asr: None,
-            vcodec: None,
-            acodec: None,
-            ext,
-            format_note: None,
-            protocol,
-            container: None,
-            filesize: None,
-            filesize_approx: None,
-            fragments: None,
-            fragment_base_url: None,
-            http_headers: None,
-            language: None,
-            dynamic_range: None,
-            cached_description: OnceLock::new(),
-            has_drm: None,
-            duration: None,
-        }
-    }
-
-    /// Check if this format has video
-    pub fn has_video(&self) -> bool {
-        self.vcodec.as_ref().is_some_and(|c| c != "none")
-    }
-
-    /// Check if this format has audio
-    pub fn has_audio(&self) -> bool {
-        self.acodec.as_ref().is_some_and(|c| c != "none")
-    }
-
-    /// Get resolution as string (e.g., "1920x1080")
-    pub fn resolution_string(&self) -> Option<String> {
-        match (self.width, self.height) {
-            (Some(w), Some(h)) => Some(format!("{w}x{h}")),
-            _ => None,
-        }
-    }
-
-    /// Get file size (exact or approximate)
-    pub fn get_filesize(&self) -> Option<u64> {
-        self.filesize.or(self.filesize_approx)
-    }
-
-    /// Format file size as human-readable string
-    /// Returns exact size if known, approximate size with ~ prefix, or "Unknown"
-    pub fn filesize_string(&self) -> String {
-        if let Some(size) = self.filesize {
-            format_bytes(size)
-        } else if let Some(size) = self.filesize_approx {
-            format!("~{}", format_bytes(size))
-        } else {
-            "Unknown".to_string()
-        }
-    }
-
-    /// Check if this is a DASH format
-    pub fn is_dash(&self) -> bool {
-        self.protocol.contains("dash")
-            || self.container.as_ref().is_some_and(|c| c.contains("dash"))
-    }
-
-    /// Check if this is an HLS format
-    pub fn is_hls(&self) -> bool {
-        self.protocol.contains("m3u8")
-    }
-
-    /// Get a human-readable format description
-    ///
-    /// This method caches the description after first computation.
-    /// Subsequent calls return a reference to the cached value.
-    pub fn description(&self) -> &str {
-        self.cached_description.get_or_init(|| {
-            let mut parts = Vec::new();
-
-            if let Some(note) = &self.format_note {
-                parts.push(note.clone());
-            }
-
-            if let Some(res) = self.resolution_string() {
-                parts.push(res);
-            }
-
-            if let Some(fps) = self.fps {
-                parts.push(format!("{fps}fps"));
-            }
-
-            if let Some(vcodec) = &self.vcodec {
-                if vcodec != "none" {
-                    parts.push(format!("vcodec:{vcodec}"));
-                }
-            }
-
-            if let Some(acodec) = &self.acodec {
-                if acodec != "none" {
-                    parts.push(format!("acodec:{acodec}"));
-                }
-            }
-
-            parts.push(self.ext.clone());
-
-            parts.join(" ")
-        })
-    }
-
-    /// Format as table row for interactive selection UI
-    ///
-    /// Returns a formatted string suitable for display in selection menus:
-    /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
-    ///
-    /// Optimized to minimize heap allocations using pre-allocated buffer.
-    pub fn table_row(&self) -> String {
-        // Pre-allocate buffer for typical row length (~80 chars)
-        let mut buf = String::with_capacity(80);
-
-        // Quality column: append fps when non-standard (e.g. "1080p60")
-        let quality_base = self.format_note.as_deref().unwrap_or("unknown");
-        match self.fps {
-            Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
-                let _ = write!(buf, "{quality_base}{fps:.0}");
-                let col_len = quality_base.len() + format!("{fps:.0}").len();
-                for _ in col_len..12 {
-                    buf.push(' ');
-                }
-                buf.push_str(" | ");
-            }
-            _ => {
-                let _ = write!(buf, "{quality_base:<12} | ");
-            }
-        }
-
-        // Resolution: avoid intermediate String allocation
-        match (self.width, self.height) {
-            (Some(w), Some(h)) => {
-                let _ = write!(buf, "{w}x{h}");
-                // Pad to 10 chars
-                let len = buf.len() - 15; // account for "quality | "
-                for _ in len..10 {
-                    buf.push(' ');
-                }
-            }
-            _ => buf.push_str("N/A       "),
-        }
-        buf.push_str(" | ");
-
-        // Check if this is an HLS format (also check URL for .m3u8)
-        let is_hls = self.is_hls() || self.url.contains(".m3u8");
-
-        // Size column: write directly to buffer
-        let size_start = buf.len();
-        if is_hls {
-            // For HLS: show duration + segment count when available
-            let seg_count = self
-                .fragments
-                .as_ref()
-                .map(|f| f.len() as u64)
-                .or(self.filesize_approx);
-
-            match (self.duration, seg_count) {
-                (Some(dur), Some(segs)) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    let _ = write!(buf, "{mins}:{secs:02} ({segs} seg)");
-                }
-                (Some(dur), None) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    let _ = write!(buf, "{mins}:{secs:02}");
-                }
-                (None, Some(segs)) => {
-                    let _ = write!(buf, "{segs} segments");
-                }
-                (None, None) => {
-                    buf.push_str("HLS stream");
-                }
-            }
-        } else if let Some(filesize) = self.filesize {
-            let _ = write!(buf, "{:.1} MB", filesize as f64 / (1024.0 * 1024.0));
-        } else if let Some(filesize_approx) = self.filesize_approx {
-            let _ = write!(buf, "~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0));
-        } else {
-            buf.push_str("Unknown");
-        }
-        // Pad size to 12 chars
-        let size_len = buf.len() - size_start;
-        for _ in size_len..12 {
-            buf.push(' ');
-        }
-        buf.push_str(" | ");
-
-        // Format type column: avoid to_uppercase() allocation for HLS
-        let format_start = buf.len();
-        if is_hls {
-            buf.push_str("HLS");
-        } else {
-            // Write uppercase directly
-            for c in self.ext.chars() {
-                buf.push(c.to_ascii_uppercase());
-            }
-        }
-        // Pad to 6 chars
-        let format_len = buf.len() - format_start;
-        for _ in format_len..6 {
-            buf.push(' ');
-        }
-        buf.push_str(" | ");
-
-        // Codecs column: write directly
-        match (&self.vcodec, &self.acodec) {
-            (Some(v), Some(a)) => {
-                let _ = write!(buf, "{v}/{a}");
-            }
-            (Some(v), None) => {
-                let _ = write!(buf, "{v} (video only)");
-            }
-            (None, Some(a)) => {
-                let _ = write!(buf, "{a} (audio only)");
-            }
-            (None, None) => buf.push_str("Unknown"),
-        }
-
-        if self.has_drm.unwrap_or(false) {
-            buf.push_str(" [DRM]");
-        }
-
-        buf
-    }
-}
-
-impl fmt::Display for Format {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Compact format for general use
-        write!(f, "{}", self.format_id)?;
-
-        if let Some(note) = &self.format_note {
-            write!(f, " ({note})")?;
-        }
-
-        if let Some(res) = self.resolution_string() {
-            write!(f, " {res}")?;
-        }
-
-        // Show exact size or approximate size with ~ prefix
-        if let Some(size) = self.filesize {
-            let mb = size as f64 / (1024.0 * 1024.0);
-            write!(f, " {mb:.1}MB")?;
-        } else if let Some(size) = self.filesize_approx {
-            let mb = size as f64 / (1024.0 * 1024.0);
-            write!(f, " ~{mb:.0}MB")?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Fragment of a segmented download
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Fragment {
-    /// Fragment URL (absolute or relative to fragment_base_url)
-    pub url: String,
-
-    /// Fragment duration in seconds
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-
-    /// Fragment size in bytes
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filesize: Option<u64>,
-}
-
-// ============================================================================
-// Format Selection DSL
-// ============================================================================
-//
-// Grammar:
-//   expression   = format_spec ( "/" format_spec )*        -- fallback chain
-//   format_spec  = selector ( "+" selector )?              -- video+audio merge
-//   selector     = base_name filter*                       -- base with filters
-//   filter       = "[" field op value "]"
-//   base_name    = "best" | "worst" | "b" | "w"
-//                | "bestvideo" | "bv" | "bv*"
-//                | "bestaudio" | "ba" | "ba*"
-//                | "worstvideo" | "wv"
-//                | "worstaudio" | "wa"
-//                | <format_id>
-//   field        = "height" | "width" | "ext" | "vcodec" | "acodec"
-//                | "fps" | "tbr" | "vbr" | "abr" | "asr"
-//                | "filesize" | "protocol" | "format_id"
-//   op           = "<=" | ">=" | "!=" | "<" | ">" | "="
-//   value        = number | string
+//! Format selection DSL — yt-dlp-compatible expression parser and selector.
+//!
+//! Grammar:
+//!   expression   = format_spec ( "/" format_spec )*        -- fallback chain
+//!   format_spec  = selector ( "+" selector )?              -- video+audio merge
+//!   selector     = base_name filter*                       -- base with filters
+//!   filter       = "[" field op value "]"
+//!   base_name    = "best" | "worst" | "b" | "w"
+//!                | "bestvideo" | "bv" | "bv*"
+//!                | "bestaudio" | "ba" | "ba*"
+//!                | "worstvideo" | "wv"
+//!                | "worstaudio" | "wa"
+//!                | <format_id>
+//!   field        = "height" | "width" | "ext" | "vcodec" | "acodec"
+//!                | "fps" | "tbr" | "vbr" | "abr" | "asr"
+//!                | "filesize" | "protocol" | "format_id"
+//!   op           = "<=" | ">=" | "!=" | "<" | ">" | "="
+//!   value        = number | string
+
+use super::Format;
 
 /// Parsed format selection expression supporting yt-dlp-compatible syntax.
 ///
@@ -615,16 +132,12 @@ impl FormatSelector {
             return Err("Empty format expression".to_string());
         }
 
-        let fallback_parts = split_top_level(expression, '/');
-        let mut fallbacks = Vec::with_capacity(fallback_parts.len());
+        // Strip trailing '/' (yt-dlp tolerates it)
+        let to_parse = expression.strip_suffix('/').unwrap_or(expression);
 
-        for part in &fallback_parts {
-            let part = part.trim();
-            if part.is_empty() {
-                return Err("Empty fallback in format expression".to_string());
-            }
-            fallbacks.push(parse_format_spec(part)?);
-        }
+        let fallbacks = parse_expression
+            .parse(to_parse)
+            .map_err(|e| format!("Invalid format expression '{expression}': {e}"))?;
 
         Ok(Self {
             expression: expression.to_string(),
@@ -654,183 +167,129 @@ impl FormatSelector {
     }
 }
 
-// ---- Parser helpers ----
+// ---- Parser (winnow combinators) ----
 
-/// Split a string on a delimiter, but only at the top level (not inside `[...]`).
-fn split_top_level(s: &str, delim: char) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0u32;
+use winnow::combinator::{alt, delimited, opt, repeat, separated};
+use winnow::prelude::*;
+use winnow::token::take_while;
 
-    for ch in s.chars() {
-        if ch == '[' {
-            depth += 1;
-            current.push(ch);
-        } else if ch == ']' {
-            depth = depth.saturating_sub(1);
-            current.push(ch);
-        } else if ch == delim && depth == 0 {
-            parts.push(current.clone());
-            current.clear();
-        } else {
-            current.push(ch);
-        }
-    }
-    if !current.is_empty() {
-        parts.push(current);
-    }
-    parts
+/// Parse a complete format expression: `format_spec ( "/" format_spec )*`
+fn parse_expression(input: &mut &str) -> ModalResult<Vec<FormatSpec>> {
+    separated(1.., parse_format_spec, '/').parse_next(input)
 }
 
-/// Parse a format spec: `selector` or `selector+selector`.
-fn parse_format_spec(s: &str) -> Result<FormatSpec, String> {
-    let merge_parts = split_top_level(s, '+');
-
-    match merge_parts.len() {
-        1 => Ok(FormatSpec::Single(parse_selector(merge_parts[0].trim())?)),
-        2 => Ok(FormatSpec::Merge {
-            video: parse_selector(merge_parts[0].trim())?,
-            audio: parse_selector(merge_parts[1].trim())?,
-        }),
-        _ => Err(format!("Invalid format spec (too many '+' operators): {s}")),
+/// Parse a format spec: `selector` or `selector "+" selector`
+fn parse_format_spec(input: &mut &str) -> ModalResult<FormatSpec> {
+    let first = parse_selector(input)?;
+    if opt('+').parse_next(input)?.is_some() {
+        let second = parse_selector(input)?;
+        Ok(FormatSpec::Merge {
+            video: first,
+            audio: second,
+        })
+    } else {
+        Ok(FormatSpec::Single(first))
     }
 }
 
-/// Parse a selector: `base_name[filter1][filter2]...`
-fn parse_selector(s: &str) -> Result<Selector, String> {
-    if s.is_empty() {
-        return Err("Empty selector".to_string());
-    }
-
-    // Split base name from filters: everything before the first `[`
-    let (base_str, filter_str) = match s.find('[') {
-        Some(idx) => (&s[..idx], &s[idx..]),
-        None => (s, ""),
-    };
-
-    let base_str = base_str.trim();
-    if base_str.is_empty() {
-        return Err(format!("Missing base selector before filters in: {s}"));
-    }
-
-    let base = parse_base_selector(base_str)?;
-    let filters = parse_filters(filter_str)?;
-
+/// Parse a selector: `base_name filter*`
+fn parse_selector(input: &mut &str) -> ModalResult<Selector> {
+    let base = parse_base_selector(input)?;
+    let filters: Vec<Filter> = repeat(0.., parse_filter).parse_next(input)?;
     Ok(Selector { base, filters })
 }
 
-/// Parse a base selector name into a `BaseSelector`.
-fn parse_base_selector(s: &str) -> Result<BaseSelector, String> {
-    match s {
-        "best" | "b" => Ok(BaseSelector::Best),
-        "worst" | "w" => Ok(BaseSelector::Worst),
-        "bestvideo" | "bv" => Ok(BaseSelector::BestVideo),
-        "bv*" | "bestvideo*" => Ok(BaseSelector::BestVideoStar),
-        "worstvideo" | "wv" => Ok(BaseSelector::WorstVideo),
-        "bestaudio" | "ba" => Ok(BaseSelector::BestAudio),
-        "ba*" | "bestaudio*" => Ok(BaseSelector::BestAudioStar),
-        "worstaudio" | "wa" => Ok(BaseSelector::WorstAudio),
-        other => {
-            // Treat as a literal format ID
-            if other.contains(|c: char| c.is_whitespace()) {
-                return Err(format!("Invalid selector: {other}"));
-            }
-            Ok(BaseSelector::FormatId(other.to_string()))
-        }
-    }
+/// Parse a base selector keyword or format ID.
+fn parse_base_selector(input: &mut &str) -> ModalResult<BaseSelector> {
+    alt((
+        "bestvideo*".value(BaseSelector::BestVideoStar),
+        "bestaudio*".value(BaseSelector::BestAudioStar),
+        "bestvideo".value(BaseSelector::BestVideo),
+        "bestaudio".value(BaseSelector::BestAudio),
+        "worstvideo".value(BaseSelector::WorstVideo),
+        "worstaudio".value(BaseSelector::WorstAudio),
+        "best".value(BaseSelector::Best),
+        "worst".value(BaseSelector::Worst),
+        "bv*".value(BaseSelector::BestVideoStar),
+        "ba*".value(BaseSelector::BestAudioStar),
+        "bv".value(BaseSelector::BestVideo),
+        "ba".value(BaseSelector::BestAudio),
+        "wv".value(BaseSelector::WorstVideo),
+        "wa".value(BaseSelector::WorstAudio),
+        "b".value(BaseSelector::Best),
+        "w".value(BaseSelector::Worst),
+        parse_format_id,
+    ))
+    .parse_next(input)
 }
 
-/// Parse a chain of `[field op value]` filters from a string like `[height<=720][ext=mp4]`.
-fn parse_filters(s: &str) -> Result<Vec<Filter>, String> {
-    if s.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut filters = Vec::new();
-    let mut remaining = s;
-
-    while !remaining.is_empty() {
-        remaining = remaining.trim_start();
-        if remaining.is_empty() {
-            break;
-        }
-
-        if !remaining.starts_with('[') {
-            return Err(format!("Expected '[' in filter expression: {remaining}"));
-        }
-
-        let close = remaining
-            .find(']')
-            .ok_or_else(|| format!("Unclosed filter bracket in: {remaining}"))?;
-
-        let inner = &remaining[1..close];
-        filters.push(parse_single_filter(inner)?);
-        remaining = &remaining[close + 1..];
-    }
-
-    Ok(filters)
+/// Parse a literal format ID (anything except whitespace and special chars).
+fn parse_format_id(input: &mut &str) -> ModalResult<BaseSelector> {
+    take_while(1.., |c: char| {
+        !c.is_whitespace() && !matches!(c, '+' | '/' | '[' | ']')
+    })
+    .map(|id: &str| BaseSelector::FormatId(id.to_string()))
+    .parse_next(input)
 }
 
-/// Parse the inside of a single filter: `field op value`.
-fn parse_single_filter(s: &str) -> Result<Filter, String> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err("Empty filter".to_string());
-    }
+/// Parse a single `[field op value]` filter.
+fn parse_filter(input: &mut &str) -> ModalResult<Filter> {
+    delimited('[', parse_filter_inner, ']').parse_next(input)
+}
 
-    // Find the operator — try two-char operators first, then single-char
-    let (field_str, op, value_str) = if let Some(idx) = s.find("<=") {
-        (&s[..idx], FilterOp::Le, &s[idx + 2..])
-    } else if let Some(idx) = s.find(">=") {
-        (&s[..idx], FilterOp::Ge, &s[idx + 2..])
-    } else if let Some(idx) = s.find("!=") {
-        (&s[..idx], FilterOp::Ne, &s[idx + 2..])
-    } else if let Some(idx) = s.find('<') {
-        (&s[..idx], FilterOp::Lt, &s[idx + 1..])
-    } else if let Some(idx) = s.find('>') {
-        (&s[..idx], FilterOp::Gt, &s[idx + 1..])
-    } else if let Some(idx) = s.find('=') {
-        (&s[..idx], FilterOp::Eq, &s[idx + 1..])
-    } else {
-        return Err(format!("No operator found in filter: {s}"));
-    };
-
-    let field_str = field_str.trim();
-    let value_str = value_str.trim();
-
-    let field = parse_filter_field(field_str)?;
-    let value = parse_filter_value(value_str);
-
+/// Parse the inside of a filter: `field op value`.
+fn parse_filter_inner(input: &mut &str) -> ModalResult<Filter> {
+    let field = parse_filter_field(input)?;
+    let op = parse_filter_op(input)?;
+    let value = parse_filter_value(input)?;
     Ok(Filter { field, op, value })
 }
 
-/// Parse a field name into `FilterField`.
-fn parse_filter_field(s: &str) -> Result<FilterField, String> {
-    match s {
-        "height" => Ok(FilterField::Height),
-        "width" => Ok(FilterField::Width),
-        "ext" => Ok(FilterField::Ext),
-        "vcodec" => Ok(FilterField::Vcodec),
-        "acodec" => Ok(FilterField::Acodec),
-        "fps" => Ok(FilterField::Fps),
-        "tbr" => Ok(FilterField::Tbr),
-        "vbr" => Ok(FilterField::Vbr),
-        "abr" => Ok(FilterField::Abr),
-        "asr" => Ok(FilterField::Asr),
-        "filesize" => Ok(FilterField::Filesize),
-        "protocol" => Ok(FilterField::Protocol),
-        "format_id" => Ok(FilterField::FormatId),
-        other => Err(format!("Unknown filter field: {other}")),
-    }
+/// Parse a filter field name.
+fn parse_filter_field(input: &mut &str) -> ModalResult<FilterField> {
+    alt((
+        "height".value(FilterField::Height),
+        "width".value(FilterField::Width),
+        "filesize".value(FilterField::Filesize),
+        "format_id".value(FilterField::FormatId),
+        "protocol".value(FilterField::Protocol),
+        "vcodec".value(FilterField::Vcodec),
+        "acodec".value(FilterField::Acodec),
+        "ext".value(FilterField::Ext),
+        "fps".value(FilterField::Fps),
+        "tbr".value(FilterField::Tbr),
+        "vbr".value(FilterField::Vbr),
+        "abr".value(FilterField::Abr),
+        "asr".value(FilterField::Asr),
+    ))
+    .parse_next(input)
+}
+
+/// Parse a comparison operator (two-char operators first to avoid prefix ambiguity).
+fn parse_filter_op(input: &mut &str) -> ModalResult<FilterOp> {
+    alt((
+        "<=".value(FilterOp::Le),
+        ">=".value(FilterOp::Ge),
+        "!=".value(FilterOp::Ne),
+        "<".value(FilterOp::Lt),
+        ">".value(FilterOp::Gt),
+        "=".value(FilterOp::Eq),
+    ))
+    .parse_next(input)
 }
 
 /// Parse a filter value — try as number first, fall back to text.
-fn parse_filter_value(s: &str) -> FilterValue {
-    if let Ok(n) = s.parse::<f64>() {
-        FilterValue::Number(n)
-    } else {
-        FilterValue::Text(s.to_string())
-    }
+fn parse_filter_value(input: &mut &str) -> ModalResult<FilterValue> {
+    take_while(1.., |c: char| c != ']')
+        .map(|raw: &str| {
+            let raw = raw.trim();
+            if let Ok(n) = raw.parse::<f64>() {
+                FilterValue::Number(n)
+            } else {
+                FilterValue::Text(raw.to_string())
+            }
+        })
+        .parse_next(input)
 }
 
 // ---- Selection logic ----
@@ -959,7 +418,6 @@ fn compare_str(val: &str, op: &FilterOp, filter_val: &FilterValue) -> bool {
         FilterValue::Text(s) => s.as_str(),
         FilterValue::Number(n) => {
             // Numeric filter on string field — convert number to string for comparison
-            // Use a stack-allocated comparison via to_string
             let s = n.to_string();
             return match op {
                 FilterOp::Eq => val == s,
@@ -1041,59 +499,9 @@ fn rank_formats(base: &BaseSelector, a: &Format, b: &Format) -> std::cmp::Orderi
     }
 }
 
-/// Format bytes as human-readable string
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-
-    let bytes_f = bytes as f64;
-    let exponent = (bytes_f.log10() / 3.0).floor() as usize;
-    let exponent = exponent.min(UNITS.len() - 1);
-
-    let value = bytes_f / 1000_f64.powi(exponent as i32);
-    let unit = UNITS[exponent];
-
-    format!("{value:.1} {unit}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ---- Format method tests ----
-
-    #[test]
-    fn test_format_has_video() {
-        let mut format = Format::new(
-            "137".to_string(),
-            "https://example.com/video".to_string(),
-            "mp4".to_string(),
-            "https".to_string(),
-        );
-        format.vcodec = Some("h264".to_string());
-        format.acodec = Some("none".to_string());
-
-        assert!(format.has_video());
-        assert!(!format.has_audio());
-    }
-
-    #[test]
-    fn test_format_has_audio() {
-        let mut format = Format::new(
-            "140".to_string(),
-            "https://example.com/audio".to_string(),
-            "m4a".to_string(),
-            "https".to_string(),
-        );
-        format.vcodec = Some("none".to_string());
-        format.acodec = Some("aac".to_string());
-
-        assert!(!format.has_video());
-        assert!(format.has_audio());
-    }
 
     // ---- Test helpers ----
 
