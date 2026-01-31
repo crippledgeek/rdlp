@@ -6,11 +6,11 @@ use log::debug;
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use serde_json::Value;
 
-use crate::base::common::BaseExtractor;
 use super::patterns::{
     DOWNLOAD_BTN_PATTERN, FLASHVARS_PATTERN, MEDIA_VAR_PATTERN, QUALITY_FROM_URL_PATTERN,
     QUALITY_ITEMS_PATTERN,
 };
+use crate::base::common::BaseExtractor;
 use std::collections::HashSet;
 
 /// Extract all formats using multiple strategies

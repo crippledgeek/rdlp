@@ -32,10 +32,7 @@ fn find_cookie_db() -> Result<PathBuf, std::io::Error> {
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!(
-                "Firefox cookies.sqlite not found at {}",
-                db_path.display()
-            ),
+            format!("Firefox cookies.sqlite not found at {}", db_path.display()),
         ))
     }
 }
@@ -105,7 +102,10 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
         } else {
             PathBuf::from(path)
         };
-        profile_path.join("cookies.sqlite").exists().then_some(profile_path)
+        profile_path
+            .join("cookies.sqlite")
+            .exists()
+            .then_some(profile_path)
     };
 
     let mut current_path: Option<String> = None;
@@ -150,9 +150,8 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
 fn firefox_profiles_dir() -> Result<PathBuf, std::io::Error> {
     #[cfg(target_os = "windows")]
     {
-        let appdata = std::env::var("APPDATA").map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set")
-        })?;
+        let appdata = std::env::var("APPDATA")
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
         Ok(PathBuf::from(appdata)
             .join("Mozilla")
             .join("Firefox")
@@ -183,15 +182,10 @@ fn firefox_profiles_dir() -> Result<PathBuf, std::io::Error> {
 }
 
 /// Read cookies from the SQLite database and insert them into the jar.
-fn read_cookies_from_db(
-    db_path: &Path,
-    jar: &impl CookieStore,
-) -> Result<usize, std::io::Error> {
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| std::io::Error::other(e.to_string()))?;
+fn read_cookies_from_db(db_path: &Path, jar: &impl CookieStore) -> Result<usize, std::io::Error> {
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(

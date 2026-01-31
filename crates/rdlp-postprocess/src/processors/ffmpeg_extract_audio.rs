@@ -11,7 +11,7 @@ use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::{get_audio_codec, AudioCodecConfig, AudioExtractOptions};
+use crate::ffmpeg::{AudioCodecConfig, AudioExtractOptions, get_audio_codec};
 
 ffmpeg_processor!(
     FFmpegExtractAudio,
@@ -123,11 +123,8 @@ impl PostProcessor for FFmpegExtractAudio {
         let output_path = input_file.with_extension(codec_config.extension);
 
         // Build extraction options
-        let opts = Self::build_extract_options(
-            codec_config,
-            can_copy,
-            config.audio_quality.as_deref(),
-        );
+        let opts =
+            Self::build_extract_options(codec_config, can_copy, config.audio_quality.as_deref());
 
         // Extract audio via library bindings
         self.ffmpeg

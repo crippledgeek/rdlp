@@ -414,8 +414,7 @@ impl FFmpegRunner {
                     // Frame rate from avg_frame_rate
                     let rate = stream.avg_frame_rate();
                     if rate.denominator() > 0 {
-                        let fps =
-                            rate.numerator() as f64 / rate.denominator() as f64;
+                        let fps = rate.numerator() as f64 / rate.denominator() as f64;
                         if fps > 0.0 && fps < 1000.0 {
                             info.fps = Some(fps);
                         }
@@ -439,8 +438,7 @@ impl FFmpegRunner {
                     {
                         if let Ok(audio) = codec_ctx.decoder().audio() {
                             info.sample_rate = Some(audio.rate());
-                            info.channels =
-                                Some(audio.ch_layout().channels() as u8);
+                            info.channels = Some(audio.ch_layout().channels() as u8);
                         }
                     }
 
@@ -498,8 +496,7 @@ impl FFmpegRunner {
 
         let stream_count = ictx.streams().count();
         let mut stream_mapping: Vec<i32> = vec![-1; stream_count];
-        let mut ist_time_bases =
-            vec![ffmpeg_the_third::Rational(0, 1); stream_count];
+        let mut ist_time_bases = vec![ffmpeg_the_third::Rational(0, 1); stream_count];
         let mut ost_index: i32 = 0;
 
         for (ist_index, ist) in ictx.streams().enumerate() {
@@ -532,34 +529,34 @@ impl FFmpegRunner {
         if opts.faststart {
             let mut dict = ffmpeg_the_third::Dictionary::new();
             dict.set("movflags", "+faststart");
-            octx.write_header_with(dict).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            octx.write_header_with(dict)
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
-                }
-            })?;
+                })?;
         } else {
-            octx.write_header().map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            octx.write_header()
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
-                }
-            })?;
+                })?;
         }
 
         // Copy packets
         for result in ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read packet: {e}"),
-                }
-            })?;
+                })?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
                 continue;
             }
             let ost_idx = ost_idx as usize;
-            let ost_time_base = octx.stream(ost_idx)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found")))?
+            let ost_time_base = octx
+                .stream(ost_idx)
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found"))
+                })?
                 .time_base();
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
@@ -571,9 +568,10 @@ impl FFmpegRunner {
             })?;
         }
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -609,35 +607,23 @@ impl FFmpegRunner {
     ) -> Result<()> {
         ensure_init()?;
 
-        let mut ictx_video =
-            ffmpeg_the_third::format::input(video_input).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "failed to open video input {}: {e}",
-                        video_input.display()
-                    ),
-                }
-            })?;
+        let mut ictx_video = ffmpeg_the_third::format::input(video_input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open video input {}: {e}", video_input.display()),
+            }
+        })?;
 
-        let mut ictx_audio =
-            ffmpeg_the_third::format::input(audio_input).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "failed to open audio input {}: {e}",
-                        audio_input.display()
-                    ),
-                }
-            })?;
+        let mut ictx_audio = ffmpeg_the_third::format::input(audio_input).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to open audio input {}: {e}", audio_input.display()),
+            }
+        })?;
 
-        let mut octx =
-            ffmpeg_the_third::format::output(output).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "failed to create output {}: {e}",
-                        output.display()
-                    ),
-                }
-            })?;
+        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("failed to create output {}: {e}", output.display()),
+            }
+        })?;
 
         // Find best video stream from video input
         let video_ist_index = ictx_video
@@ -648,7 +634,11 @@ impl FFmpegRunner {
 
         let video_ist_time_base = ictx_video
             .stream(video_ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video input stream {video_ist_index} not found")))?
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "video input stream {video_ist_index} not found"
+                ))
+            })?
             .time_base();
 
         let mut ost_video = octx
@@ -661,7 +651,11 @@ impl FFmpegRunner {
         ost_video.set_parameters(
             ictx_video
                 .stream(video_ist_index)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video input stream {video_ist_index} not found")))?
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "video input stream {video_ist_index} not found"
+                    ))
+                })?
                 .parameters(),
         );
         Self::clear_codec_tag(ost_video.parameters().as_ptr());
@@ -676,7 +670,11 @@ impl FFmpegRunner {
 
         let audio_ist_time_base = ictx_audio
             .stream(audio_ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {audio_ist_index} not found")))?
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "audio input stream {audio_ist_index} not found"
+                ))
+            })?
             .time_base();
 
         let mut ost_audio = octx
@@ -689,7 +687,11 @@ impl FFmpegRunner {
         ost_audio.set_parameters(
             ictx_audio
                 .stream(audio_ist_index)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {audio_ist_index} not found")))?
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "audio input stream {audio_ist_index} not found"
+                    ))
+                })?
                 .parameters(),
         );
         Self::clear_codec_tag(ost_audio.parameters().as_ptr());
@@ -699,31 +701,33 @@ impl FFmpegRunner {
         if opts.faststart {
             let mut dict = ffmpeg_the_third::Dictionary::new();
             dict.set("movflags", "+faststart");
-            octx.write_header_with(dict).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            octx.write_header_with(dict)
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
-                }
-            })?;
+                })?;
         } else {
-            octx.write_header().map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            octx.write_header()
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
-                }
-            })?;
+                })?;
         }
 
         // Copy video packets
         for result in ictx_video.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read video packet: {e}"),
-                }
-            })?;
+                })?;
             if stream.index() != video_ist_index {
                 continue;
             }
-            let ost_time_base = octx.stream(video_ost_index)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video output stream {video_ost_index} not found")))?
+            let ost_time_base = octx
+                .stream(video_ost_index)
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "video output stream {video_ost_index} not found"
+                    ))
+                })?
                 .time_base();
             packet.rescale_ts(video_ist_time_base, ost_time_base);
             packet.set_position(-1);
@@ -737,16 +741,20 @@ impl FFmpegRunner {
 
         // Copy audio packets
         for result in ictx_audio.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read audio packet: {e}"),
-                }
-            })?;
+                })?;
             if stream.index() != audio_ist_index {
                 continue;
             }
-            let ost_time_base = octx.stream(audio_ost_index)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio output stream {audio_ost_index} not found")))?
+            let ost_time_base = octx
+                .stream(audio_ost_index)
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "audio output stream {audio_ost_index} not found"
+                    ))
+                })?
                 .time_base();
             packet.rescale_ts(audio_ist_time_base, ost_time_base);
             packet.set_position(-1);
@@ -758,11 +766,10 @@ impl FFmpegRunner {
             })?;
         }
 
-        octx.write_trailer().map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output trailer: {e}"),
-            }
-        })?;
+            })?;
 
         Ok(())
     }
@@ -820,8 +827,11 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
-        let ist_time_base = ictx.stream(ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found")))?
+        let ist_time_base = ictx
+            .stream(ist_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found"))
+            })?
             .time_base();
 
         // Add output stream (stream copy mode)
@@ -834,26 +844,31 @@ impl FFmpegRunner {
             })?;
         ost.set_parameters(
             ictx.stream(ist_index)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found")))?
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "audio input stream {ist_index} not found"
+                    ))
+                })?
                 .parameters(),
         );
         Self::clear_codec_tag(ost.parameters().as_ptr());
 
-        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // Copy only audio packets
         for result in ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read packet: {e}"),
-                }
-            })?;
+                })?;
             if stream.index() != ist_index {
                 continue;
             }
-            let ost_time_base = octx.stream(0)
+            let ost_time_base = octx
+                .stream(0)
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("output stream 0 not found"))?
                 .time_base();
             packet.rescale_ts(ist_time_base, ost_time_base);
@@ -866,9 +881,10 @@ impl FFmpegRunner {
             })?;
         }
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -897,13 +913,17 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
-        let ist_time_base = ictx.stream(ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found")))?
+        let ist_time_base = ictx
+            .stream(ist_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found"))
+            })?
             .time_base();
 
         // Create decoder (bind stream to extend its lifetime for parameters())
-        let ist = ictx.stream(ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found")))?;
+        let ist = ictx.stream(ist_index).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found"))
+        })?;
         let decoder_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())?;
         let mut decoder = decoder_ctx.decoder().audio()?;
@@ -942,11 +962,11 @@ impl FFmpegRunner {
         let ost_index;
         let enc_context;
         {
-            let ost = octx.add_stream(enc_codec).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to add output stream: {e}"),
-                }
-            })?;
+            let ost =
+                octx.add_stream(enc_codec)
+                    .map_err(|e| PostProcessError::FFmpegLibraryError {
+                        message: format!("failed to add output stream: {e}"),
+                    })?;
             ost_index = ost.index();
             enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -984,30 +1004,31 @@ impl FFmpegRunner {
         }
 
         // Open encoder
-        let mut audio_encoder = audio_encoder.open_as(enc_codec).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open audio encoder: {e}"),
-            }
-        })?;
+        let mut audio_encoder =
+            audio_encoder
+                .open_as(enc_codec)
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to open audio encoder: {e}"),
+                })?;
 
         // Copy encoder parameters back to output stream
         // SAFETY: audio_encoder is a valid opened encoder context.
-        Self::copy_encoder_params_to_stream(&mut octx, ost_index, unsafe { audio_encoder.as_ptr() });
+        Self::copy_encoder_params_to_stream(&mut octx, ost_index, unsafe {
+            audio_encoder.as_ptr()
+        });
 
-        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // Build filter graph for sample format/rate conversion
-        let mut filter_graph =
-            Self::build_audio_filter(&decoder, &audio_encoder, ist_time_base)?;
+        let mut filter_graph = Self::build_audio_filter(&decoder, &audio_encoder, ist_time_base)?;
 
         // Transcode loop: read → decode → filter → encode → write
         for result in ictx.packets() {
-            let (stream, packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read packet: {e}"),
-                }
+            let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to read packet: {e}"),
             })?;
             if stream.index() != ist_index {
                 continue;
@@ -1033,23 +1054,21 @@ impl FFmpegRunner {
         )?;
 
         // Flush filter graph (signal EOF to source)
-        filter_graph.get("in")
+        filter_graph
+            .get("in")
             .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
-            .source().flush()?;
-        Self::drain_filter_to_encoder(
-            &mut filter_graph,
-            &mut audio_encoder,
-            &mut octx,
-            ost_index,
-        )?;
+            .source()
+            .flush()?;
+        Self::drain_filter_to_encoder(&mut filter_graph, &mut audio_encoder, &mut octx, ost_index)?;
 
         // Flush encoder
         audio_encoder.send_eof()?;
         Self::drain_encoder_packets(&mut audio_encoder, &mut octx, ost_index)?;
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -1100,12 +1119,10 @@ impl FFmpegRunner {
     ) -> Result<ffmpeg_the_third::filter::Graph> {
         let mut graph = ffmpeg_the_third::filter::Graph::new();
 
-        let abuffer = ffmpeg_the_third::filter::find("abuffer").ok_or_else(|| {
-            PostProcessError::ffmpeg_failed("abuffer filter not found")
-        })?;
-        let abuffersink = ffmpeg_the_third::filter::find("abuffersink").ok_or_else(|| {
-            PostProcessError::ffmpeg_failed("abuffersink filter not found")
-        })?;
+        let abuffer = ffmpeg_the_third::filter::find("abuffer")
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffer filter not found"))?;
+        let abuffersink = ffmpeg_the_third::filter::find("abuffersink")
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffersink filter not found"))?;
 
         // Build abuffer args with decoder's output parameters
         let channels = decoder.ch_layout().channels();
@@ -1118,16 +1135,16 @@ impl FFmpegRunner {
             channels,
         );
 
-        graph.add(&abuffer, "in", &args).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
+        graph
+            .add(&abuffer, "in", &args)
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to add abuffer filter: {e}"),
-            }
-        })?;
-        graph.add(&abuffersink, "out", "").map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
+            })?;
+        graph
+            .add(&abuffersink, "out", "")
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to add abuffersink filter: {e}"),
-            }
-        })?;
+            })?;
 
         // Build aformat spec to convert to encoder's expected format
         let enc_channels = encoder.ch_layout().channels();
@@ -1157,9 +1174,11 @@ impl FFmpegRunner {
     ) -> Result<()> {
         let mut frame = ffmpeg_the_third::frame::Audio::empty();
         while decoder.receive_frame(&mut frame).is_ok() {
-            filter.get("in")
+            filter
+                .get("in")
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
-                .source().add(&frame)?;
+                .source()
+                .add(&frame)?;
             Self::drain_filter_to_encoder(filter, encoder, octx, ost_index)?;
         }
         Ok(())
@@ -1174,7 +1193,8 @@ impl FFmpegRunner {
     ) -> Result<()> {
         let mut filtered = ffmpeg_the_third::frame::Audio::empty();
         loop {
-            let mut out_node = filter.get("out")
+            let mut out_node = filter
+                .get("out")
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'out' not found"))?;
             if out_node.sink().frame(&mut filtered).is_err() {
                 break;
@@ -1305,25 +1325,28 @@ impl FFmpegRunner {
         }
 
         // Write header
-        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // Copy packets
         for result in ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read packet: {e}"),
-                }
-            })?;
+                })?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
                 continue;
             }
             let ost_idx = ost_idx as usize;
-            let ost_time_base = octx.stream(ost_idx)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found")))?
+            let ost_time_base = octx
+                .stream(ost_idx)
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found"))
+                })?
                 .time_base();
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
@@ -1335,9 +1358,10 @@ impl FFmpegRunner {
             })?;
         }
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -1401,10 +1425,7 @@ impl FFmpegRunner {
         })?;
 
         let is_mp3 = container.eq_ignore_ascii_case("mp3");
-        let is_mkv = matches!(
-            container.to_lowercase().as_str(),
-            "mkv" | "mka"
-        );
+        let is_mkv = matches!(container.to_lowercase().as_str(), "mkv" | "mka");
 
         // Map media streams to output
         let stream_count = ictx.streams().count();
@@ -1501,25 +1522,28 @@ impl FFmpegRunner {
         octx.set_metadata(ictx.metadata().to_owned());
 
         // Write header
-        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // Copy media packets
         for result in ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read media packet: {e}"),
-                }
-            })?;
+                })?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
                 continue;
             }
             let ost_idx = ost_idx as usize;
-            let ost_time_base = octx.stream(ost_idx)
-                .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found")))?
+            let ost_time_base = octx
+                .stream(ost_idx)
+                .ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!("output stream {ost_idx} not found"))
+                })?
                 .time_base();
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
@@ -1532,15 +1556,19 @@ impl FFmpegRunner {
         }
 
         // Copy thumbnail packet(s)
-        let thumb_ost_time_base = octx.stream(thumb_ost_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("thumbnail output stream {thumb_ost_index} not found")))?
+        let thumb_ost_time_base = octx
+            .stream(thumb_ost_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "thumbnail output stream {thumb_ost_index} not found"
+                ))
+            })?
             .time_base();
         for result in thumb_ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read thumbnail packet: {e}"),
-                }
-            })?;
+                })?;
             if stream.index() == thumb_ist_index {
                 packet.rescale_ts(thumb_ist_time_base, thumb_ost_time_base);
                 packet.set_position(-1);
@@ -1553,9 +1581,10 @@ impl FFmpegRunner {
             }
         }
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -1596,17 +1625,10 @@ impl FFmpegRunner {
     }
 
     /// Convert video synchronously (dispatches to remux or transcode).
-    fn convert_video_sync(
-        input: &Path,
-        output: &Path,
-        opts: &VideoConvertOptions,
-    ) -> Result<()> {
+    fn convert_video_sync(input: &Path, output: &Path, opts: &VideoConvertOptions) -> Result<()> {
         if opts.remux_only {
             // Determine if output is MP4/MOV for faststart
-            let ext = output
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
             let remux_opts = RemuxOptions {
                 faststart: ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mov"),
                 ..Default::default()
@@ -1649,23 +1671,36 @@ impl FFmpegRunner {
             .map(|s| s.index());
 
         // Capture stream time bases before any mutable borrows
-        let video_ist_time_base = ictx.stream(video_ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video input stream {video_ist_index} not found")))?
+        let video_ist_time_base = ictx
+            .stream(video_ist_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "video input stream {video_ist_index} not found"
+                ))
+            })?
             .time_base();
-        let video_ist_frame_rate = ictx.stream(video_ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video input stream {video_ist_index} not found")))?
+        let video_ist_frame_rate = ictx
+            .stream(video_ist_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "video input stream {video_ist_index} not found"
+                ))
+            })?
             .avg_frame_rate();
         let audio_ist_time_base = audio_ist_index
             .map(|i| {
-                ictx.stream(i)
-                    .map(|s| s.time_base())
-                    .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {i} not found")))
+                ictx.stream(i).map(|s| s.time_base()).ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!("audio input stream {i} not found"))
+                })
             })
             .transpose()?;
 
         // Create video decoder
-        let video_ist = ictx.stream(video_ist_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("video input stream {video_ist_index} not found")))?;
+        let video_ist = ictx.stream(video_ist_index).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!(
+                "video input stream {video_ist_index} not found"
+            ))
+        })?;
         let video_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(video_ist.parameters())?;
         let mut video_decoder = video_dec_ctx.decoder().video()?;
@@ -1679,12 +1714,10 @@ impl FFmpegRunner {
 
         // Find video encoder
         let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
-        let video_enc_codec =
-            ffmpeg_the_third::encoder::find_by_name(video_codec_name).ok_or_else(|| {
-                PostProcessError::UnsupportedCodec {
-                    codec: video_codec_name.to_string(),
-                    operation: "video conversion".into(),
-                }
+        let video_enc_codec = ffmpeg_the_third::encoder::find_by_name(video_codec_name)
+            .ok_or_else(|| PostProcessError::UnsupportedCodec {
+                codec: video_codec_name.to_string(),
+                operation: "video conversion".into(),
             })?;
 
         // Check global header flag before mutable stream borrows
@@ -1748,15 +1781,17 @@ impl FFmpegRunner {
             video_encoder.set_bit_rate(0);
         }
 
-        let mut video_encoder = video_encoder.open_as_with(video_enc_codec, enc_opts).map_err(
-            |e| PostProcessError::FFmpegLibraryError {
+        let mut video_encoder = video_encoder
+            .open_as_with(video_enc_codec, enc_opts)
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to open video encoder: {e}"),
-            },
-        )?;
+            })?;
 
         // Copy encoder parameters back to output stream
         // SAFETY: video_encoder is a valid opened encoder context.
-        Self::copy_encoder_params_to_stream(&mut octx, video_ost_index, unsafe { video_encoder.as_ptr() });
+        Self::copy_encoder_params_to_stream(&mut octx, video_ost_index, unsafe {
+            video_encoder.as_ptr()
+        });
 
         // Add audio output stream (stream copy) if audio exists and copy requested
         let audio_ost_index = if opts.audio_copy {
@@ -1772,7 +1807,11 @@ impl FFmpegRunner {
                         })?;
                     ost.set_parameters(
                         ictx.stream(audio_idx)
-                            .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio input stream {audio_idx} not found")))?
+                            .ok_or_else(|| {
+                                PostProcessError::ffmpeg_failed(format!(
+                                    "audio input stream {audio_idx} not found"
+                                ))
+                            })?
                             .parameters(),
                     );
                     audio_ost_idx = ost.index();
@@ -1786,9 +1825,10 @@ impl FFmpegRunner {
             None
         };
 
-        octx.write_header().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // Build video filter graph for pixel format conversion
         let mut filter_graph =
@@ -1796,11 +1836,10 @@ impl FFmpegRunner {
 
         // Process packets: video → decode/filter/encode, audio → copy
         for result in ictx.packets() {
-            let (stream, mut packet) = result.map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to read packet: {e}"),
-                }
-            })?;
+                })?;
             let ist_index = stream.index();
 
             if ist_index == video_ist_index {
@@ -1816,11 +1855,17 @@ impl FFmpegRunner {
             } else if Some(ist_index) == audio_ist_index {
                 // Audio: stream copy
                 if let Some(audio_ost_idx) = audio_ost_index {
-                    let ost_time_base = octx.stream(audio_ost_idx)
-                        .ok_or_else(|| PostProcessError::ffmpeg_failed(format!("audio output stream {audio_ost_idx} not found")))?
+                    let ost_time_base = octx
+                        .stream(audio_ost_idx)
+                        .ok_or_else(|| {
+                            PostProcessError::ffmpeg_failed(format!(
+                                "audio output stream {audio_ost_idx} not found"
+                            ))
+                        })?
                         .time_base();
-                    let audio_tb = audio_ist_time_base
-                        .ok_or_else(|| PostProcessError::ffmpeg_failed("audio input time base not available"))?;
+                    let audio_tb = audio_ist_time_base.ok_or_else(|| {
+                        PostProcessError::ffmpeg_failed("audio input time base not available")
+                    })?;
                     packet.rescale_ts(audio_tb, ost_time_base);
                     packet.set_position(-1);
                     packet.set_stream(audio_ost_idx);
@@ -1844,9 +1889,11 @@ impl FFmpegRunner {
         )?;
 
         // Flush video filter graph
-        filter_graph.get("in")
+        filter_graph
+            .get("in")
             .ok_or_else(|| PostProcessError::ffmpeg_failed("video filter node 'in' not found"))?
-            .source().flush()?;
+            .source()
+            .flush()?;
         Self::drain_video_filter_to_encoder(
             &mut filter_graph,
             &mut video_encoder,
@@ -1858,9 +1905,10 @@ impl FFmpegRunner {
         video_encoder.send_eof()?;
         Self::drain_video_encoder_packets(&mut video_encoder, &mut octx, video_ost_index)?;
 
-        octx.write_trailer().map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output trailer: {e}"),
-        })?;
+        octx.write_trailer()
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output trailer: {e}"),
+            })?;
 
         Ok(())
     }
@@ -1909,12 +1957,10 @@ impl FFmpegRunner {
     ) -> Result<ffmpeg_the_third::filter::Graph> {
         let mut graph = ffmpeg_the_third::filter::Graph::new();
 
-        let buffer = ffmpeg_the_third::filter::find("buffer").ok_or_else(|| {
-            PostProcessError::ffmpeg_failed("buffer filter not found")
-        })?;
-        let buffersink = ffmpeg_the_third::filter::find("buffersink").ok_or_else(|| {
-            PostProcessError::ffmpeg_failed("buffersink filter not found")
-        })?;
+        let buffer = ffmpeg_the_third::filter::find("buffer")
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("buffer filter not found"))?;
+        let buffersink = ffmpeg_the_third::filter::find("buffersink")
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("buffersink filter not found"))?;
 
         // Pixel aspect ratio (default 1:1 if unknown)
         let sar = decoder.aspect_ratio();
@@ -1940,16 +1986,16 @@ impl FFmpegRunner {
             sar_den,
         );
 
-        graph.add(&buffer, "in", &args).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
+        graph
+            .add(&buffer, "in", &args)
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to add buffer filter: {e}"),
-            }
-        })?;
-        graph.add(&buffersink, "out", "").map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
+            })?;
+        graph
+            .add(&buffersink, "out", "")
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to add buffersink filter: {e}"),
-            }
-        })?;
+            })?;
 
         // Convert pixel format to match encoder's requirement
         let enc_pix_fmt_name = encoder
@@ -1979,9 +2025,11 @@ impl FFmpegRunner {
     ) -> Result<()> {
         let mut frame = ffmpeg_the_third::frame::Video::empty();
         while decoder.receive_frame(&mut frame).is_ok() {
-            filter.get("in")
+            filter
+                .get("in")
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("video filter node 'in' not found"))?
-                .source().add(&frame)?;
+                .source()
+                .add(&frame)?;
             Self::drain_video_filter_to_encoder(filter, encoder, octx, ost_index)?;
         }
         Ok(())
@@ -1996,8 +2044,9 @@ impl FFmpegRunner {
     ) -> Result<()> {
         let mut filtered = ffmpeg_the_third::frame::Video::empty();
         loop {
-            let mut out_node = filter.get("out")
-                .ok_or_else(|| PostProcessError::ffmpeg_failed("video filter node 'out' not found"))?;
+            let mut out_node = filter.get("out").ok_or_else(|| {
+                PostProcessError::ffmpeg_failed("video filter node 'out' not found")
+            })?;
             if out_node.sink().frame(&mut filtered).is_err() {
                 break;
             }
@@ -2079,10 +2128,7 @@ impl FFmpegRunner {
     }
 
     /// Enable VBR (variable bitrate) quality mode on an encoder.
-    fn set_vbr_quality(
-        encoder_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext,
-        quality: i32,
-    ) {
+    fn set_vbr_quality(encoder_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext, quality: i32) {
         // SAFETY: `encoder_ptr` is a valid, pre-open encoder context.
         // Setting QSCALE flag + global_quality is the standard way to enable VBR.
         unsafe {
@@ -2099,24 +2145,20 @@ impl FFmpegRunner {
         // SAFETY: `encoder_ptr` is a valid, pre-open encoder context.
         // This flag is required by certain container formats.
         unsafe {
-            (*encoder_ptr).flags |=
-                ffmpeg_the_third::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+            (*encoder_ptr).flags |= ffmpeg_the_third::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
         }
     }
 
     /// Configure a stream as an MKV attachment (for embedded thumbnails).
     ///
     /// Sets the codec type to `ATTACHMENT` and clears the codec tag.
-    fn set_stream_as_attachment(
-        params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters,
-    ) {
+    fn set_stream_as_attachment(params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters) {
         // SAFETY: `params_ptr` points to a valid AVCodecParameters for an output stream.
         // Setting codec_type to ATTACHMENT and clearing codec_tag is the standard
         // way to embed attachments in Matroska containers.
         unsafe {
             let codecpar = params_ptr as *mut ffmpeg_the_third::ffi::AVCodecParameters;
-            (*codecpar).codec_type =
-                ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
+            (*codecpar).codec_type = ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
             (*codecpar).codec_tag = 0;
         }
     }
@@ -2126,15 +2168,12 @@ impl FFmpegRunner {
     /// Sets the stream disposition and clears the codec tag. Used for MP4,
     /// FLAC, OGG, and other containers that embed cover art as a video stream
     /// with special disposition.
-    fn set_attached_pic_disposition(
-        stream_ptr: *mut ffmpeg_the_third::ffi::AVStream,
-    ) {
+    fn set_attached_pic_disposition(stream_ptr: *mut ffmpeg_the_third::ffi::AVStream) {
         // SAFETY: `stream_ptr` is a valid output stream pointer from a live
         // output context. Setting disposition and clearing codec_tag configures
         // the stream as cover art.
         unsafe {
-            (*stream_ptr).disposition =
-                ffmpeg_the_third::ffi::AV_DISPOSITION_ATTACHED_PIC;
+            (*stream_ptr).disposition = ffmpeg_the_third::ffi::AV_DISPOSITION_ATTACHED_PIC;
             (*((*stream_ptr).codecpar)).codec_tag = 0;
         }
     }

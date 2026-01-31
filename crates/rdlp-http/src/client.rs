@@ -61,17 +61,11 @@ impl HttpClientFactory {
     /// Cookies in the jar are automatically sent with every request and
     /// `Set-Cookie` response headers are stored back into the jar.
     #[must_use]
-    pub fn build_with_cookies(
-        &self,
-        jar: Arc<reqwest::cookie::Jar>,
-    ) -> reqwest::Client {
+    pub fn build_with_cookies(&self, jar: Arc<reqwest::cookie::Jar>) -> reqwest::Client {
         self.build_inner(Some(jar))
     }
 
-    fn build_inner(
-        &self,
-        cookie_jar: Option<Arc<reqwest::cookie::Jar>>,
-    ) -> reqwest::Client {
+    fn build_inner(&self, cookie_jar: Option<Arc<reqwest::cookie::Jar>>) -> reqwest::Client {
         let mut builder = reqwest::Client::builder()
             .user_agent(&self.config.user_agent)
             .pool_max_idle_per_host(self.config.pool_max_idle_per_host)
@@ -103,10 +97,7 @@ impl HttpClientFactory {
 
     /// Build with cookie provider and wrap in Arc for sharing across async tasks
     #[must_use]
-    pub fn build_arc_with_cookies(
-        &self,
-        jar: Arc<reqwest::cookie::Jar>,
-    ) -> Arc<reqwest::Client> {
+    pub fn build_arc_with_cookies(&self, jar: Arc<reqwest::cookie::Jar>) -> Arc<reqwest::Client> {
         Arc::new(self.build_with_cookies(jar))
     }
 }

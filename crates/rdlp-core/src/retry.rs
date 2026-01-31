@@ -142,8 +142,8 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_default_config() {
@@ -157,12 +157,7 @@ mod tests {
 
     #[test]
     fn test_to_backoff() {
-        let config = RetryConfig::new(
-            5,
-            Duration::from_millis(100),
-            Duration::from_secs(10),
-            2.0,
-        );
+        let config = RetryConfig::new(5, Duration::from_millis(100), Duration::from_secs(10), 2.0);
 
         // Should compile and create a valid builder
         let _builder = config.to_backoff();
@@ -214,13 +209,8 @@ mod tests {
     /// Test that retry succeeds on second attempt after initial failure
     #[tokio::test]
     async fn test_retry_succeeds_on_second_attempt() {
-        let config = RetryConfig::new(
-            3,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            2.0,
-        )
-        .with_jitter(false);
+        let config = RetryConfig::new(3, Duration::from_millis(1), Duration::from_millis(10), 2.0)
+            .with_jitter(false);
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = attempt_counter.clone();
@@ -281,13 +271,8 @@ mod tests {
     /// Test that permanent (non-retryable) errors stop immediately
     #[tokio::test]
     async fn test_permanent_error_not_retried() {
-        let config = RetryConfig::new(
-            5,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            2.0,
-        )
-        .with_jitter(false);
+        let config = RetryConfig::new(5, Duration::from_millis(1), Duration::from_millis(10), 2.0)
+            .with_jitter(false);
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = attempt_counter.clone();
@@ -312,13 +297,8 @@ mod tests {
     /// Test that notify callback is called on each retry
     #[tokio::test]
     async fn test_retry_notify_callback() {
-        let config = RetryConfig::new(
-            2,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            2.0,
-        )
-        .with_jitter(false);
+        let config = RetryConfig::new(2, Duration::from_millis(1), Duration::from_millis(10), 2.0)
+            .with_jitter(false);
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
         let notify_counter = Arc::new(AtomicUsize::new(0));
@@ -347,13 +327,8 @@ mod tests {
     /// Test retry with mixed errors (retryable then permanent)
     #[tokio::test]
     async fn test_retry_stops_on_permanent_after_transient() {
-        let config = RetryConfig::new(
-            5,
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            2.0,
-        )
-        .with_jitter(false);
+        let config = RetryConfig::new(5, Duration::from_millis(1), Duration::from_millis(10), 2.0)
+            .with_jitter(false);
 
         let attempt_counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = attempt_counter.clone();

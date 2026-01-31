@@ -52,11 +52,7 @@ pub fn insert_cookie_into_jar(
 ///
 /// Browsers lock their SQLite databases while running. Copying to a temp file
 /// avoids `SQLITE_BUSY` / `SQLITE_LOCKED` errors.
-pub fn with_temp_db_copy<F, T>(
-    db_path: &Path,
-    temp_name: &str,
-    f: F,
-) -> Result<T, std::io::Error>
+pub fn with_temp_db_copy<F, T>(db_path: &Path, temp_name: &str, f: F) -> Result<T, std::io::Error>
 where
     F: FnOnce(&Path) -> Result<T, std::io::Error>,
 {

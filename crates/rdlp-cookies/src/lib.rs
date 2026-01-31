@@ -14,12 +14,12 @@ mod firefox;
 mod netscape;
 mod util;
 
-use std::path::Path;
-use std::sync::Arc;
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
 use reqwest::cookie::CookieStore;
+use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 
 /// Cookie jar backed by `reqwest::cookie::Jar`.
@@ -104,8 +104,7 @@ impl CookieJar for SimpleCookieJar {
             }
         })
         .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        ?;
+        .map_err(|e| std::io::Error::other(e.to_string()))??;
 
         debug!("Loaded {count} cookies from browser: {browser}");
         Ok(count)
@@ -114,12 +113,9 @@ impl CookieJar for SimpleCookieJar {
     async fn load_from_file(&self, path: &Path) -> Result<usize> {
         let jar = Arc::clone(&self.jar);
         let path = path.to_path_buf();
-        let count = tokio::task::spawn_blocking(move || {
-            netscape::load_cookie_file(&path, &*jar)
-        })
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        ?;
+        let count = tokio::task::spawn_blocking(move || netscape::load_cookie_file(&path, &*jar))
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))??;
 
         debug!(count; "Loaded cookies from file");
         Ok(count)

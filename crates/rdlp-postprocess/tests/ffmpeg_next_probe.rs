@@ -49,8 +49,7 @@ fn test_ffmpeg_probe() {
     let ctx = ffmpeg_the_third::format::input(&video_path).expect("failed to open test video");
 
     // Check duration (~1 second)
-    let duration_secs =
-        ctx.duration() as f64 / f64::from(ffmpeg_the_third::ffi::AV_TIME_BASE);
+    let duration_secs = ctx.duration() as f64 / f64::from(ffmpeg_the_third::ffi::AV_TIME_BASE);
     assert!(
         duration_secs > 0.5 && duration_secs < 2.0,
         "unexpected duration: {duration_secs}"

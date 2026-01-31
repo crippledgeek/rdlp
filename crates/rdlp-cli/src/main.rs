@@ -187,8 +187,8 @@ async fn async_main() -> Result<()> {
     if !args.quiet {
         let default_level = if args.verbose { "debug" } else { "info" };
 
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(default_level));
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
         // Use SuspendingWriter to properly handle logs while progress bars are active
         // This prevents progress bar duplication caused by log messages

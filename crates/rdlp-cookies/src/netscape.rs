@@ -27,10 +27,7 @@ struct NetscapeCookie {
 /// Parse a Netscape-format cookie file and insert cookies into the jar.
 ///
 /// Returns the number of cookies successfully loaded.
-pub fn load_cookie_file(
-    path: &Path,
-    jar: &impl CookieStore,
-) -> Result<usize, std::io::Error> {
+pub fn load_cookie_file(path: &Path, jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     Ok(load_cookie_string(&content, jar))
 }
@@ -188,6 +185,12 @@ mod tests {
         let url = Url::parse("https://example.com/").unwrap();
         let cookies = jar.cookies(&url);
         assert!(cookies.is_some());
-        assert!(cookies.unwrap().to_str().unwrap().contains("httponly_cookie=secret"));
+        assert!(
+            cookies
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("httponly_cookie=secret")
+        );
     }
 }

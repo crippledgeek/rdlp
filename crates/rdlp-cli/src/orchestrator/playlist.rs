@@ -65,8 +65,9 @@ impl Orchestrator {
         let playlist_dir = self.config.output_directory.join(&playlist_folder_name);
 
         // Check for existing files (resume detection)
-        let (existing_files, partial_count) =
-            self.detect_existing_playlist_files(&playlist_dir, &infos).await;
+        let (existing_files, partial_count) = self
+            .detect_existing_playlist_files(&playlist_dir, &infos)
+            .await;
         let already_downloaded = existing_files.len();
         let remaining = total - already_downloaded;
 
@@ -122,12 +123,14 @@ impl Orchestrator {
 
         // Create playlist directory if it doesn't exist
         if !playlist_dir.exists() {
-            tokio::fs::create_dir_all(&playlist_dir).await.map_err(|e| {
-                OrchestratorError::IoError(format!(
-                    "Failed to create playlist folder '{}': {e}",
-                    playlist_dir.display()
-                ))
-            })?;
+            tokio::fs::create_dir_all(&playlist_dir)
+                .await
+                .map_err(|e| {
+                    OrchestratorError::IoError(format!(
+                        "Failed to create playlist folder '{}': {e}",
+                        playlist_dir.display()
+                    ))
+                })?;
             info!(path:? = playlist_dir.display(); "Created folder");
         }
 
