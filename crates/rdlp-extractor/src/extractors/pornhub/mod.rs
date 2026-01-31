@@ -91,7 +91,17 @@ impl InfoExtractor for PornHubExtractor {
             .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
 
         // Parse HTML and extract all metadata before async operations
-        let (title, description, thumbnail, uploader, uploader_url, channel, channel_url, view_count, average_rating) = {
+        let (
+            title,
+            description,
+            thumbnail,
+            uploader,
+            uploader_url,
+            channel,
+            channel_url,
+            view_count,
+            average_rating,
+        ) = {
             let html = Html::parse_document(&webpage);
             (
                 utils::extract_title(&html, &webpage),

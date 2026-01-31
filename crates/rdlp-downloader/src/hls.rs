@@ -2,10 +2,7 @@ use async_trait::async_trait;
 use backon::Retryable;
 use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
-use tracing::instrument;
-use rdlp_core::{
-    DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
-};
+use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,6 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
+use tracing::instrument;
 
 use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
@@ -218,8 +216,9 @@ impl HlsDownloader {
                 let mut downloaded = 0u64;
 
                 while let Some(chunk_result) = stream.next().await {
-                    let chunk = chunk_result
-                        .map_err(|e| RdlpError::Network(format!("Segment {idx} read error: {e}")))?;
+                    let chunk = chunk_result.map_err(|e| {
+                        RdlpError::Network(format!("Segment {idx} read error: {e}"))
+                    })?;
 
                     writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
                     downloaded += chunk.len() as u64;
@@ -278,11 +277,15 @@ impl HlsDownloader {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
                 // Warn about encryption (not yet supported)
                 if media.segments.iter().any(|s| s.key.is_some()) {
-                    warn!("HLS stream uses encryption (AES-128/SAMPLE-AES) — decryption not yet supported");
+                    warn!(
+                        "HLS stream uses encryption (AES-128/SAMPLE-AES) — decryption not yet supported"
+                    );
                 }
                 // Warn about live streams
                 if !media.end_list {
-                    warn!("HLS stream appears to be live (no EXT-X-ENDLIST) — may not download completely");
+                    warn!(
+                        "HLS stream appears to be live (no EXT-X-ENDLIST) — may not download completely"
+                    );
                 }
 
                 // Direct media playlist - extract segments with durations
@@ -797,10 +800,7 @@ impl Downloader for HlsDownloader {
         })
         .await
         .map_err(|_| {
-            RdlpError::Download(format!(
-                "Download timed out after {}s",
-                timeout.as_secs()
-            ))
+            RdlpError::Download(format!("Download timed out after {}s", timeout.as_secs()))
         })?
     }
 }

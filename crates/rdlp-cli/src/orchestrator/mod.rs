@@ -19,7 +19,6 @@ pub use state::{DownloadPhase, DownloadState};
 
 use indicatif::MultiProgress;
 use log::{debug, info, warn};
-use tracing::instrument;
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
@@ -29,6 +28,7 @@ use rdlp_jsinterp::SimpleJsEngine;
 use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::instrument;
 
 /// Main orchestrator coordinating extraction, download, and post-processing
 pub struct Orchestrator {
@@ -46,8 +46,8 @@ impl Orchestrator {
     #[must_use]
     pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
-        let http_client = HttpClientFactory::from_rdlp_config(&config)
-            .build_arc_with_cookies(cookie_jar.jar());
+        let http_client =
+            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
         let js_engine = Arc::new(SimpleJsEngine::new());
 
         // Wrap config in Arc once and share it
@@ -110,8 +110,8 @@ impl Orchestrator {
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
-        let http_client = HttpClientFactory::from_rdlp_config(&config)
-            .build_arc_with_cookies(cookie_jar.jar());
+        let http_client =
+            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
         let js_engine = Arc::new(SimpleJsEngine::new());
 
         let config = Arc::new(config);

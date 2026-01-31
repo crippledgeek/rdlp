@@ -493,11 +493,7 @@ impl BaseExtractor {
     /// attribute found. Relative hrefs starting with `/` are made absolute
     /// using the provided `base_url`.
     #[must_use]
-    pub fn extract_first_href(
-        html: &Html,
-        selectors: &[&str],
-        base_url: &str,
-    ) -> Option<String> {
+    pub fn extract_first_href(html: &Html, selectors: &[&str], base_url: &str) -> Option<String> {
         for selector_str in selectors {
             let Ok(selector) = Selector::parse(selector_str) else {
                 continue;

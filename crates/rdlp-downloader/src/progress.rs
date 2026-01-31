@@ -5,8 +5,8 @@
 //! duplicate progress tracking code.
 
 use rdlp_core::{DownloadProgress, ProgressCallback};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// RAII guard for progress reporter tasks.

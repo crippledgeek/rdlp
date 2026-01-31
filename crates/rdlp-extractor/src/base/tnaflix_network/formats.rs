@@ -69,7 +69,13 @@ pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
             "http-default".into()
         };
 
-        video_data.push((format_id, video_url.to_owned(), ext.to_owned(), height, width));
+        video_data.push((
+            format_id,
+            video_url.to_owned(),
+            ext.to_owned(),
+            height,
+            width,
+        ));
     }
 
     video_data

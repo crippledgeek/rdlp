@@ -423,22 +423,16 @@ mod tests {
     fn test_extract_bitrate_from_url() {
         // Standard RedTube URL pattern
         assert_eq!(
-            extract_bitrate_from_url(
-                "https://example.com/videos/1080P_4000K_378558032.mp4"
-            ),
+            extract_bitrate_from_url("https://example.com/videos/1080P_4000K_378558032.mp4"),
             Some(4000.0)
         );
         assert_eq!(
-            extract_bitrate_from_url(
-                "https://example.com/videos/720P_2000K_123456.mp4"
-            ),
+            extract_bitrate_from_url("https://example.com/videos/720P_2000K_123456.mp4"),
             Some(2000.0)
         );
         // Lowercase k
         assert_eq!(
-            extract_bitrate_from_url(
-                "https://example.com/videos/480P_1500k_789.mp4"
-            ),
+            extract_bitrate_from_url("https://example.com/videos/480P_1500k_789.mp4"),
             Some(1500.0)
         );
         // No bitrate in URL

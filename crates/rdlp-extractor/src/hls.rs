@@ -253,7 +253,9 @@ impl HlsSizeDetector {
         let segment_count = segment_urls.len();
 
         // Detect container from first segment URL
-        let segment_container = segment_urls.first().and_then(|url| detect_segment_container(url));
+        let segment_container = segment_urls
+            .first()
+            .and_then(|url| detect_segment_container(url));
 
         // Step 2: Calculate total size from all segments
         let total_size = match self.sum_segment_sizes(segment_urls).await {

@@ -93,7 +93,9 @@ impl Orchestrator {
         }
 
         // Create progress bar and add to MultiProgress for proper log handling
-        let pb = self.multi_progress.add(ProgressBar::new(filesize.unwrap_or(0)));
+        let pb = self
+            .multi_progress
+            .add(ProgressBar::new(filesize.unwrap_or(0)));
         if let Some(size) = filesize {
             pb.set_length(size);
         }

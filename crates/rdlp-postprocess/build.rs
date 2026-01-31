@@ -42,10 +42,7 @@ fn detect_ffmpeg() -> Option<PathBuf> {
     // 2. Search common installation paths (Windows)
     if cfg!(target_os = "windows") {
         if let Some(dir) = search_windows_paths() {
-            println!(
-                "cargo:warning=Auto-detected FFmpeg at: {}",
-                dir.display()
-            );
+            println!("cargo:warning=Auto-detected FFmpeg at: {}", dir.display());
             return Some(dir);
         }
     }
@@ -59,7 +56,9 @@ fn detect_ffmpeg() -> Option<PathBuf> {
         return Some(dir);
     }
 
-    println!("cargo:warning=FFmpeg shared build not found. Set FFMPEG_DIR or install via: winget install Gyan.FFmpeg.Shared");
+    println!(
+        "cargo:warning=FFmpeg shared build not found. Set FFMPEG_DIR or install via: winget install Gyan.FFmpeg.Shared"
+    );
     None
 }
 

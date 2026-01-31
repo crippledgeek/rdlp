@@ -45,13 +45,20 @@ fn find_cookie_db() -> Result<PathBuf, std::io::Error> {
         Ok(path)
     } else {
         // Try Network/Cookies (Chrome 96+)
-        let network_path = chrome_user_data_dir()?.join("Default").join("Network").join("Cookies");
+        let network_path = chrome_user_data_dir()?
+            .join("Default")
+            .join("Network")
+            .join("Cookies");
         if network_path.exists() {
             Ok(network_path)
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Chrome cookie database not found at {} or {}", path.display(), network_path.display()),
+                format!(
+                    "Chrome cookie database not found at {} or {}",
+                    path.display(),
+                    network_path.display()
+                ),
             ))
         }
     }
@@ -85,9 +92,7 @@ fn chrome_user_data_dir() -> Result<PathBuf, std::io::Error> {
 
     #[cfg(target_os = "linux")]
     {
-        Ok(util::home_dir()?
-            .join(".config")
-            .join("google-chrome"))
+        Ok(util::home_dir()?.join(".config").join("google-chrome"))
     }
 
     #[cfg(target_os = "macos")]
@@ -127,7 +132,10 @@ fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Erro
 
     // Base64 decode
     let encrypted_key = BASE64.decode(encrypted_key_b64).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Base64 decode error: {e}"))
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Base64 decode error: {e}"),
+        )
     })?;
 
     // Strip "DPAPI" prefix (5 bytes)
@@ -146,9 +154,7 @@ fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Erro
 /// Decrypt a DPAPI-encrypted key.
 #[cfg(target_os = "windows")]
 fn decrypt_dpapi_key(encrypted: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPT_INTEGER_BLOB,
-    };
+    use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData};
 
     let input = CRYPT_INTEGER_BLOB {
         cbData: encrypted.len() as u32,
@@ -237,11 +243,9 @@ fn read_cookies_from_db(
     key: &[u8],
     jar: &impl CookieStore,
 ) -> Result<usize, std::io::Error> {
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     let mut stmt = conn
         .prepare(
@@ -261,7 +265,15 @@ fn read_cookies_from_db(
             let path: String = row.get(4)?;
             let is_secure: bool = row.get(5)?;
             let is_httponly: bool = row.get(6)?;
-            Ok((host_key, name, encrypted_value, plaintext_value, path, is_secure, is_httponly))
+            Ok((
+                host_key,
+                name,
+                encrypted_value,
+                plaintext_value,
+                path,
+                is_secure,
+                is_httponly,
+            ))
         })
         .map_err(|e| std::io::Error::other(e.to_string()))?;
 
@@ -292,7 +304,15 @@ fn read_cookies_from_db(
             continue;
         }
 
-        if util::insert_cookie_into_jar(jar, &host_key, &name, &value, &path, is_secure, is_httponly) {
+        if util::insert_cookie_into_jar(
+            jar,
+            &host_key,
+            &name,
+            &value,
+            &path,
+            is_secure,
+            is_httponly,
+        ) {
             count += 1;
         }
     }
