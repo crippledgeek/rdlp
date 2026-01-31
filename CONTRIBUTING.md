@@ -44,7 +44,7 @@ More test coverage is always helpful:
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/rdlp.git
+git clone https://github.com/crippledgeek/rdlp.git
 cd rdlp
 
 # Build the project
