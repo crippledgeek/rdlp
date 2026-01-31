@@ -37,6 +37,16 @@ impl Orchestrator {
                 return Err(OrchestratorError::NoFormat);
             }
 
+            // If merge (2 formats), pick the first one for now.
+            // Full merge download (download both + FFmpeg merge) is a future enhancement.
+            if selected_formats.len() > 1 {
+                info!(
+                    video = selected_formats[0].format_id.as_str(),
+                    audio = selected_formats[1].format_id.as_str();
+                    "Merge requested — downloading primary format (merge not yet supported)"
+                );
+            }
+
             selected_formats[0].clone()
         };
 
@@ -49,7 +59,10 @@ impl Orchestrator {
     /// Displays a menu of available formats and lets the user select one.
     ///
     /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (ESC pressed)
-    pub(super) async fn select_format_interactive(&self, info: &InfoDict) -> Result<Option<Format>> {
+    pub(super) async fn select_format_interactive(
+        &self,
+        info: &InfoDict,
+    ) -> Result<Option<Format>> {
         let formats = &info.formats;
         if formats.is_empty() {
             return Err(OrchestratorError::NoFormat);

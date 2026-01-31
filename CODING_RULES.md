@@ -285,7 +285,7 @@ pub async fn extract_info(&self, url: &str, ctx: &ExtractContext) -> Result<Info
 ### Project Documentation
 - **Root**: Only `README.md`, `CLAUDE.md`, `CODING_RULES.md`, `CONTRIBUTING.md`
 - **All other docs**: In `docs/` subdirectory
-- **Governance**: See [docs/documentation-standards.md](docs/documentation-standards.md)
+- **Governance**: See `docs/documentation-standards.md` (not committed to git)
 - **No auto-generated docs**: Keep docs intentional and maintained
 
 ## Security Standards

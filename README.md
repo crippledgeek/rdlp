@@ -14,6 +14,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 - **HLS support** - Full streaming with duration-based progress, DRM detection, live stream warnings
 - **Post-processing** - FFmpeg library bindings for remux, audio extraction, metadata/thumbnail embedding
 - **Resume** - Ctrl+C to pause, re-run to resume automatically
+- **Format selection** - yt-dlp-compatible DSL with filters, merge (`+`), and fallback chains (`/`)
 - **Interactive** - Arrow-key format selection, container remux menu
 - **Playlists** - Batch downloads with pagination (PornHub)
 - **Cookie support** - Browser extraction (Chrome, Firefox) and Netscape cookie files
@@ -61,8 +62,45 @@ rdlp --cookies-from-browser chrome "https://www.pornhub.com/view_video.php?viewk
 # With cookie file (Netscape format)
 rdlp --cookies cookies.txt "https://www.pornhub.com/view_video.php?viewkey=..."
 
+# Format selection (yt-dlp compatible syntax)
+rdlp -f "bv[height<=720]+ba" "https://www.redtube.com/12345678"
+rdlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" "https://www.redtube.com/12345678"
+rdlp -f "worst" "https://www.redtube.com/12345678"
+
 # Verbose mode
 rdlp -v "https://www.redtube.com/12345678"
+```
+
+### Format Selection
+
+Supports yt-dlp-compatible format selection syntax with filters, merge, and fallback chains.
+
+```
+# Syntax
+expression   = format_spec ( "/" format_spec )*     # fallback chain
+format_spec  = selector ( "+" selector )?           # video+audio merge
+selector     = base_name filter*                    # base with optional filters
+filter       = "[" field operator value "]"
+```
+
+| Selector | Meaning |
+|----------|---------|
+| `best`, `b` | Best combined (video+audio) format |
+| `worst`, `w` | Worst combined format |
+| `bestvideo`, `bv` | Best video-only stream |
+| `bestaudio`, `ba` | Best audio-only stream |
+| `bv*`, `ba*` | Best video/audio, may include both |
+| `worstvideo`, `worstaudio` | Worst video/audio-only |
+
+**Filters**: `height`, `width`, `ext`, `vcodec`, `acodec`, `fps`, `tbr`, `vbr`, `abr`, `asr`, `filesize`, `protocol`, `format_id` with operators `=`, `!=`, `<`, `>`, `<=`, `>=`.
+
+```bash
+# Examples
+rdlp -f "best"                          # Best combined format (default)
+rdlp -f "bv+ba"                         # Best video + best audio (merge)
+rdlp -f "bv[height<=720]+ba"            # 720p or lower + best audio
+rdlp -f "ba[abr>=128]"                  # Best audio with bitrate >= 128kbps
+rdlp -f "bv[ext=mp4]+ba[ext=m4a]/b"    # MP4 video + M4A audio, fallback to best
 ```
 
 ### Resume
@@ -90,7 +128,6 @@ rdlp/
 └── docs/                  # Documentation
 ```
 
-See [docs/](docs/README.md) for architecture analysis, protocol docs, and implementation details.
 
 ## Development
 
