@@ -59,7 +59,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracin
 
 # Configuration
 toml = "0.9.11"
-serde_yaml = "0.9"
 
 # Plugin system
 libloading = "0.8"
@@ -73,6 +72,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Parsing
 winnow = "0.7"
+
+# Platform
+dirs = "6.0"
 
 # Utilities
 regex = "1.11"

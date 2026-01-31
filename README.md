@@ -157,6 +157,33 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | `--cookies-from-browser <BROWSER>` | Load cookies from browser (`chrome`, `firefox`) |
 | `--cookies <FILE>` | Load Netscape-format cookies file |
 
+#### Configuration
+
+| Flag | Description |
+|------|-------------|
+| `--config-location <FILE>` | Path to config file (TOML format) |
+| `--ignore-config` | Skip loading config file |
+
+rdlp loads configuration from a TOML file at startup. CLI flags override config file values.
+
+**Default location:**
+- Windows: `%APPDATA%\rdlp\config.toml`
+- Linux/macOS: `~/.config/rdlp/config.toml`
+
+**Example config file:**
+
+```toml
+format = "bv[height<=720]+ba/b"
+output_directory = "C:\\Videos"
+proxy = "socks5://127.0.0.1:1080"
+rate_limit = 5242880
+embed_metadata = true
+verbose = false
+quiet = false
+```
+
+All fields are optional — missing fields use defaults. See `Config` struct in `crates/rdlp-types/src/config.rs` for all available fields.
+
 ### Resume
 
 Press **Ctrl+C** during download to pause. Re-run the same command to resume from where you left off.

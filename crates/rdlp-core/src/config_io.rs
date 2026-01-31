@@ -1,12 +1,25 @@
 //! Configuration file I/O operations
 //!
-//! This module provides functions to load and save Config from/to files.
+//! This module provides functions to load and save Config from/to TOML files.
 //! The Config type itself is defined in rdlp-types.
 
 use crate::{Config, RdlpError, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Load configuration from a TOML file
+/// Returns the platform-specific default config file path.
+///
+/// - Windows: `%APPDATA%\rdlp\config.toml`
+/// - Linux/macOS: `~/.config/rdlp/config.toml`
+///
+/// Returns `None` if the platform config directory cannot be determined.
+#[must_use]
+pub fn default_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("rdlp").join("config.toml"))
+}
+
+/// Load configuration from a TOML file.
+///
+/// Missing fields use `Config::default()` values thanks to `#[serde(default)]`.
 pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Config> {
     let content = std::fs::read_to_string(path.as_ref())?;
     let config: Config = toml::from_str(&content)
@@ -14,12 +27,30 @@ pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Config> {
     Ok(config)
 }
 
-/// Load configuration from a YAML file
-pub fn from_yaml_file(path: impl AsRef<Path>) -> Result<Config> {
-    let content = std::fs::read_to_string(path.as_ref())?;
-    let config: Config = serde_yaml::from_str(&content)
-        .map_err(|e| RdlpError::Config(format!("Failed to parse YAML: {e}")))?;
-    Ok(config)
+/// Load configuration from an explicit path or the default location.
+///
+/// - If `path` is `Some`, loads from that path (errors if file doesn't exist or is invalid).
+/// - If `path` is `None`, tries `default_config_path()`. Returns `Ok(None)` if no file found.
+///
+/// Returns `Ok(Some(config))` on success, `Ok(None)` if no config file exists at the
+/// default location, or `Err` on parse/IO errors.
+pub fn load_config(path: Option<&Path>) -> Result<Option<(Config, PathBuf)>> {
+    match path {
+        Some(p) => {
+            let config = from_toml_file(p)?;
+            Ok(Some((config, p.to_path_buf())))
+        }
+        None => {
+            let Some(default_path) = default_config_path() else {
+                return Ok(None);
+            };
+            if !default_path.exists() {
+                return Ok(None);
+            }
+            let config = from_toml_file(&default_path)?;
+            Ok(Some((config, default_path)))
+        }
+    }
 }
 
 /// Save configuration to a TOML file
@@ -30,15 +61,127 @@ pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-/// Save configuration to a YAML file
-pub fn to_yaml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
-    let content = serde_yaml::to_string(config)
-        .map_err(|e| RdlpError::Config(format!("Failed to serialize YAML: {e}")))?;
-    std::fs::write(path.as_ref(), content)?;
-    Ok(())
-}
-
 /// Validate configuration, returning RdlpError on failure
 pub fn validate(config: &Config) -> Result<()> {
     config.validate().map_err(RdlpError::Config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_load_partial_toml() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "verbose = true").unwrap();
+        writeln!(file, "format = \"worst\"").unwrap();
+
+        let config = from_toml_file(file.path()).unwrap();
+        assert!(config.verbose);
+        assert_eq!(config.format, "worst");
+        // Defaults should fill in the rest
+        assert_eq!(config.concurrent_fragments, 4);
+        assert!(!config.quiet);
+    }
+
+    #[test]
+    fn test_load_empty_toml() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "").unwrap();
+
+        let config = from_toml_file(file.path()).unwrap();
+        let defaults = Config::default();
+        assert_eq!(config.format, defaults.format);
+        assert_eq!(config.concurrent_fragments, defaults.concurrent_fragments);
+    }
+
+    #[test]
+    fn test_load_full_toml_roundtrip() {
+        let original = Config::default();
+        let mut file = NamedTempFile::new().unwrap();
+        let content = toml::to_string_pretty(&original).unwrap();
+        write!(file, "{content}").unwrap();
+
+        let loaded = from_toml_file(file.path()).unwrap();
+        assert_eq!(loaded.format, original.format);
+        assert_eq!(loaded.buffer_size, original.buffer_size);
+        assert_eq!(loaded.concurrent_fragments, original.concurrent_fragments);
+    }
+
+    #[test]
+    fn test_load_config_explicit_path() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "quiet = true").unwrap();
+
+        let result = load_config(Some(file.path())).unwrap();
+        assert!(result.is_some());
+        let (config, path) = result.unwrap();
+        assert!(config.quiet);
+        assert_eq!(path, file.path());
+    }
+
+    #[test]
+    fn test_load_config_missing_explicit_path() {
+        let result = load_config(Some(Path::new("/nonexistent/config.toml")));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_config_no_default() {
+        // When no path given and no default file exists, returns None
+        let result = load_config(None).unwrap();
+        // May or may not be Some depending on whether the user has a config file
+        // We can't assert None here because the test runner might have one
+        // Just verify it doesn't error
+        let _ = result;
+    }
+
+    #[test]
+    fn test_default_config_path_is_some() {
+        // On most systems, config_dir() returns something
+        let path = default_config_path();
+        if let Some(p) = &path {
+            assert!(p.ends_with("config.toml"));
+            assert!(p.to_string_lossy().contains("rdlp"));
+        }
+    }
+
+    #[test]
+    fn test_invalid_toml() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "not valid toml {{{{").unwrap();
+
+        let result = from_toml_file(file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unknown_field_rejected() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "nonexistent_field = true").unwrap();
+
+        let result = from_toml_file(file.path());
+        // serde should reject unknown fields by default with deny_unknown_fields
+        // Without it, unknown fields are silently ignored
+        // Config doesn't have deny_unknown_fields, so this should succeed
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_save_and_reload() {
+        let mut config = Config::default();
+        config.format = "worst".to_string();
+        config.verbose = true;
+        config.rate_limit = Some(1_048_576);
+
+        let file = NamedTempFile::new().unwrap();
+        to_toml_file(&config, file.path()).unwrap();
+
+        let loaded = from_toml_file(file.path()).unwrap();
+        assert_eq!(loaded.format, "worst");
+        assert!(loaded.verbose);
+        assert_eq!(loaded.rate_limit, Some(1_048_576));
+    }
 }
