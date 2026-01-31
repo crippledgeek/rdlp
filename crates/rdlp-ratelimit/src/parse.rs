@@ -24,23 +24,11 @@ pub fn parse_rate_limit(rate_str: &str) -> Result<u64, String> {
         return Err("Rate limit string is empty".to_string());
     }
 
-    let (number_part, multiplier) = if let Some(num) = rate_str
-        .strip_suffix('G')
-        .or_else(|| rate_str.strip_suffix('g'))
-    {
-        (num, 1024u64 * 1024 * 1024)
-    } else if let Some(num) = rate_str
-        .strip_suffix('M')
-        .or_else(|| rate_str.strip_suffix('m'))
-    {
-        (num, 1024u64 * 1024)
-    } else if let Some(num) = rate_str
-        .strip_suffix('K')
-        .or_else(|| rate_str.strip_suffix('k'))
-    {
-        (num, 1024u64)
-    } else {
-        (rate_str, 1u64)
+    let (number_part, multiplier) = match rate_str.as_bytes().last() {
+        Some(b'G' | b'g') => (&rate_str[..rate_str.len() - 1], 1024u64 * 1024 * 1024),
+        Some(b'M' | b'm') => (&rate_str[..rate_str.len() - 1], 1024u64 * 1024),
+        Some(b'K' | b'k') => (&rate_str[..rate_str.len() - 1], 1024u64),
+        _ => (rate_str, 1u64),
     };
 
     let value: f64 = number_part
