@@ -86,8 +86,9 @@ impl HttpClientFactory {
         }
 
         if let Some(ref proxy_url) = self.config.proxy {
-            if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
-                builder = builder.proxy(proxy);
+            match reqwest::Proxy::all(proxy_url) {
+                Ok(proxy) => builder = builder.proxy(proxy),
+                Err(e) => tracing::warn!("Invalid proxy URL '{}': {}", proxy_url, e),
             }
         }
 

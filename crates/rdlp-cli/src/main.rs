@@ -104,6 +104,11 @@ struct Args {
     #[arg(long)]
     ffmpeg_location: Option<PathBuf>,
 
+    // === Network options ===
+    /// HTTP/HTTPS/SOCKS proxy URL (e.g., socks5://127.0.0.1:1080)
+    #[arg(long)]
+    proxy: Option<String>,
+
     // === Cookie options ===
     /// Load cookies from browser (chrome, firefox)
     #[arg(long)]
@@ -226,6 +231,7 @@ async fn async_main() -> Result<()> {
         remux_container,
         keep_video: args.keep_video,
         ffmpeg_location: args.ffmpeg_location,
+        proxy: args.proxy,
         cookies_from_browser: args.cookies_from_browser,
         cookies_file: args.cookies,
         ..Default::default()
