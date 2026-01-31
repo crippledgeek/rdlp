@@ -7,7 +7,7 @@ use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
 use rdlp_cli::Orchestrator;
-use rdlp_core::Config;
+use rdlp_core::{Config, config_io};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -35,12 +35,12 @@ struct Args {
     url: Option<String>,
 
     /// Output directory
-    #[arg(short, long, default_value = ".")]
-    output: PathBuf,
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 
     /// Format selection (e.g., "best", "bestvideo+bestaudio")
-    #[arg(short, long, default_value = "best")]
-    format: String,
+    #[arg(short, long)]
+    format: Option<String>,
 
     /// Quiet mode (minimal output)
     #[arg(short, long)]
@@ -72,8 +72,8 @@ struct Args {
     extract_audio: bool,
 
     /// Audio format for extraction (mp3, m4a, opus, flac, wav)
-    #[arg(long, default_value = "mp3")]
-    audio_format: String,
+    #[arg(long)]
+    audio_format: Option<String>,
 
     /// Audio quality (VBR level 0-9 or bitrate like "192K")
     #[arg(long)]
@@ -121,6 +121,15 @@ struct Args {
     /// Path to Netscape-format cookies file
     #[arg(long)]
     cookies: Option<PathBuf>,
+
+    // === Config file options ===
+    /// Ignore config file (don't load from default location)
+    #[arg(long)]
+    ignore_config: bool,
+
+    /// Path to config file (TOML format)
+    #[arg(long)]
+    config_location: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -182,14 +191,119 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
     }
 }
 
+/// Build Config by merging: defaults < config file < CLI args
+fn build_config(args: &Args) -> Result<Config> {
+    // Step 1: Load config file (or use defaults)
+    let mut config = if args.ignore_config {
+        Config::default()
+    } else {
+        match config_io::load_config(args.config_location.as_deref()) {
+            Ok(Some((file_config, path))) => {
+                // Can't use tracing yet (not initialized), so use eprintln for early feedback
+                // Tracing will be set up after config is built (need quiet/verbose from config)
+                eprintln!("Loaded config from {}", path.display());
+                file_config
+            }
+            Ok(None) => Config::default(),
+            Err(e) => {
+                if args.config_location.is_some() {
+                    // Explicit config path — error is fatal
+                    return Err(e.into());
+                }
+                // Default path — warn and continue with defaults
+                eprintln!("Warning: Failed to load config file: {e}");
+                Config::default()
+            }
+        }
+    };
+
+    // Step 2: Overlay CLI args (only when explicitly provided)
+    if let Some(ref output) = args.output {
+        config.output_directory = output.clone();
+    }
+    if let Some(ref format) = args.format {
+        config.format = format.clone();
+    }
+    if args.quiet {
+        config.quiet = true;
+    }
+    if args.verbose {
+        config.verbose = true;
+    }
+    if args.simulate {
+        config.simulate = true;
+    }
+    if args.extract_audio {
+        config.extract_audio = true;
+    }
+    if let Some(ref audio_format) = args.audio_format {
+        config.audio_format = Some(audio_format.clone());
+    }
+    if let Some(ref audio_quality) = args.audio_quality {
+        config.audio_quality = Some(audio_quality.clone());
+    }
+    if args.embed_metadata {
+        config.embed_metadata = true;
+    }
+    if args.embed_thumbnail {
+        config.embed_thumbnail = true;
+    }
+    if let Some(ref recode_video) = args.recode_video {
+        config.recode_video = Some(recode_video.clone());
+    }
+    if args.keep_video {
+        config.keep_video = true;
+    }
+    if let Some(ref ffmpeg_location) = args.ffmpeg_location {
+        config.ffmpeg_location = Some(ffmpeg_location.clone());
+    }
+    if let Some(ref proxy) = args.proxy {
+        config.proxy = Some(proxy.clone());
+    }
+    if let Some(ref rate_str) = args.limit_rate {
+        let bps = rdlp_ratelimit::parse_rate_limit(rate_str).map_err(|e| anyhow::anyhow!(e))?;
+        config.rate_limit = Some(bps);
+    }
+    if let Some(ref browser) = args.cookies_from_browser {
+        config.cookies_from_browser = Some(browser.clone());
+    }
+    if let Some(ref cookies) = args.cookies {
+        config.cookies_file = Some(cookies.clone());
+    }
+
+    // Handle interactive remux selection
+    match args.remux.as_deref() {
+        Some("interactive") => {
+            config.remux_container = select_remux_container()?;
+        }
+        Some(container) => {
+            config.remux_container = Some(container.to_string());
+        }
+        None => {}
+    }
+
+    // Set progress based on quiet
+    config.progress = !config.quiet;
+
+    // Set audio_format when extract_audio is set but no explicit format
+    if config.extract_audio && config.audio_format.is_none() {
+        config.audio_format = Some("mp3".to_string());
+    }
+
+    Ok(config)
+}
+
 async fn async_main() -> Result<()> {
     let args = Args::parse();
+
+    // Build config with precedence: CLI > config file > defaults
+    let config = build_config(&args)?;
 
     // Create shared MultiProgress for managing progress bars with log output
     let multi_progress = Arc::new(MultiProgress::new());
 
-    if !args.quiet {
-        let default_level = if args.verbose { "debug" } else { "info" };
+    if !config.quiet {
+        let default_level = if config.verbose { "debug" } else { "info" };
 
         let filter =
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
@@ -206,51 +320,9 @@ async fn async_main() -> Result<()> {
             .init();
     }
 
-    // Parse rate limit
-    let rate_limit = match args.limit_rate {
-        Some(ref rate_str) => {
-            let bps = rdlp_ratelimit::parse_rate_limit(rate_str).map_err(|e| anyhow::anyhow!(e))?;
-            info!("Rate limit: {} bytes/s ({rate_str})", bps);
-            Some(bps)
-        }
-        None => None,
-    };
-
-    // Handle interactive remux selection
-    let remux_container = match args.remux.as_deref() {
-        Some("interactive") => select_remux_container()?,
-        Some(container) => Some(container.to_string()),
-        None => None,
-    };
-
-    // Create configuration
-    let config = Config {
-        output_directory: args.output,
-        format: args.format,
-        quiet: args.quiet,
-        verbose: args.verbose,
-        simulate: args.simulate,
-        progress: !args.quiet,
-        // Post-processing options
-        extract_audio: args.extract_audio,
-        audio_format: if args.extract_audio {
-            Some(args.audio_format)
-        } else {
-            None
-        },
-        audio_quality: args.audio_quality,
-        embed_metadata: args.embed_metadata,
-        embed_thumbnail: args.embed_thumbnail,
-        recode_video: args.recode_video,
-        remux_container,
-        keep_video: args.keep_video,
-        ffmpeg_location: args.ffmpeg_location,
-        proxy: args.proxy,
-        rate_limit,
-        cookies_from_browser: args.cookies_from_browser,
-        cookies_file: args.cookies,
-        ..Default::default()
-    };
+    if let Some(rate) = config.rate_limit {
+        info!("Rate limit: {rate} bytes/s");
+    }
 
     let interactive = args.interactive;
 
@@ -291,9 +363,7 @@ async fn async_main() -> Result<()> {
 
     match orchestrator.download(&url, interactive).await {
         Ok(Some(path)) => {
-            if !args.quiet {
-                info!("Success! Video saved to: {}", path.display());
-            }
+            info!("Success! Video saved to: {}", path.display());
             Ok(())
         }
         Ok(None) => {

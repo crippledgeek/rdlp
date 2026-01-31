@@ -11,6 +11,7 @@ use std::path::PathBuf;
 /// For file I/O operations (loading from TOML/YAML), use the extension
 /// functions in `rdlp_core::config_io`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     // === Output options ===
     /// Output filename template (e.g., "%(title)s.%(ext)s")

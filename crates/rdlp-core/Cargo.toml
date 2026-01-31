@@ -16,12 +16,13 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 url = { workspace = true }
 toml = { workspace = true }
-serde_yaml = { workspace = true }
+dirs = { workspace = true }
 log = { workspace = true }
 backon = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
