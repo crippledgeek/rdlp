@@ -109,6 +109,10 @@ struct Args {
     #[arg(long)]
     proxy: Option<String>,
 
+    /// Limit download speed (e.g., "1M", "500K", "10M", "2.5M")
+    #[arg(long, short = 'r')]
+    limit_rate: Option<String>,
+
     // === Cookie options ===
     /// Load cookies from browser (chrome, firefox)
     #[arg(long)]
@@ -202,6 +206,16 @@ async fn async_main() -> Result<()> {
             .init();
     }
 
+    // Parse rate limit
+    let rate_limit = match args.limit_rate {
+        Some(ref rate_str) => {
+            let bps = rdlp_ratelimit::parse_rate_limit(rate_str).map_err(|e| anyhow::anyhow!(e))?;
+            info!("Rate limit: {} bytes/s ({rate_str})", bps);
+            Some(bps)
+        }
+        None => None,
+    };
+
     // Handle interactive remux selection
     let remux_container = match args.remux.as_deref() {
         Some("interactive") => select_remux_container()?,
@@ -232,6 +246,7 @@ async fn async_main() -> Result<()> {
         keep_video: args.keep_video,
         ffmpeg_location: args.ffmpeg_location,
         proxy: args.proxy,
+        rate_limit,
         cookies_from_browser: args.cookies_from_browser,
         cookies_file: args.cookies,
         ..Default::default()

@@ -25,6 +25,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::chunking::ChunkSizeStrategy;
 use config::DownloaderConfig;
+use rdlp_ratelimit::RateLimiter;
 
 /// HTTP/HTTPS downloader
 ///
@@ -33,6 +34,7 @@ use config::DownloaderConfig;
 pub struct HttpDownloader {
     client: reqwest::Client,
     pub(crate) config: Arc<DownloaderConfig>,
+    pub(crate) rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl HttpDownloader {
@@ -48,6 +50,7 @@ impl HttpDownloader {
         Self {
             client,
             config: Arc::new(DownloaderConfig::default()),
+            rate_limiter: None,
         }
     }
 
@@ -103,6 +106,13 @@ impl HttpDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_merge_timeout(mut self, timeout: Duration) -> Self {
         Arc::make_mut(&mut self.config).merge_timeout = timeout;
+        self
+    }
+
+    /// Set the rate limiter for bandwidth throttling
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_rate_limiter(mut self, limiter: Option<Arc<RateLimiter>>) -> Self {
+        self.rate_limiter = limiter;
         self
     }
 
@@ -198,6 +208,10 @@ impl HttpDownloader {
             if let Some(ref counter) = progress_counter {
                 counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
             }
+
+            if let Some(ref limiter) = self.rate_limiter {
+                limiter.acquire(chunk.len()).await;
+            }
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
@@ -276,6 +290,10 @@ impl HttpDownloader {
                     callback.on_progress(&progress_info);
                     last_update = now;
                 }
+            }
+
+            if let Some(ref limiter) = self.rate_limiter {
+                limiter.acquire(chunk.len()).await;
             }
         }
 
@@ -595,6 +613,10 @@ impl Downloader for HttpDownloader {
                         callback.on_progress(&progress_info);
                         last_update = now;
                     }
+                }
+
+                if let Some(ref limiter) = self.rate_limiter {
+                    limiter.acquire(chunk.len()).await;
                 }
             }
 

@@ -18,6 +18,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 - **Interactive** - Arrow-key format selection, container remux menu
 - **Playlists** - Batch downloads with pagination (PornHub)
 - **Cookie support** - Browser extraction (Chrome, Firefox) and Netscape cookie files
+- **Rate limiting** - Global bandwidth throttle with human-readable rates (`1M`, `500K`, `2.5G`)
 
 ### Supported Sites
 
@@ -67,6 +68,10 @@ rdlp -f "bv[height<=720]+ba" "https://www.redtube.com/12345678"
 rdlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" "https://www.redtube.com/12345678"
 rdlp -f "worst" "https://www.redtube.com/12345678"
 
+# Limit download speed
+rdlp -r 1M "https://www.redtube.com/12345678"
+rdlp --limit-rate 500K "https://www.redtube.com/12345678"
+
 # Verbose mode
 rdlp -v "https://www.redtube.com/12345678"
 ```
@@ -103,13 +108,62 @@ rdlp -f "ba[abr>=128]"                  # Best audio with bitrate >= 128kbps
 rdlp -f "bv[ext=mp4]+ba[ext=m4a]/b"    # MP4 video + M4A audio, fallback to best
 ```
 
+### CLI Reference
+
+```
+rdlp [OPTIONS] [URL]
+```
+
+#### General
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--output <DIR>` | `-o` | Output directory (default: `.`) |
+| `--format <FMT>` | `-f` | Format selection, yt-dlp syntax (default: `best`) |
+| `--interactive` | `-i` | Interactive format selection with arrow keys |
+| `--simulate` | `-s` | Simulate only, don't download |
+| `--quiet` | `-q` | Minimal output |
+| `--verbose` | `-v` | Detailed debug output |
+| `--list-extractors` | | List all supported site extractors |
+| `--list-downloaders` | | List all supported download protocols |
+
+#### Network
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--limit-rate <RATE>` | `-r` | Limit download speed (e.g., `1M`, `500K`, `2.5G`) |
+| `--proxy <URL>` | | HTTP/HTTPS/SOCKS proxy (e.g., `socks5://127.0.0.1:1080`) |
+
+Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (1073741824). Decimal values work (e.g., `2.5M`). Plain numbers are bytes/s.
+
+#### Post-processing
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--extract-audio` | `-x` | Extract audio only (requires FFmpeg) |
+| `--audio-format <FMT>` | | Audio format: `mp3`, `m4a`, `opus`, `flac`, `wav` (default: `mp3`) |
+| `--audio-quality <Q>` | | VBR level 0-9 or bitrate like `192K` |
+| `--embed-metadata` | | Embed title, artist, etc. in the file |
+| `--embed-thumbnail` | | Embed thumbnail in the file (requires FFmpeg) |
+| `--recode-video <FMT>` | | Re-encode video to format: `mp4`, `mkv`, `webm` |
+| `--remux[=FMT]` | | Remux to container without re-encoding. Use `--remux` for interactive, `--remux=mp4` for direct |
+| `--keep-video` | | Keep original file after post-processing |
+| `--ffmpeg-location <PATH>` | | Path to FFmpeg if not in PATH |
+
+#### Cookies
+
+| Flag | Description |
+|------|-------------|
+| `--cookies-from-browser <BROWSER>` | Load cookies from browser (`chrome`, `firefox`) |
+| `--cookies <FILE>` | Load Netscape-format cookies file |
+
 ### Resume
 
 Press **Ctrl+C** during download to pause. Re-run the same command to resume from where you left off.
 
 ## Architecture
 
-11-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
+12-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
 
 ```
 rdlp/
@@ -118,6 +172,7 @@ rdlp/
 │   ├── rdlp-core/         # Traits (InfoExtractor, Downloader, PostProcessor)
 │   ├── rdlp-security/     # SSRF protection, URL validation
 │   ├── rdlp-http/         # HTTP client factory
+│   ├── rdlp-ratelimit/    # Async token-bucket rate limiter
 │   ├── rdlp-extractor/    # Site extractors
 │   ├── rdlp-downloader/   # HTTP + HLS downloaders
 │   ├── rdlp-postprocess/  # FFmpeg library bindings pipeline

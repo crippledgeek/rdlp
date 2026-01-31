@@ -9,6 +9,7 @@ members = [
     "crates/rdlp-jsinterp",
     "crates/rdlp-postprocess",
     "crates/rdlp-cookies",
+    "crates/rdlp-ratelimit",
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
 ]
