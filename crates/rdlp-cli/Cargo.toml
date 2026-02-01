@@ -10,6 +10,7 @@ name = "rdlp"
 path = "src/main.rs"
 
 [dependencies]
+rdlp-types = { path = "../rdlp-types" }
 rdlp-core = { path = "../rdlp-core" }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-extractor = { path = "../rdlp-extractor" }
