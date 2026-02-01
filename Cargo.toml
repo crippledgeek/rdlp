@@ -10,6 +10,7 @@ members = [
     "crates/rdlp-postprocess",
     "crates/rdlp-cookies",
     "crates/rdlp-ratelimit",
+    "crates/rdlp-table",
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
 ]

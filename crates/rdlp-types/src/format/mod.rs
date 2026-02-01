@@ -1,7 +1,6 @@
 //! Format types for video/audio streams
 
 pub mod selector;
-pub mod table;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -383,13 +382,13 @@ impl Format {
             Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
                 let _ = write!(buf, "{quality_base}{fps:.0}");
                 let col_len = quality_base.len() + format!("{fps:.0}").len();
-                for _ in col_len..table::QUALITY_WIDTH {
+                for _ in col_len..rdlp_table::QUALITY_WIDTH {
                     buf.push(' ');
                 }
                 buf.push_str(" | ");
             }
             _ => {
-                let _ = write!(buf, "{quality_base:<w$} | ", w = table::QUALITY_WIDTH);
+                let _ = write!(buf, "{quality_base:<w$} | ", w = rdlp_table::QUALITY_WIDTH);
             }
         }
 
@@ -399,12 +398,12 @@ impl Format {
                 let res_start = buf.len();
                 let _ = write!(buf, "{w}x{h}");
                 let res_len = buf.len() - res_start;
-                for _ in res_len..table::RESOLUTION_WIDTH {
+                for _ in res_len..rdlp_table::RESOLUTION_WIDTH {
                     buf.push(' ');
                 }
             }
             _ => {
-                let _ = write!(buf, "{:<w$}", "N/A", w = table::RESOLUTION_WIDTH);
+                let _ = write!(buf, "{:<w$}", "N/A", w = rdlp_table::RESOLUTION_WIDTH);
             }
         }
         buf.push_str(" | ");
@@ -430,7 +429,7 @@ impl Format {
             }
         }
         let format_len = buf.len() - format_start;
-        for _ in format_len..table::TYPE_WIDTH {
+        for _ in format_len..rdlp_table::TYPE_WIDTH {
             buf.push(' ');
         }
         buf.push_str(" | ");

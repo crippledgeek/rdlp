@@ -1,6 +1,9 @@
 //! Column layout constants for the interactive format selection table.
 //!
-//! Shared between `Format::table_row()` and the CLI header so both stay in sync.
+//! Shared between `Format::table_row()` (in `rdlp-types`) and the CLI header
+//! (in `rdlp-cli`) so both stay in sync.
+
+#![warn(missing_docs)]
 
 /// Width of the Quality column (e.g. `"1080p60     "`).
 pub const QUALITY_WIDTH: usize = 12;
