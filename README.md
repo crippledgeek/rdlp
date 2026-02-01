@@ -76,6 +76,17 @@ rdlp -f "worst" "https://www.redtube.com/12345678"
 rdlp -r 1M "https://www.redtube.com/12345678"
 rdlp --limit-rate 500K "https://www.redtube.com/12345678"
 
+# Extract audio (interactive format selection)
+rdlp -x --audio-format "https://www.redtube.com/12345678"
+rdlp -x --audio-format=flac "https://www.redtube.com/12345678"
+
+# Re-encode video (interactive codec selection)
+rdlp --recode-video "https://www.redtube.com/12345678"
+rdlp --recode-video=webm "https://www.redtube.com/12345678"
+
+# List supported codecs
+rdlp --list-codecs
+
 # Skip already-downloaded videos (playlist or repeated runs)
 rdlp --download-archive archive.txt "https://www.pornhub.com/playlist/123456"
 
@@ -133,6 +144,7 @@ rdlp [OPTIONS] [URL]
 | `--verbose` | `-v` | Detailed debug output |
 | `--list-extractors` | | List all supported site extractors |
 | `--list-downloaders` | | List all supported download protocols |
+| `--list-codecs` | | List all supported audio and video codecs |
 
 #### Network
 
@@ -148,11 +160,11 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--extract-audio` | `-x` | Extract audio only (requires FFmpeg) |
-| `--audio-format <FMT>` | | Audio format: `mp3`, `aac`, `m4a`, `opus`, `vorbis`, `flac`, `alac`, `wav`, `ac3`, `eac3`, `dts`, `mp2`, `wavpack`, `tta` (default: `mp3`) |
+| `--audio-format[=FMT]` | | Audio format (14 codecs). Use `--audio-format` for interactive, `--audio-format=mp3` for direct |
 | `--audio-quality <Q>` | | VBR level 0-9 or bitrate like `192K` |
 | `--embed-metadata` | | Embed title, artist, etc. in the file |
 | `--embed-thumbnail` | | Embed thumbnail in the file (requires FFmpeg) |
-| `--recode-video <FMT>` | | Re-encode video to format: `mp4`, `mkv`, `webm`, `mov`, `avi`, `ts`, `flv`, `3gp`, `mpg`, `asf`, and more |
+| `--recode-video[=FMT]` | | Re-encode video (16 codecs). Use `--recode-video` for interactive, `--recode-video=mp4` for direct |
 | `--remux[=FMT]` | | Remux to container without re-encoding (28 formats). Use `--remux` for interactive, `--remux=mp4` for direct |
 | `--keep-video` | | Keep original file after post-processing |
 | `--ffmpeg-location <PATH>` | | Path to FFmpeg if not in PATH |
