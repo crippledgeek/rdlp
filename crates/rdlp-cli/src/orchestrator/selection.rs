@@ -4,7 +4,7 @@ use super::{Orchestrator, errors::*};
 use dialoguer::{Select, theme::ColorfulTheme};
 use log::{info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
-use rdlp_types::format::table;
+use rdlp_table;
 
 impl Orchestrator {
     /// Select format from available formats
@@ -92,11 +92,11 @@ impl Orchestrator {
             "Resolution",
             "Size",
             "Type",
-            qw = table::QUALITY_WIDTH,
-            rw = table::RESOLUTION_WIDTH,
-            tw = table::TYPE_WIDTH,
+            qw = rdlp_table::QUALITY_WIDTH,
+            rw = rdlp_table::RESOLUTION_WIDTH,
+            tw = rdlp_table::TYPE_WIDTH,
         );
-        info!("{}", "-".repeat(table::separator_width(size_width)));
+        info!("{}", "-".repeat(rdlp_table::separator_width(size_width)));
 
         let selection = tokio::task::spawn_blocking(move || {
             Select::with_theme(&ColorfulTheme::default())

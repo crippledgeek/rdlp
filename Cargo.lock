@@ -2249,7 +2249,7 @@ dependencies = [
  "rdlp-plugin",
  "rdlp-postprocess",
  "rdlp-ratelimit",
- "rdlp-types",
+ "rdlp-table",
  "regex",
  "reqwest",
  "serde_json",
@@ -2412,9 +2412,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdlp-table"
+version = "0.1.0"
+
+[[package]]
 name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
+ "rdlp-table",
  "regex",
  "serde",
  "serde_json",
