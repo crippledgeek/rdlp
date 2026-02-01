@@ -148,6 +148,60 @@ pub static AUDIO_CODECS: &[(&str, AudioCodecConfig)] = &[
             bitrate_range: None,
         },
     ),
+    (
+        "ac3",
+        AudioCodecConfig {
+            encoder: Some("ac3"),
+            extension: "ac3",
+            quality_scale: None,
+            bitrate_range: Some((64, 640)),
+        },
+    ),
+    (
+        "eac3",
+        AudioCodecConfig {
+            encoder: Some("eac3"),
+            extension: "eac3",
+            quality_scale: None,
+            bitrate_range: Some((32, 6144)),
+        },
+    ),
+    (
+        "dts",
+        AudioCodecConfig {
+            encoder: Some("dca"),
+            extension: "dts",
+            quality_scale: None,
+            bitrate_range: Some((32, 3840)),
+        },
+    ),
+    (
+        "mp2",
+        AudioCodecConfig {
+            encoder: Some("mp2"),
+            extension: "mp2",
+            quality_scale: None,
+            bitrate_range: Some((32, 384)),
+        },
+    ),
+    (
+        "wavpack",
+        AudioCodecConfig {
+            encoder: Some("wavpack"),
+            extension: "wv",
+            quality_scale: None,
+            bitrate_range: None, // Lossless
+        },
+    ),
+    (
+        "tta",
+        AudioCodecConfig {
+            encoder: Some("tta"),
+            extension: "tta",
+            quality_scale: None,
+            bitrate_range: None, // Lossless
+        },
+    ),
 ];
 
 /// Get audio codec configuration by name.

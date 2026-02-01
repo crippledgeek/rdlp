@@ -24,6 +24,18 @@ pub enum AudioFormat {
     Alac,
     /// Waveform Audio File Format (PCM)
     Wav,
+    /// Dolby Digital (AC-3)
+    Ac3,
+    /// Dolby Digital Plus (Enhanced AC-3)
+    Eac3,
+    /// DTS Coherent Acoustics
+    Dts,
+    /// MPEG Audio Layer 2
+    Mp2,
+    /// WavPack lossless
+    WavPack,
+    /// True Audio lossless
+    Tta,
 }
 
 impl AudioFormat {
@@ -39,6 +51,12 @@ impl AudioFormat {
             Self::Flac => "flac",
             Self::Alac => "m4a",
             Self::Wav => "wav",
+            Self::Ac3 => "ac3",
+            Self::Eac3 => "eac3",
+            Self::Dts => "dts",
+            Self::Mp2 => "mp2",
+            Self::WavPack => "wv",
+            Self::Tta => "tta",
         }
     }
 
@@ -54,6 +72,12 @@ impl AudioFormat {
             Self::Flac => "flac",
             Self::Alac => "alac",
             Self::Wav => "wav",
+            Self::Ac3 => "ac3",
+            Self::Eac3 => "eac3",
+            Self::Dts => "dts",
+            Self::Mp2 => "mp2",
+            Self::WavPack => "wavpack",
+            Self::Tta => "tta",
         }
     }
 }
@@ -77,6 +101,12 @@ impl FromStr for AudioFormat {
             "flac" => Ok(Self::Flac),
             "alac" => Ok(Self::Alac),
             "wav" => Ok(Self::Wav),
+            "ac3" => Ok(Self::Ac3),
+            "eac3" | "e-ac-3" | "e-ac3" => Ok(Self::Eac3),
+            "dts" | "dca" => Ok(Self::Dts),
+            "mp2" => Ok(Self::Mp2),
+            "wavpack" | "wv" => Ok(Self::WavPack),
+            "tta" => Ok(Self::Tta),
             _ => Err(format!("unsupported audio format: {s}")),
         }
     }
@@ -97,11 +127,26 @@ mod tests {
             AudioFormat::Flac,
             AudioFormat::Alac,
             AudioFormat::Wav,
+            AudioFormat::Ac3,
+            AudioFormat::Eac3,
+            AudioFormat::Dts,
+            AudioFormat::Mp2,
+            AudioFormat::WavPack,
+            AudioFormat::Tta,
         ] {
             let s = fmt.to_string();
             let parsed: AudioFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed);
+            assert_eq!(fmt, parsed, "roundtrip failed for {s}");
         }
+    }
+
+    #[test]
+    fn test_alias_parsing() {
+        assert_eq!("ogg".parse::<AudioFormat>().unwrap(), AudioFormat::Vorbis);
+        assert_eq!("e-ac-3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
+        assert_eq!("e-ac3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
+        assert_eq!("dca".parse::<AudioFormat>().unwrap(), AudioFormat::Dts);
+        assert_eq!("wv".parse::<AudioFormat>().unwrap(), AudioFormat::WavPack);
     }
 
     #[test]

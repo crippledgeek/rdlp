@@ -164,6 +164,8 @@ fn select_remux_container() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::Mov, "Apple QuickTime, good for editing"),
         (ContainerFormat::Avi, "Legacy format, wide support"),
         (ContainerFormat::Ts, "MPEG-TS, broadcast/streaming"),
+        (ContainerFormat::Mp3, "Audio only, MPEG Layer 3"),
+        (ContainerFormat::Flac, "Audio only, lossless"),
     ];
 
     let items: Vec<String> = containers
