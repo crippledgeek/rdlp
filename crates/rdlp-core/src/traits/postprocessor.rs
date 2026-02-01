@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
 
-use crate::{InfoDict, Result};
+use crate::{AudioFormat, ContainerFormat, InfoDict, Result};
 
 /// Post-processing operations on downloaded files
 ///
@@ -85,21 +85,20 @@ pub struct PostProcessConfig {
     /// Extract audio only
     pub extract_audio: bool,
 
-    /// Audio format to convert to ("mp3", "m4a", "opus", etc.)
-    pub audio_format: Option<String>,
+    /// Audio format to convert to
+    pub audio_format: Option<AudioFormat>,
 
     /// Audio quality (VBR level or bitrate)
     pub audio_quality: Option<String>,
 
     /// Video format to recode to
-    pub recode_video: Option<String>,
+    pub recode_video: Option<ContainerFormat>,
 
     /// Remux to container format (stream copy, no re-encoding)
-    /// Use "mp4" or "mkv" for better seeking than TS
-    pub remux_container: Option<String>,
+    pub remux_container: Option<ContainerFormat>,
 
     /// Merge output format (when combining video+audio)
-    pub merge_output_format: Option<String>,
+    pub merge_output_format: Option<ContainerFormat>,
 
     /// Embed thumbnail in video file
     pub embed_thumbnail: bool,
@@ -128,7 +127,7 @@ impl Default for PostProcessConfig {
             audio_quality: None,
             recode_video: None,
             remux_container: None,
-            merge_output_format: Some("mp4".to_string()),
+            merge_output_format: Some(ContainerFormat::Mp4),
             embed_thumbnail: false,
             embed_metadata: false,
             embed_subtitles: false,

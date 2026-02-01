@@ -1,7 +1,51 @@
 //! Application configuration types
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
+
+use crate::audio_format::AudioFormat;
+use crate::browser_type::BrowserType;
+use crate::container::ContainerFormat;
+use crate::subtitle_format::SubtitleFormat;
+
+/// Errors from configuration validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigValidationError {
+    /// `concurrent_fragments` must be at least 1
+    InvalidConcurrentFragments,
+    /// `buffer_size` must be at least 1
+    InvalidBufferSize,
+    /// `playlist_start` must be at least 1
+    InvalidPlaylistStart,
+    /// `playlist_end` must be >= `playlist_start`
+    InvalidPlaylistRange {
+        /// Configured start
+        start: usize,
+        /// Configured end
+        end: usize,
+    },
+}
+
+impl fmt::Display for ConfigValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidConcurrentFragments => {
+                write!(f, "concurrent_fragments must be at least 1")
+            }
+            Self::InvalidBufferSize => write!(f, "buffer_size must be at least 1"),
+            Self::InvalidPlaylistStart => write!(f, "playlist_start must be at least 1"),
+            Self::InvalidPlaylistRange { start, end } => {
+                write!(
+                    f,
+                    "playlist_end ({end}) must be >= playlist_start ({start})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigValidationError {}
 
 /// Application configuration
 ///
@@ -36,8 +80,8 @@ pub struct Config {
     /// Format selection expression (default: "bestvideo*+bestaudio/best")
     pub format: String,
 
-    /// Merge output format when combining video+audio (e.g., "mp4", "mkv")
-    pub merge_output_format: Option<String>,
+    /// Merge output format when combining video+audio
+    pub merge_output_format: Option<ContainerFormat>,
 
     // === Download options ===
     /// Number of concurrent fragments to download
@@ -84,17 +128,17 @@ pub struct Config {
     /// Extract audio only
     pub extract_audio: bool,
 
-    /// Audio format to convert to ("mp3", "m4a", "opus", etc.)
-    pub audio_format: Option<String>,
+    /// Audio format to convert to
+    pub audio_format: Option<AudioFormat>,
 
     /// Audio quality (VBR level or bitrate, e.g., "192K")
     pub audio_quality: Option<String>,
 
     /// Video format to recode to
-    pub recode_video: Option<String>,
+    pub recode_video: Option<ContainerFormat>,
 
-    /// Remux to container format for better seeking (mp4, mkv)
-    pub remux_container: Option<String>,
+    /// Remux to container format for better seeking
+    pub remux_container: Option<ContainerFormat>,
 
     /// Embed thumbnail in video file
     pub embed_thumbnail: bool,
@@ -124,8 +168,8 @@ pub struct Config {
     /// Subtitle languages to download (e.g., ["en", "es"])
     pub subtitle_langs: Vec<String>,
 
-    /// Subtitle format ("srt", "vtt", "ass", etc.)
-    pub subtitle_format: Option<String>,
+    /// Subtitle format
+    pub subtitle_format: Option<SubtitleFormat>,
 
     // === Thumbnail ===
     /// Write thumbnail image to disk
@@ -175,8 +219,8 @@ pub struct Config {
     pub netrc: bool,
 
     // === Cookies ===
-    /// Browser to extract cookies from ("chrome", "firefox", "safari", etc.)
-    pub cookies_from_browser: Option<String>,
+    /// Browser to extract cookies from
+    pub cookies_from_browser: Option<BrowserType>,
 
     /// Path to cookies file (Netscape format)
     pub cookies_file: Option<PathBuf>,
@@ -205,7 +249,7 @@ impl Default for Config {
 
             // Format selection
             format: "bestvideo*+bestaudio/best".to_string(),
-            merge_output_format: Some("mp4".to_string()),
+            merge_output_format: Some(ContainerFormat::Mp4),
 
             // Download options
             concurrent_fragments: 4,
@@ -282,32 +326,25 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Validate configuration and return errors if invalid
-    ///
-    /// Returns Ok(()) if valid, Err with description if invalid.
-    pub fn validate(&self) -> Result<(), String> {
-        // Validate concurrent_fragments
+    /// Validate configuration and return errors if invalid.
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.concurrent_fragments == 0 {
-            return Err("concurrent_fragments must be at least 1".to_string());
+            return Err(ConfigValidationError::InvalidConcurrentFragments);
         }
-
-        // Validate buffer_size
         if self.buffer_size == 0 {
-            return Err("buffer_size must be at least 1".to_string());
+            return Err(ConfigValidationError::InvalidBufferSize);
         }
-
-        // Validate playlist_start
         if self.playlist_start == 0 {
-            return Err("playlist_start must be at least 1".to_string());
+            return Err(ConfigValidationError::InvalidPlaylistStart);
         }
-
-        // Validate playlist_end
         if let Some(end) = self.playlist_end {
             if end < self.playlist_start {
-                return Err("playlist_end must be >= playlist_start".to_string());
+                return Err(ConfigValidationError::InvalidPlaylistRange {
+                    start: self.playlist_start,
+                    end,
+                });
             }
         }
-
         Ok(())
     }
 }

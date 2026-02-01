@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::sync::Arc;
 
-use crate::{Config, InfoDict, Result};
+use crate::{BrowserType, Config, InfoDict, Result};
 
 /// Core trait for all site extractors
 ///
@@ -265,11 +265,11 @@ pub trait CookieJar: Send + Sync {
     /// Load cookies from a browser
     ///
     /// # Arguments
-    /// * `browser` - Browser name ("chrome", "firefox", "safari", etc.)
+    /// * `browser` - Browser type to extract cookies from
     ///
     /// # Returns
     /// Number of cookies loaded
-    async fn load_from_browser(&self, browser: &str) -> Result<usize>;
+    async fn load_from_browser(&self, browser: BrowserType) -> Result<usize>;
 
     /// Load cookies from a Netscape-format cookies file
     ///

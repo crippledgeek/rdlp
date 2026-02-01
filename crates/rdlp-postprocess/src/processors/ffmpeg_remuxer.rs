@@ -10,11 +10,9 @@ use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::error::PostProcessError;
 use crate::ffmpeg::RemuxOptions;
 
-/// Supported remux target containers.
-const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "ts"];
+use rdlp_core::ContainerFormat;
 
 ffmpeg_processor!(
     FFmpegRemuxer,
@@ -31,8 +29,9 @@ ffmpeg_processor!(
 
 impl FFmpegRemuxer {
     /// Check if the format is a supported container for remuxing.
+    #[cfg(test)]
     fn is_supported_container(format: &str) -> bool {
-        SUPPORTED_CONTAINERS.contains(&format.to_lowercase().as_str())
+        format.parse::<ContainerFormat>().is_ok()
     }
 }
 
@@ -61,20 +60,7 @@ impl PostProcessor for FFmpegRemuxer {
         }
 
         let input_file = &files[0];
-        let target_container = config
-            .remux_container
-            .as_deref()
-            .unwrap_or("mp4")
-            .to_lowercase();
-
-        // Validate target container
-        if !Self::is_supported_container(&target_container) {
-            return Err(PostProcessError::UnsupportedFormat {
-                format: target_container,
-                operation: "remux".to_string(),
-            }
-            .into());
-        }
+        let target_container = config.remux_container.unwrap_or(ContainerFormat::Mp4);
 
         let input_ext = input_file
             .extension()
@@ -83,9 +69,9 @@ impl PostProcessor for FFmpegRemuxer {
             .to_lowercase();
 
         // Skip if already in target container
-        if input_ext == target_container {
+        if input_ext == target_container.as_ext() {
             debug!(
-                container = target_container.as_str();
+                container = target_container.as_ext();
                 "File already in target container, skipping remux"
             );
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -94,20 +80,20 @@ impl PostProcessor for FFmpegRemuxer {
         info!(
             file = input_file.display().to_string().as_str(),
             from = input_ext.as_str(),
-            to = target_container.as_str();
+            to = target_container.as_ext();
             "Remuxing to improve seeking"
         );
 
         // Build output path
-        let output_path = input_file.with_extension(&target_container);
+        let output_path = input_file.with_extension(target_container.as_ext());
 
         // Configure remux options
         // MP4/MOV: enable faststart for progressive playback (moov atom at beginning)
         // MKV: cues written at end, but seeking is still excellent
         // WebM: similar to MKV (Matroska-based)
         let opts = RemuxOptions {
-            faststart: matches!(target_container.as_str(), "mp4" | "mov"),
-            output_format: Some(target_container.clone()),
+            faststart: target_container.supports_faststart(),
+            output_format: Some(target_container.to_string()),
         };
 
         // Perform remux via library bindings
@@ -151,9 +137,9 @@ mod tests {
         assert!(FFmpegRemuxer::is_supported_container("mov"));
         assert!(FFmpegRemuxer::is_supported_container("avi"));
         assert!(FFmpegRemuxer::is_supported_container("ts"));
+        assert!(FFmpegRemuxer::is_supported_container("flv"));
 
         // Unsupported
-        assert!(!FFmpegRemuxer::is_supported_container("flv"));
         assert!(!FFmpegRemuxer::is_supported_container("wmv"));
     }
 

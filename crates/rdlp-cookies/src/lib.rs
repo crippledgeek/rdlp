@@ -16,7 +16,7 @@ mod util;
 
 use async_trait::async_trait;
 use log::{debug, warn};
-use rdlp_core::{CookieJar, Result};
+use rdlp_core::{BrowserType, CookieJar, Result};
 use reqwest::cookie::CookieStore;
 use std::path::Path;
 use std::sync::Arc;
@@ -88,20 +88,12 @@ impl CookieJar for SimpleCookieJar {
         Ok(())
     }
 
-    async fn load_from_browser(&self, browser: &str) -> Result<usize> {
+    async fn load_from_browser(&self, browser: BrowserType) -> Result<usize> {
         let jar = Arc::clone(&self.jar);
-        let browser_name = browser.to_lowercase();
 
-        let count = tokio::task::spawn_blocking(move || match browser_name.as_str() {
-            "chrome" | "chromium" | "google-chrome" => chrome::extract_cookies(&*jar),
-            "firefox" | "mozilla" => firefox::extract_cookies(&*jar),
-            _ => {
-                warn!("Unsupported browser for cookie extraction: {browser_name}");
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    format!("Unsupported browser: {browser_name}. Supported: chrome, firefox"),
-                ))
-            }
+        let count = tokio::task::spawn_blocking(move || match browser {
+            BrowserType::Chrome => chrome::extract_cookies(&*jar),
+            BrowserType::Firefox => firefox::extract_cookies(&*jar),
         })
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))??;

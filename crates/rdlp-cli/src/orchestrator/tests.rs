@@ -28,7 +28,7 @@ fn create_test_format(format_id: &str, quality: &str, filesize: Option<u64>) -> 
         format_id.to_string(),
         "https://example.com/video.mp4".to_string(),
         "mp4".to_string(),
-        "https".to_string(),
+        rdlp_core::DownloadProtocol::Https,
     );
     format.format_note = Some(quality.to_string());
     format.filesize = filesize;
@@ -325,9 +325,9 @@ fn test_list_extractors() {
     // Should have at least the TNAFlix network extractors
     assert!(!extractors.is_empty());
     assert!(
-        extractors.contains(&"TNAFlix".to_string())
-            || extractors.contains(&"EMPFlix".to_string())
-            || extractors.contains(&"MovieFap".to_string()),
+        extractors.contains(&"TNAFlix")
+            || extractors.contains(&"EMPFlix")
+            || extractors.contains(&"MovieFap"),
         "Expected to find at least one TNAFlix network extractor, found: {extractors:?}"
     );
 }

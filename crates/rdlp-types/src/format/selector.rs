@@ -383,7 +383,7 @@ fn matches_filter(filter: &Filter, f: &Format) -> bool {
             Some(v) => compare_str(v, &filter.op, &filter.value),
             None => false,
         },
-        FilterField::Protocol => compare_str(&f.protocol, &filter.op, &filter.value),
+        FilterField::Protocol => compare_str(f.protocol.as_str(), &filter.op, &filter.value),
         FilterField::FormatId => compare_str(&f.format_id, &filter.op, &filter.value),
     }
 }
@@ -502,6 +502,7 @@ fn rank_formats(base: &BaseSelector, a: &Format, b: &Format) -> std::cmp::Orderi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::DownloadProtocol;
 
     // ---- Test helpers ----
 
@@ -510,7 +511,7 @@ mod tests {
             id.to_string(),
             format!("url_{id}"),
             ext.to_string(),
-            "https".to_string(),
+            DownloadProtocol::Https,
         );
         f.vcodec = Some("h264".to_string());
         f.acodec = Some("aac".to_string());
@@ -526,7 +527,7 @@ mod tests {
             id.to_string(),
             format!("url_{id}"),
             ext.to_string(),
-            "https".to_string(),
+            DownloadProtocol::Https,
         );
         f.vcodec = Some("h264".to_string());
         f.acodec = Some("none".to_string());
@@ -541,7 +542,7 @@ mod tests {
             id.to_string(),
             format!("url_{id}"),
             ext.to_string(),
-            "https".to_string(),
+            DownloadProtocol::Https,
         );
         f.vcodec = Some("none".to_string());
         f.acodec = Some("aac".to_string());

@@ -39,7 +39,8 @@ pub mod traits;
 
 // Re-export types from rdlp-types for convenience
 pub use rdlp_types::{
-    Chapter, Config, Format, FormatSelector, Fragment, InfoDict, Subtitle, Thumbnail,
+    AudioFormat, BrowserType, Chapter, Config, ContainerFormat, DownloadProtocol, Format,
+    FormatSelector, Fragment, InfoDict, Subtitle, SubtitleFormat, Thumbnail,
 };
 
 // Re-export codec utilities

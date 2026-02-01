@@ -96,7 +96,7 @@ impl PostProcessor for FFmpegExtractAudio {
         }
 
         // Determine target format
-        let target_format = config.audio_format.as_deref().unwrap_or("mp3");
+        let target_format = config.audio_format.map(|f| f.codec_name()).unwrap_or("mp3");
         let codec_config =
             get_audio_codec(target_format).ok_or_else(|| PostProcessError::UnsupportedFormat {
                 format: target_format.to_string(),

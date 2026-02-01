@@ -62,7 +62,7 @@ pub fn ensure_init() -> Result<()> {
 }
 
 /// Audio codec configuration for extraction/conversion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioCodecConfig {
     /// FFmpeg encoder name (e.g., "libmp3lame", "aac")
     pub encoder: Option<&'static str>,
@@ -155,12 +155,12 @@ pub static AUDIO_CODECS: &[(&str, AudioCodecConfig)] = &[
 pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
     AUDIO_CODECS
         .iter()
-        .find(|(n, _)| *n == name.to_lowercase())
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|(_, config)| config)
 }
 
 /// Options for remux and merge operations.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemuxOptions {
     /// Enable MP4 faststart (moov atom at beginning of file).
     pub faststart: bool,
@@ -169,7 +169,7 @@ pub struct RemuxOptions {
 }
 
 /// Options for audio extraction and transcoding.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioExtractOptions {
     /// Encoder name (e.g., "libmp3lame", "aac", "libopus").
     /// If None, uses the default encoder for the output format.
@@ -185,7 +185,7 @@ pub struct AudioExtractOptions {
 }
 
 /// Options for video conversion/transcoding.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VideoConvertOptions {
     /// If true, remux only (stream copy, no re-encoding).
     pub remux_only: bool,
@@ -200,7 +200,7 @@ pub struct VideoConvertOptions {
 }
 
 /// A chapter entry for metadata embedding.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChapterEntry {
     /// Chapter ID (unique, typically sequential starting from 0).
     pub id: i64,

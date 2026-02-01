@@ -12,8 +12,7 @@ use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, R
 use crate::error::PostProcessError;
 use crate::ffmpeg::VideoConvertOptions;
 
-/// Supported video container formats.
-const SUPPORTED_CONTAINERS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "flv", "ts"];
+use rdlp_core::ContainerFormat;
 
 /// Supported video codecs for transcoding.
 const VIDEO_CODECS: &[(&str, &str)] = &[
@@ -40,7 +39,7 @@ ffmpeg_processor!(
 impl FFmpegVideoConvertor {
     /// Check if the format is a supported container.
     fn is_supported_container(format: &str) -> bool {
-        SUPPORTED_CONTAINERS.contains(&format.to_lowercase().as_str())
+        format.parse::<ContainerFormat>().is_ok()
     }
 
     /// Get the FFmpeg encoder for a codec.
@@ -131,7 +130,7 @@ impl PostProcessor for FFmpegVideoConvertor {
 
         let input_file = &files[0];
 
-        let target_format = config.recode_video.as_deref().unwrap_or("mp4");
+        let target_format = config.recode_video.map(|c| c.as_ext()).unwrap_or("mp4");
 
         // Validate target format
         if !Self::is_supported_container(target_format) {

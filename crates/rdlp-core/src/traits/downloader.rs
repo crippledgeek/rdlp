@@ -112,7 +112,7 @@ pub trait ProgressCallback: Send + Sync {
 }
 
 /// Current download progress information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DownloadProgress {
     /// Bytes downloaded so far
     pub bytes_downloaded: u64,
@@ -308,7 +308,7 @@ impl fmt::Display for DownloadProgress {
 }
 
 /// Download statistics after completion
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DownloadStats {
     /// Total bytes downloaded
     pub bytes_downloaded: u64,

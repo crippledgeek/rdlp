@@ -7,6 +7,15 @@ pub enum RdlpError {
     #[error("Network error: {0}")]
     Network(String),
 
+    /// HTTP response error with status code
+    #[error("HTTP error {status}: {reason}")]
+    Http {
+        /// HTTP status code
+        status: u16,
+        /// Human-readable reason
+        reason: String,
+    },
+
     /// Extraction errors
     #[error("Extraction failed: {0}")]
     Extraction(String),
@@ -96,11 +105,14 @@ pub type Result<T> = std::result::Result<T, RdlpError>;
 /// ```
 pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
     if !response.status().is_success() {
-        return Err(RdlpError::Network(format!(
-            "HTTP error {}: {}",
-            response.status().as_u16(),
-            response.status().canonical_reason().unwrap_or("Unknown")
-        )));
+        return Err(RdlpError::Http {
+            status: response.status().as_u16(),
+            reason: response
+                .status()
+                .canonical_reason()
+                .unwrap_or("Unknown")
+                .to_string(),
+        });
     }
     Ok(())
 }

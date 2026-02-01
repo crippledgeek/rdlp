@@ -40,6 +40,9 @@ This document establishes the core coding standards for the rdlp video downloade
 - Document public APIs with **rustdoc** (`///` comments)
 - Add `#![warn(missing_docs)]` to all crates
 - Prefer `impl Into<T>` for flexible function parameters
+- Use **typed enums** for fixed-set values (never raw strings for container formats, protocols, etc.)
+- Derive `PartialEq` (and `Eq` where no floats) on all value types for testability
+- Prefer `eq_ignore_ascii_case()` over `to_lowercase()` comparisons (avoids allocation)
 
 ### Async Patterns
 - Use `async_trait` for async trait methods
@@ -127,6 +130,44 @@ cargo test test_name                 # Specific test
 cargo test -- --nocapture            # Show println output
 ```
 
+## Type Safety
+
+### Strongly-Typed Enums
+Use the following enums from `rdlp-types` instead of raw strings. All are `Serialize`/`Deserialize` compatible and implement `Display`/`FromStr`.
+
+| Enum | Use For | Variants |
+|------|---------|----------|
+| `ContainerFormat` | Container/remux/recode config | Mp4, Mkv, WebM, Mov, Ts, Flv, Avi, Ogg, M4a |
+| `AudioFormat` | Audio extraction format | Mp3, Aac, M4a, Opus, Vorbis, Flac, Alac, Wav |
+| `BrowserType` | Cookie browser selection | Chrome, Firefox |
+| `DownloadProtocol` | Format download protocol | Http, Https, M3u8, M3u8Native, HttpDashSegments, Other(String) |
+| `SubtitleFormat` | Subtitle format config | Srt, Vtt, Ass, Ssa, Lrc |
+
+```rust
+// Correct — use typed enums
+config.remux_container = Some(ContainerFormat::Mp4);
+config.audio_format = Some(AudioFormat::Mp3);
+let format = Format::new("hd", url, "mp4", DownloadProtocol::Https);
+
+// Wrong — raw strings for fixed-set values
+config.remux_container = Some("mp4".to_string());  // DON'T
+```
+
+Parse CLI string inputs at the boundary:
+```rust
+let container: ContainerFormat = user_input.parse().map_err(|e| anyhow::anyhow!(e))?;
+```
+
+### Structured Errors
+- `Config::validate()` returns `Result<(), ConfigValidationError>` (not `String`)
+- `RdlpError::Http { status, reason }` for HTTP errors (not `Network` with status in string)
+- `is_retryable_error()` matches on `RdlpError::Http { status, .. }` for 429/5xx
+
+### Derive Guidelines
+- Add `PartialEq` to all value types (enables `assert_eq!` in tests)
+- Add `Eq` where there are no `f64` fields
+- Add `Copy` to small enums without heap data
+
 ## Error Handling
 
 ### Error Types
@@ -174,7 +215,7 @@ format.tbr = extract_bitrate_from_url(&url);   // site-specific
 
 ```rust
 // Wrong — duplicating Format construction in each extractor
-let mut format = Format::new(id, url, ext, "https".to_string());
+let mut format = Format::new(id, url, ext, DownloadProtocol::Https);
 format.height = Some(h);
 format.width = Some(width_from_height(h));
 format.vcodec = Some("h264".to_string());

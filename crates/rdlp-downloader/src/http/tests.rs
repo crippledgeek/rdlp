@@ -190,8 +190,8 @@ async fn test_parallel_download_error_propagation() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(err, RdlpError::Network(_)),
-        "Should be a network error"
+        matches!(err, RdlpError::Http { .. } | RdlpError::Network(_)),
+        "Should be an HTTP or network error, got: {err:?}"
     );
 
     // Verify mocks were called appropriately

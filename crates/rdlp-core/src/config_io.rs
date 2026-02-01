@@ -63,7 +63,9 @@ pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
 
 /// Validate configuration, returning RdlpError on failure
 pub fn validate(config: &Config) -> Result<()> {
-    config.validate().map_err(RdlpError::Config)
+    config
+        .validate()
+        .map_err(|e| RdlpError::Config(e.to_string()))
 }
 
 #[cfg(test)]
