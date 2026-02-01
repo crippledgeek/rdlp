@@ -149,6 +149,7 @@ fn main() -> Result<()> {
 /// Interactive remux container selection
 fn select_remux_container() -> Result<Option<ContainerFormat>> {
     let containers = [
+        // Video containers
         (
             ContainerFormat::Mp4,
             "Best compatibility, faststart for streaming",
@@ -164,8 +165,32 @@ fn select_remux_container() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::Mov, "Apple QuickTime, good for editing"),
         (ContainerFormat::Avi, "Legacy format, wide support"),
         (ContainerFormat::Ts, "MPEG-TS, broadcast/streaming"),
+        (ContainerFormat::Flv, "Flash Video, legacy"),
+        (ContainerFormat::ThreeGp, "3GPP mobile video"),
+        (ContainerFormat::Mpg, "MPEG-1/2 program stream"),
+        (ContainerFormat::F4v, "Flash Video (MP4 variant)"),
+        (ContainerFormat::Asf, "Windows Media / ASF"),
+        (
+            ContainerFormat::Mxf,
+            "Material eXchange, broadcast/professional",
+        ),
+        (ContainerFormat::Vob, "DVD Video Object"),
+        (ContainerFormat::Dv, "Digital Video"),
+        (ContainerFormat::Nut, "NUT (FFmpeg native container)"),
+        (ContainerFormat::Ivf, "On2 IVF (VP8/VP9/AV1 raw)"),
+        // Audio containers
         (ContainerFormat::Mp3, "Audio only, MPEG Layer 3"),
         (ContainerFormat::Flac, "Audio only, lossless"),
+        (ContainerFormat::Wav, "Audio only, PCM waveform"),
+        (ContainerFormat::Ogg, "Audio only, Ogg container"),
+        (ContainerFormat::M4a, "Audio only, MPEG-4 Audio"),
+        (ContainerFormat::Opus, "Audio only, Ogg Opus"),
+        (ContainerFormat::Aac, "Audio only, raw ADTS AAC"),
+        (ContainerFormat::Aiff, "Audio only, Apple AIFF"),
+        (ContainerFormat::Mka, "Audio only, Matroska Audio"),
+        (ContainerFormat::Wv, "Audio only, WavPack lossless"),
+        (ContainerFormat::Caf, "Audio only, Core Audio Format"),
+        (ContainerFormat::Ac3, "Audio only, Dolby AC-3"),
     ];
 
     let items: Vec<String> = containers
