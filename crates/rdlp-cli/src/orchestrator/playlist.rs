@@ -3,9 +3,9 @@
 //! Provides batch download support with progress tracking, resume capability,
 //! and graceful degradation for failed videos.
 
-use super::{Orchestrator, OrchestratorError, Result};
+use super::{Orchestrator, OrchestratorError, Result, archive};
 use log::{error, info};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 impl Orchestrator {
@@ -38,7 +38,9 @@ impl Orchestrator {
                 .map(|opt| opt.map(|path| vec![path]));
         }
 
-        self.download_playlist_internal(infos, interactive).await
+        let archive = self.load_archive_if_configured();
+        self.download_playlist_internal(infos, interactive, archive)
+            .await
     }
 
     /// Internal playlist download logic
@@ -53,6 +55,7 @@ impl Orchestrator {
         &self,
         infos: Vec<rdlp_core::InfoDict>,
         interactive: bool,
+        archive: Option<HashSet<String>>,
     ) -> Result<Option<Vec<PathBuf>>> {
         let total = infos.len();
         let playlist_title = infos[0]
@@ -156,6 +159,14 @@ impl Orchestrator {
                 continue;
             }
 
+            // Check download archive
+            if let Some(ref archive_set) = archive {
+                if archive::is_in_archive(archive_set, &info.extractor, &info.id) {
+                    info!(position, total, title:? = info.title; "Already in archive, skipping");
+                    continue;
+                }
+            }
+
             info!("{}", "─".repeat(60));
             info!(position, total, title:? = info.title; "Downloading");
             info!("{}", "─".repeat(60));
@@ -168,6 +179,7 @@ impl Orchestrator {
                         Ok(Some(path)) => {
                             info!(position, total, path:? = path.display(); "Saved");
                             downloaded.push(path);
+                            self.record_in_archive(&info.extractor, &info.id);
                         }
                         Ok(None) => {
                             info!(position, total; "Skipped by user");

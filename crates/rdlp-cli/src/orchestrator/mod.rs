@@ -1,5 +1,6 @@
 //! Orchestrator module for coordinating extraction, download, and post-processing
 
+mod archive;
 mod errors;
 mod execution;
 mod extraction;
@@ -26,6 +27,7 @@ use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
 use rdlp_jsinterp::SimpleJsEngine;
 use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::instrument;
@@ -191,12 +193,28 @@ impl Orchestrator {
         // Try playlist extraction first to check if this is a playlist
         let infos = self.extract_playlist_info(url).await?;
 
+        // Load archive once at start
+        let archive = self.load_archive_if_configured();
+
         // If multiple videos found, this is a playlist
         if infos.len() > 1 {
             return self
-                .download_playlist_internal(infos, interactive)
+                .download_playlist_internal(infos, interactive, archive)
                 .await
                 .map(|opt| opt.and_then(|paths| paths.into_iter().next()));
+        }
+
+        // Single video — check archive before downloading
+        if let Some(ref archive_set) = archive {
+            let info = &infos[0];
+            if archive::is_in_archive(archive_set, &info.extractor, &info.id) {
+                info!(
+                    id = info.id.as_str(),
+                    extractor = info.extractor.as_str();
+                    "Already in archive, skipping"
+                );
+                return Ok(None);
+            }
         }
 
         // Single video - use existing state machine
@@ -208,7 +226,12 @@ impl Orchestrator {
             phase = phase.advance(self, interactive).await?;
 
             match phase {
-                DownloadPhase::Complete { path } => return Ok(Some(path)),
+                DownloadPhase::Complete { ref path } => {
+                    let result_path = path.clone();
+                    // Record in archive after successful download
+                    self.record_in_archive(&infos[0].extractor, &infos[0].id);
+                    return Ok(Some(result_path));
+                }
                 DownloadPhase::Cancelled => return Ok(None),
                 _ => continue, // Keep advancing through phases
             }
@@ -225,5 +248,22 @@ impl Orchestrator {
     #[must_use]
     pub fn list_downloaders(&self) -> Vec<&str> {
         self.downloader_registry.list_downloaders()
+    }
+
+    /// Load archive if configured, returning `None` if not configured.
+    fn load_archive_if_configured(&self) -> Option<HashSet<String>> {
+        self.config
+            .download_archive
+            .as_ref()
+            .map(|path| archive::load_archive(path))
+    }
+
+    /// Record a completed download in the archive (no-op if not configured).
+    fn record_in_archive(&self, extractor: &str, id: &str) {
+        if let Some(ref path) = self.config.download_archive {
+            if let Err(e) = archive::record_in_archive(path, extractor, id) {
+                warn!("Failed to write to download archive: {e}");
+            }
+        }
     }
 }

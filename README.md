@@ -19,6 +19,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 - **Playlists** - Batch downloads with pagination (PornHub)
 - **Cookie support** - Browser extraction (Chrome, Firefox) and Netscape cookie files
 - **Rate limiting** - Global bandwidth throttle with human-readable rates (`1M`, `500K`, `2.5G`)
+- **Download archive** - Skip already-downloaded videos on re-run (`--download-archive`)
 
 ### Supported Sites
 
@@ -71,6 +72,9 @@ rdlp -f "worst" "https://www.redtube.com/12345678"
 # Limit download speed
 rdlp -r 1M "https://www.redtube.com/12345678"
 rdlp --limit-rate 500K "https://www.redtube.com/12345678"
+
+# Skip already-downloaded videos (playlist or repeated runs)
+rdlp --download-archive archive.txt "https://www.pornhub.com/playlist/123456"
 
 # Verbose mode
 rdlp -v "https://www.redtube.com/12345678"
@@ -157,6 +161,21 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | `--cookies-from-browser <BROWSER>` | Load cookies from browser (`chrome`, `firefox`) |
 | `--cookies <FILE>` | Load Netscape-format cookies file |
 
+#### Download Archive
+
+| Flag | Description |
+|------|-------------|
+| `--download-archive <FILE>` | Path to archive file (skip already-downloaded videos) |
+
+Records each completed download as `{extractor} {id}` (one per line) in a plain text file. On subsequent runs, videos already in the archive are skipped. Compatible with yt-dlp's archive format. Blank lines and `#` comments are ignored.
+
+```
+# Example archive file
+PornHub ph6abc123def
+RedTube 12345678
+TNAFlix 456789
+```
+
 #### Configuration
 
 | Flag | Description |
@@ -190,12 +209,13 @@ Press **Ctrl+C** during download to pause. Re-run the same command to resume fro
 
 ## Architecture
 
-12-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
+13-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
 
 ```
 rdlp/
 ├── crates/
 │   ├── rdlp-types/        # Pure data types (Config, Format, InfoDict)
+│   ├── rdlp-table/        # Column layout constants for format selection table
 │   ├── rdlp-core/         # Traits (InfoExtractor, Downloader, PostProcessor)
 │   ├── rdlp-security/     # SSRF protection, URL validation
 │   ├── rdlp-http/         # HTTP client factory
