@@ -7,7 +7,7 @@ use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
 use rdlp_cli::Orchestrator;
-use rdlp_core::{Config, config_io};
+use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, config_io};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -143,19 +143,28 @@ fn main() -> Result<()> {
 }
 
 /// Interactive remux container selection
-fn select_remux_container() -> Result<Option<String>> {
+fn select_remux_container() -> Result<Option<ContainerFormat>> {
     let containers = [
-        ("mp4", "Best compatibility, faststart for streaming"),
-        ("mkv", "Supports all codecs, efficient cues index"),
-        ("webm", "Web-optimized, VP8/VP9/AV1 + Opus/Vorbis"),
-        ("mov", "Apple QuickTime, good for editing"),
-        ("avi", "Legacy format, wide support"),
-        ("ts", "MPEG-TS, broadcast/streaming"),
+        (
+            ContainerFormat::Mp4,
+            "Best compatibility, faststart for streaming",
+        ),
+        (
+            ContainerFormat::Mkv,
+            "Supports all codecs, efficient cues index",
+        ),
+        (
+            ContainerFormat::WebM,
+            "Web-optimized, VP8/VP9/AV1 + Opus/Vorbis",
+        ),
+        (ContainerFormat::Mov, "Apple QuickTime, good for editing"),
+        (ContainerFormat::Avi, "Legacy format, wide support"),
+        (ContainerFormat::Ts, "MPEG-TS, broadcast/streaming"),
     ];
 
     let items: Vec<String> = containers
         .iter()
-        .map(|(name, desc)| format!("{name:<6} {desc}"))
+        .map(|(fmt, desc)| format!("{:<6} {desc}", fmt.as_ext()))
         .collect();
 
     let selection = Select::with_theme(&ColorfulTheme::default())
@@ -164,7 +173,7 @@ fn select_remux_container() -> Result<Option<String>> {
         .default(0)
         .interact_opt()?;
 
-    Ok(selection.map(|idx| containers[idx].0.to_string()))
+    Ok(selection.map(|idx| containers[idx].0))
 }
 
 /// Writer that suspends progress bars while writing to prevent visual duplication
@@ -237,7 +246,11 @@ fn build_config(args: &Args) -> Result<Config> {
         config.extract_audio = true;
     }
     if let Some(ref audio_format) = args.audio_format {
-        config.audio_format = Some(audio_format.clone());
+        config.audio_format = Some(
+            audio_format
+                .parse::<AudioFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
     if let Some(ref audio_quality) = args.audio_quality {
         config.audio_quality = Some(audio_quality.clone());
@@ -249,7 +262,11 @@ fn build_config(args: &Args) -> Result<Config> {
         config.embed_thumbnail = true;
     }
     if let Some(ref recode_video) = args.recode_video {
-        config.recode_video = Some(recode_video.clone());
+        config.recode_video = Some(
+            recode_video
+                .parse::<ContainerFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
     if args.keep_video {
         config.keep_video = true;
@@ -265,7 +282,11 @@ fn build_config(args: &Args) -> Result<Config> {
         config.rate_limit = Some(bps);
     }
     if let Some(ref browser) = args.cookies_from_browser {
-        config.cookies_from_browser = Some(browser.clone());
+        config.cookies_from_browser = Some(
+            browser
+                .parse::<BrowserType>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
     if let Some(ref cookies) = args.cookies {
         config.cookies_file = Some(cookies.clone());
@@ -277,7 +298,11 @@ fn build_config(args: &Args) -> Result<Config> {
             config.remux_container = select_remux_container()?;
         }
         Some(container) => {
-            config.remux_container = Some(container.to_string());
+            config.remux_container = Some(
+                container
+                    .parse::<ContainerFormat>()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            );
         }
         None => {}
     }
@@ -287,7 +312,7 @@ fn build_config(args: &Args) -> Result<Config> {
 
     // Set audio_format when extract_audio is set but no explicit format
     if config.extract_audio && config.audio_format.is_none() {
-        config.audio_format = Some("mp3".to_string());
+        config.audio_format = Some(AudioFormat::Mp3);
     }
 
     Ok(config)

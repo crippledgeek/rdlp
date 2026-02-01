@@ -54,7 +54,7 @@ pub trait ExtractorRegistryTrait: Send + Sync {
     fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>>;
 
     /// Get all registered extractor names
-    fn list_extractors(&self) -> Vec<String>;
+    fn list_extractors(&self) -> Vec<&str>;
 }
 
 /// Registry for managing extractors
@@ -125,11 +125,8 @@ impl ExtractorRegistry {
     /// # Returns
     /// A vector of extractor names (e.g., ["TNAFlix", "EMPFlix", "MovieFap"])
     #[must_use]
-    pub fn list_extractors(&self) -> Vec<String> {
-        self.extractors
-            .iter()
-            .map(|e| e.name().to_string())
-            .collect()
+    pub fn list_extractors(&self) -> Vec<&str> {
+        self.extractors.iter().map(|e| e.name()).collect()
     }
 }
 
@@ -144,7 +141,7 @@ impl ExtractorRegistryTrait for ExtractorRegistry {
         self.find_extractor(url)
     }
 
-    fn list_extractors(&self) -> Vec<String> {
+    fn list_extractors(&self) -> Vec<&str> {
         self.list_extractors()
     }
 }
@@ -157,11 +154,11 @@ mod tests {
     fn test_registry_creation() {
         let registry = ExtractorRegistry::new();
         let extractors = registry.list_extractors();
-        assert!(extractors.contains(&"TNAFlix".to_string()));
-        assert!(extractors.contains(&"EMPFlix".to_string()));
-        assert!(extractors.contains(&"MovieFap".to_string()));
-        assert!(extractors.contains(&"RedTube".to_string()));
-        assert!(extractors.contains(&"PornHub".to_string()));
+        assert!(extractors.contains(&"TNAFlix"));
+        assert!(extractors.contains(&"EMPFlix"));
+        assert!(extractors.contains(&"MovieFap"));
+        assert!(extractors.contains(&"RedTube"));
+        assert!(extractors.contains(&"PornHub"));
     }
 
     #[test]

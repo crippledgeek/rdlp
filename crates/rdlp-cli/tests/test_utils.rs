@@ -102,11 +102,8 @@ impl ExtractorRegistryTrait for MockExtractorRegistry {
             .cloned()
     }
 
-    fn list_extractors(&self) -> Vec<String> {
-        self.extractors
-            .iter()
-            .map(|e| e.name().to_string())
-            .collect()
+    fn list_extractors(&self) -> Vec<&str> {
+        self.extractors.iter().map(|e| e.name()).collect()
     }
 }
 
@@ -270,11 +267,8 @@ impl DownloaderRegistryTrait for MockDownloaderRegistry {
         self.downloaders.iter().find(|d| d.supports(url)).cloned()
     }
 
-    fn list_downloaders(&self) -> Vec<String> {
-        self.downloaders
-            .iter()
-            .map(|d| d.protocol().to_string())
-            .collect()
+    fn list_downloaders(&self) -> Vec<&str> {
+        self.downloaders.iter().map(|d| d.protocol()).collect()
     }
 }
 
@@ -285,13 +279,13 @@ pub fn create_test_info_dict(title: impl Into<String>, url: impl Into<String>) -
             "1".to_string(),
             "mock://example.com/video1.mp4".to_string(),
             "mp4".to_string(),
-            "mock".to_string(),
+            rdlp_core::DownloadProtocol::Other("mock".to_string()),
         ),
         Format::new(
             "2".to_string(),
             "mock://example.com/video2.mp4".to_string(),
             "mp4".to_string(),
-            "mock".to_string(),
+            rdlp_core::DownloadProtocol::Other("mock".to_string()),
         ),
     ];
 

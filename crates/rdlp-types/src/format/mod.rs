@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::fmt::{self, Write};
 use std::sync::OnceLock;
 
+use crate::protocol::DownloadProtocol;
+
 pub use selector::FormatSelector;
 
 /// Video/audio format information
@@ -71,8 +73,8 @@ pub struct Format {
     pub format_note: Option<String>,
 
     // === Protocol ===
-    /// Download protocol (e.g., "https", "http", "m3u8", "m3u8_native", "http_dash_segments")
-    pub protocol: String,
+    /// Download protocol
+    pub protocol: DownloadProtocol,
 
     /// Container format (e.g., "mp4", "webm", "mp4_dash")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,7 +133,7 @@ impl fmt::Debug for Format {
         d.field("format_id", &self.format_id);
         d.field("url", &self.url);
         d.field("ext", &self.ext);
-        d.field("protocol", &self.protocol);
+        d.field("protocol", &self.protocol.as_str());
 
         // Only show optional fields that have values
         if let Some(v) = &self.quality {
@@ -205,10 +207,15 @@ impl fmt::Debug for Format {
 impl Format {
     /// Create a new format with required fields
     #[must_use]
-    pub fn new(format_id: String, url: String, ext: String, protocol: String) -> Self {
+    pub fn new(
+        format_id: impl Into<String>,
+        url: impl Into<String>,
+        ext: impl Into<String>,
+        protocol: DownloadProtocol,
+    ) -> Self {
         Self {
-            format_id,
-            url,
+            format_id: format_id.into(),
+            url: url.into(),
             quality: None,
             width: None,
             height: None,
@@ -219,7 +226,7 @@ impl Format {
             asr: None,
             vcodec: None,
             acodec: None,
-            ext,
+            ext: ext.into(),
             format_note: None,
             protocol,
             container: None,
@@ -273,13 +280,12 @@ impl Format {
 
     /// Check if this is a DASH format
     pub fn is_dash(&self) -> bool {
-        self.protocol.contains("dash")
-            || self.container.as_ref().is_some_and(|c| c.contains("dash"))
+        self.protocol.is_dash() || self.container.as_ref().is_some_and(|c| c.contains("dash"))
     }
 
     /// Check if this is an HLS format
     pub fn is_hls(&self) -> bool {
-        self.protocol.contains("m3u8")
+        self.protocol.is_hls()
     }
 
     /// Get a human-readable format description
@@ -471,7 +477,7 @@ impl fmt::Display for Format {
 }
 
 /// Fragment of a segmented download
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fragment {
     /// Fragment URL (absolute or relative to fragment_base_url)
     pub url: String,
@@ -513,7 +519,7 @@ mod tests {
             "137".to_string(),
             "https://example.com/video".to_string(),
             "mp4".to_string(),
-            "https".to_string(),
+            DownloadProtocol::Https,
         );
         format.vcodec = Some("h264".to_string());
         format.acodec = Some("none".to_string());
@@ -528,7 +534,7 @@ mod tests {
             "140".to_string(),
             "https://example.com/audio".to_string(),
             "m4a".to_string(),
-            "https".to_string(),
+            DownloadProtocol::Https,
         );
         format.vcodec = Some("none".to_string());
         format.acodec = Some("aac".to_string());

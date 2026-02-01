@@ -8,7 +8,7 @@ pub use backon::{ExponentialBuilder, Retryable};
 ///
 /// This struct provides user-facing configuration that can be converted
 /// to a backon `ExponentialBuilder` for actual retry execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RetryConfig {
     /// Maximum number of retry attempts
     pub max_retries: usize,
@@ -124,14 +124,15 @@ impl Default for RetryConfig {
 #[must_use]
 pub fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
-        // Network errors are generally retryable
-        RdlpError::Network(msg) => {
-            // Don't retry HTTP 4xx client errors (except 429 rate limit)
-            if msg.contains("HTTP error 4") && !msg.contains("429") {
-                return false;
+        // Structured HTTP errors: retry 5xx and 429, not other 4xx
+        RdlpError::Http { status, .. } => {
+            if *status == 429 || *status >= 500 {
+                return true;
             }
-            true
+            false
         }
+        // Legacy network errors are generally retryable
+        RdlpError::Network(_) => true,
         // I/O errors might be retryable (disk full, temp failure)
         RdlpError::Io(_) => true,
         // Other errors are not retryable
@@ -171,23 +172,35 @@ mod tests {
 
     #[test]
     fn test_is_retryable_error() {
-        // Network errors are retryable
+        // HTTP 5xx errors are retryable
+        assert!(is_retryable_error(&RdlpError::Http {
+            status: 503,
+            reason: "Service Unavailable".to_string(),
+        }));
+        assert!(is_retryable_error(&RdlpError::Http {
+            status: 500,
+            reason: "Internal Server Error".to_string(),
+        }));
+
+        // HTTP 429 (rate limit) is retryable
+        assert!(is_retryable_error(&RdlpError::Http {
+            status: 429,
+            reason: "Too Many Requests".to_string(),
+        }));
+
+        // HTTP 4xx client errors (except 429) are not retryable
+        assert!(!is_retryable_error(&RdlpError::Http {
+            status: 404,
+            reason: "Not Found".to_string(),
+        }));
+        assert!(!is_retryable_error(&RdlpError::Http {
+            status: 403,
+            reason: "Forbidden".to_string(),
+        }));
+
+        // Legacy network errors are retryable
         assert!(is_retryable_error(&RdlpError::Network(
             "timeout".to_string()
-        )));
-        assert!(is_retryable_error(&RdlpError::Network(
-            "HTTP error 503".to_string()
-        )));
-        assert!(is_retryable_error(&RdlpError::Network(
-            "HTTP error 429".to_string()
-        )));
-
-        // 4xx client errors (except 429) are not retryable
-        assert!(!is_retryable_error(&RdlpError::Network(
-            "HTTP error 404".to_string()
-        )));
-        assert!(!is_retryable_error(&RdlpError::Network(
-            "HTTP error 403".to_string()
         )));
 
         // I/O errors are retryable
@@ -282,7 +295,10 @@ mod tests {
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 // Return a non-retryable error (404)
-                Err(RdlpError::Network("HTTP error 404 Not Found".to_string()))
+                Err(RdlpError::Http {
+                    status: 404,
+                    reason: "Not Found".to_string(),
+                })
             }
         })
         .retry(config.to_backoff())
@@ -342,7 +358,10 @@ mod tests {
                     Err(RdlpError::Network("timeout".to_string()))
                 } else {
                     // Third attempt: permanent error
-                    Err(RdlpError::Network("HTTP error 403 Forbidden".to_string()))
+                    Err(RdlpError::Http {
+                        status: 403,
+                        reason: "Forbidden".to_string(),
+                    })
                 }
             }
         })

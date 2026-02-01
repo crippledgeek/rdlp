@@ -179,12 +179,17 @@ pub struct InfoDict {
 impl InfoDict {
     /// Create a new InfoDict with required fields
     #[must_use]
-    pub fn new(id: String, title: String, extractor: String, webpage_url: String) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        extractor: impl Into<String>,
+        webpage_url: impl Into<String>,
+    ) -> Self {
         Self {
-            id,
-            title,
-            extractor,
-            webpage_url,
+            id: id.into(),
+            title: title.into(),
+            extractor: extractor.into(),
+            webpage_url: webpage_url.into(),
             description: None,
             duration: None,
             thumbnail: None,
@@ -276,7 +281,7 @@ impl InfoDict {
 }
 
 /// Thumbnail information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Thumbnail {
     /// Thumbnail URL
     pub url: String,
@@ -299,7 +304,7 @@ pub struct Thumbnail {
 }
 
 /// Subtitle information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subtitle {
     /// Subtitle URL
     pub url: String,
@@ -313,7 +318,7 @@ pub struct Subtitle {
 }
 
 /// Chapter information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Chapter {
     /// Chapter title
     pub title: String,

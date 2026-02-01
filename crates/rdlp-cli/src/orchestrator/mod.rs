@@ -152,13 +152,13 @@ impl Orchestrator {
             info!(count, file = path.display().to_string().as_str(); "Loaded cookies from file");
         }
 
-        if let Some(ref browser) = self.config.cookies_from_browser {
+        if let Some(browser) = self.config.cookies_from_browser {
             let count = cookie_jar.load_from_browser(browser).await.map_err(|e| {
                 OrchestratorError::Configuration(format!(
                     "Failed to load cookies from {browser}: {e}"
                 ))
             })?;
-            info!(count, browser = browser.as_str(); "Loaded cookies from browser");
+            info!(count, browser = browser.to_string().as_str(); "Loaded cookies from browser");
         }
 
         Ok(())
@@ -217,13 +217,13 @@ impl Orchestrator {
 
     /// List all available extractors
     #[must_use]
-    pub fn list_extractors(&self) -> Vec<String> {
+    pub fn list_extractors(&self) -> Vec<&str> {
         self.extractor_registry.list_extractors()
     }
 
     /// List all available download protocols
     #[must_use]
-    pub fn list_downloaders(&self) -> Vec<String> {
+    pub fn list_downloaders(&self) -> Vec<&str> {
         self.downloader_registry.list_downloaders()
     }
 }

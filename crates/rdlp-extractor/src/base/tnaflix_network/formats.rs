@@ -138,7 +138,7 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
 // Common codec strings to avoid repeated allocations
 const CODEC_H264: &str = "h264";
 const CODEC_AAC: &str = "aac";
-const PROTOCOL_HTTPS: &str = "https";
+use rdlp_core::DownloadProtocol;
 
 /// Build format list from video metadata and fetch filesizes
 pub(crate) async fn build_formats(
@@ -152,7 +152,7 @@ pub(crate) async fn build_formats(
             format_id,
             video_url.clone(),
             ext.clone(),
-            PROTOCOL_HTTPS.to_owned(),
+            DownloadProtocol::Https,
         );
 
         format.height = height;

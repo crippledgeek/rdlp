@@ -267,7 +267,7 @@ pub trait DownloaderRegistryTrait: Send + Sync {
     fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>>;
 
     /// Get all registered downloader protocol names
-    fn list_downloaders(&self) -> Vec<String>;
+    fn list_downloaders(&self) -> Vec<&str>;
 }
 
 /// Registry for managing downloaders
@@ -352,11 +352,8 @@ impl DownloaderRegistry {
     /// # Returns
     /// A vector of protocol names (e.g., ["http", "hls", "dash"])
     #[must_use]
-    pub fn list_downloaders(&self) -> Vec<String> {
-        self.downloaders
-            .iter()
-            .map(|d| d.protocol().to_string())
-            .collect()
+    pub fn list_downloaders(&self) -> Vec<&str> {
+        self.downloaders.iter().map(|d| d.protocol()).collect()
     }
 }
 
@@ -371,7 +368,7 @@ impl DownloaderRegistryTrait for DownloaderRegistry {
         self.find_downloader(url)
     }
 
-    fn list_downloaders(&self) -> Vec<String> {
+    fn list_downloaders(&self) -> Vec<&str> {
         self.list_downloaders()
     }
 }
@@ -384,7 +381,7 @@ mod tests {
     fn test_registry_creation() {
         let registry = DownloaderRegistry::new();
         let downloaders = registry.list_downloaders();
-        assert!(downloaders.contains(&"http".to_string()));
+        assert!(downloaders.contains(&"http"));
     }
 
     #[test]
@@ -396,7 +393,7 @@ mod tests {
 
         let registry = DownloaderRegistry::with_config(&config);
         let downloaders = registry.list_downloaders();
-        assert!(downloaders.contains(&"http".to_string()));
+        assert!(downloaders.contains(&"http"));
 
         // Verify the downloader was created with config settings
         let downloader = registry.find_downloader("https://example.com/video.mp4");
@@ -424,8 +421,8 @@ mod tests {
         let registry = DownloaderRegistry::new();
         let downloaders = registry.list_downloaders();
 
-        assert!(downloaders.contains(&"http".to_string()));
-        assert!(downloaders.contains(&"hls".to_string()));
+        assert!(downloaders.contains(&"http"));
+        assert!(downloaders.contains(&"hls"));
         assert_eq!(downloaders.len(), 2);
     }
 }

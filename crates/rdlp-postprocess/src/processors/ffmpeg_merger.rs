@@ -35,14 +35,8 @@ impl FFmpegMerger {
         audio_ext: Option<&str>,
     ) -> &'static str {
         // Use configured merge format if specified
-        if let Some(ref format) = config.merge_output_format {
-            match format.as_str() {
-                "mp4" => return "mp4",
-                "mkv" => return "mkv",
-                "webm" => return "webm",
-                "mov" => return "mov",
-                _ => {}
-            }
+        if let Some(format) = config.merge_output_format {
+            return format.as_ext();
         }
 
         // Determine based on file extensions
@@ -131,7 +125,7 @@ impl PostProcessor for FFmpegMerger {
         // The MP4 muxer automatically handles AAC ADTS→ASC conversion,
         // so we no longer need the unconditional aac_adtstoasc BSF.
         let opts = RemuxOptions {
-            faststart: output_format == "mp4" || output_format == "mov",
+            faststart: matches!(output_format, "mp4" | "mov"),
             ..Default::default()
         };
         self.ffmpeg
@@ -175,7 +169,7 @@ mod tests {
             // Without explicit format, uses codec-based detection
             let config_no_format = PostProcessConfig {
                 merge_output_format: None,
-                ..Default::default()
+                ..PostProcessConfig::default()
             };
             assert_eq!(
                 merger.determine_output_format(&config_no_format, Some("webm"), Some("opus")),

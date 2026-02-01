@@ -12,11 +12,11 @@ impl Orchestrator {
     pub(super) fn to_postprocess_config(&self) -> PostProcessConfig {
         PostProcessConfig {
             extract_audio: self.config.extract_audio,
-            audio_format: self.config.audio_format.clone(),
+            audio_format: self.config.audio_format,
             audio_quality: self.config.audio_quality.clone(),
-            recode_video: self.config.recode_video.clone(),
-            remux_container: self.config.remux_container.clone(),
-            merge_output_format: self.config.merge_output_format.clone(),
+            recode_video: self.config.recode_video,
+            remux_container: self.config.remux_container,
+            merge_output_format: self.config.merge_output_format,
             embed_thumbnail: self.config.embed_thumbnail,
             embed_metadata: self.config.embed_metadata,
             embed_subtitles: self.config.embed_subtitles,
@@ -82,7 +82,7 @@ impl Orchestrator {
         if is_hls && pp_config.recode_video.is_none() && !pp_config.extract_audio {
             // Set merge_output_format to trigger FFmpeg remux for container fixup
             // This ensures proper moov atom placement and timestamp fixing
-            pp_config.merge_output_format = Some("mp4".to_string());
+            pp_config.merge_output_format = Some(rdlp_core::ContainerFormat::Mp4);
         }
 
         info!("Running post-processing pipeline...");
