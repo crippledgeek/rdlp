@@ -2249,6 +2249,7 @@ dependencies = [
  "rdlp-plugin",
  "rdlp-postprocess",
  "rdlp-ratelimit",
+ "rdlp-types",
  "regex",
  "reqwest",
  "serde_json",

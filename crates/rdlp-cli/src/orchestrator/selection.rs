@@ -4,6 +4,7 @@ use super::{Orchestrator, errors::*};
 use dialoguer::{Select, theme::ColorfulTheme};
 use log::{info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
+use rdlp_types::format::table;
 
 impl Orchestrator {
     /// Select format from available formats
@@ -73,15 +74,29 @@ impl Orchestrator {
             warn!("LIVE stream detected — download may be incomplete");
         }
 
+        // Compute dynamic size column width from actual content
+        let size_width = formats
+            .iter()
+            .map(|f| f.size_text().len())
+            .max()
+            .unwrap_or(4) // "Size".len()
+            .max(4);
+
         // Build menu items with format details
-        let items: Vec<String> = formats.iter().map(|f| f.table_row()).collect();
+        let items: Vec<String> = formats.iter().map(|f| f.table_row(size_width)).collect();
 
         info!("Available formats:");
         info!(
-            "{:<12} | {:<10} | {:<12} | {:<6} | Codecs",
-            "Quality", "Resolution", "Size", "Type"
+            "{:<qw$} | {:<rw$} | {:<size_width$} | {:<tw$} | Codecs",
+            "Quality",
+            "Resolution",
+            "Size",
+            "Type",
+            qw = table::QUALITY_WIDTH,
+            rw = table::RESOLUTION_WIDTH,
+            tw = table::TYPE_WIDTH,
         );
-        info!("{}", "-".repeat(79));
+        info!("{}", "-".repeat(table::separator_width(size_width)));
 
         let selection = tokio::task::spawn_blocking(move || {
             Select::with_theme(&ColorfulTheme::default())

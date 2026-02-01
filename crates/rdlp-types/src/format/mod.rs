@@ -1,6 +1,7 @@
 //! Format types for video/audio streams
 
 pub mod selector;
+pub mod table;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -326,53 +327,14 @@ impl Format {
         })
     }
 
-    /// Format as table row for interactive selection UI
+    /// Returns the size column text for this format (e.g. `"837.9 MB"`, `"50:16 (754 seg)"`)
     ///
-    /// Returns a formatted string suitable for display in selection menus:
-    /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
-    ///
-    /// Optimized to minimize heap allocations using pre-allocated buffer.
-    pub fn table_row(&self) -> String {
-        // Pre-allocate buffer for typical row length (~80 chars)
-        let mut buf = String::with_capacity(80);
-
-        // Quality column: append fps when non-standard (e.g. "1080p60")
-        let quality_base = self.format_note.as_deref().unwrap_or("unknown");
-        match self.fps {
-            Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
-                let _ = write!(buf, "{quality_base}{fps:.0}");
-                let col_len = quality_base.len() + format!("{fps:.0}").len();
-                for _ in col_len..12 {
-                    buf.push(' ');
-                }
-                buf.push_str(" | ");
-            }
-            _ => {
-                let _ = write!(buf, "{quality_base:<12} | ");
-            }
-        }
-
-        // Resolution: avoid intermediate String allocation
-        match (self.width, self.height) {
-            (Some(w), Some(h)) => {
-                let _ = write!(buf, "{w}x{h}");
-                // Pad to 10 chars
-                let len = buf.len() - 15; // account for "quality | "
-                for _ in len..10 {
-                    buf.push(' ');
-                }
-            }
-            _ => buf.push_str("N/A       "),
-        }
-        buf.push_str(" | ");
-
-        // Check if this is an HLS format (also check URL for .m3u8)
+    /// Call this on every format to compute `max` width, then pass that to [`Self::table_row`].
+    #[must_use]
+    pub fn size_text(&self) -> String {
         let is_hls = self.is_hls() || self.url.contains(".m3u8");
 
-        // Size column: write directly to buffer
-        let size_start = buf.len();
         if is_hls {
-            // For HLS: show duration + segment count when available
             let seg_count = self
                 .fragments
                 .as_ref()
@@ -383,35 +345,81 @@ impl Format {
                 (Some(dur), Some(segs)) => {
                     let mins = dur as u64 / 60;
                     let secs = dur as u64 % 60;
-                    let _ = write!(buf, "{mins}:{secs:02} ({segs} seg)");
+                    format!("{mins}:{secs:02} ({segs} seg)")
                 }
                 (Some(dur), None) => {
                     let mins = dur as u64 / 60;
                     let secs = dur as u64 % 60;
-                    let _ = write!(buf, "{mins}:{secs:02}");
+                    format!("{mins}:{secs:02}")
                 }
-                (None, Some(segs)) => {
-                    let _ = write!(buf, "{segs} segments");
-                }
-                (None, None) => {
-                    buf.push_str("HLS stream");
-                }
+                (None, Some(segs)) => format!("{segs} segments"),
+                (None, None) => "HLS stream".to_string(),
             }
         } else if let Some(filesize) = self.filesize {
-            let _ = write!(buf, "{:.1} MB", filesize as f64 / (1024.0 * 1024.0));
+            format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
         } else if let Some(filesize_approx) = self.filesize_approx {
-            let _ = write!(buf, "~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0));
+            format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
         } else {
-            buf.push_str("Unknown");
+            "Unknown".to_string()
         }
-        // Pad size to 12 chars
+    }
+
+    /// Format as table row for interactive selection UI
+    ///
+    /// Returns a formatted string suitable for display in selection menus:
+    /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
+    ///
+    /// `size_width` controls the size column padding (use [`Self::size_text`] across
+    /// all formats to compute the appropriate value).
+    ///
+    /// Optimized to minimize heap allocations using pre-allocated buffer.
+    pub fn table_row(&self, size_width: usize) -> String {
+        // Pre-allocate buffer for typical row length (~80 chars)
+        let mut buf = String::with_capacity(80);
+
+        // Quality column: append fps when non-standard (e.g. "1080p60")
+        let quality_base = self.format_note.as_deref().unwrap_or("unknown");
+        match self.fps {
+            Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
+                let _ = write!(buf, "{quality_base}{fps:.0}");
+                let col_len = quality_base.len() + format!("{fps:.0}").len();
+                for _ in col_len..table::QUALITY_WIDTH {
+                    buf.push(' ');
+                }
+                buf.push_str(" | ");
+            }
+            _ => {
+                let _ = write!(buf, "{quality_base:<w$} | ", w = table::QUALITY_WIDTH);
+            }
+        }
+
+        // Resolution: avoid intermediate String allocation
+        match (self.width, self.height) {
+            (Some(w), Some(h)) => {
+                let res_start = buf.len();
+                let _ = write!(buf, "{w}x{h}");
+                let res_len = buf.len() - res_start;
+                for _ in res_len..table::RESOLUTION_WIDTH {
+                    buf.push(' ');
+                }
+            }
+            _ => {
+                let _ = write!(buf, "{:<w$}", "N/A", w = table::RESOLUTION_WIDTH);
+            }
+        }
+        buf.push_str(" | ");
+
+        // Size column: write directly, pad to dynamic width
+        let size_start = buf.len();
+        buf.push_str(&self.size_text());
         let size_len = buf.len() - size_start;
-        for _ in size_len..12 {
+        for _ in size_len..size_width {
             buf.push(' ');
         }
         buf.push_str(" | ");
 
         // Format type column: avoid to_uppercase() allocation for HLS
+        let is_hls = self.is_hls() || self.url.contains(".m3u8");
         let format_start = buf.len();
         if is_hls {
             buf.push_str("HLS");
@@ -421,9 +429,8 @@ impl Format {
                 buf.push(c.to_ascii_uppercase());
             }
         }
-        // Pad to 6 chars
         let format_len = buf.len() - format_start;
-        for _ in format_len..6 {
+        for _ in format_len..table::TYPE_WIDTH {
             buf.push(' ');
         }
         buf.push_str(" | ");
