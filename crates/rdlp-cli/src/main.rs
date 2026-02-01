@@ -122,6 +122,10 @@ struct Args {
     #[arg(long)]
     cookies: Option<PathBuf>,
 
+    /// Path to download archive file (skip already-downloaded videos)
+    #[arg(long)]
+    download_archive: Option<PathBuf>,
+
     // === Config file options ===
     /// Ignore config file (don't load from default location)
     #[arg(long)]
@@ -290,6 +294,9 @@ fn build_config(args: &Args) -> Result<Config> {
     }
     if let Some(ref cookies) = args.cookies {
         config.cookies_file = Some(cookies.clone());
+    }
+    if let Some(ref archive) = args.download_archive {
+        config.download_archive = Some(archive.clone());
     }
 
     // Handle interactive remux selection

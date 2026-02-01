@@ -225,6 +225,10 @@ pub struct Config {
     /// Path to cookies file (Netscape format)
     pub cookies_file: Option<PathBuf>,
 
+    // === Archive ===
+    /// Path to download archive file (logs completed downloads to skip on re-run)
+    pub download_archive: Option<PathBuf>,
+
     // === Plugin system ===
     /// Directories to search for plugins
     pub plugin_directories: Vec<PathBuf>,
@@ -316,6 +320,9 @@ impl Default for Config {
             // Cookies
             cookies_from_browser: None,
             cookies_file: None,
+
+            // Archive
+            download_archive: None,
 
             // Plugin system
             plugin_directories: Vec::new(),
