@@ -23,6 +23,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 - **Cookie support** - Browser extraction (Chrome, Firefox) and Netscape cookie files
 - **Rate limiting** - Global bandwidth throttle with human-readable rates (`1M`, `500K`, `2.5G`)
 - **Download archive** - Skip already-downloaded videos on re-run (`--download-archive`)
+- **JSON metadata** - `--dump-json` and `--print` for scripting (`rdlp --dump-json URL | jq .title`)
 
 ### Supported Sites
 
@@ -90,6 +91,14 @@ rdlp --list-codecs
 # Skip already-downloaded videos (playlist or repeated runs)
 rdlp --download-archive archive.txt "https://www.pornhub.com/playlist/123456"
 
+# Dump metadata as JSON (no download)
+rdlp --dump-json "https://www.redtube.com/12345678"
+rdlp --dump-json "https://www.redtube.com/12345678" | jq .title
+
+# Print specific fields
+rdlp --print title "https://www.redtube.com/12345678"
+rdlp --print "id,title,extractor" "https://www.redtube.com/12345678"
+
 # Verbose mode
 rdlp -v "https://www.redtube.com/12345678"
 ```
@@ -139,7 +148,9 @@ rdlp [OPTIONS] [URL]
 | `--output <DIR>` | `-o` | Output directory (default: `.`) |
 | `--format <FMT>` | `-f` | Format selection, yt-dlp syntax (default: `best`) |
 | `--interactive` | `-i` | Interactive format selection with arrow keys |
-| `--simulate` | `-s` | Simulate only, don't download |
+| `--dump-json` | `-j` | Dump full metadata as JSON to stdout (no download) |
+| `--print <FIELDS>` | | Print specific metadata field(s), comma-separated (no download) |
+| `--simulate` | `-s` | Simulate only, show metadata summary |
 | `--quiet` | `-q` | Minimal output |
 | `--verbose` | `-v` | Detailed debug output |
 | `--list-extractors` | | List all supported site extractors |
