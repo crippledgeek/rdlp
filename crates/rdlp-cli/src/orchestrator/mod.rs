@@ -238,6 +238,11 @@ impl Orchestrator {
         }
     }
 
+    /// Extract metadata without downloading (for --dump-json / --print / --simulate)
+    pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
+        self.extract_playlist_info(url).await
+    }
+
     /// List all available extractors
     #[must_use]
     pub fn list_extractors(&self) -> Vec<&str> {

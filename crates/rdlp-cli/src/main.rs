@@ -7,10 +7,10 @@ use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
 use rdlp_cli::Orchestrator;
-use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, config_io};
+use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, InfoDict, config_io};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -62,9 +62,18 @@ struct Args {
     #[arg(long)]
     list_codecs: bool,
 
-    /// Simulate (don't actually download)
+    /// Simulate (don't actually download, shows extraction summary)
     #[arg(short = 's', long)]
     simulate: bool,
+
+    /// Dump full metadata as JSON to stdout (no download)
+    #[arg(short = 'j', long)]
+    dump_json: bool,
+
+    /// Print specific field(s) from metadata (no download)
+    /// e.g., --print title or --print "id,title,extractor"
+    #[arg(long)]
+    print: Option<String>,
 
     /// Interactive format selection
     #[arg(short = 'i', long)]
@@ -322,6 +331,29 @@ fn print_codecs() {
     }
 }
 
+/// Print specific fields from an InfoDict
+fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
+    let value = serde_json::to_value(info)?;
+    let map = value.as_object().expect("InfoDict serializes to object");
+
+    for field in fields.split(',') {
+        let field = field.trim();
+        if field.is_empty() {
+            continue;
+        }
+        match map.get(field) {
+            Some(serde_json::Value::String(s)) => println!("{field}: {s}"),
+            Some(serde_json::Value::Null) => println!("{field}:"),
+            Some(v) => println!("{field}: {v}"),
+            None => {
+                warn!("Unknown field: {field}");
+                eprintln!("Warning: unknown field '{field}'");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Writer that suspends progress bars while writing to prevent visual duplication
 #[derive(Clone)]
 struct SuspendingWriter {
@@ -545,10 +577,35 @@ async fn async_main() -> Result<()> {
         .url
         .ok_or_else(|| anyhow::anyhow!("No URL provided. Use --help for usage information."))?;
 
-    // Download the video
-    if args.simulate {
-        info!("[Simulate] No actual download will occur");
-        info!("URL: {url}");
+    // Metadata-only modes: --dump-json, --print, --simulate
+    if args.dump_json || args.print.is_some() || args.simulate {
+        let infos = orchestrator.extract_info(&url).await?;
+
+        if args.dump_json {
+            for info in &infos {
+                let json = serde_json::to_string_pretty(info)?;
+                println!("{json}");
+            }
+        }
+
+        if let Some(ref fields) = args.print {
+            for info in &infos {
+                print_fields(info, fields)?;
+            }
+        }
+
+        if args.simulate && !args.dump_json && args.print.is_none() {
+            for info in &infos {
+                info!(
+                    "[Simulate] {} | id={} | extractor={} | {} format(s)",
+                    info.title,
+                    info.id,
+                    info.extractor,
+                    info.formats.len()
+                );
+            }
+        }
+
         return Ok(());
     }
 
