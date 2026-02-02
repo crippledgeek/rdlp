@@ -1530,6 +1530,13 @@ impl FFmpegRunner {
         let thumb_ost_index;
         if is_mkv {
             // MKV: add as attachment stream
+            // Matroska attachments are written during write_header() via extradata,
+            // not via packet writing (which fails with "Invalid argument").
+            let thumb_bytes =
+                std::fs::read(thumbnail).map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read thumbnail file: {e}"),
+                })?;
+
             let mut ost = octx
                 .add_stream(ffmpeg_the_third::encoder::find(
                     ffmpeg_the_third::codec::Id::None,
@@ -1542,11 +1549,13 @@ impl FFmpegRunner {
             ost.set_parameters(thumb_params);
             // Override to attachment type for MKV
             Self::set_stream_as_attachment(ost.parameters().as_ptr());
+            // Set the thumbnail data as extradata — Matroska muxer reads this during write_header()
+            Self::set_extradata(ost.parameters().as_ptr(), &thumb_bytes);
             // Set attachment metadata
             {
                 let mut dict = ffmpeg_the_third::Dictionary::new();
                 dict.set("mimetype", Self::thumbnail_mimetype(thumbnail));
-                dict.set("filename", "cover.jpg");
+                dict.set("filename", Self::thumbnail_attachment_filename(thumbnail));
                 ost.set_metadata(dict);
             }
         } else {
@@ -1567,7 +1576,7 @@ impl FFmpegRunner {
             if is_mp3 {
                 let mut dict = ffmpeg_the_third::Dictionary::new();
                 dict.set("title", "Album cover");
-                dict.set("comment", "Cover (front)");
+                dict.set("comment", "Cover (Front)");
                 ost.set_metadata(dict);
             }
         }
@@ -1575,11 +1584,39 @@ impl FFmpegRunner {
         // Copy format-level metadata from media input
         octx.set_metadata(ictx.metadata().to_owned());
 
-        // Write header
-        octx.write_header()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+        // Write header (with faststart for MP4/MOV so moov atom is at start —
+        // required for Windows Explorer and many players to show the thumbnail)
+        let is_mp4_mov = matches!(
+            container.to_lowercase().as_str(),
+            "mp4" | "m4a" | "m4v" | "mov"
+        );
+        if is_mp4_mov {
+            let mut dict = ffmpeg_the_third::Dictionary::new();
+            dict.set("movflags", "+faststart");
+            octx.write_header_with(dict).map(|_| ())
+        } else {
+            octx.write_header()
+        }
+        .map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to write output header: {e}"),
+        })?;
+
+        // For FLAC/OGG/Opus: write thumbnail packets BEFORE media packets.
+        // These formats store picture metadata in the file header (METADATA_BLOCK_PICTURE
+        // for FLAC, Vorbis comment for OGG/Opus), so the muxer needs picture data before
+        // audio frames are flushed. For other formats (MP4, MP3), order doesn't matter.
+        let is_header_picture_format =
+            matches!(container.to_lowercase().as_str(), "flac" | "ogg" | "opus");
+
+        if !is_mkv && is_header_picture_format {
+            Self::write_thumbnail_packets(
+                &mut thumb_ictx,
+                &mut octx,
+                thumb_ist_index,
+                thumb_ist_time_base,
+                thumb_ost_index,
+            )?;
+        }
 
         // Copy media packets
         for result in ictx.packets() {
@@ -1609,30 +1646,16 @@ impl FFmpegRunner {
             })?;
         }
 
-        // Copy thumbnail packet(s)
-        let thumb_ost_time_base = octx
-            .stream(thumb_ost_index)
-            .ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "thumbnail output stream {thumb_ost_index} not found"
-                ))
-            })?
-            .time_base();
-        for result in thumb_ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read thumbnail packet: {e}"),
-                })?;
-            if stream.index() == thumb_ist_index {
-                packet.rescale_ts(thumb_ist_time_base, thumb_ost_time_base);
-                packet.set_position(-1);
-                packet.set_stream(thumb_ost_index);
-                packet.write_interleaved(&mut octx).map_err(|e| {
-                    PostProcessError::FFmpegLibraryError {
-                        message: format!("failed to write thumbnail packet: {e}"),
-                    }
-                })?;
-            }
+        // Copy thumbnail packet(s) for formats that don't need them in the header.
+        // MKV: already embedded via extradata. FLAC/OGG/Opus: already written above.
+        if !is_mkv && !is_header_picture_format {
+            Self::write_thumbnail_packets(
+                &mut thumb_ictx,
+                &mut octx,
+                thumb_ist_index,
+                thumb_ist_time_base,
+                thumb_ost_index,
+            )?;
         }
 
         octx.write_trailer()
@@ -1655,6 +1678,21 @@ impl FFmpegRunner {
             "png" => "image/png",
             "webp" => "image/webp",
             _ => "image/jpeg",
+        }
+    }
+
+    /// Determine attachment filename from thumbnail file extension (for MKV).
+    fn thumbnail_attachment_filename(path: &Path) -> &'static str {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str()
+        {
+            "png" => "cover.png",
+            "webp" => "cover.webp",
+            _ => "cover.jpg",
         }
     }
 
@@ -2200,6 +2238,72 @@ impl FFmpegRunner {
         // This flag is required by certain container formats.
         unsafe {
             (*encoder_ptr).flags |= ffmpeg_the_third::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+        }
+    }
+
+    /// Write thumbnail packets from the thumbnail input to the output context.
+    fn write_thumbnail_packets(
+        thumb_ictx: &mut ffmpeg_the_third::format::context::Input,
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        thumb_ist_index: usize,
+        thumb_ist_time_base: ffmpeg_the_third::Rational,
+        thumb_ost_index: usize,
+    ) -> Result<()> {
+        let thumb_ost_time_base = octx
+            .stream(thumb_ost_index)
+            .ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "thumbnail output stream {thumb_ost_index} not found"
+                ))
+            })?
+            .time_base();
+        for result in thumb_ictx.packets() {
+            let (stream, mut packet) =
+                result.map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to read thumbnail packet: {e}"),
+                })?;
+            if stream.index() == thumb_ist_index {
+                packet.rescale_ts(thumb_ist_time_base, thumb_ost_time_base);
+                packet.set_position(-1);
+                packet.set_stream(thumb_ost_index);
+                packet.write_interleaved(octx).map_err(|e| {
+                    PostProcessError::FFmpegLibraryError {
+                        message: format!("failed to write thumbnail packet: {e}"),
+                    }
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Set extradata on codec parameters (used for MKV attachment data).
+    ///
+    /// The Matroska muxer reads attachment data from `extradata` during `write_header()`,
+    /// so the thumbnail bytes must be set here rather than written as packets.
+    ///
+    /// Follows FFmpeg's `ff_alloc_extradata` convention: allocate
+    /// `size + AV_INPUT_BUFFER_PADDING_SIZE` bytes via `av_malloc`, zero the padding.
+    fn set_extradata(params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters, data: &[u8]) {
+        const PADDING: usize = ffmpeg_the_third::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+
+        // SAFETY: `params_ptr` points to a valid AVCodecParameters for an output stream.
+        // We allocate extradata via av_malloc (required by FFmpeg) and copy the thumbnail bytes.
+        // FFmpeg takes ownership and frees the buffer when the context is closed.
+        unsafe {
+            let codecpar = params_ptr as *mut ffmpeg_the_third::ffi::AVCodecParameters;
+            // Free any existing extradata
+            if !(*codecpar).extradata.is_null() {
+                ffmpeg_the_third::ffi::av_free((*codecpar).extradata as *mut _);
+            }
+            let alloc_size = data.len() + PADDING;
+            let buf = ffmpeg_the_third::ffi::av_malloc(alloc_size) as *mut u8;
+            if !buf.is_null() {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
+                // Zero the padding bytes (required by FFmpeg bitstream readers)
+                std::ptr::write_bytes(buf.add(data.len()), 0, PADDING);
+                (*codecpar).extradata = buf;
+                (*codecpar).extradata_size = data.len() as i32;
+            }
         }
     }
 

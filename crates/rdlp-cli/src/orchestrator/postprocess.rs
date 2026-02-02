@@ -18,6 +18,7 @@ impl Orchestrator {
             remux_container: self.config.remux_container,
             merge_output_format: self.config.merge_output_format,
             embed_thumbnail: self.config.embed_thumbnail,
+            write_thumbnail: self.config.write_thumbnail,
             embed_metadata: self.config.embed_metadata,
             embed_subtitles: self.config.embed_subtitles,
             keep_video: self.config.keep_video,
@@ -182,6 +183,7 @@ impl Orchestrator {
     /// Also runs user-requested post-processing (extract audio, embed metadata, etc.)
     pub(super) async fn run_postprocessing_for_state_machine(
         &self,
+        info: &rdlp_core::InfoDict,
         output_path: &Path,
         is_hls: bool,
     ) -> Result<PathBuf> {
@@ -191,19 +193,8 @@ impl Orchestrator {
             if let Some(fixed_path) = fixed_files.into_iter().next() {
                 // If user also requested additional post-processing, run it
                 if self.needs_postprocessing() {
-                    let info = rdlp_core::InfoDict::new(
-                        "unknown".to_string(),
-                        fixed_path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("Unknown")
-                            .to_string(),
-                        "unknown".to_string(),
-                        "unknown".to_string(),
-                    );
-
                     let result = self
-                        .run_postprocessing(&info, vec![fixed_path.clone()], is_hls)
+                        .run_postprocessing(info, vec![fixed_path.clone()], is_hls)
                         .await?;
                     if let Some(path) = result.into_iter().next() {
                         return Ok(path);
@@ -215,20 +206,8 @@ impl Orchestrator {
 
         // If FFmpeg remux failed, check if user requested any post-processing
         if self.needs_postprocessing() {
-            // Create a minimal InfoDict for post-processing
-            let info = rdlp_core::InfoDict::new(
-                "unknown".to_string(),
-                output_path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Unknown")
-                    .to_string(),
-                "unknown".to_string(),
-                "unknown".to_string(),
-            );
-
             let result = self
-                .run_postprocessing(&info, vec![output_path.to_path_buf()], is_hls)
+                .run_postprocessing(info, vec![output_path.to_path_buf()], is_hls)
                 .await?;
             if let Some(path) = result.into_iter().next() {
                 return Ok(path);

@@ -103,6 +103,9 @@ pub struct PostProcessConfig {
     /// Embed thumbnail in video file
     pub embed_thumbnail: bool,
 
+    /// Write thumbnail image to disk (keep after embedding)
+    pub write_thumbnail: bool,
+
     /// Embed metadata (title, artist, etc.)
     pub embed_metadata: bool,
 
@@ -129,6 +132,7 @@ impl Default for PostProcessConfig {
             remux_container: None,
             merge_output_format: Some(ContainerFormat::Mp4),
             embed_thumbnail: false,
+            write_thumbnail: false,
             embed_metadata: false,
             embed_subtitles: false,
             keep_video: false,

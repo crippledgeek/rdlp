@@ -70,6 +70,8 @@ pub enum DownloadPhase {
     },
     /// Downloading with progress tracking
     Downloading {
+        /// Extracted video metadata (for post-processing and thumbnail)
+        info: Box<rdlp_core::InfoDict>,
         /// Path where the file will be saved
         output_path: PathBuf,
         /// Selected format being downloaded
@@ -172,6 +174,7 @@ impl DownloadPhase {
                 };
 
                 Ok(Self::Downloading {
+                    info,
                     output_path,
                     format,
                     state,
@@ -179,6 +182,7 @@ impl DownloadPhase {
             }
 
             Self::Downloading {
+                info,
                 output_path,
                 format,
                 state,
@@ -235,9 +239,15 @@ impl DownloadPhase {
                 info!("   File: {}", output_path.display());
                 info!("   Stats: {stats:?}");
 
+                // Download thumbnail for embedding or standalone use
+                // Skipped only when --no-thumbnail is set (embed_thumbnail=false && write_thumbnail=false)
+                if orchestrator.config.embed_thumbnail || orchestrator.config.write_thumbnail {
+                    orchestrator.download_thumbnail(&info, &output_path).await;
+                }
+
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_path = orchestrator
-                    .run_postprocessing_for_state_machine(&output_path, is_hls)
+                    .run_postprocessing_for_state_machine(&info, &output_path, is_hls)
                     .await?;
 
                 Ok(Self::Complete { path: final_path })
