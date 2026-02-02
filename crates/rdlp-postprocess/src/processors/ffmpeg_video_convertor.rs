@@ -22,6 +22,17 @@ const VIDEO_CODECS: &[(&str, &str)] = &[
     ("vp9", "libvpx-vp9"),
     ("vp8", "libvpx"),
     ("av1", "libaom-av1"),
+    ("vvc", "libvvenc"),
+    ("h266", "libvvenc"),
+    ("mpeg1", "mpeg1video"),
+    ("mpeg2", "mpeg2video"),
+    ("mpeg4", "mpeg4"),
+    ("theora", "libtheora"),
+    ("prores", "prores_ks"),
+    ("dnxhd", "dnxhd"),
+    ("wmv2", "wmv2"),
+    ("ffv1", "ffv1"),
+    ("xvid", "libxvid"),
 ];
 
 ffmpeg_processor!(
@@ -54,15 +65,33 @@ impl FFmpegVideoConvertor {
     fn can_remux(input_ext: &str, output_ext: &str, video_codec: Option<&str>) -> bool {
         // Check if the codec is compatible with the target container
         match (output_ext.to_lowercase().as_str(), video_codec) {
-            // MP4 supports H.264, H.265, MPEG-4
-            ("mp4", Some(c)) => matches!(
+            // MP4/F4v supports H.264, H.265, MPEG-4, AV1
+            ("mp4" | "f4v", Some(c)) => matches!(
                 c.to_lowercase().as_str(),
-                "h264" | "avc" | "h265" | "hevc" | "mpeg4"
+                "h264" | "avc" | "h265" | "hevc" | "mpeg4" | "av1"
             ),
-            // MKV supports almost everything
-            ("mkv", _) => true,
+            // MKV, MKA, NUT, MXF accept almost everything
+            ("mkv" | "mka" | "nut" | "mxf", _) => true,
             // WebM supports VP8, VP9, AV1
             ("webm", Some(c)) => matches!(c.to_lowercase().as_str(), "vp8" | "vp9" | "av1"),
+            // IVF supports VP8, VP9, AV1
+            ("ivf", Some(c)) => matches!(c.to_lowercase().as_str(), "vp8" | "vp9" | "av1"),
+            // 3GP supports H.264, H.263, MPEG-4
+            ("3gp", Some(c)) => {
+                matches!(c.to_lowercase().as_str(), "h264" | "avc" | "h263" | "mpeg4")
+            }
+            // ASF/WMV supports WMV, H.264, MPEG-4
+            ("asf", Some(c)) => matches!(
+                c.to_lowercase().as_str(),
+                "wmv1" | "wmv2" | "h264" | "avc" | "mpeg4"
+            ),
+            // MPEG/VOB supports MPEG-1, MPEG-2, MPEG-4
+            ("mpg" | "vob", Some(c)) => matches!(
+                c.to_lowercase().as_str(),
+                "mpeg1" | "mpeg1video" | "mpeg2" | "mpeg2video" | "mpeg4"
+            ),
+            // AVI supports most codecs
+            ("avi", _) => true,
             // Same container - can copy
             _ if input_ext.eq_ignore_ascii_case(output_ext) => true,
             _ => false,
@@ -82,14 +111,18 @@ impl FFmpegVideoConvertor {
         // Determine target codec from container
         let target_codec = match target_format {
             "webm" => "vp9",
-            "mp4" | "mov" | "mkv" => "h264",
+            "ivf" => "vp9",
+            "ogg" => "theora",
+            "mpg" | "vob" => "mpeg2",
             _ => "h264",
         };
 
         let encoder = Self::get_encoder(target_codec);
         let (preset, crf) = match target_codec {
-            "h264" | "h265" | "hevc" => (Some("medium".to_string()), Some(23)),
-            "vp9" => (None, Some(30)),
+            "h264" | "h265" | "hevc" | "vvc" | "h266" => (Some("medium".to_string()), Some(23)),
+            "vp9" | "vp8" => (None, Some(30)),
+            "av1" => (None, Some(28)),
+            "mpeg2" | "mpeg4" | "theora" => (None, None),
             _ => (None, None),
         };
 

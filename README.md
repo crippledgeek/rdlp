@@ -12,7 +12,10 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 
 - **Performance** - 10+ MB/s downloads with parallel chunking and power-of-two sizing
 - **HLS support** - Full streaming with duration-based progress, DRM detection, live stream warnings
-- **Post-processing** - FFmpeg library bindings for remux, audio extraction, metadata/thumbnail embedding
+- **Post-processing** - FFmpeg library bindings for remux, audio extraction, video conversion, metadata/thumbnail embedding
+- **28 container formats** - MP4, MKV, WebM, MOV, AVI, TS, FLV, 3GP, MPG, ASF/WMV, MXF, VOB, IVF, and audio containers (MP3, FLAC, WAV, Opus, AAC, AIFF, etc.)
+- **16 video codecs** - H.264, H.265, VP8, VP9, AV1, VVC/H.266, MPEG-1/2/4, ProRes, DNxHD, Theora, FFV1, Xvid, WMV2
+- **14 audio codecs** - MP3, AAC, M4A, Opus, Vorbis, FLAC, ALAC, WAV, AC-3, E-AC-3, DTS, MP2, WavPack, TTA
 - **Resume** - Ctrl+C to pause, re-run to resume automatically
 - **Format selection** - yt-dlp-compatible DSL with filters, merge (`+`), and fallback chains (`/`)
 - **Interactive** - Arrow-key format selection, container remux menu
@@ -73,6 +76,17 @@ rdlp -f "worst" "https://www.redtube.com/12345678"
 rdlp -r 1M "https://www.redtube.com/12345678"
 rdlp --limit-rate 500K "https://www.redtube.com/12345678"
 
+# Extract audio (interactive format selection)
+rdlp -x --audio-format "https://www.redtube.com/12345678"
+rdlp -x --audio-format=flac "https://www.redtube.com/12345678"
+
+# Re-encode video (interactive codec selection)
+rdlp --recode-video "https://www.redtube.com/12345678"
+rdlp --recode-video=webm "https://www.redtube.com/12345678"
+
+# List supported codecs
+rdlp --list-codecs
+
 # Skip already-downloaded videos (playlist or repeated runs)
 rdlp --download-archive archive.txt "https://www.pornhub.com/playlist/123456"
 
@@ -130,6 +144,7 @@ rdlp [OPTIONS] [URL]
 | `--verbose` | `-v` | Detailed debug output |
 | `--list-extractors` | | List all supported site extractors |
 | `--list-downloaders` | | List all supported download protocols |
+| `--list-codecs` | | List all supported audio and video codecs |
 
 #### Network
 
@@ -145,12 +160,12 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--extract-audio` | `-x` | Extract audio only (requires FFmpeg) |
-| `--audio-format <FMT>` | | Audio format: `mp3`, `m4a`, `opus`, `flac`, `wav` (default: `mp3`) |
+| `--audio-format[=FMT]` | | Audio format (14 codecs). Use `--audio-format` for interactive, `--audio-format=mp3` for direct |
 | `--audio-quality <Q>` | | VBR level 0-9 or bitrate like `192K` |
 | `--embed-metadata` | | Embed title, artist, etc. in the file |
 | `--embed-thumbnail` | | Embed thumbnail in the file (requires FFmpeg) |
-| `--recode-video <FMT>` | | Re-encode video to format: `mp4`, `mkv`, `webm` |
-| `--remux[=FMT]` | | Remux to container without re-encoding. Use `--remux` for interactive, `--remux=mp4` for direct |
+| `--recode-video[=FMT]` | | Re-encode video (16 codecs). Use `--recode-video` for interactive, `--recode-video=mp4` for direct |
+| `--remux[=FMT]` | | Remux to container without re-encoding (28 formats). Use `--remux` for interactive, `--remux=mp4` for direct |
 | `--keep-video` | | Keep original file after post-processing |
 | `--ffmpeg-location <PATH>` | | Path to FFmpeg if not in PATH |
 
@@ -235,7 +250,7 @@ rdlp/
 
 ```bash
 cargo build --release      # Optimized build
-cargo test                 # Run all tests (270+)
+cargo test                 # Run all tests (400+)
 cargo clippy               # Lint check
 cargo fmt                  # Format code
 ```

@@ -58,6 +58,10 @@ struct Args {
     #[arg(long)]
     list_downloaders: bool,
 
+    /// List all supported audio and video codecs
+    #[arg(long)]
+    list_codecs: bool,
+
     /// Simulate (don't actually download)
     #[arg(short = 's', long)]
     simulate: bool,
@@ -71,8 +75,9 @@ struct Args {
     #[arg(short = 'x', long)]
     extract_audio: bool,
 
-    /// Audio format for extraction (mp3, m4a, opus, flac, wav)
-    #[arg(long)]
+    /// Audio format for extraction
+    /// Use --audio-format for interactive, --audio-format=mp3 for direct
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
     audio_format: Option<String>,
 
     /// Audio quality (VBR level 0-9 or bitrate like "192K")
@@ -87,8 +92,9 @@ struct Args {
     #[arg(long)]
     embed_thumbnail: bool,
 
-    /// Convert video to specified format (mp4, mkv, webm)
-    #[arg(long)]
+    /// Convert video to specified format
+    /// Use --recode-video for interactive, --recode-video=mp4 for direct
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
     recode_video: Option<String>,
 
     /// Remux to container for better seeking - no re-encoding
@@ -149,6 +155,7 @@ fn main() -> Result<()> {
 /// Interactive remux container selection
 fn select_remux_container() -> Result<Option<ContainerFormat>> {
     let containers = [
+        // Video containers
         (
             ContainerFormat::Mp4,
             "Best compatibility, faststart for streaming",
@@ -164,6 +171,32 @@ fn select_remux_container() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::Mov, "Apple QuickTime, good for editing"),
         (ContainerFormat::Avi, "Legacy format, wide support"),
         (ContainerFormat::Ts, "MPEG-TS, broadcast/streaming"),
+        (ContainerFormat::Flv, "Flash Video, legacy"),
+        (ContainerFormat::ThreeGp, "3GPP mobile video"),
+        (ContainerFormat::Mpg, "MPEG-1/2 program stream"),
+        (ContainerFormat::F4v, "Flash Video (MP4 variant)"),
+        (ContainerFormat::Asf, "Windows Media / ASF"),
+        (
+            ContainerFormat::Mxf,
+            "Material eXchange, broadcast/professional",
+        ),
+        (ContainerFormat::Vob, "DVD Video Object"),
+        (ContainerFormat::Dv, "Digital Video"),
+        (ContainerFormat::Nut, "NUT (FFmpeg native container)"),
+        (ContainerFormat::Ivf, "On2 IVF (VP8/VP9/AV1 raw)"),
+        // Audio containers
+        (ContainerFormat::Mp3, "Audio only, MPEG Layer 3"),
+        (ContainerFormat::Flac, "Audio only, lossless"),
+        (ContainerFormat::Wav, "Audio only, PCM waveform"),
+        (ContainerFormat::Ogg, "Audio only, Ogg container"),
+        (ContainerFormat::M4a, "Audio only, MPEG-4 Audio"),
+        (ContainerFormat::Opus, "Audio only, Ogg Opus"),
+        (ContainerFormat::Aac, "Audio only, raw ADTS AAC"),
+        (ContainerFormat::Aiff, "Audio only, Apple AIFF"),
+        (ContainerFormat::Mka, "Audio only, Matroska Audio"),
+        (ContainerFormat::Wv, "Audio only, WavPack lossless"),
+        (ContainerFormat::Caf, "Audio only, Core Audio Format"),
+        (ContainerFormat::Ac3, "Audio only, Dolby AC-3"),
     ];
 
     let items: Vec<String> = containers
@@ -178,6 +211,115 @@ fn select_remux_container() -> Result<Option<ContainerFormat>> {
         .interact_opt()?;
 
     Ok(selection.map(|idx| containers[idx].0))
+}
+
+/// Interactive audio format selection
+fn select_audio_format() -> Result<Option<AudioFormat>> {
+    let formats = [
+        (AudioFormat::Mp3, "MPEG Layer 3, most compatible"),
+        (AudioFormat::Aac, "Advanced Audio Coding"),
+        (AudioFormat::M4a, "AAC in M4A container"),
+        (AudioFormat::Opus, "Opus codec, excellent quality/size"),
+        (AudioFormat::Vorbis, "Ogg Vorbis"),
+        (AudioFormat::Flac, "Free Lossless Audio Codec"),
+        (AudioFormat::Alac, "Apple Lossless"),
+        (AudioFormat::Wav, "PCM waveform, uncompressed"),
+        (AudioFormat::Ac3, "Dolby Digital"),
+        (AudioFormat::Eac3, "Dolby Digital Plus"),
+        (AudioFormat::Dts, "DTS Coherent Acoustics"),
+        (AudioFormat::Mp2, "MPEG Layer 2"),
+        (AudioFormat::WavPack, "WavPack lossless"),
+        (AudioFormat::Tta, "True Audio lossless"),
+    ];
+
+    let items: Vec<String> = formats
+        .iter()
+        .map(|(fmt, desc)| format!("{:<8} {desc}", fmt.as_ext()))
+        .collect();
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select audio format (ESC to cancel)")
+        .items(&items)
+        .default(0)
+        .interact_opt()?;
+
+    Ok(selection.map(|idx| formats[idx].0))
+}
+
+/// Interactive video recode format selection
+fn select_recode_video() -> Result<Option<ContainerFormat>> {
+    let formats = [
+        (ContainerFormat::Mp4, "h264", "Best compatibility, H.264"),
+        (ContainerFormat::Mkv, "h264", "Matroska, H.264"),
+        (ContainerFormat::WebM, "vp9", "Web-optimized, VP9"),
+        (ContainerFormat::Mov, "h264", "Apple QuickTime, H.264"),
+        (ContainerFormat::Avi, "h264", "Legacy AVI, H.264"),
+        (ContainerFormat::Mpg, "mpeg2", "MPEG program stream, MPEG-2"),
+        (ContainerFormat::Ts, "h264", "MPEG-TS, H.264"),
+        (ContainerFormat::ThreeGp, "h264", "3GPP mobile, H.264"),
+        (ContainerFormat::Flv, "h264", "Flash Video, H.264"),
+        (ContainerFormat::Asf, "wmv2", "Windows Media, WMV2"),
+    ];
+
+    let items: Vec<String> = formats
+        .iter()
+        .map(|(fmt, codec, desc)| format!("{:<6} [{codec}] {desc}", fmt.as_ext()))
+        .collect();
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select video format (ESC to cancel)")
+        .items(&items)
+        .default(0)
+        .interact_opt()?;
+
+    Ok(selection.map(|idx| formats[idx].0))
+}
+
+/// Print all supported codecs
+fn print_codecs() {
+    println!("Audio codecs (14):");
+    let audio_codecs = [
+        ("mp3", "libmp3lame", "MPEG Layer 3"),
+        ("aac", "aac", "Advanced Audio Coding"),
+        ("m4a", "aac", "AAC in M4A container"),
+        ("opus", "libopus", "Opus codec"),
+        ("vorbis", "libvorbis", "Ogg Vorbis"),
+        ("flac", "flac", "Free Lossless Audio Codec"),
+        ("alac", "alac", "Apple Lossless"),
+        ("wav", "pcm_s16le", "PCM waveform"),
+        ("ac3", "ac3", "Dolby Digital"),
+        ("eac3", "eac3", "Dolby Digital Plus"),
+        ("dts", "dca", "DTS Coherent Acoustics"),
+        ("mp2", "mp2", "MPEG Layer 2"),
+        ("wavpack", "wavpack", "WavPack lossless"),
+        ("tta", "tta", "True Audio lossless"),
+    ];
+    for (name, encoder, desc) in audio_codecs {
+        println!("  {name:<10} [{encoder}]  {desc}");
+    }
+
+    println!();
+    println!("Video codecs (16):");
+    let video_codecs = [
+        ("h264", "libx264", "H.264 / AVC"),
+        ("h265", "libx265", "H.265 / HEVC"),
+        ("vp9", "libvpx-vp9", "VP9"),
+        ("vp8", "libvpx", "VP8"),
+        ("av1", "libaom-av1", "AV1"),
+        ("vvc", "libvvenc", "H.266 / VVC"),
+        ("mpeg1", "mpeg1video", "MPEG-1 Video"),
+        ("mpeg2", "mpeg2video", "MPEG-2 Video"),
+        ("mpeg4", "mpeg4", "MPEG-4 Part 2"),
+        ("theora", "libtheora", "Theora"),
+        ("prores", "prores_ks", "Apple ProRes"),
+        ("dnxhd", "dnxhd", "Avid DNxHD"),
+        ("wmv2", "wmv2", "Windows Media Video 8"),
+        ("ffv1", "ffv1", "FFV1 lossless archival"),
+        ("xvid", "libxvid", "Xvid (MPEG-4 ASP)"),
+    ];
+    for (name, encoder, desc) in video_codecs {
+        println!("  {name:<10} [{encoder}]  {desc}");
+    }
 }
 
 /// Writer that suspends progress bars while writing to prevent visual duplication
@@ -249,12 +391,18 @@ fn build_config(args: &Args) -> Result<Config> {
     if args.extract_audio {
         config.extract_audio = true;
     }
-    if let Some(ref audio_format) = args.audio_format {
-        config.audio_format = Some(
-            audio_format
-                .parse::<AudioFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
-        );
+    match args.audio_format.as_deref() {
+        Some("interactive") => {
+            config.audio_format = select_audio_format()?;
+        }
+        Some(audio_format) => {
+            config.audio_format = Some(
+                audio_format
+                    .parse::<AudioFormat>()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            );
+        }
+        None => {}
     }
     if let Some(ref audio_quality) = args.audio_quality {
         config.audio_quality = Some(audio_quality.clone());
@@ -265,12 +413,18 @@ fn build_config(args: &Args) -> Result<Config> {
     if args.embed_thumbnail {
         config.embed_thumbnail = true;
     }
-    if let Some(ref recode_video) = args.recode_video {
-        config.recode_video = Some(
-            recode_video
-                .parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
-        );
+    match args.recode_video.as_deref() {
+        Some("interactive") => {
+            config.recode_video = select_recode_video()?;
+        }
+        Some(recode_video) => {
+            config.recode_video = Some(
+                recode_video
+                    .parse::<ContainerFormat>()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            );
+        }
+        None => {}
     }
     if args.keep_video {
         config.keep_video = true;
@@ -378,6 +532,11 @@ async fn async_main() -> Result<()> {
         for downloader in orchestrator.list_downloaders() {
             info!("  - {downloader}");
         }
+        return Ok(());
+    }
+
+    if args.list_codecs {
+        print_codecs();
         return Ok(());
     }
 

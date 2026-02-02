@@ -139,8 +139,13 @@ mod tests {
         assert!(FFmpegRemuxer::is_supported_container("ts"));
         assert!(FFmpegRemuxer::is_supported_container("flv"));
 
+        // Aliases
+        assert!(FFmpegRemuxer::is_supported_container("wmv"));
+        assert!(FFmpegRemuxer::is_supported_container("3gp"));
+        assert!(FFmpegRemuxer::is_supported_container("flac"));
+
         // Unsupported
-        assert!(!FFmpegRemuxer::is_supported_container("wmv"));
+        assert!(!FFmpegRemuxer::is_supported_container("xyz"));
     }
 
     #[test]
