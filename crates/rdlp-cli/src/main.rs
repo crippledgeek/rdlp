@@ -97,9 +97,13 @@ struct Args {
     #[arg(long)]
     embed_metadata: bool,
 
-    /// Embed thumbnail in the file (requires FFmpeg)
+    /// Disable automatic thumbnail download and embedding
     #[arg(long)]
-    embed_thumbnail: bool,
+    no_thumbnail: bool,
+
+    /// Write thumbnail image to disk alongside media file
+    #[arg(long)]
+    write_thumbnail: bool,
 
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
@@ -442,8 +446,11 @@ fn build_config(args: &Args) -> Result<Config> {
     if args.embed_metadata {
         config.embed_metadata = true;
     }
-    if args.embed_thumbnail {
-        config.embed_thumbnail = true;
+    if args.no_thumbnail {
+        config.embed_thumbnail = false;
+    }
+    if args.write_thumbnail {
+        config.write_thumbnail = true;
     }
     match args.recode_video.as_deref() {
         Some("interactive") => {

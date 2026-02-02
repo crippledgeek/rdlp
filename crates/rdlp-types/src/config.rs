@@ -280,7 +280,7 @@ impl Default for Config {
             audio_quality: None,
             recode_video: None,
             remux_container: None,
-            embed_thumbnail: false,
+            embed_thumbnail: true,
             embed_metadata: false,
             embed_subtitles: false,
             keep_video: false,

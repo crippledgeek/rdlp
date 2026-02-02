@@ -435,6 +435,11 @@ impl Orchestrator {
         info!(path:? = output_path.display(); "   File");
         info!(stats:?; "   Stats");
 
+        // Download thumbnail if needed (before post-processing so embed can find it)
+        if self.config.embed_thumbnail || self.config.write_thumbnail {
+            self.download_thumbnail(info, &output_path).await;
+        }
+
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self
             .run_postprocessing(info, vec![output_path.clone()], is_hls)

@@ -3,10 +3,14 @@
 //! Embeds thumbnail images into media files using `ffmpeg-the-third` library
 //! bindings (no CLI process spawning). Supports different embedding methods
 //! based on the container format:
-//! - MP4/M4A/MOV: Cover art with `ATTACHED_PIC` disposition
+//! - MP4/M4A/MOV: Cover art with `ATTACHED_PIC` disposition + iTunes `covr` atom
 //! - MKV/MKA: Attachment stream with mimetype metadata
 //! - MP3: Video stream with ID3v2 metadata
 //! - FLAC/OGG/Opus: Video stream with `ATTACHED_PIC` disposition
+//!
+//! For MP4 containers, a second pass writes the thumbnail into the iTunes `covr`
+//! metadata atom using `mp4ameta`. This is needed because Windows Explorer reads
+//! cover art from the `covr` atom, not from `attached_pic` streams.
 
 use std::path::{Path, PathBuf};
 
@@ -56,6 +60,51 @@ impl EmbedThumbnail {
             .iter()
             .any(|c| c.eq_ignore_ascii_case(extension))
     }
+
+    /// Check if the container is an MP4-family format (supports covr atom).
+    fn is_mp4_family(extension: &str) -> bool {
+        matches!(
+            extension.to_lowercase().as_str(),
+            "mp4" | "m4a" | "m4v" | "mov"
+        )
+    }
+
+    /// Write the iTunes `covr` metadata atom for Windows Explorer thumbnail visibility.
+    ///
+    /// This is a second pass after FFmpeg embedding. Non-fatal: logs a warning on failure.
+    async fn write_covr_atom(media_file: &Path, thumbnail_file: &Path) {
+        let media = media_file.to_path_buf();
+        let thumb = thumbnail_file.to_path_buf();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let cover_bytes = std::fs::read(&thumb)?;
+
+            let img = match thumb
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .as_str()
+            {
+                "png" => mp4ameta::Img::png(cover_bytes),
+                _ => mp4ameta::Img::jpeg(cover_bytes),
+            };
+
+            let mut tag = mp4ameta::Tag::read_from_path(&media)
+                .unwrap_or_else(|_| mp4ameta::Tag::default());
+            tag.set_artwork(img);
+            tag.write_to_path(&media)?;
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => info!("MP4 covr atom written for Windows Explorer"),
+            Ok(Err(e)) => warn!("Failed to write MP4 covr atom: {e}"),
+            Err(e) => warn!("covr atom task panicked: {e}"),
+        }
+    }
 }
 
 #[async_trait]
@@ -76,7 +125,7 @@ impl PostProcessor for EmbedThumbnail {
         &self,
         info: &InfoDict,
         files: Vec<PathBuf>,
-        _config: &PostProcessConfig,
+        config: &PostProcessConfig,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -121,13 +170,23 @@ impl PostProcessor for EmbedThumbnail {
             Ok(()) => {
                 // Replace original with temp
                 tokio::fs::rename(&temp_output, media_file).await?;
-                info!(file:? = media_file.display(); "Thumbnail embedded");
+                info!(file:? = media_file.display(); "Thumbnail embedded via FFmpeg");
 
-                // Return thumbnail as temp file for cleanup
+                // For MP4-family: write covr atom so Windows Explorer shows the thumbnail
+                if Self::is_mp4_family(extension) {
+                    Self::write_covr_atom(media_file, &thumbnail_file).await;
+                }
+
+                // Clean up thumbnail unless --write-thumbnail was requested
+                let temp_files = if config.write_thumbnail {
+                    Vec::new()
+                } else {
+                    vec![thumbnail_file]
+                };
                 Ok(PostProcessResult {
                     info: info.clone(),
                     files,
-                    temp_files: vec![thumbnail_file],
+                    temp_files,
                 })
             }
             Err(e) => {
