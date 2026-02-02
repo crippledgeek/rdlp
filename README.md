@@ -12,7 +12,8 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 
 - **Performance** - 10+ MB/s downloads with parallel chunking and power-of-two sizing
 - **HLS support** - Full streaming with duration-based progress, DRM detection, live stream warnings
-- **Post-processing** - FFmpeg library bindings for remux, audio extraction, video conversion, metadata/thumbnail embedding
+- **Post-processing** - FFmpeg library bindings for remux, audio extraction, video conversion, metadata embedding
+- **Thumbnails** - Auto-download and embed cover art; MP4 uses iTunes `covr` atom for Windows Explorer visibility
 - **28 container formats** - MP4, MKV, WebM, MOV, AVI, TS, FLV, 3GP, MPG, ASF/WMV, MXF, VOB, IVF, and audio containers (MP3, FLAC, WAV, Opus, AAC, AIFF, etc.)
 - **16 video codecs** - H.264, H.265, VP8, VP9, AV1, VVC/H.266, MPEG-1/2/4, ProRes, DNxHD, Theora, FFV1, Xvid, WMV2
 - **14 audio codecs** - MP3, AAC, M4A, Opus, Vorbis, FLAC, ALAC, WAV, AC-3, E-AC-3, DTS, MP2, WavPack, TTA
@@ -87,6 +88,10 @@ rdlp --recode-video=webm "https://www.redtube.com/12345678"
 
 # List supported codecs
 rdlp --list-codecs
+
+# Thumbnail control
+rdlp --no-thumbnail "https://www.redtube.com/12345678"       # Skip thumbnail download/embed
+rdlp --write-thumbnail "https://www.redtube.com/12345678"     # Keep thumbnail file on disk
 
 # Skip already-downloaded videos (playlist or repeated runs)
 rdlp --download-archive archive.txt "https://www.pornhub.com/playlist/123456"
@@ -174,7 +179,9 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | `--audio-format[=FMT]` | | Audio format (14 codecs). Use `--audio-format` for interactive, `--audio-format=mp3` for direct |
 | `--audio-quality <Q>` | | VBR level 0-9 or bitrate like `192K` |
 | `--embed-metadata` | | Embed title, artist, etc. in the file |
-| `--embed-thumbnail` | | Embed thumbnail in the file (requires FFmpeg) |
+| `--embed-thumbnail` | | Embed thumbnail in the file (default: on). MP4 writes both `attached_pic` stream and iTunes `covr` atom |
+| `--no-thumbnail` | | Disable automatic thumbnail download and embedding |
+| `--write-thumbnail` | | Keep thumbnail image file on disk alongside media file |
 | `--recode-video[=FMT]` | | Re-encode video (16 codecs). Use `--recode-video` for interactive, `--recode-video=mp4` for direct |
 | `--remux[=FMT]` | | Remux to container without re-encoding (28 formats). Use `--remux` for interactive, `--remux=mp4` for direct |
 | `--keep-video` | | Keep original file after post-processing |
