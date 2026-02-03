@@ -91,6 +91,9 @@ impl InfoExtractor for PornHubExtractor {
             .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
 
         // Parse HTML and extract all metadata before async operations
+        // Extract duration from flashvars (before HTML parsing drops webpage borrow)
+        let duration = utils::extract_duration(&webpage);
+
         let (
             title,
             description,
@@ -106,7 +109,7 @@ impl InfoExtractor for PornHubExtractor {
             (
                 utils::extract_title(&html, &webpage),
                 utils::extract_description(&html),
-                utils::extract_thumbnail(&html),
+                utils::extract_thumbnail(&html, &webpage),
                 utils::extract_uploader(&html),
                 utils::extract_uploader_url(&html),
                 utils::extract_channel(&html),
@@ -138,6 +141,7 @@ impl InfoExtractor for PornHubExtractor {
         info.channel_url = channel_url;
         info.view_count = view_count;
         info.average_rating = average_rating;
+        info.duration = duration;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
 

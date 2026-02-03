@@ -2356,6 +2356,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdlp-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ffmpeg-the-third",
+ "log",
+ "rdlp-core",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
@@ -2391,13 +2405,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "ffmpeg-the-third",
  "log",
  "mp4ameta",
  "rdlp-core",
- "serde",
+ "rdlp-ffmpeg",
  "tempfile",
- "thiserror",
  "tokio",
 ]
 

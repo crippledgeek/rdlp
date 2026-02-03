@@ -13,9 +13,9 @@
 //! # Example
 //!
 //! ```no_run
-//! use rdlp_postprocess::ffmpeg::FFmpegRunner;
+//! use rdlp_ffmpeg::FFmpegRunner;
 //!
-//! # async fn example() -> rdlp_postprocess::error::Result<()> {
+//! # async fn example() -> rdlp_ffmpeg::Result<()> {
 //! let ffmpeg = FFmpegRunner::new()?;
 //!
 //! // Probe a media file

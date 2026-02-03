@@ -242,7 +242,7 @@ Press **Ctrl+C** during download to pause. Re-run the same command to resume fro
 
 ## Architecture
 
-13-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
+14-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
 
 ```
 rdlp/
@@ -255,7 +255,8 @@ rdlp/
 │   ├── rdlp-ratelimit/    # Async token-bucket rate limiter
 │   ├── rdlp-extractor/    # Site extractors
 │   ├── rdlp-downloader/   # HTTP + HLS downloaders
-│   ├── rdlp-postprocess/  # FFmpeg library bindings pipeline
+│   ├── rdlp-ffmpeg/       # FFmpeg library bindings (probe, remux, transcode, metadata)
+│   ├── rdlp-postprocess/  # Post-processing pipeline (processors, registry, mp4ameta)
 │   ├── rdlp-cookies/      # Browser cookie extraction (Chrome, Firefox, Netscape)
 │   ├── rdlp-jsinterp/     # JavaScript interpreter (boa)
 │   ├── rdlp-plugin/       # Plugin system

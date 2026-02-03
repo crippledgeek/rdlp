@@ -144,7 +144,16 @@ impl Orchestrator {
 
         for file in files {
             let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-            let temp_path = file.with_extension(format!("fixed.{ext}"));
+
+            // MPEG-TS → MP4: HLS downloads produce .ts files which lack proper
+            // seeking support and thumbnail embedding. Remux to .mp4 for a
+            // proper container with moov atom, faststart, etc.
+            let target_ext = if ext.eq_ignore_ascii_case("ts") {
+                "mp4"
+            } else {
+                ext
+            };
+            let temp_path = file.with_extension(format!("fixed.{target_ext}"));
 
             // Remux using library bindings (stream copy + faststart)
             match registry.remux_faststart(file, &temp_path).await {
@@ -153,12 +162,13 @@ impl Orchestrator {
                     if let Err(e) = tokio::fs::remove_file(file).await {
                         warn!("Could not remove original file: {e}");
                     }
-                    if let Err(e) = tokio::fs::rename(&temp_path, file).await {
+                    let final_path = file.with_extension(target_ext);
+                    if let Err(e) = tokio::fs::rename(&temp_path, &final_path).await {
                         warn!("Could not rename fixed file: {e}");
                         output_files.push(temp_path);
                     } else {
                         info!("Post-processed: faststart enabled, container fixed");
-                        output_files.push(file.clone());
+                        output_files.push(final_path);
                     }
                 }
                 Err(e) => {

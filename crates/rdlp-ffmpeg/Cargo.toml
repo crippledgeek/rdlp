@@ -1,21 +1,21 @@
 [package]
-name = "rdlp-postprocess"
+name = "rdlp-ffmpeg"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Post-processing pipeline for rdlp (FFmpeg operations, metadata embedding, etc.)"
+description = "FFmpeg library bindings wrapper for rdlp (probing, remuxing, transcoding, metadata, thumbnails)"
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
-rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
-async-trait = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true }
 
-# MP4 iTunes metadata (covr atom for Windows Explorer thumbnails)
-mp4ameta = "0.13"
+# FFmpeg library bindings (FFmpeg 5-8)
+ffmpeg-the-third = "4.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

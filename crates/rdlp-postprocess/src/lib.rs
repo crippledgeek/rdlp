@@ -82,19 +82,18 @@
 //!
 //! ## FFmpeg Integration
 //!
-//! The crate provides comprehensive FFmpeg operations via library bindings:
+//! FFmpeg operations are provided by the [`rdlp_ffmpeg`] crate and re-exported here:
 //!
 //! ```no_run
-//! use rdlp_postprocess::ffmpeg::FFmpegRunner;
+//! use rdlp_postprocess::FFmpegRunner;
 //!
-//! # async fn example() -> rdlp_postprocess::error::Result<()> {
+//! # async fn example() -> rdlp_postprocess::Result<()> {
 //! let ffmpeg = FFmpegRunner::new()?;
 //!
 //! // Probe a media file
 //! let info = ffmpeg.probe("video.mp4").await?;
 //! println!("Duration: {:?}s", info.duration);
 //! println!("Video codec: {:?}", info.video_codec);
-//! println!("Audio codec: {:?}", info.audio_codec);
 //! println!("Resolution: {:?}", info.resolution_string());
 //! # Ok(())
 //! # }
@@ -110,36 +109,21 @@
 //! | `FFmpegVideoConvertor` | 40 | Convert/remux video formats |
 //! | `FFmpegMetadata` | 30 | Embed metadata and chapters |
 //! | `EmbedThumbnail` | 20 | Embed cover art/thumbnails |
-//!
-//! ## Error Handling
-//!
-//! The crate uses a dedicated error type for post-processing errors:
-//!
-//! ```no_run
-//! use rdlp_postprocess::error::{PostProcessError, Result};
-//!
-//! fn example() -> Result<()> {
-//!     // Errors are descriptive and actionable
-//!     Err(PostProcessError::FFmpegInitFailed {
-//!         message: "FFmpeg library not available".to_string(),
-//!     })
-//! }
-//! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod error;
-pub mod ffmpeg;
 pub mod processors;
 pub mod registry;
 
-// Re-export main types
-pub use error::{PostProcessError, Result};
-pub use ffmpeg::{
-    AudioExtractOptions, ChapterEntry, FFmpegRunner, MediaInfo, RemuxOptions, StreamInfo,
-    VideoConvertOptions,
+// Re-export rdlp-ffmpeg types for backward compatibility
+pub use rdlp_ffmpeg::error;
+pub use rdlp_ffmpeg::ffmpeg;
+pub use rdlp_ffmpeg::{
+    AudioExtractOptions, ChapterEntry, FFmpegRunner, MediaInfo, PostProcessError, RemuxOptions,
+    Result, StreamInfo, VideoConvertOptions,
 };
+
 pub use registry::{PostProcessorRegistry, PostProcessorRegistryTrait};
 
 // Re-export processor types

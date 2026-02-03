@@ -27,13 +27,13 @@ macro_rules! ffmpeg_processor {
     ($name:ident, $display_name:expr, $priority:expr, $doc:expr) => {
         #[doc = $doc]
         pub struct $name {
-            ffmpeg: std::sync::Arc<crate::ffmpeg::FFmpegRunner>,
+            ffmpeg: std::sync::Arc<rdlp_ffmpeg::FFmpegRunner>,
         }
 
         impl $name {
             /// Create a new processor.
             #[must_use]
-            pub fn new(ffmpeg: std::sync::Arc<crate::ffmpeg::FFmpegRunner>) -> Self {
+            pub fn new(ffmpeg: std::sync::Arc<rdlp_ffmpeg::FFmpegRunner>) -> Self {
                 Self { ffmpeg }
             }
         }
