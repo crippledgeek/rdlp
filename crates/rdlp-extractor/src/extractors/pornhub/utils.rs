@@ -7,6 +7,7 @@ use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
 use scraper::Html;
 
+use super::patterns::FLASHVARS_PATTERN;
 use crate::base::common::BaseExtractor;
 
 /// Age verification cookies required by PornHub
@@ -154,11 +155,37 @@ pub fn extract_description(html: &Html) -> Option<String> {
     BaseExtractor::extract_description_multi_strategy(html)
 }
 
-/// Extract thumbnail URL from HTML.
+/// Extract thumbnail URL from flashvars (primary) or HTML meta tags (fallback).
 ///
-/// Delegates to `BaseExtractor::extract_thumbnail_multi_strategy`.
-pub fn extract_thumbnail(html: &Html) -> Option<String> {
+/// yt-dlp uses `flashvars.image_url` which is the authoritative CDN URL.
+/// Meta tags (`og:image`, `twitter:image`) may use different CDN paths that
+/// require different auth tokens or return lower quality images.
+pub fn extract_thumbnail(html: &Html, webpage: &str) -> Option<String> {
+    // Strategy 1: flashvars.image_url (matches yt-dlp behavior)
+    if let Some(url) = extract_flashvar_string(webpage, "image_url") {
+        return Some(url);
+    }
+
+    // Strategy 2: og:image / twitter:image meta tags
     BaseExtractor::extract_thumbnail_multi_strategy(html)
+}
+
+/// Extract video duration from flashvars.
+///
+/// yt-dlp uses `flashvars.video_duration` for accurate duration.
+pub fn extract_duration(webpage: &str) -> Option<f64> {
+    extract_flashvar_string(webpage, "video_duration")
+        .and_then(|s| s.parse::<f64>().ok())
+}
+
+/// Extract a string value from the flashvars JSON object.
+fn extract_flashvar_string(webpage: &str, key: &str) -> Option<String> {
+    let json_str = FLASHVARS_PATTERN
+        .captures(webpage)?
+        .get(1)?
+        .as_str();
+    let flashvars: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    flashvars.get(key)?.as_str().map(|s| s.to_string())
 }
 
 /// Extract uploader name from HTML

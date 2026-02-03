@@ -478,8 +478,16 @@ impl HlsSizeDetector {
         media_url: &str,
     ) -> Result<Option<MediaPlaylistInfo>> {
         let text = self.fetch_playlist_text(media_url).await?;
-        let playlist = m3u8_rs::parse_playlist_res(text.as_bytes())
-            .map_err(|e| RdlpError::Extraction(format!("M3U8 parse error: {e:?}")))?;
+        let playlist = m3u8_rs::parse_playlist_res(text.as_bytes()).map_err(|e| {
+            if !text.trim().starts_with("#EXTM3U") {
+                let preview: String = text.chars().take(200).collect();
+                RdlpError::Extraction(format!(
+                    "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
+                ))
+            } else {
+                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+            }
+        })?;
 
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
@@ -534,8 +542,16 @@ impl HlsSizeDetector {
         }
 
         // Parse with m3u8-rs
-        let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes())
-            .map_err(|e| RdlpError::Extraction(format!("M3U8 parse error: {e:?}")))?;
+        let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
+            if !playlist_text.trim().starts_with("#EXTM3U") {
+                let preview: String = playlist_text.chars().take(200).collect();
+                RdlpError::Extraction(format!(
+                    "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
+                ))
+            } else {
+                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+            }
+        })?;
 
         // Extract segment URLs
         match playlist {

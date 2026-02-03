@@ -276,8 +276,17 @@ impl HlsDownloader {
             .map_err(|e| RdlpError::Network(format!("Failed to read playlist: {e}")))?;
 
         // Parse with m3u8-rs
-        let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes())
-            .map_err(|e| RdlpError::Extraction(format!("M3U8 parse error: {e:?}")))?;
+        let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
+            // Show the actual response content when parsing fails (e.g. CDN error pages)
+            if !playlist_text.trim().starts_with("#EXTM3U") {
+                let preview: String = playlist_text.chars().take(200).collect();
+                RdlpError::Extraction(format!(
+                    "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
+                ))
+            } else {
+                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+            }
+        })?;
 
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {

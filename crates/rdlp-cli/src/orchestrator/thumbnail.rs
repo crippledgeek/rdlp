@@ -58,23 +58,28 @@ impl Orchestrator {
         let parent = media_file.parent()?;
         let thumbnail_path = parent.join(format!("{stem}.{ext}"));
 
+        // Build Referer from the thumbnail URL origin (CDNs often require this)
+        let referer = reqwest::Url::parse(thumbnail_url)
+            .ok()
+            .map(|u| format!("{}://{}/", u.scheme(), u.host_str().unwrap_or("")));
+
         // Download using the shared HTTP client
-        let response = match self
-            .extraction_context
-            .http_client
-            .get(thumbnail_url)
-            .send()
-            .await
-        {
+        let mut request = self.extraction_context.http_client.get(thumbnail_url);
+        if let Some(ref referer) = referer {
+            request = request.header("Referer", referer);
+        }
+
+        let response = match request.send().await {
             Ok(resp) => resp,
             Err(e) => {
-                warn!("Failed to download thumbnail: {e}");
+                warn!(url = thumbnail_url; "Failed to download thumbnail: {e}");
                 return None;
             }
         };
 
         if !response.status().is_success() {
             warn!(
+                url = thumbnail_url,
                 status = response.status().as_u16();
                 "Thumbnail download returned non-success status"
             );

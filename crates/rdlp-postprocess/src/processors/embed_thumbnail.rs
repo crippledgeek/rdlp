@@ -173,6 +173,7 @@ impl PostProcessor for EmbedThumbnail {
                 info!(file:? = media_file.display(); "Thumbnail embedded via FFmpeg");
 
                 // For MP4-family: write covr atom so Windows Explorer shows the thumbnail
+                debug!(extension, is_mp4 = Self::is_mp4_family(extension); "Checking covr atom eligibility");
                 if Self::is_mp4_family(extension) {
                     Self::write_covr_atom(media_file, &thumbnail_file).await;
                 }
