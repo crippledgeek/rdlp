@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use log::info;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::ChapterEntry;
+use rdlp_ffmpeg::ChapterEntry;
 
 ffmpeg_processor!(
     FFmpegMetadata,

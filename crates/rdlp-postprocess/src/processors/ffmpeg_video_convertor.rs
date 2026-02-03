@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::error::PostProcessError;
-use crate::ffmpeg::VideoConvertOptions;
+use rdlp_ffmpeg::PostProcessError;
+use rdlp_ffmpeg::VideoConvertOptions;
 
 use rdlp_core::ContainerFormat;
 

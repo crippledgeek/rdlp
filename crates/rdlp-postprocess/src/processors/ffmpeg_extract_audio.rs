@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::error::PostProcessError;
-use crate::ffmpeg::{AudioCodecConfig, AudioExtractOptions, get_audio_codec};
+use rdlp_ffmpeg::PostProcessError;
+use rdlp_ffmpeg::ffmpeg::{AudioCodecConfig, AudioExtractOptions, get_audio_codec};
 
 ffmpeg_processor!(
     FFmpegExtractAudio,

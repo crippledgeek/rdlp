@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use crate::ffmpeg::RemuxOptions;
+use rdlp_ffmpeg::RemuxOptions;
 
 ffmpeg_processor!(
     FFmpegMerger,
@@ -148,7 +148,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::ffmpeg::FFmpegRunner;
+    use rdlp_ffmpeg::FFmpegRunner;
 
     #[test]
     fn test_determine_output_format() {
