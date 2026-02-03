@@ -39,7 +39,7 @@ pub mod hls;
 pub mod utils;
 
 // Re-export extractors
-pub use extractors::{PornHubExtractor, RedTubeExtractor, TNAFlixExtractor};
+pub use extractors::{PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, XTitsExtractor};
 
 // Re-export base utilities for convenient access
 pub use base::common::BaseExtractor;
@@ -80,6 +80,9 @@ impl ExtractorRegistry {
 
         // Register PornHub extractor (with playlist support)
         registry.register(Arc::new(PornHubExtractor::new()));
+
+        // Register XTits extractor
+        registry.register(Arc::new(XTitsExtractor::new()));
 
         registry
     }
@@ -159,6 +162,7 @@ mod tests {
         assert!(extractors.contains(&"MovieFap"));
         assert!(extractors.contains(&"RedTube"));
         assert!(extractors.contains(&"PornHub"));
+        assert!(extractors.contains(&"XTits"));
     }
 
     #[test]
@@ -176,6 +180,10 @@ mod tests {
         let redtube = registry.find_extractor("https://www.redtube.com/123456");
         assert!(redtube.is_some());
         assert_eq!(redtube.unwrap().name(), "RedTube");
+
+        let xtits = registry.find_extractor("https://www.xtits.xxx/videos/183207/spicy-lesbians/");
+        assert!(xtits.is_some());
+        assert_eq!(xtits.unwrap().name(), "XTits");
 
         let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
         assert!(unknown.is_none());

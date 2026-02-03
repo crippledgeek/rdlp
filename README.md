@@ -35,6 +35,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 | MovieFap | MP4 | Multi-quality (144p-720p) |
 | RedTube | HLS + MP4 | Segment-based progress |
 | PornHub | HLS | Playlist support |
+| XTits | MP4 | Direct download, multi-quality (480p-720p) |
 
 ## Installation
 
@@ -276,17 +277,6 @@ cargo fmt                  # Format code
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for adding extractors, code style, and development workflow.
 See [CODING_RULES.md](CODING_RULES.md) for coding standards.
-
-## Performance
-
-Tested on Windows 11, Intel Core i7, 1 Gbps connection:
-
-| Config | Speed | Notes |
-|--------|-------|-------|
-| Baseline (8KB, single) | ~360 KB/s | 1x |
-| Power-of-two chunking | **10.5 MB/s** | **37x** (590 MB in 56s) |
-
-Memory usage stays under 20 MB regardless of video size (streaming I/O).
 
 ## Legal
 
