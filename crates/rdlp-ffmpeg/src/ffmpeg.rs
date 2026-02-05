@@ -612,10 +612,25 @@ impl FFmpegRunner {
         // Copy format-level metadata
         octx.set_metadata(ictx.metadata().to_owned());
 
-        // Write header (with faststart if requested)
+        // Build muxer options dictionary
+        let mut dict = ffmpeg_the_third::Dictionary::new();
+
+        // MP4/MOV: enable faststart (moov atom at beginning) for streaming
         if opts.faststart {
-            let mut dict = ffmpeg_the_third::Dictionary::new();
             dict.set("movflags", "+faststart");
+        }
+
+        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
+        // Default FFmpeg uses ~2-5 second clusters which causes choppy time display
+        let is_mkv = output
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
+        if is_mkv {
+            dict.set("cluster_time_limit", "500"); // 500ms clusters
+        }
+
+        // Write header with options
+        if dict.iter().count() > 0 {
             octx.write_header_with(dict)
                 .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
@@ -796,10 +811,24 @@ impl FFmpegRunner {
         Self::clear_codec_tag(ost_audio.parameters().as_ptr());
         let audio_ost_index = ost_audio.index();
 
-        // Write header (with faststart if requested)
+        // Build muxer options dictionary
+        let mut dict = ffmpeg_the_third::Dictionary::new();
+
+        // MP4/MOV: enable faststart (moov atom at beginning) for streaming
         if opts.faststart {
-            let mut dict = ffmpeg_the_third::Dictionary::new();
             dict.set("movflags", "+faststart");
+        }
+
+        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
+        let is_mkv = output
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
+        if is_mkv {
+            dict.set("cluster_time_limit", "500"); // 500ms clusters
+        }
+
+        // Write header with options
+        if dict.iter().count() > 0 {
             octx.write_header_with(dict)
                 .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("failed to write output header: {e}"),
@@ -1423,11 +1452,29 @@ impl FFmpegRunner {
             })?;
         }
 
-        // Write header
-        octx.write_header()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+        // Build muxer options dictionary
+        let mut dict = ffmpeg_the_third::Dictionary::new();
+
+        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
+        let is_mkv = output
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
+        if is_mkv {
+            dict.set("cluster_time_limit", "500"); // 500ms clusters
+        }
+
+        // Write header with options
+        if dict.iter().count() > 0 {
+            octx.write_header_with(dict)
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                })?;
+        } else {
+            octx.write_header()
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                })?;
+        }
 
         // Copy packets
         for result in ictx.packets() {
@@ -1629,15 +1676,26 @@ impl FFmpegRunner {
         // Copy format-level metadata from media input
         octx.set_metadata(ictx.metadata().to_owned());
 
-        // Write header (with faststart for MP4/MOV so moov atom is at start —
-        // required for Windows Explorer and many players to show the thumbnail)
+        // Build muxer options dictionary
+        let mut dict = ffmpeg_the_third::Dictionary::new();
+
+        // MP4/MOV: enable faststart (moov atom at beginning) for Windows Explorer thumbnail visibility
         let is_mp4_mov = matches!(
             container.to_lowercase().as_str(),
             "mp4" | "m4a" | "m4v" | "mov"
         );
         if is_mp4_mov {
-            let mut dict = ffmpeg_the_third::Dictionary::new();
             dict.set("movflags", "+faststart");
+        }
+
+        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
+        let is_mkv = container.eq_ignore_ascii_case("mkv");
+        if is_mkv {
+            dict.set("cluster_time_limit", "500"); // 500ms clusters
+        }
+
+        // Write header with options
+        if dict.iter().count() > 0 {
             octx.write_header_with(dict).map(|_| ())
         } else {
             octx.write_header()
@@ -1962,10 +2020,29 @@ impl FFmpegRunner {
             None
         };
 
-        octx.write_header()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+        // Build muxer options dictionary
+        let mut dict = ffmpeg_the_third::Dictionary::new();
+
+        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
+        let is_mkv = output
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
+        if is_mkv {
+            dict.set("cluster_time_limit", "500"); // 500ms clusters
+        }
+
+        // Write header with options
+        if dict.iter().count() > 0 {
+            octx.write_header_with(dict)
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                })?;
+        } else {
+            octx.write_header()
+                .map_err(|e| PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to write output header: {e}"),
+                })?;
+        }
 
         // Build video filter graph for pixel format conversion
         let mut filter_graph =
