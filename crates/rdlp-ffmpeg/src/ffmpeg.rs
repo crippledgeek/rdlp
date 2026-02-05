@@ -533,6 +533,8 @@ impl FFmpegRunner {
     }
 
     /// Remux a single input file synchronously (stream copy).
+    ///
+    /// Normalizes PTS/DTS timestamps to start at 0 (fixes HLS streams with non-zero start times).
     fn remux_sync(input: &Path, output: &Path, opts: &RemuxOptions) -> Result<()> {
         ensure_init()?;
 
@@ -551,7 +553,31 @@ impl FFmpegRunner {
         let stream_count = ictx.streams().count();
         let mut stream_mapping: Vec<i32> = vec![-1; stream_count];
         let mut ist_time_bases = vec![ffmpeg_the_third::Rational(0, 1); stream_count];
+        // Track PTS offset per stream for normalization (in stream time_base units)
+        let mut ist_pts_offsets: Vec<i64> = vec![0; stream_count];
         let mut ost_index: i32 = 0;
+
+        // Find minimum start_time across all video/audio streams for normalization
+        let mut min_start_time_seconds: f64 = f64::MAX;
+        for ist in ictx.streams() {
+            let medium = ist.parameters().medium();
+            if medium == ffmpeg_the_third::media::Type::Video
+                || medium == ffmpeg_the_third::media::Type::Audio
+            {
+                let start = ist.start_time();
+                if start > 0 {
+                    let tb = ist.time_base();
+                    let start_secs = start as f64 * tb.0 as f64 / tb.1 as f64;
+                    if start_secs < min_start_time_seconds {
+                        min_start_time_seconds = start_secs;
+                    }
+                }
+            }
+        }
+        // If no positive start_time found, no normalization needed
+        if min_start_time_seconds == f64::MAX {
+            min_start_time_seconds = 0.0;
+        }
 
         for (ist_index, ist) in ictx.streams().enumerate() {
             let medium = ist.parameters().medium();
@@ -563,6 +589,13 @@ impl FFmpegRunner {
 
             stream_mapping[ist_index] = ost_index;
             ist_time_bases[ist_index] = ist.time_base();
+
+            // Calculate PTS offset for this stream in its time_base units
+            // offset = min_start_time_seconds * time_base_denominator / time_base_numerator
+            let tb = ist.time_base();
+            ist_pts_offsets[ist_index] =
+                (min_start_time_seconds * tb.1 as f64 / tb.0 as f64) as i64;
+
             ost_index += 1;
 
             let mut ost = octx
@@ -594,7 +627,7 @@ impl FFmpegRunner {
                 })?;
         }
 
-        // Copy packets
+        // Copy packets with PTS normalization (shifts timestamps to start at 0)
         for result in ictx.packets() {
             let (stream, mut packet) =
                 result.map_err(|e| PostProcessError::FFmpegLibraryError {
@@ -606,6 +639,18 @@ impl FFmpegRunner {
                 continue;
             }
             let ost_idx = ost_idx as usize;
+
+            // Apply PTS offset to normalize timestamps to start at 0
+            let offset = ist_pts_offsets[ist_index];
+            if offset > 0 {
+                if let Some(pts) = packet.pts() {
+                    packet.set_pts(Some(pts.saturating_sub(offset)));
+                }
+                if let Some(dts) = packet.dts() {
+                    packet.set_dts(Some(dts.saturating_sub(offset)));
+                }
+            }
+
             let ost_time_base = octx
                 .stream(ost_idx)
                 .ok_or_else(|| {

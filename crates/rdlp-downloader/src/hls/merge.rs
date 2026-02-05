@@ -62,8 +62,42 @@ pub(crate) async fn download_segments_with_resume(
 ) -> Result<Vec<PathBuf>> {
     let total_segments = segments.len();
 
-    // Get already completed segments
-    let completed: HashSet<usize> = state.lock().await.completed_segments.clone();
+    // Get already completed segments and validate they exist on disk
+    let original_completed: HashSet<usize> = state.lock().await.completed_segments.clone();
+
+    // Verify completed segments actually exist on disk (handles corrupted/deleted files)
+    let mut completed: HashSet<usize> = HashSet::new();
+    let mut missing_segments = Vec::new();
+    for idx in &original_completed {
+        let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
+        if segment_path.exists() {
+            // Also verify file is non-empty
+            if let Ok(meta) = std::fs::metadata(&segment_path) {
+                if meta.len() > 0 {
+                    completed.insert(*idx);
+                    continue;
+                }
+            }
+        }
+        missing_segments.push(*idx);
+    }
+
+    if !missing_segments.is_empty() {
+        missing_segments.sort_unstable();
+        warn!(
+            count = missing_segments.len(),
+            segments:? = missing_segments;
+            "State claimed segments completed but files missing/empty, re-downloading"
+        );
+        // Update state to remove invalid entries
+        {
+            let mut state_guard = state.lock().await;
+            for idx in &missing_segments {
+                state_guard.completed_segments.remove(idx);
+            }
+        }
+    }
+
     let to_download: Vec<(usize, SegmentInfo)> = segments
         .iter()
         .enumerate()
