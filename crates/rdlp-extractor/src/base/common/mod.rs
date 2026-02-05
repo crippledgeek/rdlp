@@ -139,6 +139,10 @@ pub static ISO8601_DURATION_PATTERN: Lazy<Regex> = Lazy::new(|| {
 pub static ISO8601_DATE_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern"));
 
+/// Pattern to strip HTML tags from text
+pub static HTML_TAG_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
+
 // ============================================================================
 // Base Extractor
 // ============================================================================
@@ -905,6 +909,34 @@ impl BaseExtractor {
         }
     }
 
+    /// Strip HTML tags from text and truncate to a maximum length.
+    ///
+    /// Useful for cleaning error messages and other text extracted from HTML.
+    ///
+    /// # Arguments
+    /// * `text` - Text potentially containing HTML tags
+    /// * `max_len` - Maximum length of the result (default 200 if None)
+    ///
+    /// # Returns
+    /// Cleaned text with HTML tags removed and whitespace trimmed
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let clean = BaseExtractor::clean_html_tags("<p>Video <b>removed</b></p>", Some(200));
+    /// assert_eq!(clean, "Video removed");
+    /// ```
+    #[must_use]
+    pub fn clean_html_tags(text: &str, max_len: Option<usize>) -> String {
+        let max = max_len.unwrap_or(200);
+        HTML_TAG_PATTERN
+            .replace_all(text.trim(), "")
+            .trim()
+            .chars()
+            .take(max)
+            .collect()
+    }
+
     /// Sanitize a string for safe logging (redact sensitive data)
     ///
     /// **Note**: This function delegates to [`rdlp_security::sanitize_for_logging`].
@@ -980,5 +1012,123 @@ impl BaseExtractor {
         let day = caps.get(3)?.as_str();
 
         Some(format!("{year}{month}{day}"))
+    }
+
+    /// Parse duration from various string formats.
+    ///
+    /// Supports:
+    /// - ISO 8601: `PT1H2M30S`, `PT5M`, `PT30S`
+    /// - Colon-separated: `1:30`, `1:02:30`
+    /// - Text format: `28min 18sec`, `5min`, `30sec`
+    /// - Plain seconds as string: `893`
+    ///
+    /// # Arguments
+    /// * `s` - Duration string in any supported format
+    ///
+    /// # Returns
+    /// Duration in seconds, `None` if parsing fails
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// assert_eq!(BaseExtractor::parse_duration("PT1H2M30S"), Some(3750.0));
+    /// assert_eq!(BaseExtractor::parse_duration("1:30"), Some(90.0));
+    /// assert_eq!(BaseExtractor::parse_duration("28min 18sec"), Some(1698.0));
+    /// assert_eq!(BaseExtractor::parse_duration("893"), Some(893.0));
+    /// ```
+    #[must_use]
+    pub fn parse_duration(s: &str) -> Option<f64> {
+        let s = s.trim();
+
+        // Try ISO 8601 first
+        if let Some(duration) = Self::parse_iso8601_duration(s) {
+            return Some(duration);
+        }
+
+        // Try colon-separated format (1:30, 1:02:30)
+        if s.contains(':') {
+            let parts: Vec<&str> = s.split(':').collect();
+            return match parts.len() {
+                2 => {
+                    let mins: f64 = parts[0].parse().ok()?;
+                    let secs: f64 = parts[1].parse().ok()?;
+                    Some(mins * 60.0 + secs)
+                }
+                3 => {
+                    let hours: f64 = parts[0].parse().ok()?;
+                    let mins: f64 = parts[1].parse().ok()?;
+                    let secs: f64 = parts[2].parse().ok()?;
+                    Some(hours * 3600.0 + mins * 60.0 + secs)
+                }
+                _ => None,
+            };
+        }
+
+        // Try text format (28min 18sec)
+        if let Some(duration) = Self::parse_text_duration(s) {
+            return Some(duration);
+        }
+
+        // Try plain number
+        s.parse().ok()
+    }
+
+    /// Parse text duration format like "28min 18sec" into seconds.
+    ///
+    /// Supports:
+    /// - `28min 18sec`
+    /// - `5min`
+    /// - `30sec`
+    /// - `1h 30min` (hour support)
+    ///
+    /// # Arguments
+    /// * `text` - Duration text
+    ///
+    /// # Returns
+    /// Duration in seconds, `None` if parsing fails
+    #[must_use]
+    pub fn parse_text_duration(text: &str) -> Option<f64> {
+        let text = text.trim().to_lowercase();
+        let mut total_seconds = 0.0;
+        let mut found_any = false;
+
+        // Extract hours
+        if let Some(h_idx) = text.find('h') {
+            let before = text[..h_idx].trim();
+            if let Some(num_str) = before.split_whitespace().next_back() {
+                if let Ok(hours) = num_str.parse::<f64>() {
+                    total_seconds += hours * 3600.0;
+                    found_any = true;
+                }
+            }
+        }
+
+        // Extract minutes
+        if let Some(min_idx) = text.find("min") {
+            let before = text[..min_idx].trim();
+            if let Some(num_str) = before.split_whitespace().next_back() {
+                if let Ok(mins) = num_str.parse::<f64>() {
+                    total_seconds += mins * 60.0;
+                    found_any = true;
+                }
+            }
+        }
+
+        // Extract seconds
+        if let Some(sec_idx) = text.find("sec") {
+            let before = text[..sec_idx].trim();
+            if let Some(num_str) = before.split_whitespace().next_back() {
+                if let Ok(secs) = num_str.parse::<f64>() {
+                    total_seconds += secs;
+                    found_any = true;
+                }
+            }
+        }
+
+        if found_any && total_seconds > 0.0 {
+            Some(total_seconds)
+        } else {
+            None
+        }
     }
 }

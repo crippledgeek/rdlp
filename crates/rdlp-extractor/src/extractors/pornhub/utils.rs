@@ -37,9 +37,6 @@ static GEO_BLOCKED_PATTERN: Lazy<Regex> =
 static LOCKED_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"<[^>]+\bid=["']lockedPlayer"#).expect("Valid locked pattern"));
 
-static HTML_TAG_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
-
 static SHARE_TITLE_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"shareTitle\s*[:=]\s*["']([^"']+)["']"#).expect("Valid share title pattern")
 });
@@ -83,7 +80,7 @@ pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
     // Check for removed/flagged videos
     if let Some(caps) = REMOVED_VIDEO_PATTERN.captures(webpage) {
         if let Some(error) = caps.name("error") {
-            let cleaned = clean_html(error.as_str());
+            let cleaned = BaseExtractor::clean_html_tags(error.as_str(), Some(200));
             return Some(format!("Video unavailable: {cleaned}"));
         }
     }
@@ -91,7 +88,7 @@ pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
     // Check for noVideo section
     if let Some(caps) = NO_VIDEO_PATTERN.captures(webpage) {
         if let Some(error) = caps.name("error") {
-            let cleaned = clean_html(error.as_str());
+            let cleaned = BaseExtractor::clean_html_tags(error.as_str(), Some(200));
             return Some(format!("Video unavailable: {cleaned}"));
         }
     }
@@ -109,12 +106,6 @@ pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
     }
 
     None
-}
-
-/// Clean HTML tags from text and truncate
-fn clean_html(text: &str) -> String {
-    let cleaned = HTML_TAG_PATTERN.replace_all(text.trim(), "");
-    cleaned.trim().chars().take(200).collect()
 }
 
 /// PornHub base URL for making relative hrefs absolute.

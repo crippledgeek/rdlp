@@ -52,4 +52,5 @@
 //! - Use static `Lazy<Regex>` for URL patterns (see `common.rs` examples)
 
 pub mod common;
+pub mod kvs;
 pub mod tnaflix_network;

@@ -7,6 +7,31 @@ use crate::chunking::ChunkSizeStrategy;
 use rdlp_core::RetryConfig;
 use std::time::Duration;
 
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// Minimum file size to enable parallel downloads (10 MB)
+pub const PARALLEL_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// Progress callback update interval
+pub const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Default buffer size for I/O operations (2 MB)
+pub const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+
+/// Maximum concurrent connections cap
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 8;
+
+/// Default per-read idle timeout (60 seconds)
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Default total download timeout (1 hour)
+pub const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// Default merge operation timeout (30 minutes)
+pub const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
+
 /// Downloader configuration (shared across clones via Arc)
 ///
 /// This struct consolidates all config fields into a single Arc,
@@ -36,21 +61,21 @@ impl Default for DownloaderConfig {
         // For I/O-bound workloads like HTTP downloads:
         // - Tokio can handle many more tasks than CPU cores
         // - Research shows: aria2 uses 4-16 connections, yt-dlp defaults to 1
-        // - Formula: min(available_parallelism, 8) for balanced I/O saturation
+        // - Formula: min(available_parallelism, MAX_CONCURRENT_CONNECTIONS)
         //   * Too few: underutilizes bandwidth
         //   * Too many: connection overhead, server rate limiting
         let concurrent_fragments = std::thread::available_parallelism()
-            .map(|n| n.get().min(8))
+            .map(|n| n.get().min(MAX_CONCURRENT_CONNECTIONS))
             .unwrap_or(4);
 
         Self {
-            buffer_size: 2 * 1024 * 1024, // 2 MB
+            buffer_size: DEFAULT_BUFFER_SIZE,
             retry_config: RetryConfig::default_config(),
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
-            read_timeout: Duration::from_secs(60),
-            download_timeout: Duration::from_secs(3600), // 1 hour
-            merge_timeout: Duration::from_secs(1800),    // 30 min
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            download_timeout: DEFAULT_DOWNLOAD_TIMEOUT,
+            merge_timeout: DEFAULT_MERGE_TIMEOUT,
         }
     }
 }

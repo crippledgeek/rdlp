@@ -181,45 +181,11 @@ fn parse_duration_text(html: &Html) -> Option<f64> {
     for item in html.select(&item_selector) {
         if item.select(&icon_selector).next().is_some() {
             let text: String = item.text().collect();
-            return parse_min_sec_duration(text.trim());
+            return BaseExtractor::parse_text_duration(text.trim());
         }
     }
 
     None
-}
-
-/// Parse "28min 18sec" or "5min" or "30sec" into seconds
-fn parse_min_sec_duration(text: &str) -> Option<f64> {
-    let text = text.trim().to_lowercase();
-    let mut total_seconds = 0.0;
-
-    // Extract minutes
-    if let Some(min_idx) = text.find("min") {
-        let before = text[..min_idx].trim();
-        // Take only the last numeric token before "min"
-        if let Some(num_str) = before.split_whitespace().next_back() {
-            if let Ok(mins) = num_str.parse::<f64>() {
-                total_seconds += mins * 60.0;
-            }
-        }
-    }
-
-    // Extract seconds
-    if let Some(sec_idx) = text.find("sec") {
-        // Find the number just before "sec"
-        let before = text[..sec_idx].trim();
-        if let Some(num_str) = before.split_whitespace().next_back() {
-            if let Ok(secs) = num_str.parse::<f64>() {
-                total_seconds += secs;
-            }
-        }
-    }
-
-    if total_seconds > 0.0 {
-        Some(total_seconds)
-    } else {
-        None
-    }
 }
 
 #[async_trait]
@@ -372,12 +338,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_min_sec_duration() {
-        assert_eq!(parse_min_sec_duration("28min 18sec"), Some(1698.0));
-        assert_eq!(parse_min_sec_duration("5min"), Some(300.0));
-        assert_eq!(parse_min_sec_duration("30sec"), Some(30.0));
-        assert_eq!(parse_min_sec_duration("1min 1sec"), Some(61.0));
-        assert_eq!(parse_min_sec_duration(""), None);
+    fn test_parse_text_duration() {
+        // Tests use BaseExtractor::parse_text_duration now
+        assert_eq!(BaseExtractor::parse_text_duration("28min 18sec"), Some(1698.0));
+        assert_eq!(BaseExtractor::parse_text_duration("5min"), Some(300.0));
+        assert_eq!(BaseExtractor::parse_text_duration("30sec"), Some(30.0));
+        assert_eq!(BaseExtractor::parse_text_duration("1min 1sec"), Some(61.0));
+        assert_eq!(BaseExtractor::parse_text_duration(""), None);
     }
 
     #[test]

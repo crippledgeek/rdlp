@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::base::common::BaseExtractor;
 use crate::utils::extract_extension_from_url;
+use rdlp_crypto::xhamster::decipher_format_url;
 
-use super::decrypt::decipher_format_url;
 use super::patterns;
 
 /// Extract height from a quality string like "720p", "1080P", etc.

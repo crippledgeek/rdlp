@@ -75,21 +75,13 @@ static CATEGORY_LINK_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"<a[^>]+>(.+?)</a>").expect("Valid category link pattern")
 });
 
-static HTML_TAG_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
-
 /// Detect if a video page indicates the video is unavailable.
 ///
 /// Returns an error message if the video is closed/removed, `None` otherwise.
 pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
     VIDEO_CLOSED_PATTERN.captures(webpage).and_then(|caps| {
         caps.get(1).map(|m| {
-            let cleaned = HTML_TAG_PATTERN
-                .replace_all(m.as_str().trim(), "")
-                .trim()
-                .chars()
-                .take(200)
-                .collect::<String>();
+            let cleaned = BaseExtractor::clean_html_tags(m.as_str(), Some(200));
             format!("Video unavailable: {cleaned}")
         })
     })
@@ -260,12 +252,11 @@ pub fn extract_metadata_from_html(
         });
 
     // Duration (parse "PT1M30S" or "1:30" formats)
-    // We'll just extract the raw string and let the caller parse if needed
     for pattern in &LEGACY_DURATION_PATTERNS {
         if let Some(caps) = Regex::new(pattern).ok().and_then(|re| re.captures(webpage)) {
             if let Some(m) = caps.get(1) {
                 let dur_str = m.as_str().trim();
-                info.duration = parse_duration_string(dur_str);
+                info.duration = BaseExtractor::parse_duration(dur_str);
                 if info.duration.is_some() {
                     break;
                 }
@@ -299,12 +290,7 @@ pub fn extract_metadata_from_html(
         let cats: Vec<String> = CATEGORY_LINK_PATTERN
             .captures_iter(cats_html)
             .filter_map(|caps| {
-                caps.get(1).map(|m| {
-                    HTML_TAG_PATTERN
-                        .replace_all(m.as_str(), "")
-                        .trim()
-                        .to_string()
-                })
+                caps.get(1).map(|m| BaseExtractor::clean_html_tags(m.as_str(), None))
             })
             .filter(|s| !s.is_empty())
             .collect();
@@ -364,60 +350,6 @@ fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Parse a duration string in various formats.
-///
-/// Supports:
-/// - ISO 8601: `PT1H2M30S`, `PT5M`, `PT30S`
-/// - Colon-separated: `1:30`, `1:02:30`
-/// - Plain seconds as string
-fn parse_duration_string(s: &str) -> Option<f64> {
-    let s = s.trim();
-
-    // ISO 8601 duration: PT1H2M30S
-    if s.starts_with("PT") || s.starts_with("pt") {
-        let s = &s[2..];
-        let mut total = 0.0;
-        let mut num_str = String::new();
-        for ch in s.chars() {
-            if ch.is_ascii_digit() || ch == '.' {
-                num_str.push(ch);
-            } else {
-                let num: f64 = num_str.parse().unwrap_or(0.0);
-                num_str.clear();
-                match ch {
-                    'H' | 'h' => total += num * 3600.0,
-                    'M' | 'm' => total += num * 60.0,
-                    'S' | 's' => total += num,
-                    _ => {}
-                }
-            }
-        }
-        return if total > 0.0 { Some(total) } else { None };
-    }
-
-    // Colon-separated: "1:30" or "1:02:30"
-    if s.contains(':') {
-        let parts: Vec<&str> = s.split(':').collect();
-        return match parts.len() {
-            2 => {
-                let mins: f64 = parts[0].parse().ok()?;
-                let secs: f64 = parts[1].parse().ok()?;
-                Some(mins * 60.0 + secs)
-            }
-            3 => {
-                let hours: f64 = parts[0].parse().ok()?;
-                let mins: f64 = parts[1].parse().ok()?;
-                let secs: f64 = parts[2].parse().ok()?;
-                Some(hours * 3600.0 + mins * 60.0 + secs)
-            }
-            _ => None,
-        };
-    }
-
-    // Plain number
-    s.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,25 +375,6 @@ mod tests {
 
         let html = r#"<meta name="description" content="normal">"#;
         assert_eq!(extract_age_limit(html), None);
-    }
-
-    #[test]
-    fn test_parse_duration_iso() {
-        assert_eq!(parse_duration_string("PT1H2M30S"), Some(3750.0));
-        assert_eq!(parse_duration_string("PT5M"), Some(300.0));
-        assert_eq!(parse_duration_string("PT30S"), Some(30.0));
-        assert_eq!(parse_duration_string("PT1H"), Some(3600.0));
-    }
-
-    #[test]
-    fn test_parse_duration_colon() {
-        assert_eq!(parse_duration_string("1:30"), Some(90.0));
-        assert_eq!(parse_duration_string("1:02:30"), Some(3750.0));
-    }
-
-    #[test]
-    fn test_parse_duration_plain() {
-        assert_eq!(parse_duration_string("893"), Some(893.0));
     }
 
     #[test]

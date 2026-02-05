@@ -18,7 +18,6 @@
 //! - Users: `https://xhamster.com/users/username/videos`
 //! - Creators: `https://xhamster.com/creators/username`
 
-mod decrypt;
 mod formats;
 mod patterns;
 mod utils;

@@ -26,7 +26,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::chunking::ChunkSizeStrategy;
-use config::DownloaderConfig;
+use config::{DownloaderConfig, PARALLEL_THRESHOLD, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
 /// Convert optional HashMap headers to reqwest HeaderMap
@@ -44,6 +44,26 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
         }
     }
     map
+}
+
+/// Execute an async operation with retry logic
+async fn with_retry<F, Fut, T>(
+    retry_config: &RetryConfig,
+    context: &'static str,
+    operation: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let backoff = retry_config.to_backoff();
+    operation
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!(delay:? = dur; "{context} failed, retrying: {err}");
+        })
+        .await
 }
 
 /// HTTP/HTTPS downloader
@@ -154,10 +174,9 @@ impl HttpDownloader {
     async fn supports_ranges(&self, url: &str) -> Result<bool> {
         let client = self.client.clone();
         let url = url.to_string();
-        let backoff = self.config.retry_config.to_backoff();
         let hdrs = self.headers();
 
-        let response = (|| {
+        let response = with_retry(&self.config.retry_config, "HTTP HEAD (range check)", || {
             let client = client.clone();
             let url = url.clone();
             let hdrs = hdrs.clone();
@@ -169,11 +188,6 @@ impl HttpDownloader {
                     .await
                     .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
             }
-        })
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "HTTP HEAD (range check) failed, retrying: {err}");
         })
         .await?;
 
@@ -196,10 +210,9 @@ impl HttpDownloader {
     ) -> Result<u64> {
         let client = self.client.clone();
         let url = url.to_string();
-        let backoff = self.config.retry_config.to_backoff();
         let hdrs = self.headers();
 
-        let response = (|| {
+        let response = with_retry(&self.config.retry_config, "HTTP GET (range)", || {
             let client = client.clone();
             let url = url.clone();
             let hdrs = hdrs.clone();
@@ -215,11 +228,6 @@ impl HttpDownloader {
                 check_http_response(&response)?;
                 Ok(response)
             }
-        })
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "HTTP GET (range) failed, retrying: {err}");
         })
         .await?;
 
@@ -268,10 +276,9 @@ impl HttpDownloader {
         let start_time = Instant::now();
         let client = self.client.clone();
         let url_string = url.to_string();
-        let backoff = self.config.retry_config.to_backoff();
         let hdrs = self.headers();
 
-        let response = (|| {
+        let response = with_retry(&self.config.retry_config, "HTTP GET", || {
             let client = client.clone();
             let url = url_string.clone();
             let hdrs = hdrs.clone();
@@ -287,11 +294,6 @@ impl HttpDownloader {
                 Ok(response)
             }
         })
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "HTTP GET failed, retrying: {err}");
-        })
         .await?;
 
         let total_size = response.content_length();
@@ -301,7 +303,7 @@ impl HttpDownloader {
         let mut stream = response.bytes_stream();
         let mut downloaded: u64 = 0;
         let mut last_update = Instant::now();
-        let update_interval = Duration::from_millis(100);
+        let update_interval = PROGRESS_UPDATE_INTERVAL;
         let read_timeout = self.config.read_timeout;
 
         while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
@@ -388,10 +390,9 @@ impl Downloader for HttpDownloader {
                 debug!("HEAD didn't return valid size, trying Range request...");
                 let client = self.client.clone();
                 let url_string = url.to_string();
-                let backoff = self.config.retry_config.to_backoff();
                 let hdrs = self.headers();
 
-                match (|| {
+                match with_retry(&self.config.retry_config, "HTTP GET (size check)", || {
                     let client = client.clone();
                     let url = url_string.clone();
                     let hdrs = hdrs.clone();
@@ -404,11 +405,6 @@ impl Downloader for HttpDownloader {
                             .await
                             .map_err(|e| RdlpError::Network(format!("Size check failed: {e}")))
                     }
-                })
-                .retry(backoff)
-                .when(is_retryable_error)
-                .notify(|err, dur| {
-                    warn!(delay:? = dur; "HTTP GET (size check) failed, retrying: {err}");
                 })
                 .await
                 {
@@ -439,7 +435,7 @@ impl Downloader for HttpDownloader {
             };
 
             let use_parallel = match size {
-                Some(s) if s > 10 * 1024 * 1024 => {
+                Some(s) if s > PARALLEL_THRESHOLD => {
                     self.config.concurrent_fragments > 1 && supports_ranges
                 }
                 _ => false,
@@ -456,7 +452,7 @@ impl Downloader for HttpDownloader {
             } else {
                 let reason = match size {
                     None | Some(0) => "could not detect file size",
-                    Some(s) if s <= 10 * 1024 * 1024 => "file too small for parallel",
+                    Some(s) if s <= PARALLEL_THRESHOLD => "file too small for parallel",
                     Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
                     Some(_) if !supports_ranges => "server doesn't support ranges",
                     Some(_) => "unknown reason",
@@ -486,10 +482,9 @@ impl Downloader for HttpDownloader {
     async fn get_size(&self, url: &str) -> Result<Option<u64>> {
         let client = self.client.clone();
         let url = url.to_string();
-        let backoff = self.config.retry_config.to_backoff();
         let hdrs = self.headers();
 
-        let response = (|| {
+        let response = with_retry(&self.config.retry_config, "HTTP HEAD", || {
             let client = client.clone();
             let url = url.clone();
             let hdrs = hdrs.clone();
@@ -501,11 +496,6 @@ impl Downloader for HttpDownloader {
                     .await
                     .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
             }
-        })
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "HTTP HEAD failed, retrying: {err}");
         })
         .await?;
 
@@ -524,10 +514,9 @@ impl Downloader for HttpDownloader {
             let start_time = Instant::now();
             let client = self.client.clone();
             let url_string = url.to_string();
-            let backoff = self.config.retry_config.to_backoff();
             let hdrs = self.headers();
 
-            let response = (|| {
+            let response = with_retry(&self.config.retry_config, "HTTP GET (resume)", || {
                 let client = client.clone();
                 let url = url_string.clone();
                 let hdrs = hdrs.clone();
@@ -551,11 +540,6 @@ impl Downloader for HttpDownloader {
 
                     Ok(response)
                 }
-            })
-            .retry(backoff)
-            .when(is_retryable_error)
-            .notify(|err, dur| {
-                warn!(delay:? = dur; "HTTP GET (resume) failed, retrying: {err}");
             })
             .await?;
 
@@ -594,7 +578,7 @@ impl Downloader for HttpDownloader {
                     supports_ranges
                 );
 
-                let can_parallel = remaining_size > 10 * 1024 * 1024
+                let can_parallel = remaining_size > PARALLEL_THRESHOLD
                     && self.config.concurrent_fragments > 1
                     && supports_ranges;
 
@@ -633,7 +617,7 @@ impl Downloader for HttpDownloader {
             let mut stream = response.bytes_stream();
             let mut downloaded = resume_from;
             let mut last_update = Instant::now();
-            let update_interval = Duration::from_millis(100);
+            let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
 
             while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())

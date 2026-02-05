@@ -17,6 +17,31 @@ use super::config::DownloaderConfig;
 use crate::chunking::calculate_chunks;
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 
+/// Mode for chunk merging operations
+#[derive(Clone, Copy)]
+enum MergeMode {
+    /// Create new file and merge chunks (.part suffix)
+    Create,
+    /// Append chunks to existing file (.resume suffix)
+    Append,
+}
+
+impl MergeMode {
+    fn chunk_suffix(self) -> &'static str {
+        match self {
+            MergeMode::Create => "part",
+            MergeMode::Append => "resume",
+        }
+    }
+
+    fn log_action(self) -> &'static str {
+        match self {
+            MergeMode::Create => "Merging",
+            MergeMode::Append => "Appending",
+        }
+    }
+}
+
 /// Global atomic counter for generating unique download IDs
 pub(super) static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -133,13 +158,14 @@ impl HttpDownloader {
             total_downloaded / 1024 / 1024
         );
 
-        merge_chunks(
+        merge_chunks_with_mode(
             path,
             temp_dir,
             &filename,
             download_id,
             total_chunks,
             &self.config,
+            MergeMode::Create,
         )
         .await?;
 
@@ -256,13 +282,14 @@ impl HttpDownloader {
         // Progress guard will be dropped and abort the task automatically
 
         // Append chunks to existing file
-        append_chunks(
+        merge_chunks_with_mode(
             path,
             temp_dir,
             &filename,
             download_id,
             total_chunks,
             &self.config,
+            MergeMode::Append,
         )
         .await?;
 
@@ -282,73 +309,35 @@ impl HttpDownloader {
     }
 }
 
-/// Merge chunks into final file
-async fn merge_chunks(
+/// Merge or append chunks to file
+async fn merge_chunks_with_mode(
     path: &Path,
     temp_dir: &Path,
     filename: &str,
     download_id: u64,
     total_chunks: usize,
     config: &DownloaderConfig,
+    mode: MergeMode,
 ) -> Result<()> {
     let merge_timeout = config.merge_timeout;
-    tokio::time::timeout(merge_timeout, async {
-        info!(chunks = total_chunks; "Merging chunks into final file");
-        let final_file = File::create(path).await.map_err(RdlpError::Io)?;
-        let mut writer = BufWriter::with_capacity(config.buffer_size, final_file);
+    let suffix = mode.chunk_suffix();
+    let action = mode.log_action();
 
-        let mut deleted_chunks = 0;
-        for chunk_id in 0..total_chunks {
-            let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
-            let mut chunk_file = File::open(&chunk_path).await.map_err(RdlpError::Io)?;
-            tokio::io::copy(&mut chunk_file, &mut writer)
+    tokio::time::timeout(merge_timeout, async {
+        let file = match mode {
+            MergeMode::Create => File::create(path).await.map_err(RdlpError::Io)?,
+            MergeMode::Append => tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(path)
                 .await
-                .map_err(RdlpError::Io)?;
-
-            if tokio::fs::remove_file(&chunk_path).await.is_ok() {
-                deleted_chunks += 1;
-            }
-
-            if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-                debug!(merged = chunk_id + 1, total = total_chunks; "Merge progress");
-            }
-        }
-        debug!(deleted = deleted_chunks; "Chunk cleanup complete");
-
-        writer.flush().await.map_err(RdlpError::Io)?;
-        Ok(())
-    })
-    .await
-    .map_err(|_| {
-        RdlpError::Download(format!(
-            "Merge timed out after {}s",
-            merge_timeout.as_secs()
-        ))
-    })?
-}
-
-/// Append chunks to existing file (for resume)
-async fn append_chunks(
-    path: &Path,
-    temp_dir: &Path,
-    filename: &str,
-    download_id: u64,
-    total_chunks: usize,
-    config: &DownloaderConfig,
-) -> Result<()> {
-    let merge_timeout = config.merge_timeout;
-    tokio::time::timeout(merge_timeout, async {
-        let file = tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(path)
-            .await
-            .map_err(RdlpError::Io)?;
+                .map_err(RdlpError::Io)?,
+        };
         let mut writer = BufWriter::with_capacity(config.buffer_size, file);
 
-        info!(chunks = total_chunks; "Appending chunks to existing file");
+        info!(chunks = total_chunks; "{action} chunks into file");
         let mut deleted_chunks = 0;
         for chunk_id in 0..total_chunks {
-            let chunk_path = temp_dir.join(format!("{filename}.{download_id}.resume{chunk_id}"));
+            let chunk_path = temp_dir.join(format!("{filename}.{download_id}.{suffix}{chunk_id}"));
             let mut chunk_file = File::open(&chunk_path).await.map_err(RdlpError::Io)?;
             tokio::io::copy(&mut chunk_file, &mut writer)
                 .await
@@ -359,7 +348,7 @@ async fn append_chunks(
             }
 
             if (chunk_id + 1) % 100 == 0 || chunk_id == total_chunks - 1 {
-                debug!(appended = chunk_id + 1, total = total_chunks; "Append progress");
+                debug!(processed = chunk_id + 1, total = total_chunks; "{action} progress");
             }
         }
         debug!(deleted = deleted_chunks; "Chunk cleanup complete");
