@@ -266,6 +266,16 @@ pub trait DownloaderRegistryTrait: Send + Sync {
     /// Find a suitable downloader for the given URL
     fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>>;
 
+    /// Find a downloader and apply extra HTTP headers (e.g. Referer for CDN auth).
+    /// Default falls back to `find_downloader` (ignoring headers).
+    fn find_downloader_with_headers(
+        &self,
+        url: &str,
+        _headers: Option<&std::collections::HashMap<String, String>>,
+    ) -> Option<Arc<dyn Downloader>> {
+        self.find_downloader(url)
+    }
+
     /// Get all registered downloader protocol names
     fn list_downloaders(&self) -> Vec<&str>;
 }
@@ -273,6 +283,10 @@ pub trait DownloaderRegistryTrait: Send + Sync {
 /// Registry for managing downloaders
 pub struct DownloaderRegistry {
     downloaders: Vec<Arc<dyn Downloader>>,
+    /// Stored concrete HTTP downloader for creating copies with headers
+    http_base: HttpDownloader,
+    /// Stored concrete HLS downloader for creating copies with headers
+    hls_base: HlsDownloader,
 }
 
 impl DownloaderRegistry {
@@ -285,10 +299,6 @@ impl DownloaderRegistry {
     /// Create a new registry with custom configuration
     #[must_use]
     pub fn with_config(config: &Config) -> Self {
-        let mut registry = Self {
-            downloaders: Vec::new(),
-        };
-
         // Create optimized HTTP client using shared factory
         let client = HttpClientFactory::from_rdlp_config(config).build();
 
@@ -301,12 +311,19 @@ impl DownloaderRegistry {
             .with_concurrent_fragments(config.concurrent_fragments)
             .with_rate_limiter(rate_limiter);
 
-        // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
+        // Create HLS downloader
         let hls_downloader = HlsDownloader::new()
             .with_http_downloader(http_downloader.clone())
             .with_concurrent_segments(config.concurrent_fragments)
             .with_buffer_size(config.buffer_size);
 
+        let mut registry = Self {
+            downloaders: Vec::new(),
+            http_base: http_downloader.clone(),
+            hls_base: hls_downloader.clone(),
+        };
+
+        // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
         registry.register(Arc::new(hls_downloader));
 
         // Register HTTP downloader SECOND (fallback for generic HTTP/HTTPS URLs)
@@ -366,6 +383,32 @@ impl Default for DownloaderRegistry {
 impl DownloaderRegistryTrait for DownloaderRegistry {
     fn find_downloader(&self, url: &str) -> Option<Arc<dyn Downloader>> {
         self.find_downloader(url)
+    }
+
+    fn find_downloader_with_headers(
+        &self,
+        url: &str,
+        headers: Option<&std::collections::HashMap<String, String>>,
+    ) -> Option<Arc<dyn Downloader>> {
+        // If no headers, use shared downloader
+        if headers.is_none() || headers.is_none_or(|h| h.is_empty()) {
+            return self.find_downloader(url);
+        }
+
+        // Create a fresh downloader clone with the extra headers applied
+        let base = self.downloaders.iter().find(|d| d.supports(url))?;
+
+        match base.protocol() {
+            "hls" => {
+                let new_http = self.http_base.clone().with_extra_headers(headers);
+                let new_hls = self.hls_base.clone().with_http_downloader(new_http);
+                Some(Arc::new(new_hls))
+            }
+            "http" => {
+                Some(Arc::new(self.http_base.clone().with_extra_headers(headers)))
+            }
+            _ => self.find_downloader(url),
+        }
     }
 
     fn list_downloaders(&self) -> Vec<&str> {

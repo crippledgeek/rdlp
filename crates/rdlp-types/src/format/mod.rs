@@ -123,6 +123,10 @@ pub struct Format {
     /// Total duration in seconds (for HLS: sum of segment durations)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+
+    /// Fallback download URLs (alternative CDNs), tried in order if primary fails
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_urls: Option<Vec<String>>,
 }
 
 impl fmt::Debug for Format {
@@ -199,6 +203,9 @@ impl fmt::Debug for Format {
         if let Some(v) = &self.duration {
             d.field("duration", v);
         }
+        if let Some(v) = &self.fallback_urls {
+            d.field("fallback_urls", &format!("[{} URLs]", v.len()));
+        }
 
         d.finish()
     }
@@ -240,6 +247,7 @@ impl Format {
             cached_description: OnceLock::new(),
             has_drm: None,
             duration: None,
+            fallback_urls: None,
         }
     }
 
@@ -355,9 +363,18 @@ impl Format {
                 (None, None) => "HLS stream".to_string(),
             }
         } else if let Some(filesize) = self.filesize {
-            format!("{:.1} MB", filesize as f64 / (1024.0 * 1024.0))
+            let dur_suffix = self.duration.map(|dur| {
+                let mins = dur as u64 / 60;
+                let secs = dur as u64 % 60;
+                format!(" ({mins}:{secs:02})")
+            }).unwrap_or_default();
+            format!("{:.1} MB{dur_suffix}", filesize as f64 / (1024.0 * 1024.0))
         } else if let Some(filesize_approx) = self.filesize_approx {
             format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))
+        } else if let Some(dur) = self.duration {
+            let mins = dur as u64 / 60;
+            let secs = dur as u64 % 60;
+            format!("{mins}:{secs:02}")
         } else {
             "Unknown".to_string()
         }

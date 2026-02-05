@@ -266,6 +266,20 @@ impl InfoDict {
             })
     }
 
+    /// Propagate video-level duration to all formats that lack it.
+    ///
+    /// Call this after setting both `self.duration` and `self.formats`.
+    /// Formats that already have a duration (e.g., from HLS segment sums) are not overwritten.
+    pub fn propagate_duration(&mut self) {
+        if let Some(duration) = self.duration {
+            for f in &mut self.formats {
+                if f.duration.is_none() {
+                    f.duration = Some(duration);
+                }
+            }
+        }
+    }
+
     /// Get the best audio-only format
     #[must_use]
     pub fn best_audio(&self) -> Option<&Format> {

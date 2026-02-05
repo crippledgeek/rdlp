@@ -173,8 +173,12 @@ pub fn extract_thumbnail(html: &Html, webpage: &str) -> Option<String> {
 /// Extract video duration from flashvars.
 ///
 /// yt-dlp uses `flashvars.video_duration` for accurate duration.
+/// The value may be a JSON string (`"673.13"`) or a JSON number (`673.13`).
 pub fn extract_duration(webpage: &str) -> Option<f64> {
-    extract_flashvar_string(webpage, "video_duration").and_then(|s| s.parse::<f64>().ok())
+    let json_str = FLASHVARS_PATTERN.captures(webpage)?.get(1)?.as_str();
+    let flashvars: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let val = flashvars.get("video_duration")?;
+    val.as_f64().or_else(|| val.as_str()?.parse::<f64>().ok())
 }
 
 /// Extract a string value from the flashvars JSON object.

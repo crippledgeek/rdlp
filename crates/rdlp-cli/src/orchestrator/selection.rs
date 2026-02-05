@@ -1,5 +1,7 @@
 //! Format selection logic
 
+use std::collections::BTreeMap;
+
 use super::{Orchestrator, errors::*};
 use dialoguer::{Select, theme::ColorfulTheme};
 use log::{info, warn};
@@ -64,8 +66,7 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
     ) -> Result<Option<Format>> {
-        let formats = &info.formats;
-        if formats.is_empty() {
+        if info.formats.is_empty() {
             return Err(OrchestratorError::NoFormat);
         }
 
@@ -74,16 +75,30 @@ impl Orchestrator {
             warn!("LIVE stream detected — download may be incomplete");
         }
 
+        // Group formats by (height, is_hls), picking the best format per group.
+        // This gives the user a choice between direct MP4 and HLS at each resolution.
+        let mut by_key: BTreeMap<(u32, bool), &Format> = BTreeMap::new();
+        for fmt in &info.formats {
+            let h = fmt.height.unwrap_or(0);
+            let hls = is_hls(fmt);
+            let entry = by_key.entry((h, hls)).or_insert(fmt);
+            if pick_better(fmt, entry) {
+                *entry = fmt;
+            }
+        }
+
+        let grouped: Vec<&Format> = by_key.values().copied().collect();
+
         // Compute dynamic size column width from actual content
-        let size_width = formats
+        let size_width = grouped
             .iter()
             .map(|f| f.size_text().len())
             .max()
-            .unwrap_or(4) // "Size".len()
+            .unwrap_or(4)
             .max(4);
 
         // Build menu items with format details
-        let items: Vec<String> = formats.iter().map(|f| f.table_row(size_width)).collect();
+        let items: Vec<String> = grouped.iter().map(|f| f.table_row(size_width)).collect();
 
         info!("Available formats:");
         info!(
@@ -110,8 +125,40 @@ impl Orchestrator {
         .map_err(|e| OrchestratorError::Io(e.into()))?;
 
         match selection {
-            Some(index) => Ok(Some(formats[index].clone())),
+            Some(index) => Ok(Some(grouped[index].clone())),
             None => Ok(None),
         }
+    }
+}
+
+/// Detect HLS by protocol flag or URL pattern (some extractors set protocol as Https
+/// even for m3u8 URLs)
+fn is_hls(f: &Format) -> bool {
+    f.protocol.is_hls()
+        || f.url.contains(".m3u8")
+        || f.url.contains("/master.m3u8")
+}
+
+/// Returns true if `candidate` is a better pick than `current` within the same group.
+///
+/// Prefer formats with audio over video-only, then higher quality, then larger filesize.
+fn pick_better(candidate: &Format, current: &Format) -> bool {
+    // Prefer formats that have audio over video-only
+    let has_audio = |f: &Format| f.acodec.is_some();
+    match (has_audio(candidate), has_audio(current)) {
+        (true, false) => return true,
+        (false, true) => return false,
+        _ => {}
+    }
+
+    // Higher quality score wins
+    if candidate.quality != current.quality {
+        return candidate.quality > current.quality;
+    }
+
+    // Larger filesize wins (more likely to be higher quality)
+    match (candidate.filesize, current.filesize) {
+        (Some(a), Some(b)) if a != b => a > b,
+        _ => false,
     }
 }

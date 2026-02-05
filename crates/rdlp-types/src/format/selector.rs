@@ -456,46 +456,38 @@ fn rank_formats(base: &BaseSelector, a: &Format, b: &Format) -> std::cmp::Orderi
     match base {
         BaseSelector::BestAudio | BaseSelector::BestAudioStar | BaseSelector::WorstAudio => {
             // Audio ranking: abr > asr
-            a.abr
-                .partial_cmp(&b.abr)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    a.asr
-                        .partial_cmp(&b.asr)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+            cmp_opt_f64(a.abr, b.abr)
+                .then(a.asr.cmp(&b.asr))
         }
         BaseSelector::BestVideo | BaseSelector::BestVideoStar | BaseSelector::WorstVideo => {
             // Video ranking: height > vbr > fps
             a.height
                 .cmp(&b.height)
-                .then(
-                    a.vbr
-                        .partial_cmp(&b.vbr)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-                .then(
-                    a.fps
-                        .partial_cmp(&b.fps)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+                .then(cmp_opt_f64(a.vbr, b.vbr))
+                .then(cmp_opt_f64(a.fps, b.fps))
         }
         _ => {
             // Combined/general ranking: quality > height > tbr > fps
             a.quality
                 .cmp(&b.quality)
                 .then(a.height.cmp(&b.height))
-                .then(
-                    a.tbr
-                        .partial_cmp(&b.tbr)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-                .then(
-                    a.fps
-                        .partial_cmp(&b.fps)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+                .then(cmp_opt_f64(a.tbr, b.tbr))
+                .then(cmp_opt_f64(a.fps, b.fps))
         }
+    }
+}
+
+/// Compare two `Option<f64>` values for ranking purposes.
+///
+/// When both sides have values, compare them numerically.
+/// When either side is `None`, treat as `Equal` — missing data should not
+/// bias the ranking (prevents `Some(x) > None` from `Option::partial_cmp`
+/// causing HLS formats with known bitrate to always outrank direct downloads
+/// that lack bitrate metadata).
+fn cmp_opt_f64(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
+        _ => std::cmp::Ordering::Equal,
     }
 }
 

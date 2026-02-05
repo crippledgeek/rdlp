@@ -30,12 +30,13 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 
 | Site | Formats | Features |
 |------|---------|----------|
-| TNAFlix | MP4 | Multi-quality (144p-720p) |
-| EMPFlix | MP4 | Multi-quality (144p-720p) |
-| MovieFap | MP4 | Multi-quality (144p-720p) |
-| RedTube | HLS + MP4 | Segment-based progress |
-| PornHub | HLS | Playlist support |
+| PornHub | HLS + MP4 | Multi-quality (240p-1080p), playlist support, CDN Referer auth |
+| XHamster | HLS + MP4 | Multi-quality (144p-2160p), AV1 + H.264, encrypted URL decryption, user playlists |
+| RedTube | HLS + MP4 | Multi-quality (240p-1080p), segment-based progress |
 | XTits | MP4 | Direct download, multi-quality (480p-720p) |
+| TNAFlix | MP4 | Multi-quality (144p-480p) |
+| EMPFlix | MP4 | Multi-quality (144p-1080p) |
+| MovieFap | MP4 | Multi-quality (144p-1080p) |
 
 ## Installation
 

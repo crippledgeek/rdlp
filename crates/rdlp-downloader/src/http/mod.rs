@@ -17,6 +17,8 @@ use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
     check_http_response, is_retryable_error,
 };
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,6 +29,23 @@ use crate::chunking::ChunkSizeStrategy;
 use config::DownloaderConfig;
 use rdlp_ratelimit::RateLimiter;
 
+/// Convert optional HashMap headers to reqwest HeaderMap
+fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
+    let Some(headers) = headers else {
+        return HeaderMap::new();
+    };
+    let mut map = HeaderMap::new();
+    for (key, value) in headers {
+        if let (Ok(name), Ok(val)) = (
+            HeaderName::from_bytes(key.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            map.insert(name, val);
+        }
+    }
+    map
+}
+
 /// HTTP/HTTPS downloader
 ///
 /// **Clone performance:** O(1) - both client and config use Arc internally
@@ -35,6 +54,7 @@ pub struct HttpDownloader {
     client: reqwest::Client,
     pub(crate) config: Arc<DownloaderConfig>,
     pub(crate) rate_limiter: Option<Arc<RateLimiter>>,
+    extra_headers: HeaderMap,
 }
 
 impl HttpDownloader {
@@ -51,6 +71,7 @@ impl HttpDownloader {
             client,
             config: Arc::new(DownloaderConfig::default()),
             rate_limiter: None,
+            extra_headers: HeaderMap::new(),
         }
     }
 
@@ -116,18 +137,34 @@ impl HttpDownloader {
         self
     }
 
+    /// Set extra HTTP headers sent with every download request (e.g. Referer for CDN auth)
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_extra_headers(mut self, headers: Option<&HashMap<String, String>>) -> Self {
+        self.extra_headers = to_header_map(headers);
+        self
+    }
+
+    /// Get a clone of extra headers for use in closures
+    #[must_use]
+    pub fn headers(&self) -> HeaderMap {
+        self.extra_headers.clone()
+    }
+
     /// Check if server supports range requests
     async fn supports_ranges(&self, url: &str) -> Result<bool> {
         let client = self.client.clone();
         let url = url.to_string();
         let backoff = self.config.retry_config.to_backoff();
+        let hdrs = self.headers();
 
         let response = (|| {
             let client = client.clone();
             let url = url.clone();
+            let hdrs = hdrs.clone();
             async move {
                 client
                     .head(&url)
+                    .headers(hdrs)
                     .send()
                     .await
                     .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
@@ -160,13 +197,16 @@ impl HttpDownloader {
         let client = self.client.clone();
         let url = url.to_string();
         let backoff = self.config.retry_config.to_backoff();
+        let hdrs = self.headers();
 
         let response = (|| {
             let client = client.clone();
             let url = url.clone();
+            let hdrs = hdrs.clone();
             async move {
                 let response = client
                     .get(&url)
+                    .headers(hdrs)
                     .header("Range", format!("bytes={start}-{end}"))
                     .send()
                     .await
@@ -229,13 +269,16 @@ impl HttpDownloader {
         let client = self.client.clone();
         let url_string = url.to_string();
         let backoff = self.config.retry_config.to_backoff();
+        let hdrs = self.headers();
 
         let response = (|| {
             let client = client.clone();
             let url = url_string.clone();
+            let hdrs = hdrs.clone();
             async move {
                 let response = client
                     .get(&url)
+                    .headers(hdrs)
                     .send()
                     .await
                     .map_err(|e| RdlpError::Network(format!("GET request failed: {e}")))?;
@@ -346,13 +389,16 @@ impl Downloader for HttpDownloader {
                 let client = self.client.clone();
                 let url_string = url.to_string();
                 let backoff = self.config.retry_config.to_backoff();
+                let hdrs = self.headers();
 
                 match (|| {
                     let client = client.clone();
                     let url = url_string.clone();
+                    let hdrs = hdrs.clone();
                     async move {
                         client
                             .get(&url)
+                            .headers(hdrs)
                             .header("Range", "bytes=0-0")
                             .send()
                             .await
@@ -441,13 +487,16 @@ impl Downloader for HttpDownloader {
         let client = self.client.clone();
         let url = url.to_string();
         let backoff = self.config.retry_config.to_backoff();
+        let hdrs = self.headers();
 
         let response = (|| {
             let client = client.clone();
             let url = url.clone();
+            let hdrs = hdrs.clone();
             async move {
                 client
                     .head(&url)
+                    .headers(hdrs)
                     .send()
                     .await
                     .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
@@ -476,13 +525,16 @@ impl Downloader for HttpDownloader {
             let client = self.client.clone();
             let url_string = url.to_string();
             let backoff = self.config.retry_config.to_backoff();
+            let hdrs = self.headers();
 
             let response = (|| {
                 let client = client.clone();
                 let url = url_string.clone();
+                let hdrs = hdrs.clone();
                 async move {
                     let response = client
                         .get(&url)
+                        .headers(hdrs)
                         .header("Range", format!("bytes={resume_from}-"))
                         .send()
                         .await

@@ -4,7 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::{Orchestrator, OrchestratorError, Result, archive};
-use log::{error, info};
+use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -406,29 +406,67 @@ impl Orchestrator {
         };
         let progress_bar = self.create_progress_bar(estimated_size, resume_from)?;
 
-        // Find downloader
+        // Find downloader (with extra HTTP headers if the format specifies them)
         let downloader = self
             .downloader_registry
-            .find_downloader(&format.url)
+            .find_downloader_with_headers(
+                &format.url,
+                format.http_headers.as_ref(),
+            )
             .ok_or_else(|| OrchestratorError::NoDownloader {
                 url: format.url.clone(),
             })?;
 
-        // Execute download
-        let stats = match self
-            .execute_download(
-                &downloader,
-                &format.url,
-                &output_path,
-                resume_from,
-                progress_bar.as_ref(),
-                estimated_size,
+        // Execute download with fallback CDN retry
+        let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
+            .chain(
+                format
+                    .fallback_urls
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
             )
-            .await?
-        {
-            Some(stats) => stats,
-            None => return Ok(None),
-        };
+            .collect();
+
+        let mut stats = None;
+        let mut last_err = None;
+        for (i, download_url) in download_urls.iter().enumerate() {
+            if i > 0 {
+                warn!(
+                    fallback = i,
+                    url:? = download_url;
+                    "Primary CDN failed, trying fallback"
+                );
+            }
+            match self
+                .execute_download(
+                    &downloader,
+                    download_url,
+                    &output_path,
+                    resume_from,
+                    progress_bar.as_ref(),
+                    estimated_size,
+                )
+                .await
+            {
+                Ok(Some(s)) => {
+                    stats = Some(s);
+                    last_err = None;
+                    break;
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    if i < download_urls.len() - 1 {
+                        warn!("Download failed: {e}, will try fallback CDN");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+        let stats = stats.unwrap();
 
         // Report success
         info!("Downloaded successfully!");
