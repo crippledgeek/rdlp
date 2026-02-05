@@ -144,6 +144,7 @@ impl InfoExtractor for PornHubExtractor {
         info.duration = duration;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
+        info.propagate_duration();
 
         // Set stream-level flags from HLS detection
         if hls_flags.is_live {

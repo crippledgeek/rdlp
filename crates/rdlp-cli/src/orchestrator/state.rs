@@ -1,7 +1,7 @@
 //! State machine types for the download workflow
 
 use super::{Orchestrator, errors::*};
-use log::info;
+use log::{info, warn};
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
@@ -210,29 +210,85 @@ impl DownloadPhase {
                     orchestrator.create_progress_bar(estimated_size, resume_from)?
                 };
 
-                // Find downloader
+                // Find downloader (with extra HTTP headers if the format specifies them)
                 let downloader = orchestrator
                     .downloader_registry
-                    .find_downloader(&format.url)
+                    .find_downloader_with_headers(
+                        &format.url,
+                        format.http_headers.as_ref(),
+                    )
                     .ok_or_else(|| OrchestratorError::NoDownloader {
                         url: format.url.clone(),
                     })?;
 
-                // Execute download
-                let stats = match orchestrator
-                    .execute_download(
-                        &downloader,
-                        &format.url,
-                        &output_path,
-                        resume_from,
-                        progress_bar.as_ref(),
-                        estimated_size,
+                // Check if the CDN token is still valid
+                if let Some(expires) = parse_url_expiry(&format.url) {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if now >= expires {
+                        return Err(OrchestratorError::DownloadFailed(
+                            rdlp_core::RdlpError::Network(format!(
+                                "CDN token expired {}s ago — re-run the command to get a fresh URL",
+                                now - expires
+                            )),
+                        ));
+                    } else if expires - now < 60 {
+                        warn!("CDN token expires in less than 60 seconds — download may fail");
+                    }
+                }
+
+                // Execute download with fallback CDN retry
+                let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
+                    .chain(
+                        format
+                            .fallback_urls
+                            .iter()
+                            .flatten()
+                            .map(String::as_str),
                     )
-                    .await?
-                {
-                    Some(stats) => stats,
-                    None => return Ok(Self::Cancelled),
-                };
+                    .collect();
+
+                let mut stats = None;
+                let mut last_err = None;
+                for (i, download_url) in download_urls.iter().enumerate() {
+                    if i > 0 {
+                        warn!(
+                            fallback = i,
+                            url:? = download_url;
+                            "Primary CDN failed, trying fallback"
+                        );
+                    }
+                    match orchestrator
+                        .execute_download(
+                            &downloader,
+                            download_url,
+                            &output_path,
+                            resume_from,
+                            progress_bar.as_ref(),
+                            estimated_size,
+                        )
+                        .await
+                    {
+                        Ok(Some(s)) => {
+                            stats = Some(s);
+                            last_err = None;
+                            break;
+                        }
+                        Ok(None) => return Ok(Self::Cancelled),
+                        Err(e) => {
+                            if i < download_urls.len() - 1 {
+                                warn!("Download failed: {e}, will try fallback CDN");
+                            }
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                if let Some(e) = last_err {
+                    return Err(e);
+                }
+                let stats = stats.unwrap();
 
                 // Report success
                 info!("Downloaded successfully!");
@@ -259,4 +315,31 @@ impl DownloadPhase {
             }
         }
     }
+}
+
+/// Parse CDN token expiry timestamp from a URL.
+///
+/// Supports two formats:
+/// - `validto=TIMESTAMP` (PornHub direct MP4)
+/// - `~exp=TIMESTAMP~` (PornHub HLS / Akamai)
+fn parse_url_expiry(url: &str) -> Option<u64> {
+    // Try `validto=DIGITS`
+    if let Some(pos) = url.find("validto=") {
+        let rest = &url[pos + 8..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(ts) = digits.parse::<u64>() {
+            return Some(ts);
+        }
+    }
+
+    // Try `~exp=DIGITS~` (Akamai-style)
+    if let Some(pos) = url.find("~exp=") {
+        let rest = &url[pos + 5..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(ts) = digits.parse::<u64>() {
+            return Some(ts);
+        }
+    }
+
+    None
 }

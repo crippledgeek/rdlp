@@ -89,6 +89,39 @@ pub struct HlsInfo {
     pub segment_container: Option<String>,
 }
 
+/// Per-variant information from an HLS master playlist.
+///
+/// Each variant represents a specific quality level (e.g., 720p, 1080p)
+/// with its own media playlist URL and metadata.
+#[derive(Debug, Clone)]
+pub struct HlsVariantInfo {
+    /// Resolved absolute URL to this variant's media playlist
+    pub media_playlist_url: String,
+    /// Video resolution (width, height)
+    pub resolution: Option<(u64, u64)>,
+    /// Parsed video codec name (e.g., "h264", "av1")
+    pub video_codec: Option<String>,
+    /// Parsed audio codec name (e.g., "aac", "opus")
+    pub audio_codec: Option<String>,
+    /// Frame rate
+    pub frame_rate: Option<f64>,
+    /// Peak bandwidth in bits per second
+    pub bandwidth: u64,
+    /// Average bandwidth in bits per second
+    pub average_bandwidth: Option<u64>,
+    // Shared fields (from one media playlist, applied to all variants):
+    /// Number of segments
+    pub segment_count: usize,
+    /// Total duration in seconds
+    pub total_duration: Option<f64>,
+    /// Whether the stream is live
+    pub is_live: bool,
+    /// Whether segments use encryption
+    pub has_encryption: bool,
+    /// Detected segment container format
+    pub segment_container: Option<String>,
+}
+
 /// Media playlist metadata extracted without additional HTTP requests
 struct MediaPlaylistInfo {
     segment_count: usize,
@@ -344,7 +377,14 @@ impl HlsSizeDetector {
                     return Ok(None);
                 }
 
-                let variant = &master.variants[0];
+                // Select the non-I-frame variant with the highest bandwidth (best quality)
+                let variant = master
+                    .variants
+                    .iter()
+                    .filter(|v| !v.is_i_frame)
+                    .max_by_key(|v| v.bandwidth)
+                    .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
+                    .unwrap(); // safe: checked non-empty above
 
                 // Extract variant metadata
                 let resolution = variant.resolution.as_ref().map(|r| (r.width, r.height));
@@ -445,6 +485,120 @@ impl HlsSizeDetector {
                 }))
             }
         }
+    }
+
+    /// Detect all quality variants from an HLS master playlist.
+    ///
+    /// Returns one `HlsVariantInfo` per variant in a master playlist, each with
+    /// a resolved media playlist URL and per-variant metadata. Shared metadata
+    /// (segment count, duration, etc.) is fetched from the best variant's media
+    /// playlist and applied to all entries.
+    ///
+    /// For media playlists (non-master), returns an empty Vec.
+    pub async fn detect_hls_variants(
+        &self,
+        m3u8_url: &str,
+    ) -> Result<Vec<HlsVariantInfo>> {
+        BaseExtractor::validate_url_security(m3u8_url)?;
+
+        let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
+            Ok(text) => text,
+            Err(e) => {
+                if self.verbose {
+                    debug!("HLS failed to fetch playlist for variant expansion: {e}");
+                }
+                return Ok(Vec::new());
+            }
+        };
+
+        let playlist = match m3u8_rs::parse_playlist_res(playlist_text.as_bytes()) {
+            Ok(p) => p,
+            Err(e) => {
+                if self.verbose {
+                    debug!("HLS failed to parse playlist for variant expansion: {e:?}");
+                }
+                return Ok(Vec::new());
+            }
+        };
+
+        let master = match playlist {
+            m3u8_rs::Playlist::MasterPlaylist(m) => m,
+            m3u8_rs::Playlist::MediaPlaylist(_) => {
+                // Not a master playlist — caller should fall back to detect_hls_metadata
+                return Ok(Vec::new());
+            }
+        };
+
+        if master.variants.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let base_url = url::Url::parse(m3u8_url)
+            .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+
+        // Resolve all variant media playlist URLs and extract per-variant metadata.
+        // Skip I-frame-only variants (EXT-X-I-FRAME-STREAM-INF) — these are trick-play
+        // playlists whose segments are not downloadable as standalone media.
+        let mut variants: Vec<HlsVariantInfo> = Vec::with_capacity(master.variants.len());
+        for variant in master.variants.iter().filter(|v| !v.is_i_frame) {
+            let media_url = match base_url.join(&variant.uri) {
+                Ok(u) => u.to_string(),
+                Err(_) => continue,
+            };
+            let (video_codec, audio_codec) = variant
+                .codecs
+                .as_deref()
+                .map(rdlp_core::parse_hls_codecs)
+                .unwrap_or((None, None));
+
+            variants.push(HlsVariantInfo {
+                media_playlist_url: media_url,
+                resolution: variant.resolution.as_ref().map(|r| (r.width, r.height)),
+                video_codec: video_codec.map(String::from),
+                audio_codec: audio_codec.map(String::from),
+                frame_rate: variant.frame_rate,
+                bandwidth: variant.bandwidth,
+                average_bandwidth: variant.average_bandwidth,
+                // Shared fields filled below
+                segment_count: 0,
+                total_duration: None,
+                is_live: false,
+                has_encryption: false,
+                segment_container: None,
+            });
+        }
+
+        // Fetch shared media info from the best non-I-frame variant (highest bandwidth)
+        let best_variant = master
+            .variants
+            .iter()
+            .filter(|v| !v.is_i_frame)
+            .max_by_key(|v| v.bandwidth)
+            .unwrap();
+        let best_media_url = base_url
+            .join(&best_variant.uri)
+            .map_err(|e| RdlpError::Extraction(format!("Failed to join media URL: {e}")))?
+            .to_string();
+
+        if let Ok(Some(media_info)) = self.fetch_and_extract_media_info(&best_media_url).await {
+            for v in &mut variants {
+                v.segment_count = media_info.segment_count;
+                v.total_duration = Some(media_info.total_duration);
+                v.is_live = media_info.is_live;
+                v.has_encryption = media_info.has_encryption;
+                v.segment_container = media_info.segment_container.clone();
+            }
+        }
+
+        if self.verbose {
+            debug!(
+                variants = variants.len(),
+                url:? = m3u8_url;
+                "HLS master playlist expanded into variants"
+            );
+        }
+
+        Ok(variants)
     }
 
     /// Fetch M3U8 playlist text from a URL
@@ -599,8 +753,14 @@ impl HlsSizeDetector {
                     ));
                 }
 
-                // Select the first variant (usually the best quality)
-                let variant = &master.variants[0];
+                // Select the non-I-frame variant with the highest bandwidth (best quality)
+                let variant = master
+                    .variants
+                    .iter()
+                    .filter(|v| !v.is_i_frame)
+                    .max_by_key(|v| v.bandwidth)
+                    .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
+                    .unwrap(); // safe: checked non-empty above
                 let media_playlist_uri = &variant.uri;
 
                 if self.verbose {
@@ -793,6 +953,108 @@ impl HlsSizeDetector {
     }
 }
 
+/// Detect video or audio codec from a format ID string.
+///
+/// Checks for common codec names embedded in format IDs like "hls-av1-url"
+/// or "hls-h264-fallback". Returns `None` if no codec is detected.
+fn detect_codec_from_id(format_id: &str, is_video: bool) -> Option<String> {
+    let id = format_id.to_lowercase();
+    if is_video {
+        if id.contains("av1") || id.contains("av01") {
+            Some("av1".to_string())
+        } else if id.contains("h264") || id.contains("avc") {
+            Some("h264".to_string())
+        } else if id.contains("h265") || id.contains("hevc") || id.contains("hvc") {
+            Some("hevc".to_string())
+        } else if id.contains("vp9") || id.contains("vp09") {
+            Some("vp9".to_string())
+        } else {
+            None
+        }
+    } else if id.contains("aac") || id.contains("mp4a") {
+        Some("aac".to_string())
+    } else if id.contains("opus") {
+        Some("opus".to_string())
+    } else {
+        None
+    }
+}
+
+/// Enrich a single HLS format with metadata from `detect_hls_metadata()`.
+///
+/// Used as a fallback when the HLS URL is a media playlist (not a master)
+/// or when variant expansion fails.
+///
+/// Returns `(Option<bool>, Option<bool>)` — `(is_live, has_encryption)`.
+async fn enrich_single_hls_format(
+    format: &mut rdlp_core::Format,
+    hls_detector: &HlsSizeDetector,
+    url: &str,
+    extractor_name: &str,
+    verbose: bool,
+) -> (Option<bool>, Option<bool>) {
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let result = timeout(
+        Duration::from_secs(10),
+        hls_detector.detect_hls_metadata(url),
+    )
+    .await;
+
+    let hls_info = match result {
+        Ok(Ok(Some(info))) => info,
+        _ => {
+            if verbose {
+                debug!(
+                    extractor:? = extractor_name,
+                    format:? = format.format_id;
+                    "HLS metadata detection failed or timed out"
+                );
+            }
+            return (None, None);
+        }
+    };
+
+    // Enrich format with metadata
+    if let Some((w, h)) = hls_info.resolution {
+        format.width = Some(w as u32);
+        format.height = Some(h as u32);
+        format.format_note = Some(format!("{h}p"));
+    }
+    if let Some(vc) = &hls_info.video_codec {
+        format.vcodec = Some(vc.clone());
+    }
+    if let Some(ac) = &hls_info.audio_codec {
+        format.acodec = Some(ac.clone());
+    }
+    format.fps = hls_info.frame_rate;
+    if let Some(bw) = hls_info.bandwidth {
+        format.tbr = Some(bw as f64 / 1000.0);
+    }
+    format.duration = hls_info.total_duration;
+    format.filesize_approx = Some(hls_info.segment_count as u64);
+    format.container = hls_info.segment_container;
+    if hls_info.has_encryption {
+        format.has_drm = Some(true);
+    }
+    if let Some(h) = format.height {
+        format.quality = Some((h / 100) as i32);
+    }
+
+    if verbose {
+        debug!(
+            extractor:? = extractor_name,
+            format:? = format.format_id,
+            resolution:? = hls_info.resolution,
+            segments = hls_info.segment_count;
+            "HLS single format enriched"
+        );
+    }
+
+    (Some(hls_info.is_live), Some(hls_info.has_encryption))
+}
+
 /// Detect file sizes and segment counts for all formats in parallel
 ///
 /// This is a shared utility function used by multiple extractors to avoid code duplication.
@@ -828,80 +1090,86 @@ pub async fn detect_format_sizes(
             let extractor_name = extractor_name.clone();
 
             async move {
-                let mut format = format;
                 let url = format.url.clone();
                 let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
 
-                // Track stream-level flags from HLS detection
-                let mut detected_is_live = None;
-                let mut detected_has_encryption = None;
-
                 if is_hls {
-                    // Detect HLS metadata (segment count, codecs, resolution, etc.)
+                    // Try to expand master playlist into per-variant formats
                     let result = timeout(
-                        Duration::from_secs(5),
-                        hls_detector.detect_hls_metadata(&url),
+                        Duration::from_secs(10),
+                        hls_detector.detect_hls_variants(&url),
                     )
                     .await;
 
-                    match result {
-                        Ok(Ok(Some(info))) => {
-                            format.filesize_approx = Some(info.segment_count as u64);
-
-                            // Enrich format with M3U8 metadata (overrides hardcoded values)
-                            if let Some((w, h)) = info.resolution {
-                                format.width = Some(w as u32);
-                                format.height = Some(h as u32);
-                            }
-                            if let Some(vc) = info.video_codec {
-                                format.vcodec = Some(vc);
-                            }
-                            if let Some(ac) = info.audio_codec {
-                                format.acodec = Some(ac);
-                            }
-                            if let Some(fr) = info.frame_rate {
-                                format.fps = Some(fr);
-                            }
-                            if let Some(bw) = info.average_bandwidth.or(info.bandwidth) {
-                                format.tbr = Some(bw as f64 / 1000.0);
-                            }
-                            if let Some(dur) = info.total_duration {
-                                format.duration = Some(dur);
-                            }
-                            if info.has_encryption {
-                                format.has_drm = Some(true);
-                            }
-                            if let Some(container) = info.segment_container {
-                                format.container = Some(container);
-                            }
-
-                            // Capture stream-level flags for aggregation
-                            detected_is_live = Some(info.is_live);
-                            detected_has_encryption = Some(info.has_encryption);
-
-                            if verbose {
-                                debug!(
-                                    extractor:? = extractor_name,
-                                    format:? = format.format_id,
-                                    segments = info.segment_count,
-                                    resolution:? = info.resolution,
-                                    video_codec:? = format.vcodec,
-                                    audio_codec:? = format.acodec,
-                                    fps:? = format.fps,
-                                    tbr:? = format.tbr,
-                                    is_live = info.is_live;
-                                    "HLS metadata detected"
-                                );
-                            }
+                    let variants = match result {
+                        Ok(Ok(v)) if v.len() > 1 => v,
+                        _ => {
+                            // Not a master playlist or detection failed — fall back to
+                            // single-format enrichment via detect_hls_metadata
+                            let mut format = format;
+                            let (is_live, has_enc) =
+                                enrich_single_hls_format(&mut format, &hls_detector, &url, &extractor_name, verbose).await;
+                            return vec![(format, is_live, has_enc)];
                         }
-                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
-                            if verbose {
-                                debug!(extractor:? = extractor_name, url:? = url; "Could not detect HLS metadata");
-                            }
+                    };
+
+                    // Expand master playlist into one format per variant
+                    let mut expanded = Vec::with_capacity(variants.len());
+                    for variant in &variants {
+                        let height = variant.resolution.map(|(_, h)| h as u32);
+                        let width = variant.resolution.map(|(w, _)| w as u32);
+                        let format_id = if let Some(h) = height {
+                            format!("{}-{h}p", format.format_id)
+                        } else {
+                            format!("{}-{}k", format.format_id, variant.bandwidth / 1000)
+                        };
+
+                        let mut expanded_format = rdlp_core::Format::new(
+                            &format_id,
+                            &variant.media_playlist_url,
+                            &format.ext,
+                            format.protocol.clone(),
+                        );
+                        expanded_format.height = height;
+                        expanded_format.width = width;
+                        expanded_format.vcodec = variant.video_codec.clone()
+                            .or_else(|| format.vcodec.clone())
+                            .or_else(|| detect_codec_from_id(&format.format_id, true));
+                        expanded_format.acodec = variant.audio_codec.clone()
+                            .or_else(|| format.acodec.clone())
+                            .or_else(|| detect_codec_from_id(&format.format_id, false));
+                        expanded_format.fps = variant.frame_rate;
+                        expanded_format.tbr = Some(variant.bandwidth as f64 / 1000.0);
+                        expanded_format.http_headers = format.http_headers.clone();
+                        expanded_format.filesize_approx = Some(variant.segment_count as u64);
+                        expanded_format.duration = variant.total_duration;
+                        expanded_format.container = variant.segment_container.clone();
+                        if variant.has_encryption {
+                            expanded_format.has_drm = Some(true);
                         }
+                        if let Some(h) = height {
+                            expanded_format.format_note = Some(format!("{h}p"));
+                            expanded_format.quality = Some((h / 100) as i32);
+                        }
+
+                        let is_live = Some(variant.is_live);
+                        let has_enc = Some(variant.has_encryption);
+                        expanded.push((expanded_format, is_live, has_enc));
                     }
+
+                    if verbose {
+                        debug!(
+                            extractor:? = extractor_name,
+                            parent:? = format.format_id,
+                            variants = expanded.len();
+                            "HLS master expanded into per-quality formats"
+                        );
+                    }
+
+                    expanded
                 } else {
                     // Non-HLS: HEAD request for file size
+                    let mut format = format;
                     let result = timeout(
                         Duration::from_secs(5),
                         BaseExtractor::detect_file_size_with_client(&url, &http_client),
@@ -911,26 +1179,52 @@ pub async fn detect_format_sizes(
                     if let Ok(Some(size)) = result {
                         format.filesize = Some(size);
                     }
-                }
 
-                (format, detected_is_live, detected_has_encryption)
+                    vec![(format, None, None)]
+                }
             }
         })
         .collect();
 
     let results = join_all(detection_futures).await;
 
-    // Separate formats from flags and aggregate stream-level properties
-    let mut formats = Vec::with_capacity(results.len());
+    // Flatten expanded formats, deduplicate HLS CDN mirrors, aggregate flags
+    let mut formats: Vec<rdlp_core::Format> = Vec::new();
     let mut flags = HlsStreamFlags::default();
+    let mut seen_hls: std::collections::HashSet<(Option<u32>, Option<String>, Option<String>)> =
+        std::collections::HashSet::new();
 
-    for (format, is_live, has_encryption) in results {
-        formats.push(format);
-        if is_live.unwrap_or(false) {
-            flags.is_live = true;
-        }
-        if has_encryption.unwrap_or(false) {
-            flags.has_any_drm = true;
+    for format_group in results {
+        for (format, is_live, has_encryption) in format_group {
+            if is_live.unwrap_or(false) {
+                flags.is_live = true;
+            }
+            if has_encryption.unwrap_or(false) {
+                flags.has_any_drm = true;
+            }
+
+            // Deduplicate expanded HLS formats: keep first per (height, vcodec, acodec),
+            // collect duplicate URLs as fallbacks on the kept format
+            if format.is_hls() {
+                let key = (format.height, format.vcodec.clone(), format.acodec.clone());
+                if !seen_hls.insert(key) {
+                    // Attach this URL as a fallback to the existing format
+                    if let Some(existing) = formats.iter_mut().find(|f| {
+                        f.is_hls()
+                            && f.height == format.height
+                            && f.vcodec == format.vcodec
+                            && f.acodec == format.acodec
+                    }) {
+                        existing
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .push(format.url.clone());
+                    }
+                    continue;
+                }
+            }
+
+            formats.push(format);
         }
     }
 

@@ -140,6 +140,7 @@ impl InfoExtractor for RedTubeExtractor {
         info.categories = metadata.categories;
         info.age_limit = Some(18); // RedTube is adult content
         info.formats = formats;
+        info.propagate_duration();
 
         // Set stream-level flags from HLS detection
         if hls_flags.is_live {

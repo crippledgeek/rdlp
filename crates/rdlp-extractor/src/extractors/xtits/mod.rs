@@ -327,6 +327,7 @@ impl InfoExtractor for XTitsExtractor {
         info.duration = duration;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
+        info.propagate_duration();
 
         // Store first model as uploader (KVS convention)
         if !models.is_empty() {

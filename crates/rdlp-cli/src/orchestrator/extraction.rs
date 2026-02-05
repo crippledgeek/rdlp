@@ -27,7 +27,7 @@ impl Orchestrator {
         info!("Using extractor: {}", extractor.name());
         info!("Extracting video information...");
 
-        let info = extractor
+        let mut info = extractor
             .extract(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
@@ -59,6 +59,16 @@ impl Orchestrator {
         }
 
         info!("Found {} formats", info.formats.len());
+
+        // Auto-set Referer header on all formats that don't already have one.
+        // Many CDNs (PornHub, XHamster, etc.) require a Referer to serve content.
+        if !info.webpage_url.is_empty() {
+            let referer = info.webpage_url.clone();
+            for fmt in &mut info.formats {
+                let headers = fmt.http_headers.get_or_insert_with(std::collections::HashMap::new);
+                headers.entry("Referer".to_string()).or_insert(referer.clone());
+            }
+        }
 
         Ok(info)
     }

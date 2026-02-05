@@ -2,8 +2,11 @@ use async_trait::async_trait;
 use backon::Retryable;
 use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
-use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig};
-use std::collections::HashSet;
+use rdlp_core::{
+    DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig,
+    is_retryable_error,
+};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +20,20 @@ use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 
+/// EXT-X-MAP initialization segment info (fMP4 streams)
+///
+/// Per the HLS spec, `EXT-X-MAP` applies to every segment after it until
+/// the next `EXT-X-MAP` tag. A playlist may therefore contain multiple
+/// init segments (e.g. codec change mid-stream, ad insertion).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct InitSegmentInfo {
+    /// Fully-resolved URL of the initialization segment
+    url: String,
+    /// Optional byte range `(length, offset)` — when the init data is
+    /// packed inside a larger resource (e.g. the same URI as the segments)
+    byte_range: Option<(u64, Option<u64>)>,
+}
+
 /// Information about an HLS segment including its duration
 #[derive(Clone, Debug)]
 struct SegmentInfo {
@@ -24,6 +41,15 @@ struct SegmentInfo {
     url: String,
     /// Segment duration in seconds (from EXTINF)
     duration: f64,
+    /// The EXT-X-MAP init segment that applies to this segment (if any)
+    init_segment: Option<InitSegmentInfo>,
+}
+
+/// Result of parsing an HLS playlist
+#[derive(Clone, Debug)]
+struct PlaylistParseResult {
+    /// Media segments (each carrying its own init segment reference)
+    segments: Vec<SegmentInfo>,
 }
 
 /// HLS (HTTP Live Streaming) downloader
@@ -152,6 +178,13 @@ impl HlsDownloader {
         self
     }
 
+    /// Set extra HTTP headers sent with every request (delegates to inner HttpDownloader)
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_extra_headers(mut self, headers: Option<&std::collections::HashMap<String, String>>) -> Self {
+        self.http_downloader = self.http_downloader.with_extra_headers(headers);
+        self
+    }
+
     /// Download a single HLS segment with retry logic using backon
     ///
     /// Handles network errors, timeouts, and expired URLs by retrying with exponential backoff.
@@ -177,6 +210,7 @@ impl HlsDownloader {
         let rate_limiter = self.http_downloader.rate_limiter.clone();
         let buffer_size = self.buffer_size;
         let backoff = self.retry_config.to_backoff();
+        let hdrs = self.http_downloader.headers();
 
         // Use backon for retry with exponential backoff and jitter
         let result = (|| {
@@ -185,11 +219,13 @@ impl HlsDownloader {
             let segment_path = segment_path.clone();
             let progress = progress.clone();
             let rate_limiter = rate_limiter.clone();
+            let hdrs = hdrs.clone();
 
             async move {
                 // Download segment to file
                 let response = client
                     .get(&url)
+                    .headers(hdrs)
                     .timeout(Duration::from_secs(30)) // 30 second timeout per segment
                     .send()
                     .await
@@ -204,11 +240,13 @@ impl HlsDownloader {
                     })?;
 
                 if !response.status().is_success() {
-                    return Err(RdlpError::Network(format!(
-                        "Segment {} returned HTTP {}",
-                        idx,
-                        response.status()
-                    )));
+                    return Err(RdlpError::Http {
+                        status: response.status().as_u16(),
+                        reason: format!(
+                            "Segment {idx} returned HTTP {}",
+                            response.status()
+                        ),
+                    });
                 }
 
                 // Stream segment to file with progress tracking
@@ -239,16 +277,77 @@ impl HlsDownloader {
             }
         })
         .retry(backoff)
-        .when(|e: &RdlpError| {
-            // Retry on network errors, not on permanent failures
-            matches!(e, RdlpError::Network(_) | RdlpError::Io(_))
-        })
+        .when(is_retryable_error)
         .notify(|err, dur| {
             warn!(segment = idx, delay:? = dur; "Segment download failed, retrying: {err}");
         })
         .await?;
 
         Ok(result)
+    }
+
+    /// Download an fMP4 initialization segment, respecting optional byte range.
+    ///
+    /// EXT-X-MAP may specify a `BYTERANGE` when the init data lives inside a
+    /// larger resource.  When present we send an HTTP `Range` header so we only
+    /// fetch the relevant bytes.
+    async fn download_init_segment(
+        &self,
+        init: &InitSegmentInfo,
+        dest: &Path,
+    ) -> Result<()> {
+        let client = self.http_downloader.client().clone();
+        let backoff = self.retry_config.to_backoff();
+        let url = init.url.clone();
+        let byte_range = init.byte_range;
+        let dest = dest.to_path_buf();
+        let hdrs = self.http_downloader.headers();
+
+        (|| {
+            let client = client.clone();
+            let url = url.clone();
+            let dest = dest.clone();
+            let hdrs = hdrs.clone();
+            async move {
+                let mut req = client.get(&url).headers(hdrs).timeout(Duration::from_secs(30));
+
+                // Apply Range header when EXT-X-MAP specifies BYTERANGE
+                if let Some((length, offset)) = byte_range {
+                    let start = offset.unwrap_or(0);
+                    let end = start + length - 1;
+                    req = req.header("Range", format!("bytes={start}-{end}"));
+                    debug!(start, end; "Init segment byte-range request");
+                }
+
+                let response = req.send().await.map_err(|e| {
+                    RdlpError::Network(format!("Init segment request failed: {e}"))
+                })?;
+
+                if !response.status().is_success() {
+                    return Err(RdlpError::Http {
+                        status: response.status().as_u16(),
+                        reason: format!(
+                            "Init segment returned HTTP {}",
+                            response.status()
+                        ),
+                    });
+                }
+
+                let bytes = response.bytes().await.map_err(|e| {
+                    RdlpError::Network(format!("Init segment read error: {e}"))
+                })?;
+
+                tokio::fs::write(&dest, &bytes).await.map_err(RdlpError::Io)?;
+                debug!(bytes = bytes.len(); "Init segment downloaded");
+                Ok(())
+            }
+        })
+        .retry(backoff)
+        .when(is_retryable_error)
+        .notify(|err, dur| {
+            warn!(delay:? = dur; "Init segment download failed, retrying: {err}");
+        })
+        .await
     }
 
     /// Parse m3u8 playlist and extract segment URLs
@@ -260,14 +359,15 @@ impl HlsDownloader {
     /// * `m3u8_url` - URL of the m3u8 playlist
     ///
     /// # Returns
-    /// * `Ok(Vec<SegmentInfo>)` - List of segment URLs with durations
+    /// * `Ok(PlaylistParseResult)` - Segments and optional init segment URL
     /// * `Err(_)` - Network error, parse error, or empty playlist
-    async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<SegmentInfo>> {
+    async fn parse_playlist(&self, m3u8_url: &str) -> Result<PlaylistParseResult> {
         // Fetch playlist text
         let playlist_text = self
             .http_downloader
             .client()
             .get(m3u8_url)
+            .headers(self.http_downloader.headers())
             .send()
             .await
             .map_err(|e| RdlpError::Network(format!("Failed to fetch playlist: {e}")))?
@@ -307,24 +407,54 @@ impl HlsDownloader {
                 let base_url = url::Url::parse(m3u8_url)
                     .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
 
+                // Build per-segment init info from EXT-X-MAP.
+                // m3u8_rs sets `seg.map` on each segment the tag applies to,
+                // so we just map it directly — handles multiple EXT-X-MAP tags.
                 let segments: Vec<SegmentInfo> = media
                     .segments
                     .iter()
                     .map(|seg| {
-                        // Join relative URLs with base URL
                         let url = base_url
                             .join(&seg.uri)
                             .map(|u| u.to_string())
                             .unwrap_or_else(|_| seg.uri.clone());
+
+                        let init_segment = seg.map.as_ref().map(|map| {
+                            let init_url = base_url
+                                .join(&map.uri)
+                                .map(|u| u.to_string())
+                                .unwrap_or_else(|_| map.uri.clone());
+                            InitSegmentInfo {
+                                url: init_url,
+                                byte_range: map
+                                    .byte_range
+                                    .as_ref()
+                                    .map(|br| (br.length, br.offset)),
+                            }
+                        });
+
                         SegmentInfo {
                             url,
                             duration: seg.duration as f64,
+                            init_segment,
                         }
                     })
                     .collect();
 
                 if segments.is_empty() {
                     return Err(RdlpError::Extraction("Playlist has no segments".into()));
+                }
+
+                // Log init segment info
+                let unique_inits: HashSet<_> = segments
+                    .iter()
+                    .filter_map(|s| s.init_segment.as_ref())
+                    .collect();
+                if !unique_inits.is_empty() {
+                    debug!(
+                        count = unique_inits.len();
+                        "fMP4 stream detected (EXT-X-MAP init segments)"
+                    );
                 }
 
                 // Security check: limit max segments
@@ -337,17 +467,23 @@ impl HlsDownloader {
                     )));
                 }
 
-                Ok(segments)
+                Ok(PlaylistParseResult { segments })
             }
             m3u8_rs::Playlist::MasterPlaylist(master) => {
-                // Master playlist - select first variant
+                // Master playlist - select best quality variant
                 if master.variants.is_empty() {
                     return Err(RdlpError::Extraction(
                         "Master playlist has no variants".into(),
                     ));
                 }
 
-                let variant = &master.variants[0];
+                let variant = master
+                    .variants
+                    .iter()
+                    .filter(|v| !v.is_i_frame)
+                    .max_by_key(|v| v.bandwidth)
+                    .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
+                    .unwrap(); // safe: checked non-empty above
                 let base_url = url::Url::parse(m3u8_url)
                     .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
 
@@ -362,7 +498,7 @@ impl HlsDownloader {
                     "Master playlist detected, selecting variant"
                 );
 
-                // Recursively parse media playlist
+                // Recursively parse media playlist (will detect EXT-X-MAP there)
                 Box::pin(self.parse_playlist(&media_playlist_url)).await
             }
         }
@@ -594,35 +730,61 @@ impl HlsDownloader {
         Ok(segment_paths)
     }
 
-    /// Merge segment files into final output file
+    /// Merge segment files into final output file.
     ///
-    /// Concatenates all segment files in order into the final video file.
-    /// Uses buffered I/O for efficient merging.
+    /// For fMP4 streams, each segment may reference an init segment (EXT-X-MAP).
+    /// The init segment is written before the first media segment that uses it,
+    /// and re-written whenever the init segment changes (supporting playlists
+    /// with multiple EXT-X-MAP tags).
     ///
-    /// # Arguments
-    /// * `segment_paths` - Paths to segment files (in order)
-    /// * `output_path` - Final output file path
-    ///
-    /// # Returns
-    /// * `Ok(u64)` - Total bytes written
-    /// * `Err(_)` - I/O error during merge
-    async fn merge_segments(&self, segment_paths: Vec<PathBuf>, output_path: &Path) -> Result<u64> {
+    /// `segment_init_paths[i]` is the init segment file for `segment_paths[i]`,
+    /// or `None` for plain TS segments.
+    async fn merge_segments(
+        &self,
+        segment_paths: Vec<PathBuf>,
+        output_path: &Path,
+        segment_init_paths: &[Option<PathBuf>],
+    ) -> Result<u64> {
         let merge_timeout = self.merge_timeout;
         tokio::time::timeout(merge_timeout, async {
-            info!(segments = segment_paths.len(); "Merging segments into final file");
+            let has_init = segment_init_paths.iter().any(|p| p.is_some());
+            info!(
+                segments = segment_paths.len(),
+                fmp4 = has_init;
+                "Merging segments into final file"
+            );
 
             let final_file = File::create(output_path).await.map_err(RdlpError::Io)?;
-
             let mut writer = BufWriter::with_capacity(self.buffer_size, final_file);
             let mut total_bytes = 0u64;
 
-            for (idx, segment_path) in segment_paths.iter().enumerate() {
-                let mut segment_file = File::open(segment_path).await.map_err(RdlpError::Io)?;
+            // Track the current init segment so we only re-write it on change
+            let mut current_init: Option<&Path> = None;
 
+            for (idx, segment_path) in segment_paths.iter().enumerate() {
+                // Check if this segment needs an init segment (different from current)
+                let seg_init = segment_init_paths
+                    .get(idx)
+                    .and_then(|p| p.as_deref());
+
+                if seg_init != current_init {
+                    if let Some(init_path) = seg_init {
+                        let mut init_file =
+                            File::open(init_path).await.map_err(RdlpError::Io)?;
+                        let bytes = tokio::io::copy(&mut init_file, &mut writer)
+                            .await
+                            .map_err(RdlpError::Io)?;
+                        total_bytes += bytes;
+                        debug!(bytes, segment = idx; "Wrote fMP4 init segment");
+                    }
+                    current_init = seg_init;
+                }
+
+                let mut segment_file =
+                    File::open(segment_path).await.map_err(RdlpError::Io)?;
                 let bytes = tokio::io::copy(&mut segment_file, &mut writer)
                     .await
                     .map_err(RdlpError::Io)?;
-
                 total_bytes += bytes;
 
                 if (idx + 1) % 100 == 0 || idx == segment_paths.len() - 1 {
@@ -703,12 +865,15 @@ impl Downloader for HlsDownloader {
             let start_time = Instant::now();
 
             // Step 1: Parse playlist
-            let segments = self.parse_playlist(url).await?;
+            let playlist = self.parse_playlist(url).await?;
+            let segments = playlist.segments;
+            let has_init = segments.iter().any(|s| s.init_segment.is_some());
             let total_segments = segments.len();
             let total_duration: f64 = segments.iter().map(|s| s.duration).sum();
             info!(
                 segments = total_segments,
-                duration_secs = total_duration;
+                duration_secs = total_duration,
+                fmp4 = has_init;
                 "Parsed HLS playlist"
             );
 
@@ -789,16 +954,50 @@ impl Downloader for HlsDownloader {
             // Progress guard will be dropped and abort the task automatically
             drop(progress_guard);
 
-            // Step 5: Merge segments
-            let total_bytes = self.merge_segments(segment_paths.clone(), path).await?;
+            // Step 5: Download unique init segments (fMP4 EXT-X-MAP)
+            // Collect unique init segments and download each once.
+            let mut init_file_map: HashMap<InitSegmentInfo, PathBuf> = HashMap::new();
+            {
+                let unique_inits: Vec<InitSegmentInfo> = segments
+                    .iter()
+                    .filter_map(|s| s.init_segment.clone())
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
 
-            // Step 6: Cleanup segments and state file
+                for (i, init) in unique_inits.into_iter().enumerate() {
+                    let init_path = temp_dir.join(format!("{base_filename}.init{i}"));
+                    info!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
+                    self.download_init_segment(&init, &init_path).await?;
+                    init_file_map.insert(init, init_path);
+                }
+            }
+
+            // Build per-segment init path mapping for merge
+            let segment_init_paths: Vec<Option<PathBuf>> = segments
+                .iter()
+                .map(|s| {
+                    s.init_segment
+                        .as_ref()
+                        .and_then(|init| init_file_map.get(init).cloned())
+                })
+                .collect();
+
+            // Step 6: Merge segments (re-inserting init segment on change)
+            let total_bytes = self
+                .merge_segments(segment_paths.clone(), path, &segment_init_paths)
+                .await?;
+
+            // Step 7: Cleanup segments, init segments, and state file
             self.cleanup_segments(segment_paths).await;
+            for init_path in init_file_map.values() {
+                let _ = tokio::fs::remove_file(init_path).await;
+            }
             if let Err(e) = HlsDownloadState::delete(path).await {
                 warn!("Failed to delete HLS state file: {e}");
             }
 
-            // Step 7: Return statistics
+            // Step 8: Return statistics
             let duration = start_time.elapsed();
             let stats = DownloadStats::new(total_bytes, duration, 0).with_fragments(total_segments);
 
