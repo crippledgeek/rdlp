@@ -140,15 +140,27 @@ pub fn extract_from_initials(
         //   New: hls: {av1: {url: "..."}, h264: {url: "...", fallback: "..."}}
         if let Some(hls) = xplayer_sources.get("hls").and_then(|v| v.as_object()) {
             // Collect all (format_id, encrypted_url) pairs from both layouts
+            // IMPORTANT: Process top-level url/fallback FIRST (master playlists),
+            // then codec-specific URLs. This ensures master playlists are preferred
+            // during deduplication (they typically have complete segment lists).
             let mut hls_urls: Vec<(String, String)> = Vec::new();
 
-            for (key, value) in hls {
-                if let Some(url_str) = value.as_str() {
-                    // Old layout: direct string values keyed by "url"/"fallback"
+            // First: top-level "url" and "fallback" keys (master playlists)
+            for top_key in &["url", "fallback"] {
+                if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str()) {
                     if !url_str.is_empty() {
-                        hls_urls.push((format!("hls-{key}"), url_str.to_string()));
+                        hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
                     }
-                } else if let Some(codec_obj) = value.as_object() {
+                }
+            }
+
+            // Second: codec-specific nested objects (h264, av1, etc.)
+            for (key, value) in hls {
+                // Skip top-level keys already processed
+                if key == "url" || key == "fallback" {
+                    continue;
+                }
+                if let Some(codec_obj) = value.as_object() {
                     // New layout: codec-keyed objects like {url: "...", fallback: "..."}
                     for hls_key in &["url", "fallback"] {
                         if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str()) {

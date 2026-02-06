@@ -133,6 +133,22 @@ fn parse_media_playlist(
         )));
     }
 
+    // Check for potentially incomplete playlists (XHamster CDN bug: first segment > 1)
+    // Pattern: seg-N-... where N should be 1 for first segment
+    if let Some(first_seg) = segments.first() {
+        if let Some(first_seg_num) = extract_segment_number(&first_seg.url) {
+            if first_seg_num > 1 {
+                let missing = first_seg_num - 1;
+                warn!(
+                    "Playlist may be incomplete: first segment is #{first_seg_num}, \
+                     missing {missing} segment(s) from the beginning (~{} seconds). \
+                     Consider trying a different format (AV1, MP4) or the fallback URL.",
+                    missing * 4  // Typical ~4s per segment
+                );
+            }
+        }
+    }
+
     Ok(PlaylistParseResult { segments })
 }
 
@@ -172,4 +188,72 @@ async fn parse_master_playlist(
 
     // Recursively parse media playlist (will detect EXT-X-MAP there)
     Box::pin(parse_playlist(http_downloader, &media_playlist_url)).await
+}
+
+/// Extract segment number from a URL matching patterns like:
+/// - `seg-1-v1-a1.ts` or `seg-3-v1-a1.m4s` (XHamster)
+/// - `segment1.ts` or `segment-1.ts`
+/// - Other common segment numbering schemes
+fn extract_segment_number(url: &str) -> Option<u32> {
+    // Get the filename/path component
+    let path = url.split('?').next().unwrap_or(url);
+    let filename = path.rsplit('/').next().unwrap_or(path);
+
+    // Pattern 1: seg-N-... (XHamster style)
+    if filename.starts_with("seg-") {
+        if let Some(num_part) = filename.strip_prefix("seg-") {
+            if let Some(end) = num_part.find('-') {
+                return num_part[..end].parse().ok();
+            }
+        }
+    }
+
+    // Pattern 2: segmentN or segment-N or segment_N
+    if let Some(rest) = filename.strip_prefix("segment") {
+        let rest = rest.trim_start_matches('-').trim_start_matches('_');
+        if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
+            return rest[..end].parse().ok();
+        }
+        return rest.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok();
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_segment_number_xhamster() {
+        // XHamster patterns
+        assert_eq!(extract_segment_number("seg-1-v1-a1.ts"), Some(1));
+        assert_eq!(extract_segment_number("seg-3-v1-a1.ts"), Some(3));
+        assert_eq!(extract_segment_number("seg-502-v1-a1.m4s"), Some(502));
+        assert_eq!(
+            extract_segment_number("https://cdn.example.com/path/seg-1-v1-a1.ts?token=abc"),
+            Some(1)
+        );
+        assert_eq!(
+            extract_segment_number("https://cdn.example.com/path/seg-3-v1-a1.ts?token=abc"),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn test_extract_segment_number_common() {
+        // Common patterns
+        assert_eq!(extract_segment_number("segment1.ts"), Some(1));
+        assert_eq!(extract_segment_number("segment-1.ts"), Some(1));
+        assert_eq!(extract_segment_number("segment_10.ts"), Some(10));
+        assert_eq!(extract_segment_number("segment100.m4s"), Some(100));
+    }
+
+    #[test]
+    fn test_extract_segment_number_unknown() {
+        // Patterns that don't match
+        assert_eq!(extract_segment_number("video.ts"), None);
+        assert_eq!(extract_segment_number("chunk-1.ts"), None);
+        assert_eq!(extract_segment_number("media-0001.ts"), None);
+    }
 }
