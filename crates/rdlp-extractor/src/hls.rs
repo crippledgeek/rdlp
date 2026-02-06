@@ -495,10 +495,7 @@ impl HlsSizeDetector {
     /// playlist and applied to all entries.
     ///
     /// For media playlists (non-master), returns an empty Vec.
-    pub async fn detect_hls_variants(
-        &self,
-        m3u8_url: &str,
-    ) -> Result<Vec<HlsVariantInfo>> {
+    pub async fn detect_hls_variants(&self, m3u8_url: &str) -> Result<Vec<HlsVariantInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
@@ -1107,8 +1104,14 @@ pub async fn detect_format_sizes(
                             // Not a master playlist or detection failed — fall back to
                             // single-format enrichment via detect_hls_metadata
                             let mut format = format;
-                            let (is_live, has_enc) =
-                                enrich_single_hls_format(&mut format, &hls_detector, &url, &extractor_name, verbose).await;
+                            let (is_live, has_enc) = enrich_single_hls_format(
+                                &mut format,
+                                &hls_detector,
+                                &url,
+                                &extractor_name,
+                                verbose,
+                            )
+                            .await;
                             return vec![(format, is_live, has_enc)];
                         }
                     };
@@ -1132,10 +1135,14 @@ pub async fn detect_format_sizes(
                         );
                         expanded_format.height = height;
                         expanded_format.width = width;
-                        expanded_format.vcodec = variant.video_codec.clone()
+                        expanded_format.vcodec = variant
+                            .video_codec
+                            .clone()
                             .or_else(|| format.vcodec.clone())
                             .or_else(|| detect_codec_from_id(&format.format_id, true));
-                        expanded_format.acodec = variant.audio_codec.clone()
+                        expanded_format.acodec = variant
+                            .audio_codec
+                            .clone()
                             .or_else(|| format.acodec.clone())
                             .or_else(|| detect_codec_from_id(&format.format_id, false));
                         expanded_format.fps = variant.frame_rate;
@@ -1203,22 +1210,42 @@ pub async fn detect_format_sizes(
                 flags.has_any_drm = true;
             }
 
-            // Deduplicate expanded HLS formats: keep first per (height, vcodec, acodec),
-            // collect duplicate URLs as fallbacks on the kept format
+            // Deduplicate expanded HLS formats: keep format with most segments per (height, vcodec, acodec),
+            // collect other URLs as fallbacks on the kept format.
+            // This handles CDN bugs where some sources have incomplete playlists (missing first segments).
+            // Note: HLS segment count is stored in filesize_approx during extraction.
             if format.is_hls() {
                 let key = (format.height, format.vcodec.clone(), format.acodec.clone());
                 if !seen_hls.insert(key) {
-                    // Attach this URL as a fallback to the existing format
+                    // Find existing format with same key
                     if let Some(existing) = formats.iter_mut().find(|f| {
                         f.is_hls()
                             && f.height == format.height
                             && f.vcodec == format.vcodec
                             && f.acodec == format.acodec
                     }) {
-                        existing
-                            .fallback_urls
-                            .get_or_insert_with(Vec::new)
-                            .push(format.url.clone());
+                        // Compare segment counts (stored in filesize_approx for HLS)
+                        // Keep the one with more segments (more complete playlist)
+                        let existing_segments = existing.filesize_approx.unwrap_or(0);
+                        let new_segments = format.filesize_approx.unwrap_or(0);
+
+                        if new_segments > existing_segments {
+                            // New format has more segments - swap: make existing the fallback
+                            let old_url = std::mem::replace(&mut existing.url, format.url.clone());
+                            existing.filesize_approx = format.filesize_approx;
+                            existing.duration = format.duration;
+                            existing.filesize = format.filesize;
+                            existing
+                                .fallback_urls
+                                .get_or_insert_with(Vec::new)
+                                .push(old_url);
+                        } else {
+                            // Existing has equal or more segments - keep it, add new as fallback
+                            existing
+                                .fallback_urls
+                                .get_or_insert_with(Vec::new)
+                                .push(format.url.clone());
+                        }
                     }
                     continue;
                 }

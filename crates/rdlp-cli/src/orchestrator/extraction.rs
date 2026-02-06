@@ -65,8 +65,12 @@ impl Orchestrator {
         if !info.webpage_url.is_empty() {
             let referer = info.webpage_url.clone();
             for fmt in &mut info.formats {
-                let headers = fmt.http_headers.get_or_insert_with(std::collections::HashMap::new);
-                headers.entry("Referer".to_string()).or_insert(referer.clone());
+                let headers = fmt
+                    .http_headers
+                    .get_or_insert_with(std::collections::HashMap::new);
+                headers
+                    .entry("Referer".to_string())
+                    .or_insert(referer.clone());
             }
         }
 

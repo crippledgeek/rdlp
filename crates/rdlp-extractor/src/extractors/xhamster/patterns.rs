@@ -74,8 +74,7 @@ pub static LEGACY_SOURCES_PATTERN: Lazy<Regex> = Lazy::new(|| {
 
 /// Pattern for legacy `file: "url"` variable.
 pub static LEGACY_FILE_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"file\s*:\s*["'](?P<url>.+?)["']"#)
-        .expect("Valid legacy file pattern")
+    Regex::new(r#"file\s*:\s*["'](?P<url>.+?)["']"#).expect("Valid legacy file pattern")
 });
 
 /// Pattern for `<a class="mp4Thumb" href="url">`.
@@ -103,9 +102,8 @@ pub static EMBED_VIDEO_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Pattern for embed page `vars` JSON.
-pub static EMBED_VARS_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid embed vars pattern")
-});
+pub static EMBED_VARS_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid embed vars pattern"));
 
 /// Check if a URL matches any xHamster pattern (video, embed, or user).
 pub fn is_suitable(url: &str) -> bool {
@@ -165,8 +163,11 @@ mod tests {
 
     #[test]
     fn test_video_url_new_schema() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster.com/videos/femaleagent-shy-beauty-takes-the-bait-1509445"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN.is_match(
+                "https://xhamster.com/videos/femaleagent-shy-beauty-takes-the-bait-1509445"
+            )
+        );
         assert_eq!(
             extract_video_id(
                 "https://xhamster.com/videos/femaleagent-shy-beauty-takes-the-bait-1509445"
@@ -183,72 +184,91 @@ mod tests {
 
     #[test]
     fn test_video_url_old_schema() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html")
+        );
         assert_eq!(
-            extract_video_id(
-                "http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html"
-            ),
+            extract_video_id("http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html"),
             Some("1509445".to_string())
         );
     }
 
     #[test]
     fn test_video_url_alphanumeric_id() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("http://de.xhamster.com/videos/skinny-girl-fucks-herself-xhnBJZx"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("http://de.xhamster.com/videos/skinny-girl-fucks-herself-xhnBJZx")
+        );
         assert_eq!(
-            extract_video_id(
-                "http://de.xhamster.com/videos/skinny-girl-fucks-herself-xhnBJZx"
-            ),
+            extract_video_id("http://de.xhamster.com/videos/skinny-girl-fucks-herself-xhnBJZx"),
             Some("xhnBJZx".to_string())
         );
     }
 
     #[test]
     fn test_video_url_alt_domains() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster.one/videos/femaleagent-shy-beauty-1509445"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster.desi/videos/femaleagent-shy-beauty-1509445"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster2.com/videos/femaleagent-shy-beauty-1509445"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster11.com/videos/femaleagent-shy-beauty-1509445"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster26.com/videos/femaleagent-shy-beauty-1509445"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhday.com/videos/strapless-threesome-xhh7yVf"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhvid.com/videos/lk-mm-xhc6wn6"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://xhamster20.desi/videos/my-verification-video-11937369"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster.one/videos/femaleagent-shy-beauty-1509445")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster.desi/videos/femaleagent-shy-beauty-1509445")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster2.com/videos/femaleagent-shy-beauty-1509445")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster11.com/videos/femaleagent-shy-beauty-1509445")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster26.com/videos/femaleagent-shy-beauty-1509445")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN.is_match("https://xhday.com/videos/strapless-threesome-xhh7yVf")
+        );
+        assert!(XHAMSTER_VIDEO_PATTERN.is_match("https://xhvid.com/videos/lk-mm-xhc6wn6"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://xhamster20.desi/videos/my-verification-video-11937369")
+        );
     }
 
     #[test]
     fn test_video_url_country_codes() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://de.xhamster.com/videos/euro-pedal-pumping-7937821"));
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://pt.xhamster.com/videos/euro-pedal-pumping-7937821"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://de.xhamster.com/videos/euro-pedal-pumping-7937821")
+        );
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://pt.xhamster.com/videos/euro-pedal-pumping-7937821")
+        );
     }
 
     #[test]
     fn test_video_url_mobile() {
-        assert!(XHAMSTER_VIDEO_PATTERN
-            .is_match("https://m.xhamster.com/videos/cute-teen-solo-masturbation-8559111"));
+        assert!(
+            XHAMSTER_VIDEO_PATTERN
+                .is_match("https://m.xhamster.com/videos/cute-teen-solo-masturbation-8559111")
+        );
     }
 
     #[test]
     fn test_video_url_invalid() {
         assert!(!XHAMSTER_VIDEO_PATTERN.is_match("https://youtube.com/watch?v=test"));
-        assert!(!XHAMSTER_VIDEO_PATTERN.is_match("https://pornhub.com/view_video.php?viewkey=ph123"));
+        assert!(
+            !XHAMSTER_VIDEO_PATTERN.is_match("https://pornhub.com/view_video.php?viewkey=ph123")
+        );
     }
 
     #[test]
     fn test_embed_url() {
-        assert!(XHAMSTER_EMBED_PATTERN
-            .is_match("http://xhamster.com/xembed.php?video=3328539"));
+        assert!(XHAMSTER_EMBED_PATTERN.is_match("http://xhamster.com/xembed.php?video=3328539"));
         let caps = XHAMSTER_EMBED_PATTERN
             .captures("http://xhamster.com/xembed.php?video=3328539")
             .unwrap();
@@ -272,7 +292,9 @@ mod tests {
     fn test_is_suitable() {
         assert!(is_suitable("https://xhamster.com/videos/test-1509445"));
         assert!(is_suitable("http://xhamster.com/xembed.php?video=3328539"));
-        assert!(is_suitable("https://xhamster.com/users/netvideogirls/videos"));
+        assert!(is_suitable(
+            "https://xhamster.com/users/netvideogirls/videos"
+        ));
         assert!(!is_suitable("https://youtube.com/watch?v=test"));
     }
 

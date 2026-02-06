@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
 rdlp-security = { path = "../rdlp-security" }
+rdlp-crypto = { path = "../rdlp-crypto" }
 async-trait = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }

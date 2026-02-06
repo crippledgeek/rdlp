@@ -40,9 +40,9 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 
+use crate::processors::*;
 use rdlp_ffmpeg::error::Result;
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
-use crate::processors::*;
 
 /// Trait for post-processor registry operations.
 #[async_trait]

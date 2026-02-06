@@ -90,8 +90,8 @@ impl EmbedThumbnail {
                 _ => mp4ameta::Img::jpeg(cover_bytes),
             };
 
-            let mut tag = mp4ameta::Tag::read_from_path(&media)
-                .unwrap_or_else(|_| mp4ameta::Tag::default());
+            let mut tag =
+                mp4ameta::Tag::read_from_path(&media).unwrap_or_else(|_| mp4ameta::Tag::default());
             tag.set_artwork(img);
             tag.write_to_path(&media)?;
 

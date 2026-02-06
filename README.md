@@ -11,7 +11,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 ## Features
 
 - **Performance** - 10+ MB/s downloads with parallel chunking and power-of-two sizing
-- **HLS support** - Full streaming with duration-based progress, DRM detection, live stream warnings
+- **HLS support** - Full streaming with duration-based progress, DRM detection, live stream warnings, resume validation, PTS normalization
 - **Post-processing** - FFmpeg library bindings for remux, audio extraction, video conversion, metadata embedding
 - **Thumbnails** - Auto-download and embed cover art; MP4 uses iTunes `covr` atom for Windows Explorer visibility
 - **28 container formats** - MP4, MKV, WebM, MOV, AVI, TS, FLV, 3GP, MPG, ASF/WMV, MXF, VOB, IVF, and audio containers (MP3, FLAC, WAV, Opus, AAC, AIFF, etc.)
@@ -185,7 +185,7 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | `--no-thumbnail` | | Disable automatic thumbnail download and embedding |
 | `--write-thumbnail` | | Keep thumbnail image file on disk alongside media file |
 | `--recode-video[=FMT]` | | Re-encode video (16 codecs). Use `--recode-video` for interactive, `--recode-video=mp4` for direct |
-| `--remux[=FMT]` | | Remux to container without re-encoding (28 formats). Use `--remux` for interactive, `--remux=mp4` for direct |
+| `--remux[=FMT]` | | Remux to container without re-encoding (28 formats). Normalizes timestamps to start at 0. Use `--remux` for interactive, `--remux=mp4` for direct |
 | `--keep-video` | | Keep original file after post-processing |
 | `--ffmpeg-location <PATH>` | | Path to FFmpeg if not in PATH |
 
@@ -242,9 +242,11 @@ All fields are optional — missing fields use defaults. See `Config` struct in 
 
 Press **Ctrl+C** during download to pause. Re-run the same command to resume from where you left off.
 
+HLS downloads validate segment files on resume — missing or corrupted segments are automatically re-downloaded.
+
 ## Architecture
 
-14-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
+15-crate workspace with a three-stage pipeline: **Extract** -> **Download** -> **Post-process**.
 
 ```
 rdlp/
@@ -255,6 +257,7 @@ rdlp/
 │   ├── rdlp-security/     # SSRF protection, URL validation
 │   ├── rdlp-http/         # HTTP client factory
 │   ├── rdlp-ratelimit/    # Async token-bucket rate limiter
+│   ├── rdlp-crypto/       # PRNG-based URL decryption (XHamster)
 │   ├── rdlp-extractor/    # Site extractors
 │   ├── rdlp-downloader/   # HTTP + HLS downloaders
 │   ├── rdlp-ffmpeg/       # FFmpeg library bindings (probe, remux, transcode, metadata)

@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::base::common::BaseExtractor;
 use crate::utils::extract_extension_from_url;
+use rdlp_crypto::xhamster::decipher_format_url;
 
-use super::decrypt::decipher_format_url;
 use super::patterns;
 
 /// Extract height from a quality string like "720p", "1080P", etc.
@@ -51,10 +51,7 @@ pub fn fixup_formats(formats: &mut [Format]) {
 /// 1. `videoModel.sources` — direct URLs keyed by format type and quality
 /// 2. `xplayerSettings.sources.hls` — encrypted HLS manifests
 /// 3. `xplayerSettings.sources.standard` — encrypted standard video URLs
-pub fn extract_from_initials(
-    initials: &Value,
-    page_url: &str,
-) -> Vec<Format> {
+pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
     let mut formats = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
 
@@ -101,8 +98,7 @@ pub fn extract_from_initials(
                 continue;
             }
 
-            let ext = extract_extension_from_url(&format_url)
-                .unwrap_or_else(|| "mp4".to_string());
+            let ext = extract_extension_from_url(&format_url).unwrap_or_else(|| "mp4".to_string());
 
             let height = get_height(quality);
             let mut format = BaseExtractor::build_format(
@@ -130,33 +126,44 @@ pub fn extract_from_initials(
         .pointer("/xplayerSettings/sources")
         .or_else(|| initials.pointer("/xplayerSettings2/sources"));
 
-    if let Some(xplayer_sources) = xplayer_sources_val
-        .and_then(|v| v.as_object())
-    {
-        debug!("[XHamster] Found xplayerSettings.sources with {} keys", xplayer_sources.len());
+    if let Some(xplayer_sources) = xplayer_sources_val.and_then(|v| v.as_object()) {
+        debug!(
+            "[XHamster] Found xplayerSettings.sources with {} keys",
+            xplayer_sources.len()
+        );
         // HLS sources (encrypted)
         // Supports two layouts:
         //   Old: hls: {url: "...", fallback: "..."}
         //   New: hls: {av1: {url: "..."}, h264: {url: "...", fallback: "..."}}
         if let Some(hls) = xplayer_sources.get("hls").and_then(|v| v.as_object()) {
             // Collect all (format_id, encrypted_url) pairs from both layouts
+            // IMPORTANT: Process top-level url/fallback FIRST (master playlists),
+            // then codec-specific URLs. This ensures master playlists are preferred
+            // during deduplication (they typically have complete segment lists).
             let mut hls_urls: Vec<(String, String)> = Vec::new();
 
-            for (key, value) in hls {
-                if let Some(url_str) = value.as_str() {
-                    // Old layout: direct string values keyed by "url"/"fallback"
+            // First: top-level "url" and "fallback" keys (master playlists)
+            for top_key in &["url", "fallback"] {
+                if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str()) {
                     if !url_str.is_empty() {
-                        hls_urls.push((format!("hls-{key}"), url_str.to_string()));
+                        hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
                     }
-                } else if let Some(codec_obj) = value.as_object() {
+                }
+            }
+
+            // Second: codec-specific nested objects (h264, av1, etc.)
+            for (key, value) in hls {
+                // Skip top-level keys already processed
+                if key == "url" || key == "fallback" {
+                    continue;
+                }
+                if let Some(codec_obj) = value.as_object() {
                     // New layout: codec-keyed objects like {url: "...", fallback: "..."}
                     for hls_key in &["url", "fallback"] {
                         if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str()) {
                             if !url_str.is_empty() {
-                                hls_urls.push((
-                                    format!("hls-{key}-{hls_key}"),
-                                    url_str.to_string(),
-                                ));
+                                hls_urls
+                                    .push((format!("hls-{key}-{hls_key}"), url_str.to_string()));
                             }
                         }
                     }
@@ -216,7 +223,10 @@ pub fn extract_from_initials(
                                         .or_else(|| v.as_i64().map(|i| i.to_string()))
                                 })
                                 .or_else(|| {
-                                    std_obj.get("label").and_then(|v| v.as_str()).map(|s| s.to_string())
+                                    std_obj
+                                        .get("label")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string())
                                 })
                                 .unwrap_or_default()
                         } else {
@@ -255,12 +265,8 @@ pub fn extract_from_initials(
                         }
 
                         let height = get_height(&quality_str);
-                        let mut format = BaseExtractor::build_format(
-                            format_id,
-                            deciphered,
-                            ext,
-                            height,
-                        );
+                        let mut format =
+                            BaseExtractor::build_format(format_id, deciphered, ext, height);
 
                         if let Some(&size) = format_sizes.get(&quality_str) {
                             format.filesize = Some(size as u64);
@@ -322,7 +328,8 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
             if let Some(url_match) = caps.name("url") {
                 let url = url_match.as_str();
                 if !url.is_empty() && seen_urls.insert(url.to_string()) {
-                    let format = Format::new("video", url, "mp4", rdlp_core::DownloadProtocol::Https);
+                    let format =
+                        Format::new("video", url, "mp4", rdlp_core::DownloadProtocol::Https);
                     formats.push(format);
                 }
             }
@@ -354,8 +361,14 @@ mod tests {
 
     #[test]
     fn test_detect_vcodec() {
-        assert_eq!(detect_vcodec("https://example.com/video.h264.mp4"), Some("h264".to_string()));
-        assert_eq!(detect_vcodec("https://example.com/video.av1.mp4"), Some("av1".to_string()));
+        assert_eq!(
+            detect_vcodec("https://example.com/video.h264.mp4"),
+            Some("h264".to_string())
+        );
+        assert_eq!(
+            detect_vcodec("https://example.com/video.av1.mp4"),
+            Some("av1".to_string())
+        );
         assert_eq!(detect_vcodec("https://example.com/video.mp4"), None);
     }
 
@@ -400,7 +413,10 @@ mod tests {
     #[test]
     fn test_referer_headers() {
         let headers = referer_headers("https://xhamster.com/videos/test-123");
-        assert_eq!(headers.get("Referer").unwrap(), "https://xhamster.com/videos/test-123");
+        assert_eq!(
+            headers.get("Referer").unwrap(),
+            "https://xhamster.com/videos/test-123"
+        );
     }
 
     #[test]

@@ -409,23 +409,14 @@ impl Orchestrator {
         // Find downloader (with extra HTTP headers if the format specifies them)
         let downloader = self
             .downloader_registry
-            .find_downloader_with_headers(
-                &format.url,
-                format.http_headers.as_ref(),
-            )
+            .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
             .ok_or_else(|| OrchestratorError::NoDownloader {
                 url: format.url.clone(),
             })?;
 
         // Execute download with fallback CDN retry
         let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
-            .chain(
-                format
-                    .fallback_urls
-                    .iter()
-                    .flatten()
-                    .map(String::as_str),
-            )
+            .chain(format.fallback_urls.iter().flatten().map(String::as_str))
             .collect();
 
         let mut stats = None;
