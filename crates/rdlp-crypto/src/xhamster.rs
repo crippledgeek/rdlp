@@ -39,7 +39,6 @@ use url::Url;
 
 use crate::prng::ByteGenerator;
 
-
 /// Pattern to extract hex-encoded ciphertext and remainder from URL path.
 ///
 /// The path starts with `/{hex}{remainder}` where hex is 12+ hex chars
@@ -200,5 +199,4 @@ mod tests {
         assert!(!HEX_PATH_PATTERN.is_match("/abc/something")); // Too short
         assert!(!HEX_PATH_PATTERN.is_match("/abcdef12345g/something")); // Non-hex char
     }
-
 }

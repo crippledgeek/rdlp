@@ -1,14 +1,14 @@
 //! HLS segment download logic with retry support.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use backon::Retryable;
 use futures::StreamExt;
 use log::{debug, warn};
-use rdlp_core::{is_retryable_error, RdlpError, Result};
+use rdlp_core::{RdlpError, Result, is_retryable_error};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tracing::instrument;

@@ -50,9 +50,7 @@ pub(crate) async fn parse_playlist(
     })?;
 
     match playlist {
-        m3u8_rs::Playlist::MediaPlaylist(media) => {
-            parse_media_playlist(media, m3u8_url)
-        }
+        m3u8_rs::Playlist::MediaPlaylist(media) => parse_media_playlist(media, m3u8_url),
         m3u8_rs::Playlist::MasterPlaylist(master) => {
             parse_master_playlist(http_downloader, master, m3u8_url).await
         }
@@ -143,7 +141,7 @@ fn parse_media_playlist(
                     "Playlist may be incomplete: first segment is #{first_seg_num}, \
                      missing {missing} segment(s) from the beginning (~{} seconds). \
                      Consider trying a different format (AV1, MP4) or the fallback URL.",
-                    missing * 4  // Typical ~4s per segment
+                    missing * 4 // Typical ~4s per segment
                 );
             }
         }
@@ -214,7 +212,10 @@ fn extract_segment_number(url: &str) -> Option<u32> {
         if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
             return rest[..end].parse().ok();
         }
-        return rest.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok();
+        return rest
+            .trim_end_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .ok();
     }
 
     None

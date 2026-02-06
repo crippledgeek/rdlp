@@ -456,8 +456,7 @@ fn rank_formats(base: &BaseSelector, a: &Format, b: &Format) -> std::cmp::Orderi
     match base {
         BaseSelector::BestAudio | BaseSelector::BestAudioStar | BaseSelector::WorstAudio => {
             // Audio ranking: abr > asr
-            cmp_opt_f64(a.abr, b.abr)
-                .then(a.asr.cmp(&b.asr))
+            cmp_opt_f64(a.abr, b.abr).then(a.asr.cmp(&b.asr))
         }
         BaseSelector::BestVideo | BaseSelector::BestVideoStar | BaseSelector::WorstVideo => {
             // Video ranking: height > vbr > fps

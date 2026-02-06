@@ -123,7 +123,10 @@ impl ByteGenerator {
         if !(1..=7).contains(&algo_id) {
             return None;
         }
-        Some(Self { state: seed, algo_id })
+        Some(Self {
+            state: seed,
+            algo_id,
+        })
     }
 
     /// Generate the next byte (0-255) from the PRNG stream.

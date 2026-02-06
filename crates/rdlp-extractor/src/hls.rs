@@ -495,10 +495,7 @@ impl HlsSizeDetector {
     /// playlist and applied to all entries.
     ///
     /// For media playlists (non-master), returns an empty Vec.
-    pub async fn detect_hls_variants(
-        &self,
-        m3u8_url: &str,
-    ) -> Result<Vec<HlsVariantInfo>> {
+    pub async fn detect_hls_variants(&self, m3u8_url: &str) -> Result<Vec<HlsVariantInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
@@ -1107,8 +1104,14 @@ pub async fn detect_format_sizes(
                             // Not a master playlist or detection failed — fall back to
                             // single-format enrichment via detect_hls_metadata
                             let mut format = format;
-                            let (is_live, has_enc) =
-                                enrich_single_hls_format(&mut format, &hls_detector, &url, &extractor_name, verbose).await;
+                            let (is_live, has_enc) = enrich_single_hls_format(
+                                &mut format,
+                                &hls_detector,
+                                &url,
+                                &extractor_name,
+                                verbose,
+                            )
+                            .await;
                             return vec![(format, is_live, has_enc)];
                         }
                     };
@@ -1132,10 +1135,14 @@ pub async fn detect_format_sizes(
                         );
                         expanded_format.height = height;
                         expanded_format.width = width;
-                        expanded_format.vcodec = variant.video_codec.clone()
+                        expanded_format.vcodec = variant
+                            .video_codec
+                            .clone()
                             .or_else(|| format.vcodec.clone())
                             .or_else(|| detect_codec_from_id(&format.format_id, true));
-                        expanded_format.acodec = variant.audio_codec.clone()
+                        expanded_format.acodec = variant
+                            .audio_codec
+                            .clone()
                             .or_else(|| format.acodec.clone())
                             .or_else(|| detect_codec_from_id(&format.format_id, false));
                         expanded_format.fps = variant.frame_rate;

@@ -705,14 +705,16 @@ impl FFmpegRunner {
 
         debug!("MKV remux via raw FFI with avg_frame_rate + cluster_time_limit=500");
 
-        let input_cstr = CString::new(input.to_string_lossy().as_ref())
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
+        let input_cstr = CString::new(input.to_string_lossy().as_ref()).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
                 message: format!("Invalid input path: {e}"),
-            })?;
-        let output_cstr = CString::new(output.to_string_lossy().as_ref())
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
+            }
+        })?;
+        let output_cstr = CString::new(output.to_string_lossy().as_ref()).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
                 message: format!("Invalid output path: {e}"),
-            })?;
+            }
+        })?;
 
         unsafe {
             // 1. Open input
@@ -814,9 +816,12 @@ impl FFmpegRunner {
 
                 log::debug!(
                     "Stream {i}: time_base={}/{}, avg_frame_rate={}/{}, r_frame_rate={}/{}",
-                    (*out_stream).time_base.num, (*out_stream).time_base.den,
-                    (*out_stream).avg_frame_rate.num, (*out_stream).avg_frame_rate.den,
-                    (*out_stream).r_frame_rate.num, (*out_stream).r_frame_rate.den,
+                    (*out_stream).time_base.num,
+                    (*out_stream).time_base.den,
+                    (*out_stream).avg_frame_rate.num,
+                    (*out_stream).avg_frame_rate.den,
+                    (*out_stream).r_frame_rate.num,
+                    (*out_stream).r_frame_rate.den,
                 );
             }
 
@@ -979,14 +984,21 @@ impl FFmpegRunner {
 
         let status = std::process::Command::new("ffmpeg")
             .args([
-                "-y",                                   // Overwrite output
-                "-i", &*media.to_string_lossy(),        // Media input
-                "-i", &*thumbnail.to_string_lossy(),    // Thumbnail input
-                "-map", "0",                            // Map all streams from media
-                "-map", "1",                            // Map thumbnail
-                "-c", "copy",                           // Stream copy
-                "-disposition:v:1", "attached_pic",     // Mark thumbnail as attached picture
-                "-cluster_time_limit", "500",           // 500ms clusters for VLC
+                "-y", // Overwrite output
+                "-i",
+                &*media.to_string_lossy(), // Media input
+                "-i",
+                &*thumbnail.to_string_lossy(), // Thumbnail input
+                "-map",
+                "0", // Map all streams from media
+                "-map",
+                "1", // Map thumbnail
+                "-c",
+                "copy", // Stream copy
+                "-disposition:v:1",
+                "attached_pic", // Mark thumbnail as attached picture
+                "-cluster_time_limit",
+                "500", // 500ms clusters for VLC
             ])
             .arg(&*output.to_string_lossy())
             .stdout(std::process::Stdio::null())
@@ -2006,9 +2018,10 @@ impl FFmpegRunner {
         }
 
         // Write header with options
-        octx.write_header_with(dict).map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to write output header: {e}"),
-        })?;
+        octx.write_header_with(dict)
+            .map_err(|e| PostProcessError::FFmpegLibraryError {
+                message: format!("failed to write output header: {e}"),
+            })?;
 
         // For FLAC/OGG/Opus: write thumbnail packets BEFORE media packets.
         // These formats store picture metadata in the file header (METADATA_BLOCK_PICTURE

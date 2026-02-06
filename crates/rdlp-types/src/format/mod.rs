@@ -363,11 +363,14 @@ impl Format {
                 (None, None) => "HLS stream".to_string(),
             }
         } else if let Some(filesize) = self.filesize {
-            let dur_suffix = self.duration.map(|dur| {
-                let mins = dur as u64 / 60;
-                let secs = dur as u64 % 60;
-                format!(" ({mins}:{secs:02})")
-            }).unwrap_or_default();
+            let dur_suffix = self
+                .duration
+                .map(|dur| {
+                    let mins = dur as u64 / 60;
+                    let secs = dur as u64 % 60;
+                    format!(" ({mins}:{secs:02})")
+                })
+                .unwrap_or_default();
             format!("{:.1} MB{dur_suffix}", filesize as f64 / (1024.0 * 1024.0))
         } else if let Some(filesize_approx) = self.filesize_approx {
             format!("~{:.0} MB", filesize_approx as f64 / (1024.0 * 1024.0))

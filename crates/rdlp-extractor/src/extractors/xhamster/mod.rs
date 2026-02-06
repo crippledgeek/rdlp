@@ -95,47 +95,46 @@ impl XHamsterExtractor {
         let age_limit = utils::extract_age_limit(&webpage);
 
         // Try modern layout: window.initials JSON
-        let (mut info, formats) =
-            if let Some(initials) = extract_initials_json(&webpage) {
-                let video_model = initials.get("videoModel");
+        let (mut info, formats) = if let Some(initials) = extract_initials_json(&webpage) {
+            let video_model = initials.get("videoModel");
 
-                let info = if let Some(vm) = video_model {
-                    utils::extract_metadata_from_json(
-                        vm,
-                        &video_id,
-                        display_id.as_deref(),
-                        &url,
-                        self.name(),
-                        age_limit,
-                    )
-                } else {
-                    // initials found but no videoModel — fall back to HTML metadata
-                    utils::extract_metadata_from_html(
-                        &webpage,
-                        &video_id,
-                        display_id.as_deref(),
-                        &url,
-                        self.name(),
-                        age_limit,
-                    )
-                };
-
-                let formats = formats::extract_from_initials(&initials, &url);
-                (info, formats)
+            let info = if let Some(vm) = video_model {
+                utils::extract_metadata_from_json(
+                    vm,
+                    &video_id,
+                    display_id.as_deref(),
+                    &url,
+                    self.name(),
+                    age_limit,
+                )
             } else {
-                // Legacy fallback
-                debug!("[XHamster] No window.initials found, using legacy extraction");
-                let info = utils::extract_metadata_from_html(
+                // initials found but no videoModel — fall back to HTML metadata
+                utils::extract_metadata_from_html(
                     &webpage,
                     &video_id,
                     display_id.as_deref(),
                     &url,
                     self.name(),
                     age_limit,
-                );
-                let formats = formats::extract_from_legacy(&webpage);
-                (info, formats)
+                )
             };
+
+            let formats = formats::extract_from_initials(&initials, &url);
+            (info, formats)
+        } else {
+            // Legacy fallback
+            debug!("[XHamster] No window.initials found, using legacy extraction");
+            let info = utils::extract_metadata_from_html(
+                &webpage,
+                &video_id,
+                display_id.as_deref(),
+                &url,
+                self.name(),
+                age_limit,
+            );
+            let formats = formats::extract_from_legacy(&webpage);
+            (info, formats)
+        };
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction(format!(
@@ -144,8 +143,7 @@ impl XHamsterExtractor {
         }
 
         // Detect file sizes and segment counts for HLS
-        let (formats_with_size, hls_flags) =
-            detect_format_sizes(formats, ctx, self.name()).await;
+        let (formats_with_size, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
 
         info.formats = formats_with_size;
         info.propagate_duration();
@@ -173,7 +171,8 @@ impl XHamsterExtractor {
         if let Some(caps) = patterns::EMBED_VARS_PATTERN.captures(&webpage) {
             if let Some(json_str) = caps.get(1) {
                 if let Ok(vars) = serde_json::from_str::<serde_json::Value>(json_str.as_str()) {
-                    if let Some(video_url) = vars.get("downloadLink")
+                    if let Some(video_url) = vars
+                        .get("downloadLink")
                         .or_else(|| vars.get("mp4File"))
                         .and_then(|v| v.as_str())
                     {
@@ -215,23 +214,16 @@ impl XHamsterExtractor {
 
             debug!(page, url:? = page_url; "[XHamster] Fetching user page");
 
-            let response = ctx
-                .http_client
-                .get(&page_url)
-                .send()
-                .await
-                .map_err(|e| {
-                    RdlpError::Network(format!("Failed to fetch user page {page}: {e}"))
-                })?;
+            let response = ctx.http_client.get(&page_url).send().await.map_err(|e| {
+                RdlpError::Network(format!("Failed to fetch user page {page}: {e}"))
+            })?;
 
             check_http_response(&response)?;
 
             let webpage = response
                 .text()
                 .await
-                .map_err(|e| {
-                    RdlpError::Network(format!("Failed to read user page {page}: {e}"))
-                })?;
+                .map_err(|e| RdlpError::Network(format!("Failed to read user page {page}: {e}")))?;
 
             // Extract video URLs from the page
             let page_urls = extract_user_video_urls(&webpage);
@@ -282,43 +274,44 @@ impl XHamsterExtractor {
 
         let completed = Arc::new(AtomicUsize::new(0));
 
-        let extraction_futures = all_video_urls
-            .into_iter()
-            .enumerate()
-            .map(|(index, video_url)| {
-                let position = index + 1;
-                let user_id = user_id.clone();
-                let completed = Arc::clone(&completed);
+        let extraction_futures =
+            all_video_urls
+                .into_iter()
+                .enumerate()
+                .map(|(index, video_url)| {
+                    let position = index + 1;
+                    let user_id = user_id.clone();
+                    let completed = Arc::clone(&completed);
 
-                async move {
-                    let result = timeout(
-                        VIDEO_EXTRACTION_TIMEOUT,
-                        self.extract_video(&video_url, ctx),
-                    )
-                    .await;
+                    async move {
+                        let result = timeout(
+                            VIDEO_EXTRACTION_TIMEOUT,
+                            self.extract_video(&video_url, ctx),
+                        )
+                        .await;
 
-                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
 
-                    match result {
-                        Ok(Ok(mut info)) => {
-                            info.playlist = Some(user_id);
-                            info.playlist_index = Some(position);
-                            info.playlist_count = Some(total);
+                        match result {
+                            Ok(Ok(mut info)) => {
+                                info.playlist = Some(user_id);
+                                info.playlist_index = Some(position);
+                                info.playlist_count = Some(total);
 
-                            debug!(done, total; "[XHamster] Extracted video");
-                            Some((position, info))
-                        }
-                        Ok(Err(e)) => {
-                            warn!(position, total; "Failed to extract video: {e}");
-                            None
-                        }
-                        Err(_) => {
-                            warn!(position, total; "Timed out extracting video");
-                            None
+                                debug!(done, total; "[XHamster] Extracted video");
+                                Some((position, info))
+                            }
+                            Ok(Err(e)) => {
+                                warn!(position, total; "Failed to extract video: {e}");
+                                None
+                            }
+                            Err(_) => {
+                                warn!(position, total; "Timed out extracting video");
+                                None
+                            }
                         }
                     }
-                }
-            });
+                });
 
         let results: Vec<Option<(usize, InfoDict)>> = stream::iter(extraction_futures)
             .buffer_unordered(CONCURRENT_EXTRACTIONS)
@@ -454,30 +447,26 @@ mod tests {
         let extractor = XHamsterExtractor::new();
 
         // Video URLs
-        assert!(extractor.suitable(
-            "https://xhamster.com/videos/femaleagent-shy-beauty-takes-the-bait-1509445"
-        ));
-        assert!(extractor.suitable(
-            "http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html"
-        ));
+        assert!(
+            extractor.suitable(
+                "https://xhamster.com/videos/femaleagent-shy-beauty-takes-the-bait-1509445"
+            )
+        );
+        assert!(
+            extractor.suitable("http://xhamster.com/movies/1509445/femaleagent_shy_beauty.html")
+        );
 
         // Alt domains
-        assert!(extractor
-            .suitable("https://xhamster.one/videos/test-1509445"));
-        assert!(extractor
-            .suitable("https://xhamster2.com/videos/test-1509445"));
-        assert!(extractor
-            .suitable("https://xhday.com/videos/test-xhh7yVf"));
+        assert!(extractor.suitable("https://xhamster.one/videos/test-1509445"));
+        assert!(extractor.suitable("https://xhamster2.com/videos/test-1509445"));
+        assert!(extractor.suitable("https://xhday.com/videos/test-xhh7yVf"));
 
         // Embed URLs
-        assert!(extractor
-            .suitable("http://xhamster.com/xembed.php?video=3328539"));
+        assert!(extractor.suitable("http://xhamster.com/xembed.php?video=3328539"));
 
         // User URLs
-        assert!(extractor
-            .suitable("https://xhamster.com/users/netvideogirls/videos"));
-        assert!(extractor
-            .suitable("https://xhamster.com/creators/squirt-orgasm-69"));
+        assert!(extractor.suitable("https://xhamster.com/users/netvideogirls/videos"));
+        assert!(extractor.suitable("https://xhamster.com/creators/squirt-orgasm-69"));
 
         // Invalid URLs
         assert!(!extractor.suitable("https://youtube.com/watch?v=test"));

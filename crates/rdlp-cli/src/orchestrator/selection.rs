@@ -134,9 +134,7 @@ impl Orchestrator {
 /// Detect HLS by protocol flag or URL pattern (some extractors set protocol as Https
 /// even for m3u8 URLs)
 fn is_hls(f: &Format) -> bool {
-    f.protocol.is_hls()
-        || f.url.contains(".m3u8")
-        || f.url.contains("/master.m3u8")
+    f.protocol.is_hls() || f.url.contains(".m3u8") || f.url.contains("/master.m3u8")
 }
 
 /// Returns true if `candidate` is a better pick than `current` within the same group.

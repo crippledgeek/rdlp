@@ -62,18 +62,15 @@ static LEGACY_LIKES_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 static LEGACY_COMMENT_COUNT_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"</label>Comments \((?P<count>\d+)\)</div>")
-        .expect("Valid comment count pattern")
+    Regex::new(r"</label>Comments \((?P<count>\d+)\)</div>").expect("Valid comment count pattern")
 });
 
 static LEGACY_CATEGORIES_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?s)<table.+?(<span>Categories:.+?)</table>")
-        .expect("Valid categories pattern")
+    Regex::new(r"(?s)<table.+?(<span>Categories:.+?)</table>").expect("Valid categories pattern")
 });
 
-static CATEGORY_LINK_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<a[^>]+>(.+?)</a>").expect("Valid category link pattern")
-});
+static CATEGORY_LINK_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<a[^>]+>(.+?)</a>").expect("Valid category link pattern"));
 
 /// Detect if a video page indicates the video is unavailable.
 ///
@@ -133,9 +130,7 @@ pub fn extract_metadata_from_json(
         .and_then(|v| v.as_u64())
         .map(|d| d as f64);
 
-    info.view_count = video_model
-        .get("views")
-        .and_then(|v| v.as_u64());
+    info.view_count = video_model.get("views").and_then(|v| v.as_u64());
 
     info.like_count = video_model
         .pointer("/rating/likes")
@@ -145,9 +140,7 @@ pub fn extract_metadata_from_json(
         .pointer("/rating/dislikes")
         .and_then(|v| v.as_u64());
 
-    info.comment_count = video_model
-        .get("comments")
-        .and_then(|v| v.as_u64());
+    info.comment_count = video_model.get("comments").and_then(|v| v.as_u64());
 
     info.upload_date = video_model
         .get("created")
@@ -176,7 +169,11 @@ pub fn extract_metadata_from_json(
     if let Some(categories_arr) = video_model.get("categories").and_then(|v| v.as_array()) {
         let cats: Vec<String> = categories_arr
             .iter()
-            .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+            .filter_map(|c| {
+                c.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect();
         if !cats.is_empty() {
             info.categories = Some(cats);
@@ -241,15 +238,13 @@ pub fn extract_metadata_from_html(
     info.uploader = Some(uploader);
 
     // Thumbnail
-    info.thumbnail = LEGACY_THUMBNAIL_PATTERNS
-        .iter()
-        .find_map(|pattern| {
-            Regex::new(pattern)
-                .ok()
-                .and_then(|re| re.captures(webpage))
-                .and_then(|caps| caps.name("url"))
-                .map(|m| m.as_str().to_string())
-        });
+    info.thumbnail = LEGACY_THUMBNAIL_PATTERNS.iter().find_map(|pattern| {
+        Regex::new(pattern)
+            .ok()
+            .and_then(|re| re.captures(webpage))
+            .and_then(|caps| caps.name("url"))
+            .map(|m| m.as_str().to_string())
+    });
 
     // Duration (parse "PT1M30S" or "1:30" formats)
     for pattern in &LEGACY_DURATION_PATTERNS {
@@ -290,7 +285,8 @@ pub fn extract_metadata_from_html(
         let cats: Vec<String> = CATEGORY_LINK_PATTERN
             .captures_iter(cats_html)
             .filter_map(|caps| {
-                caps.get(1).map(|m| BaseExtractor::clean_html_tags(m.as_str(), None))
+                caps.get(1)
+                    .map(|m| BaseExtractor::clean_html_tags(m.as_str(), None))
             })
             .filter(|s| !s.is_empty())
             .collect();
@@ -397,19 +393,35 @@ mod tests {
             ]
         });
 
-        let info = extract_metadata_from_json(&json, "123", Some("test-video"), "https://xhamster.com/videos/test-video-123", "XHamster", Some(18));
+        let info = extract_metadata_from_json(
+            &json,
+            "123",
+            Some("test-video"),
+            "https://xhamster.com/videos/test-video-123",
+            "XHamster",
+            Some(18),
+        );
 
         assert_eq!(info.title, "Test Video");
         assert_eq!(info.description, Some("A test".to_string()));
-        assert_eq!(info.thumbnail, Some("https://example.com/thumb.jpg".to_string()));
+        assert_eq!(
+            info.thumbnail,
+            Some("https://example.com/thumb.jpg".to_string())
+        );
         assert_eq!(info.duration, Some(893.0));
         assert_eq!(info.view_count, Some(12345));
         assert_eq!(info.like_count, Some(100));
         assert_eq!(info.comment_count, Some(42));
         assert_eq!(info.uploader, Some("TestUser".to_string()));
-        assert_eq!(info.uploader_url, Some("https://xhamster.com/users/testuser".to_string()));
+        assert_eq!(
+            info.uploader_url,
+            Some("https://xhamster.com/users/testuser".to_string())
+        );
         assert_eq!(info.uploader_id, Some("testuser".to_string()));
-        assert_eq!(info.categories, Some(vec!["Amateur".to_string(), "HD".to_string()]));
+        assert_eq!(
+            info.categories,
+            Some(vec!["Amateur".to_string(), "HD".to_string()])
+        );
         assert_eq!(info.age_limit, Some(18));
     }
 }

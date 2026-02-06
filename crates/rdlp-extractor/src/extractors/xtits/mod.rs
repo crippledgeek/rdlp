@@ -340,7 +340,10 @@ mod tests {
     #[test]
     fn test_parse_text_duration() {
         // Tests use BaseExtractor::parse_text_duration now
-        assert_eq!(BaseExtractor::parse_text_duration("28min 18sec"), Some(1698.0));
+        assert_eq!(
+            BaseExtractor::parse_text_duration("28min 18sec"),
+            Some(1698.0)
+        );
         assert_eq!(BaseExtractor::parse_text_duration("5min"), Some(300.0));
         assert_eq!(BaseExtractor::parse_text_duration("30sec"), Some(30.0));
         assert_eq!(BaseExtractor::parse_text_duration("1min 1sec"), Some(61.0));

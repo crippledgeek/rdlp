@@ -404,9 +404,7 @@ impl DownloaderRegistryTrait for DownloaderRegistry {
                 let new_hls = self.hls_base.clone().with_http_downloader(new_http);
                 Some(Arc::new(new_hls))
             }
-            "http" => {
-                Some(Arc::new(self.http_base.clone().with_extra_headers(headers)))
-            }
+            "http" => Some(Arc::new(self.http_base.clone().with_extra_headers(headers))),
             _ => self.find_downloader(url),
         }
     }
