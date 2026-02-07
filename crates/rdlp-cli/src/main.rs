@@ -528,10 +528,17 @@ async fn async_main() -> Result<()> {
     let multi_progress = Arc::new(MultiProgress::new());
 
     if !config.quiet {
-        let default_level = if config.verbose { "debug" } else { "info" };
-
-        let filter =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+        // EnvFilter handles both tracing events and log crate events
+        // (tracing-subscriber's tracing-log feature bridges log -> tracing automatically)
+        //
+        // Note: The "standard" pattern of try_from_default_env().unwrap_or_else(EnvFilter::new)
+        // does NOT work reliably - DEBUG logs from hyper_util leak through even when RUST_LOG
+        // is unset. This appears to be a tracing-subscriber bug. Using explicit branching instead.
+        let filter = if config.verbose {
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
+        } else {
+            EnvFilter::new("info")
+        };
 
         // Use SuspendingWriter to properly handle logs while progress bars are active
         // This prevents progress bar duplication caused by log messages

@@ -91,6 +91,8 @@ impl Orchestrator {
         match registry_result {
             Ok(registry) => {
                 debug!("FFmpeg initialized successfully");
+                // Set FFmpeg log level based on verbose mode
+                rdlp_ffmpeg::set_verbose(config.verbose);
                 Some(Arc::new(registry))
             }
             Err(e) => {
