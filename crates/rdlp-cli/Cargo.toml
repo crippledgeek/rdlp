@@ -17,6 +17,7 @@ rdlp-extractor = { path = "../rdlp-extractor" }
 rdlp-downloader = { path = "../rdlp-downloader" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-postprocess = { path = "../rdlp-postprocess" }
+rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-plugin = { path = "../rdlp-plugin" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }

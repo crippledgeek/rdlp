@@ -41,5 +41,5 @@ pub mod ffmpeg;
 pub use error::{PostProcessError, Result};
 pub use ffmpeg::{
     AudioExtractOptions, ChapterEntry, FFmpegRunner, MediaInfo, RemuxOptions, StreamInfo,
-    VideoConvertOptions,
+    VideoConvertOptions, set_verbose,
 };
