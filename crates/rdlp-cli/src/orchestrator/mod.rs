@@ -10,6 +10,7 @@ mod postprocess;
 mod resume;
 mod selection;
 mod state;
+mod template;
 mod thumbnail;
 
 #[cfg(test)]

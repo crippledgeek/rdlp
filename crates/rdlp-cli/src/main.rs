@@ -34,9 +34,13 @@ struct Args {
     /// Video URL to download
     url: Option<String>,
 
-    /// Output directory
+    /// Output template or directory (e.g., "%(title)s.%(ext)s" or "./downloads/")
     #[arg(short, long)]
-    output: Option<PathBuf>,
+    output: Option<String>,
+
+    /// Output directory (always sets base directory, combinable with -o template)
+    #[arg(short = 'P', long = "paths")]
+    output_dir: Option<PathBuf>,
 
     /// Format selection (e.g., "best", "bestvideo+bestaudio")
     #[arg(short, long)]
@@ -410,7 +414,16 @@ fn build_config(args: &Args) -> Result<Config> {
 
     // Step 2: Overlay CLI args (only when explicitly provided)
     if let Some(ref output) = args.output {
-        config.output_directory = output.clone();
+        if output.contains("%(") {
+            // Contains template fields — treat as output template
+            config.output_template = output.clone();
+        } else {
+            // No template fields — backward compat: treat as directory
+            config.output_directory = PathBuf::from(output);
+        }
+    }
+    if let Some(ref dir) = args.output_dir {
+        config.output_directory = dir.clone();
     }
     if let Some(ref format) = args.format {
         config.format = format.clone();
