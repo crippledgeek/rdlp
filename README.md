@@ -18,6 +18,7 @@ Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp). Built on tokio, reqwest,
 - **16 video codecs** - H.264, H.265, VP8, VP9, AV1, VVC/H.266, MPEG-1/2/4, ProRes, DNxHD, Theora, FFV1, Xvid, WMV2
 - **14 audio codecs** - MP3, AAC, M4A, Opus, Vorbis, FLAC, ALAC, WAV, AC-3, E-AC-3, DTS, MP2, WavPack, TTA
 - **Resume** - Ctrl+C to pause, re-run to resume automatically
+- **Output templates** - Full yt-dlp `%(field)s` syntax with fallbacks, arithmetic, date formatting, slicing, 13 format types
 - **Format selection** - yt-dlp-compatible DSL with filters, merge (`+`), and fallback chains (`/`)
 - **Interactive** - Arrow-key format selection, container remux menu
 - **Playlists** - Batch downloads with pagination (PornHub)
@@ -142,6 +143,81 @@ rdlp -f "ba[abr>=128]"                  # Best audio with bitrate >= 128kbps
 rdlp -f "bv[ext=mp4]+ba[ext=m4a]/b"    # MP4 video + M4A audio, fallback to best
 ```
 
+### Output Templates
+
+The `-o` flag accepts yt-dlp-compatible output templates with `%(field)s` substitution.
+
+```
+%(name[.keys][+/-/*÷arith][>strf][,alternate][&replacement][|default])[#][0][width][.precision]type
+```
+
+#### Basic usage
+
+```bash
+# Default template
+rdlp "URL"                                                    # %(title)s.%(ext)s
+
+# Custom filename
+rdlp -o "%(id)s.%(ext)s" "URL"                                # abc123.mp4
+
+# Subdirectories (auto-created)
+rdlp -o "%(extractor)s/%(uploader|Unknown)s/%(title)s.%(ext)s" "URL"
+
+# Output directory + template
+rdlp -P ~/Videos -o "%(extractor)s/%(title)s.%(ext)s" "URL"
+```
+
+#### Field syntax
+
+| Feature | Syntax | Example |
+|---------|--------|---------|
+| Fallback fields | `%(field1,field2)s` | `%(uploader,channel,title)s` |
+| Default value | `%(field\|default)s` | `%(uploader\|Unknown)s` |
+| Missing → `NA` | `%(field)s` | Missing fields produce `"NA"` |
+| Conditional | `%(field&text)s` | Empty if field missing |
+| Date format | `%(field>strftime)s` | `%(upload_date>%Y-%m-%d)s` → `2023-11-14` |
+| Arithmetic | `%(field+N)d` | `%(playlist_index+10)d`, `%(duration/60).0f` |
+| Array index | `%(field.N)s` | `%(tags.0)s`, `%(tags.-1)s` |
+| String slice | `%(field.:N)s` | `%(title.:50)s`, `%(title.-10:)s` |
+| Literal `%` | `%%` | `100%% done` → `100% done` |
+
+#### Format types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `s` | String (truncate with `.N`, pad with `N`) | `%(title).50s`, `%(id)10s` |
+| `d` | Integer (zero-pad with `0N`) | `%(playlist_index)03d` → `005` |
+| `f` | Float (precision with `.N`) | `%(duration).2f` → `3661.50` |
+| `B` | Human-readable bytes (`#B` = 1024-based) | `%(filesize)B` → `590.00MB` |
+| `D` | Decimal suffixes (`#D` = 1024-based) | `%(view_count)D` → `12.3K` |
+| `R` | Thousands separator | `%(view_count)R` → `12,345` |
+| `S` | Filename-safe (`#S` = ASCII-only) | `%(title)S`, `%(title)#S` |
+| `j` | JSON (`#j` = pretty-printed) | `%(tags)j`, `%(tags)#j` |
+| `l` | List join (`#l` = newline-separated) | `%(tags)l` → `tag1, tag2` |
+| `q` | Shell-quoted | `%(title)q` → `'My Video'` |
+| `h` | HTML-escaped | `%(title)h` |
+| `c` | Int to char | `65` → `A` |
+| `U` | Unicode passthrough | `%(title)U` |
+
+#### Computed fields
+
+| Field | Description |
+|-------|-------------|
+| `epoch` | Current Unix timestamp at render time |
+| `autonumber` | Global download counter (for playlists) |
+| `ext` | Computed file extension (respects `--remux`) |
+
+```bash
+# Playlist with zero-padded numbering
+rdlp -o "%(autonumber)05d - %(title)s.%(ext)s" "URL"
+
+# Date-organized downloads
+rdlp -o "%(upload_date>%Y-%m-%d)s - %(title.:80)s.%(ext)s" "URL"
+
+# With file size in filename
+rdlp -o "%(title)s [%(filesize)B].%(ext)s" "URL"
+```
+
 ### CLI Reference
 
 ```
@@ -152,7 +228,8 @@ rdlp [OPTIONS] [URL]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--output <DIR>` | `-o` | Output directory (default: `.`) |
+| `--output <TEMPLATE>` | `-o` | Output template (default: `%(title)s.%(ext)s`). See [Output Templates](#output-templates) |
+| `--paths <DIR>` | `-P` | Output directory (default: `.`) |
 | `--format <FMT>` | `-f` | Format selection, yt-dlp syntax (default: `best`) |
 | `--interactive` | `-i` | Interactive format selection with arrow keys |
 | `--dump-json` | `-j` | Dump full metadata as JSON to stdout (no download) |

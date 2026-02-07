@@ -2,25 +2,68 @@
 //!
 //! Provides secure filename generation and path manipulation utilities.
 
+use super::template::{OutputTemplate, RenderContext};
 use super::{Orchestrator, Result};
 use std::path::PathBuf;
 
 impl Orchestrator {
-    /// Generate output file path
+    /// Generate output file path from the configured output template.
+    ///
+    /// Uses `%(field)s` template syntax to generate filenames from metadata.
+    /// Templates containing `/` create subdirectories. Each path component
+    /// is individually sanitized for filesystem safety.
     pub(super) fn generate_output_path(
         &self,
         info: &rdlp_core::InfoDict,
         format: &rdlp_core::Format,
     ) -> Result<PathBuf> {
-        // Determine the actual file extension
         let file_ext = self.determine_file_extension(format);
+        let template = OutputTemplate::parse(&self.config.output_template).map_err(|e| {
+            super::OrchestratorError::Configuration(format!("Invalid output template: {e}"))
+        })?;
+        let ctx = RenderContext {
+            epoch: chrono::Utc::now().timestamp(),
+            autonumber: 0,
+        };
+        let rendered = template.render(info, format, &file_ext, &ctx).map_err(|e| {
+            super::OrchestratorError::Configuration(format!("Template rendering failed: {e}"))
+        })?;
 
-        let filename = format!("{}.{}", self.sanitize_filename(&info.title), file_ext);
+        let path = self.sanitize_template_path(&rendered);
 
-        let mut path = self.config.output_directory.clone();
-        path.push(filename);
+        let full_path = if path.is_absolute() {
+            path
+        } else {
+            self.config.output_directory.join(path)
+        };
 
-        Ok(path)
+        // Create parent directories if the template produced subdirectories
+        if let Some(parent) = full_path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    super::OrchestratorError::Configuration(format!(
+                        "Failed to create output directory {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+
+        Ok(full_path)
+    }
+
+    /// Sanitize a rendered template path by sanitizing each component individually.
+    ///
+    /// Splits on `/` (the template directory separator), sanitizes each component
+    /// with `sanitize_filename()`, and reassembles as a `PathBuf`.
+    fn sanitize_template_path(&self, rendered: &str) -> PathBuf {
+        let components: Vec<&str> = rendered.split('/').collect();
+        let mut path = PathBuf::new();
+        for component in components {
+            let sanitized = self.sanitize_filename(component);
+            path.push(sanitized);
+        }
+        path
     }
 
     /// Determine the actual file extension for a format
