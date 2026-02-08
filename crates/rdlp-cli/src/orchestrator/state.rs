@@ -1,7 +1,7 @@
 //! State machine types for the download workflow
 
 use super::{Orchestrator, errors::*};
-use log::{info, warn};
+use log::info;
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
@@ -162,7 +162,6 @@ impl DownloadPhase {
                 // Check if file is already complete
                 if let Some(expected_size) = format.filesize {
                     if resume_offset == expected_size {
-                        // File is already fully downloaded, skip to Complete
                         return Ok(Self::Complete { path: output_path });
                     }
                 }
@@ -187,115 +186,25 @@ impl DownloadPhase {
                 format,
                 state,
             } => {
-                // Create progress bar with best available size estimate
-                // For HLS streams, use segment-based progress bar (not byte-based)
-                let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
-
-                // HLS downloads use segment-based resume (tracked in .hls_state.json), not byte offsets
-                // The HLS downloader handles its own resume logic internally
-                let resume_from = if is_hls {
-                    0 // HLS downloader manages its own state file for segment-based resume
-                } else {
-                    state.offset()
+                // Execute download with CDN fallback (shared implementation)
+                let outcome = match orchestrator
+                    .download_with_cdn_fallback(&format, &output_path, state.offset())
+                    .await?
+                {
+                    Some(outcome) => outcome,
+                    None => return Ok(Self::Cancelled),
                 };
-
-                let estimated_size = if is_hls {
-                    None // HLS uses segment-based progress, not byte-based
-                } else {
-                    format.filesize.or(format.filesize_approx)
-                };
-                let progress_bar = if is_hls {
-                    orchestrator.create_hls_progress_bar()?
-                } else {
-                    orchestrator.create_progress_bar(estimated_size, resume_from)?
-                };
-
-                // Find downloader (with extra HTTP headers if the format specifies them)
-                let downloader = orchestrator
-                    .downloader_registry
-                    .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
-                    .ok_or_else(|| OrchestratorError::NoDownloader {
-                        url: format.url.clone(),
-                    })?;
-
-                // Check if the CDN token is still valid
-                if let Some(expires) = parse_url_expiry(&format.url) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    if now >= expires {
-                        return Err(OrchestratorError::DownloadFailed(
-                            rdlp_core::RdlpError::Network(format!(
-                                "CDN token expired {}s ago — re-run the command to get a fresh URL",
-                                now - expires
-                            )),
-                        ));
-                    } else if expires - now < 60 {
-                        warn!("CDN token expires in less than 60 seconds — download may fail");
-                    }
-                }
-
-                // Execute download with fallback CDN retry
-                let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
-                    .chain(format.fallback_urls.iter().flatten().map(String::as_str))
-                    .collect();
-
-                let mut stats = None;
-                let mut last_err = None;
-                for (i, download_url) in download_urls.iter().enumerate() {
-                    if i > 0 {
-                        warn!(
-                            fallback = i,
-                            url:? = download_url;
-                            "Primary CDN failed, trying fallback"
-                        );
-                    }
-                    match orchestrator
-                        .execute_download(
-                            &downloader,
-                            download_url,
-                            &output_path,
-                            resume_from,
-                            progress_bar.as_ref(),
-                            estimated_size,
-                        )
-                        .await
-                    {
-                        Ok(Some(s)) => {
-                            stats = Some(s);
-                            last_err = None;
-                            break;
-                        }
-                        Ok(None) => return Ok(Self::Cancelled),
-                        Err(e) => {
-                            if i < download_urls.len() - 1 {
-                                warn!("Download failed: {e}, will try fallback CDN");
-                            }
-                            last_err = Some(e);
-                        }
-                    }
-                }
-                if let Some(e) = last_err {
-                    return Err(e);
-                }
-                let stats = stats.unwrap();
-
-                // Report success
-                info!("Downloaded successfully!");
-                info!("   File: {}", output_path.display());
-                info!("   Stats: {stats:?}");
 
                 // Download thumbnail for embedding or standalone use
-                // Skipped only when --no-thumbnail is set (embed_thumbnail=false && write_thumbnail=false)
                 if orchestrator.config.embed_thumbnail || orchestrator.config.write_thumbnail {
                     orchestrator.download_thumbnail(&info, &output_path).await;
                 }
 
                 // Run post-processing (automatic for HLS, optional for others)
-                let final_path = orchestrator
-                    .run_postprocessing_for_state_machine(&info, &output_path, is_hls)
+                let final_files = orchestrator
+                    .run_postprocessing(&info, vec![output_path.clone()], outcome.is_hls)
                     .await?;
+                let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
                 Ok(Self::Complete { path: final_path })
             }
@@ -306,31 +215,4 @@ impl DownloadPhase {
             }
         }
     }
-}
-
-/// Parse CDN token expiry timestamp from a URL.
-///
-/// Supports two formats:
-/// - `validto=TIMESTAMP` (PornHub direct MP4)
-/// - `~exp=TIMESTAMP~` (PornHub HLS / Akamai)
-fn parse_url_expiry(url: &str) -> Option<u64> {
-    // Try `validto=DIGITS`
-    if let Some(pos) = url.find("validto=") {
-        let rest = &url[pos + 8..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(ts) = digits.parse::<u64>() {
-            return Some(ts);
-        }
-    }
-
-    // Try `~exp=DIGITS~` (Akamai-style)
-    if let Some(pos) = url.find("~exp=") {
-        let rest = &url[pos + 5..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(ts) = digits.parse::<u64>() {
-            return Some(ts);
-        }
-    }
-
-    None
 }

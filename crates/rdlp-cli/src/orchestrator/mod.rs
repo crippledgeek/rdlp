@@ -1,6 +1,7 @@
 //! Orchestrator module for coordinating extraction, download, and post-processing
 
 mod archive;
+mod download;
 mod errors;
 mod execution;
 mod extraction;

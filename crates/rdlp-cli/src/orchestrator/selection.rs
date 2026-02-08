@@ -80,7 +80,7 @@ impl Orchestrator {
         let mut by_key: BTreeMap<(u32, bool), &Format> = BTreeMap::new();
         for fmt in &info.formats {
             let h = fmt.height.unwrap_or(0);
-            let hls = is_hls(fmt);
+            let hls = fmt.is_hls();
             let entry = by_key.entry((h, hls)).or_insert(fmt);
             if pick_better(fmt, entry) {
                 *entry = fmt;
@@ -129,12 +129,6 @@ impl Orchestrator {
             None => Ok(None),
         }
     }
-}
-
-/// Detect HLS by protocol flag or URL pattern (some extractors set protocol as Https
-/// even for m3u8 URLs)
-fn is_hls(f: &Format) -> bool {
-    f.protocol.is_hls() || f.url.contains(".m3u8") || f.url.contains("/master.m3u8")
 }
 
 /// Returns true if `candidate` is a better pick than `current` within the same group.
