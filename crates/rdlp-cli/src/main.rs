@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
-use rdlp_cli::Orchestrator;
+use rdlp_cli::{Orchestrator, OrchestratorError};
 use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, InfoDict, config_io};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -386,41 +386,57 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
     }
 }
 
-/// Build Config by merging: defaults < config file < CLI args
-fn build_config(args: &Args) -> Result<Config> {
-    // Step 1: Load config file (or use defaults)
-    let mut config = if args.ignore_config {
-        Config::default()
-    } else {
-        match config_io::load_config(args.config_location.as_deref()) {
-            Ok(Some((file_config, path))) => {
-                // Can't use tracing yet (not initialized), so use eprintln for early feedback
-                // Tracing will be set up after config is built (need quiet/verbose from config)
-                eprintln!("Loaded config from {}", path.display());
-                file_config
-            }
-            Ok(None) => Config::default(),
-            Err(e) => {
-                if args.config_location.is_some() {
-                    // Explicit config path — error is fatal
-                    return Err(e.into());
-                }
-                // Default path — warn and continue with defaults
-                eprintln!("Warning: Failed to load config file: {e}");
-                Config::default()
-            }
-        }
+/// Resolved values from interactive CLI prompts.
+///
+/// These are resolved BEFORE the pure config merge so that `merge_config()`
+/// remains free of side effects and is testable.
+struct ResolvedInteractiveValues {
+    audio_format: Option<AudioFormat>,
+    recode_video: Option<ContainerFormat>,
+    remux_container: Option<ContainerFormat>,
+}
+
+/// Resolve interactive CLI values (dialoguer prompts) before config merge.
+///
+/// Returns `None` values for fields that weren't set to "interactive".
+fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> {
+    let audio_format = match args.audio_format.as_deref() {
+        Some("interactive") => select_audio_format()?,
+        _ => None,
     };
 
-    // Step 2: Overlay CLI args (only when explicitly provided)
+    let recode_video = match args.recode_video.as_deref() {
+        Some("interactive") => select_recode_video()?,
+        _ => None,
+    };
+
+    let remux_container = match args.remux.as_deref() {
+        Some("interactive") => select_remux_container()?,
+        _ => None,
+    };
+
+    Ok(ResolvedInteractiveValues {
+        audio_format,
+        recode_video,
+        remux_container,
+    })
+}
+
+/// Pure config merge: defaults < config file < CLI args.
+///
+/// This function has no side effects (no interactive prompts, no I/O).
+/// Interactive values must be pre-resolved via `resolve_interactive_values()`.
+fn merge_config(
+    args: &Args,
+    file_config: Config,
+    interactive_values: ResolvedInteractiveValues,
+) -> Result<Config> {
+    let mut config = file_config;
+
+    // Output: -o always sets output_template (the template engine handles
+    // both template fields like "%(title)s" and plain filenames like "video.mp4")
     if let Some(ref output) = args.output {
-        if output.contains("%(") {
-            // Contains template fields — treat as output template
-            config.output_template = output.clone();
-        } else {
-            // No template fields — backward compat: treat as directory
-            config.output_directory = PathBuf::from(output);
-        }
+        config.output_template = output.clone();
     }
     if let Some(ref dir) = args.output_dir {
         config.output_directory = dir.clone();
@@ -440,19 +456,20 @@ fn build_config(args: &Args) -> Result<Config> {
     if args.extract_audio {
         config.extract_audio = true;
     }
-    match args.audio_format.as_deref() {
-        Some("interactive") => {
-            config.audio_format = select_audio_format()?;
-        }
-        Some(audio_format) => {
+
+    // Audio format: interactive (pre-resolved) or direct parse
+    if let Some(fmt) = interactive_values.audio_format {
+        config.audio_format = Some(fmt);
+    } else if let Some(audio_format) = args.audio_format.as_deref() {
+        if audio_format != "interactive" {
             config.audio_format = Some(
                 audio_format
                     .parse::<AudioFormat>()
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
-        None => {}
     }
+
     if let Some(ref audio_quality) = args.audio_quality {
         config.audio_quality = Some(audio_quality.clone());
     }
@@ -465,19 +482,20 @@ fn build_config(args: &Args) -> Result<Config> {
     if args.write_thumbnail {
         config.write_thumbnail = true;
     }
-    match args.recode_video.as_deref() {
-        Some("interactive") => {
-            config.recode_video = select_recode_video()?;
-        }
-        Some(recode_video) => {
+
+    // Recode video: interactive (pre-resolved) or direct parse
+    if let Some(fmt) = interactive_values.recode_video {
+        config.recode_video = Some(fmt);
+    } else if let Some(recode_video) = args.recode_video.as_deref() {
+        if recode_video != "interactive" {
             config.recode_video = Some(
                 recode_video
                     .parse::<ContainerFormat>()
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
-        None => {}
     }
+
     if args.keep_video {
         config.keep_video = true;
     }
@@ -505,30 +523,98 @@ fn build_config(args: &Args) -> Result<Config> {
         config.download_archive = Some(archive.clone());
     }
 
-    // Handle interactive remux selection
-    match args.remux.as_deref() {
-        Some("interactive") => {
-            config.remux_container = select_remux_container()?;
-        }
-        Some(container) => {
+    // Remux: interactive (pre-resolved) or direct parse
+    if let Some(fmt) = interactive_values.remux_container {
+        config.remux_container = Some(fmt);
+    } else if let Some(container) = args.remux.as_deref() {
+        if container != "interactive" {
             config.remux_container = Some(
                 container
                     .parse::<ContainerFormat>()
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
-        None => {}
     }
 
-    // Set progress based on quiet
+    // Derived settings
     config.progress = !config.quiet;
 
-    // Set audio_format when extract_audio is set but no explicit format
     if config.extract_audio && config.audio_format.is_none() {
         config.audio_format = Some(AudioFormat::Mp3);
     }
 
+    // Validate final config
+    config
+        .validate()
+        .map_err(|e| anyhow::anyhow!("Invalid configuration: {e}"))?;
+
     Ok(config)
+}
+
+/// Build Config by: resolve interactive prompts → load file → merge.
+fn build_config(args: &Args) -> Result<Config> {
+    // Step 1: Resolve interactive values (side effects isolated here)
+    let interactive_values = resolve_interactive_values(args)?;
+
+    // Step 2: Load config file (or use defaults)
+    let file_config = if args.ignore_config {
+        Config::default()
+    } else {
+        match config_io::load_config(args.config_location.as_deref()) {
+            Ok(Some((file_config, path))) => {
+                eprintln!("Loaded config from {}", path.display());
+                file_config
+            }
+            Ok(None) => Config::default(),
+            Err(e) => {
+                if args.config_location.is_some() {
+                    return Err(e.into());
+                }
+                eprintln!("Warning: Failed to load config file: {e}");
+                Config::default()
+            }
+        }
+    };
+
+    // Step 3: Pure merge (no side effects, testable)
+    merge_config(args, file_config, interactive_values)
+}
+
+/// Map OrchestratorError to a structured process exit code.
+///
+/// Exit codes:
+///   0 — success (handled by Ok paths)
+///   1 — general/unknown error (I/O, progress bar, path generation)
+///   2 — user cancelled (Ctrl+C, ESC)
+///   3 — extraction failed (no extractor found, extraction error)
+///   4 — download/network failed (no downloader, CDN error, chunk merge)
+///   5 — configuration/format error (invalid config, no matching format)
+fn exit_code_for(e: &OrchestratorError) -> i32 {
+    match e {
+        OrchestratorError::UserCancelled => 2,
+        OrchestratorError::NoExtractor { .. } | OrchestratorError::ExtractionFailed(_) => 3,
+        OrchestratorError::NoDownloader { .. }
+        | OrchestratorError::DownloadFailed(_)
+        | OrchestratorError::ResumeDetectionFailed(_)
+        | OrchestratorError::MissingChunk { .. }
+        | OrchestratorError::ChunkMergeFailed(_) => 4,
+        OrchestratorError::NoFormat
+        | OrchestratorError::InvalidFormatSelector(_)
+        | OrchestratorError::Configuration(_) => 5,
+        OrchestratorError::PathGenerationFailed(_)
+        | OrchestratorError::ProgressBarFailed(_)
+        | OrchestratorError::IoError(_)
+        | OrchestratorError::Io(_) => 1,
+    }
+}
+
+/// Log an OrchestratorError and exit with the appropriate structured code.
+fn fail_with(e: OrchestratorError, verbose: bool) -> ! {
+    error!("Error: {e}");
+    if verbose {
+        error!("Debug info: {e:?}");
+    }
+    std::process::exit(exit_code_for(&e))
 }
 
 async fn async_main() -> Result<()> {
@@ -575,7 +661,9 @@ async fn async_main() -> Result<()> {
     let orchestrator = Orchestrator::new(config, (*multi_progress).clone());
 
     // Load cookies from file or browser if configured
-    orchestrator.load_cookies().await?;
+    if let Err(e) = orchestrator.load_cookies().await {
+        fail_with(e, args.verbose);
+    }
 
     // List extractors if requested
     if args.list_extractors {
@@ -606,7 +694,10 @@ async fn async_main() -> Result<()> {
 
     // Metadata-only modes: --dump-json, --print, --simulate
     if args.dump_json || args.print.is_some() || args.simulate {
-        let infos = orchestrator.extract_info(&url).await?;
+        let infos = match orchestrator.extract_info(&url).await {
+            Ok(infos) => infos,
+            Err(e) => fail_with(e, args.verbose),
+        };
 
         if args.dump_json {
             for info in &infos {
@@ -645,12 +736,6 @@ async fn async_main() -> Result<()> {
             // User cancelled - already printed message in orchestrator
             Ok(())
         }
-        Err(e) => {
-            error!("Error: {e}");
-            if args.verbose {
-                error!("Debug info: {e:?}");
-            }
-            std::process::exit(1);
-        }
+        Err(e) => fail_with(e, args.verbose),
     }
 }

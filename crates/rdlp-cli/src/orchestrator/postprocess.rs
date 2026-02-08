@@ -5,7 +5,7 @@
 use super::{Orchestrator, Result};
 use log::{debug, info, warn};
 use rdlp_core::PostProcessConfig;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 impl Orchestrator {
     /// Convert Config to PostProcessConfig
@@ -181,50 +181,6 @@ impl Orchestrator {
         }
 
         Some(output_files)
-    }
-
-    /// Run post-processing for state machine downloads (single videos)
-    ///
-    /// Runs FFmpeg remux on all downloads for consistent output quality:
-    /// - Faststart (moov atom at beginning)
-    /// - Fixed timestamps
-    /// - Proper MP4 container structure
-    ///
-    /// Also runs user-requested post-processing (extract audio, embed metadata, etc.)
-    pub(super) async fn run_postprocessing_for_state_machine(
-        &self,
-        info: &rdlp_core::InfoDict,
-        output_path: &Path,
-        is_hls: bool,
-    ) -> Result<PathBuf> {
-        // Run FFmpeg remux on all downloads (both HLS and HTTP) for consistent output
-        // This moves moov atom to start (faststart), fixes timestamps, ensures proper container
-        if let Some(fixed_files) = self.ffmpeg_remux(&[output_path.to_path_buf()]).await {
-            if let Some(fixed_path) = fixed_files.into_iter().next() {
-                // If user also requested additional post-processing, run it
-                if self.needs_postprocessing() {
-                    let result = self
-                        .run_postprocessing(info, vec![fixed_path.clone()], is_hls)
-                        .await?;
-                    if let Some(path) = result.into_iter().next() {
-                        return Ok(path);
-                    }
-                }
-                return Ok(fixed_path);
-            }
-        }
-
-        // If FFmpeg remux failed, check if user requested any post-processing
-        if self.needs_postprocessing() {
-            let result = self
-                .run_postprocessing(info, vec![output_path.to_path_buf()], is_hls)
-                .await?;
-            if let Some(path) = result.into_iter().next() {
-                return Ok(path);
-            }
-        }
-
-        Ok(output_path.to_path_buf())
     }
 
     /// Clean up leftover HLS segment files from interrupted downloads

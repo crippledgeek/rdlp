@@ -7,4 +7,4 @@
 
 pub mod orchestrator;
 
-pub use orchestrator::Orchestrator;
+pub use orchestrator::{Orchestrator, OrchestratorError};

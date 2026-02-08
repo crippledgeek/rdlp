@@ -292,8 +292,14 @@ impl Format {
     }
 
     /// Check if this is an HLS format
+    ///
+    /// Checks all three signals: protocol enum, URL pattern, and file extension.
+    /// Some extractors set `protocol` as `Https` even for m3u8 URLs, so the URL
+    /// and extension checks act as fallbacks.
     pub fn is_hls(&self) -> bool {
         self.protocol.is_hls()
+            || self.url.contains(".m3u8")
+            || self.ext == "hls"
     }
 
     /// Get a human-readable format description
@@ -339,9 +345,7 @@ impl Format {
     /// Call this on every format to compute `max` width, then pass that to [`Self::table_row`].
     #[must_use]
     pub fn size_text(&self) -> String {
-        let is_hls = self.is_hls() || self.url.contains(".m3u8");
-
-        if is_hls {
+        if self.is_hls() {
             let seg_count = self
                 .fragments
                 .as_ref()
@@ -438,9 +442,8 @@ impl Format {
         buf.push_str(" | ");
 
         // Format type column: avoid to_uppercase() allocation for HLS
-        let is_hls = self.is_hls() || self.url.contains(".m3u8");
         let format_start = buf.len();
-        if is_hls {
+        if self.is_hls() {
             buf.push_str("HLS");
         } else {
             // Write uppercase directly
@@ -567,5 +570,36 @@ mod tests {
 
         assert!(!format.has_video());
         assert!(format.has_audio());
+    }
+
+    #[test]
+    fn test_is_hls_by_protocol() {
+        let format = Format::new("hls", "https://cdn.example.com/video.ts", "mp4", DownloadProtocol::M3u8);
+        assert!(format.is_hls());
+
+        let format = Format::new("hls", "https://cdn.example.com/video.ts", "mp4", DownloadProtocol::M3u8Native);
+        assert!(format.is_hls());
+    }
+
+    #[test]
+    fn test_is_hls_by_url() {
+        // Some extractors set protocol as Https even for m3u8 URLs
+        let format = Format::new("hls", "https://cdn.example.com/master.m3u8", "mp4", DownloadProtocol::Https);
+        assert!(format.is_hls());
+
+        let format = Format::new("hls", "https://cdn.example.com/index.m3u8?token=abc", "mp4", DownloadProtocol::Https);
+        assert!(format.is_hls());
+    }
+
+    #[test]
+    fn test_is_hls_by_ext() {
+        let format = Format::new("hls", "https://cdn.example.com/video", "hls", DownloadProtocol::Https);
+        assert!(format.is_hls());
+    }
+
+    #[test]
+    fn test_is_not_hls() {
+        let format = Format::new("mp4", "https://cdn.example.com/video.mp4", "mp4", DownloadProtocol::Https);
+        assert!(!format.is_hls());
     }
 }

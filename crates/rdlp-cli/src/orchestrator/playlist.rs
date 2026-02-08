@@ -4,7 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::{Orchestrator, OrchestratorError, Result, archive};
-use log::{error, info, warn};
+use log::{error, info};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -356,6 +356,7 @@ impl Orchestrator {
     /// Download from pre-extracted InfoDict to a specific directory
     ///
     /// This method is used by playlist downloads to save files to the playlist folder.
+    /// Uses the shared CDN fallback loop via `download_with_cdn_fallback()`.
     pub(super) async fn download_from_info_to_dir(
         &self,
         info: &rdlp_core::InfoDict,
@@ -393,76 +394,14 @@ impl Orchestrator {
             }
         }
 
-        let resume_from = resume_offset;
-
-        // Create progress bar with best available size estimate
-        // For HLS streams, don't use filesize_approx - it's unreliable since the
-        // actual bitrate of the selected variant often differs from the estimate
-        let is_hls = format.url.contains(".m3u8") || format.ext == "hls";
-        let estimated_size = if is_hls {
-            format.filesize // Only use exact size if available (rare for HLS)
-        } else {
-            format.filesize.or(format.filesize_approx)
+        // Execute download with CDN fallback (shared implementation)
+        let outcome = match self
+            .download_with_cdn_fallback(&format, &output_path, resume_offset)
+            .await?
+        {
+            Some(outcome) => outcome,
+            None => return Ok(None),
         };
-        let progress_bar = self.create_progress_bar(estimated_size, resume_from)?;
-
-        // Find downloader (with extra HTTP headers if the format specifies them)
-        let downloader = self
-            .downloader_registry
-            .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
-            .ok_or_else(|| OrchestratorError::NoDownloader {
-                url: format.url.clone(),
-            })?;
-
-        // Execute download with fallback CDN retry
-        let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
-            .chain(format.fallback_urls.iter().flatten().map(String::as_str))
-            .collect();
-
-        let mut stats = None;
-        let mut last_err = None;
-        for (i, download_url) in download_urls.iter().enumerate() {
-            if i > 0 {
-                warn!(
-                    fallback = i,
-                    url:? = download_url;
-                    "Primary CDN failed, trying fallback"
-                );
-            }
-            match self
-                .execute_download(
-                    &downloader,
-                    download_url,
-                    &output_path,
-                    resume_from,
-                    progress_bar.as_ref(),
-                    estimated_size,
-                )
-                .await
-            {
-                Ok(Some(s)) => {
-                    stats = Some(s);
-                    last_err = None;
-                    break;
-                }
-                Ok(None) => return Ok(None),
-                Err(e) => {
-                    if i < download_urls.len() - 1 {
-                        warn!("Download failed: {e}, will try fallback CDN");
-                    }
-                    last_err = Some(e);
-                }
-            }
-        }
-        if let Some(e) = last_err {
-            return Err(e);
-        }
-        let stats = stats.unwrap();
-
-        // Report success
-        info!("Downloaded successfully!");
-        info!(path:? = output_path.display(); "   File");
-        info!(stats:?; "   Stats");
 
         // Download thumbnail if needed (before post-processing so embed can find it)
         if self.config.embed_thumbnail || self.config.write_thumbnail {
@@ -471,7 +410,7 @@ impl Orchestrator {
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self
-            .run_postprocessing(info, vec![output_path.clone()], is_hls)
+            .run_postprocessing(info, vec![output_path.clone()], outcome.is_hls)
             .await?;
         let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
