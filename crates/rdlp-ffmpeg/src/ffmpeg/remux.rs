@@ -190,7 +190,8 @@ impl FFmpegRunner {
     /// - `sample_aspect_ratio` — pixel aspect ratio
     /// - `cluster_time_limit=500` — 500ms clusters for smooth seeking
     /// - `avoid_negative_ts` — timestamp normalization
-    /// - `max_interleave_delta=0` — immediate output
+    /// - `max_interleave_delta=0` — disables delta-based queue flushing (safe
+    ///   for remux since packets arrive in muxer order from a single input)
     #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
     fn remux_mkv_raw_ffi(input: &Path, output: &Path) -> Result<()> {
         use ffmpeg_the_third::ffi;
@@ -323,7 +324,9 @@ impl FFmpegRunner {
             // Enable avoid_negative_ts to normalize timestamps
             (*ofmt_ctx).avoid_negative_ts = ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
 
-            // Set max_interleave_delta to 0 for immediate output (no buffering)
+            // Disable delta-based interleave flushing. Safe for remux since
+            // packets arrive in muxer order from a single input, keeping the
+            // interleave queue small. 0 = no delta limit (not "flush immediately").
             (*ofmt_ctx).max_interleave_delta = 0;
 
             // Enable auto bitstream filters

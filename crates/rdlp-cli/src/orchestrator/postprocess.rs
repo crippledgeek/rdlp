@@ -24,6 +24,12 @@ impl Orchestrator {
             keep_video: self.config.keep_video,
             ffmpeg_location: self.config.ffmpeg_location.clone(),
             ffmpeg_args: self.config.ffmpeg_args.clone(),
+            normalize_audio: self.config.normalize_audio,
+            loudnorm: self.config.loudnorm,
+            audio_gain_target: self.config.audio_gain_target,
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
         }
     }
 
@@ -34,6 +40,7 @@ impl Orchestrator {
             || self.config.embed_thumbnail
             || self.config.recode_video.is_some()
             || self.config.remux_container.is_some()
+            || self.config.normalize_audio
     }
 
     /// Run post-processing pipeline on downloaded file(s)

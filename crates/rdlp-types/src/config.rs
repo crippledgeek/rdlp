@@ -152,6 +152,15 @@ pub struct Config {
     /// Keep original files after post-processing
     pub keep_video: bool,
 
+    /// Normalize audio levels (peak mode unless loudnorm is set)
+    pub normalize_audio: bool,
+
+    /// Use EBU R128 loudnorm normalization (implies normalize_audio)
+    pub loudnorm: bool,
+
+    /// Target peak level in dBFS for peak normalization (default -1.0)
+    pub audio_gain_target: Option<f64>,
+
     /// FFmpeg location (if not in PATH)
     pub ffmpeg_location: Option<PathBuf>,
 
@@ -284,6 +293,9 @@ impl Default for Config {
             embed_metadata: false,
             embed_subtitles: false,
             keep_video: false,
+            normalize_audio: false,
+            loudnorm: false,
+            audio_gain_target: None,
             ffmpeg_location: None,
             ffmpeg_args: Vec::new(),
 

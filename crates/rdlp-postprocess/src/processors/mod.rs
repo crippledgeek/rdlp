@@ -66,6 +66,7 @@ mod embed_thumbnail;
 mod ffmpeg_extract_audio;
 mod ffmpeg_merger;
 mod ffmpeg_metadata;
+mod ffmpeg_normalize_audio;
 mod ffmpeg_remuxer;
 mod ffmpeg_video_convertor;
 
@@ -73,5 +74,6 @@ pub use embed_thumbnail::EmbedThumbnail;
 pub use ffmpeg_extract_audio::FFmpegExtractAudio;
 pub use ffmpeg_merger::FFmpegMerger;
 pub use ffmpeg_metadata::FFmpegMetadata;
+pub use ffmpeg_normalize_audio::FFmpegNormalizeAudio;
 pub use ffmpeg_remuxer::FFmpegRemuxer;
 pub use ffmpeg_video_convertor::FFmpegVideoConvertor;

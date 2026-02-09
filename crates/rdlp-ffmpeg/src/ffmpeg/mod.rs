@@ -28,10 +28,13 @@
 //! ```
 
 mod ffi_helpers;
+pub(crate) mod log_capture;
 mod merge;
 mod metadata;
+mod normalize;
 mod probe;
 mod remux;
+pub(crate) mod salvage;
 mod thumbnail;
 mod transcode;
 
@@ -289,11 +292,80 @@ pub struct ChapterEntry {
     pub title: String,
 }
 
+/// Audio normalization mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioNormMode {
+    /// Peak/gain normalization: analyze peak/RMS via astats, apply volume + alimiter.
+    Peak,
+    /// EBU R128 two-pass loudness normalization via loudnorm filter.
+    Loudnorm,
+}
+
+/// Options for audio normalization.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NormalizeOptions {
+    /// Normalization mode (peak or loudnorm).
+    pub mode: AudioNormMode,
+    /// Target peak level in dBFS (Mode A, default -1.0).
+    pub target_peak_db: f64,
+    /// Target integrated loudness in LUFS (Mode B, default -16.0).
+    pub target_i: f64,
+    /// Target true peak in dBTP (Mode B, default -1.5).
+    pub target_tp: f64,
+    /// Target loudness range in LU (Mode B, default 11.0).
+    pub target_lra: f64,
+    /// Automatically salvage corrupt Matroska/WebM containers before processing.
+    ///
+    /// When enabled (default), corrupt inputs are detected via EBML log analysis
+    /// and automatically remuxed to a clean temporary file before normalization.
+    /// Disable for strict mode where corruption should be a hard error.
+    pub salvage: bool,
+}
+
+impl Default for NormalizeOptions {
+    fn default() -> Self {
+        Self {
+            mode: AudioNormMode::Peak,
+            target_peak_db: -1.0,
+            target_i: -16.0,
+            target_tp: -1.5,
+            target_lra: 11.0,
+            salvage: true,
+        }
+    }
+}
+
+/// Results from peak/RMS audio analysis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PeakAnalysis {
+    /// Peak level in dBFS.
+    pub peak_db: f64,
+    /// RMS level in dBFS.
+    pub rms_db: f64,
+    /// Computed gain adjustment in dB.
+    pub gain_db: f64,
+}
+
+/// Measurements from EBU R128 loudnorm first pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoudnormMeasurements {
+    /// Measured integrated loudness (LUFS).
+    pub input_i: f64,
+    /// Measured true peak (dBTP).
+    pub input_tp: f64,
+    /// Measured loudness range (LU).
+    pub input_lra: f64,
+    /// Measured loudness threshold (LUFS).
+    pub input_thresh: f64,
+    /// Target offset (LU).
+    pub target_offset: f64,
+}
+
 /// FFmpeg runner.
 ///
 /// Provides media operations via `ffmpeg-the-third` library bindings:
 /// probing, remuxing, merging, audio extraction, video conversion,
-/// metadata embedding, and thumbnail embedding.
+/// metadata embedding, thumbnail embedding, and audio normalization.
 #[derive(Debug, Clone)]
 pub struct FFmpegRunner;
 

@@ -25,9 +25,11 @@ impl Orchestrator {
             epoch: chrono::Utc::now().timestamp(),
             autonumber: 0,
         };
-        let rendered = template.render(info, format, &file_ext, &ctx).map_err(|e| {
-            super::OrchestratorError::Configuration(format!("Template rendering failed: {e}"))
-        })?;
+        let rendered = template
+            .render(info, format, &file_ext, &ctx)
+            .map_err(|e| {
+                super::OrchestratorError::Configuration(format!("Template rendering failed: {e}"))
+            })?;
 
         let path = self.sanitize_template_path(&rendered);
 

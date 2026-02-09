@@ -119,6 +119,18 @@ struct Args {
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
     remux: Option<String>,
 
+    /// Normalize audio levels (peak mode: volume + limiter)
+    #[arg(long)]
+    normalize_audio: bool,
+
+    /// Use EBU R128 loudnorm normalization (two-pass, implies --normalize-audio)
+    #[arg(long)]
+    loudnorm: bool,
+
+    /// Target peak level in dBFS for peak normalization (default: -1.0)
+    #[arg(long, allow_hyphen_values = true)]
+    audio_gain_target: Option<f64>,
+
     /// Keep original video file after post-processing
     #[arg(long)]
     keep_video: bool,
@@ -494,6 +506,17 @@ fn merge_config(
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
+    }
+
+    // Audio normalization: --loudnorm implies --normalize-audio
+    if args.normalize_audio || args.loudnorm {
+        config.normalize_audio = true;
+    }
+    if args.loudnorm {
+        config.loudnorm = true;
+    }
+    if let Some(target) = args.audio_gain_target {
+        config.audio_gain_target = Some(target);
     }
 
     if args.keep_video {
