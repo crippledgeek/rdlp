@@ -40,18 +40,53 @@ ffmpeg_processor!(
 
 impl EmbedThumbnail {
     /// Find a thumbnail file for the given media file.
+    ///
+    /// Searches for thumbnail files matching the media file's stem. Also strips
+    /// pipeline suffixes (`.norm`, `.fixed`, `.thumb`) that earlier processors
+    /// may have appended, so that `video.norm.mkv` still finds `video.jpg`.
     fn find_thumbnail(media_file: &Path) -> Option<PathBuf> {
         let stem = media_file.file_stem()?.to_str()?;
         let parent = media_file.parent()?;
 
-        for ext in THUMBNAIL_EXTENSIONS {
-            let thumbnail_path = parent.join(format!("{stem}.{ext}"));
-            if thumbnail_path.exists() {
-                return Some(thumbnail_path);
+        // Try exact stem first, then with pipeline suffixes stripped
+        let candidates = Self::stem_candidates(stem);
+
+        for candidate in &candidates {
+            for ext in THUMBNAIL_EXTENSIONS {
+                let thumbnail_path = parent.join(format!("{candidate}.{ext}"));
+                if thumbnail_path.exists() {
+                    return Some(thumbnail_path);
+                }
             }
         }
 
         None
+    }
+
+    /// Generate stem candidates by progressively stripping known pipeline suffixes.
+    ///
+    /// e.g. `"video.norm"` → `["video.norm", "video"]`
+    fn stem_candidates(stem: &str) -> Vec<&str> {
+        const PIPELINE_SUFFIXES: &[&str] = &[".norm", ".fixed", ".thumb"];
+        let mut candidates = vec![stem];
+        let mut current = stem;
+        loop {
+            let mut stripped = false;
+            for suffix in PIPELINE_SUFFIXES {
+                if let Some(base) = current.strip_suffix(suffix) {
+                    if !base.is_empty() {
+                        candidates.push(base);
+                        current = base;
+                        stripped = true;
+                        break;
+                    }
+                }
+            }
+            if !stripped {
+                break;
+            }
+        }
+        candidates
     }
 
     /// Check if the container supports thumbnail embedding.
@@ -216,5 +251,35 @@ mod tests {
         assert!(EmbedThumbnail::supports_thumbnail("opus"));
         assert!(!EmbedThumbnail::supports_thumbnail("txt"));
         assert!(!EmbedThumbnail::supports_thumbnail("avi"));
+    }
+
+    #[test]
+    fn test_stem_candidates_no_suffix() {
+        let candidates = EmbedThumbnail::stem_candidates("video");
+        assert_eq!(candidates, vec!["video"]);
+    }
+
+    #[test]
+    fn test_stem_candidates_norm_suffix() {
+        let candidates = EmbedThumbnail::stem_candidates("video.norm");
+        assert_eq!(candidates, vec!["video.norm", "video"]);
+    }
+
+    #[test]
+    fn test_stem_candidates_fixed_suffix() {
+        let candidates = EmbedThumbnail::stem_candidates("video.fixed");
+        assert_eq!(candidates, vec!["video.fixed", "video"]);
+    }
+
+    #[test]
+    fn test_stem_candidates_chained_suffixes() {
+        let candidates = EmbedThumbnail::stem_candidates("video.norm.fixed");
+        assert_eq!(candidates, vec!["video.norm.fixed", "video.norm", "video"]);
+    }
+
+    #[test]
+    fn test_stem_candidates_dots_in_title() {
+        let candidates = EmbedThumbnail::stem_candidates("my.video.2024.norm");
+        assert_eq!(candidates, vec!["my.video.2024.norm", "my.video.2024"]);
     }
 }
