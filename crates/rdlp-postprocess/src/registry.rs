@@ -118,6 +118,9 @@ impl PostProcessorRegistry {
         // Priority 50: Extract audio
         self.register(Arc::new(FFmpegExtractAudio::new(self.ffmpeg.clone())));
 
+        // Priority 48: Audio normalization (peak or loudnorm)
+        self.register(Arc::new(FFmpegNormalizeAudio::new(self.ffmpeg.clone())));
+
         // Priority 45: Container remuxing (TS → MP4/MKV for better seeking)
         self.register(Arc::new(FFmpegRemuxer::new(self.ffmpeg.clone())));
 

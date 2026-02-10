@@ -119,6 +119,42 @@ struct Args {
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
     remux: Option<String>,
 
+    /// Normalize audio levels (peak mode: volume + limiter)
+    #[arg(long)]
+    normalize_audio: bool,
+
+    /// Use EBU R128 loudnorm normalization (two-pass, implies --normalize-audio)
+    #[arg(long)]
+    loudnorm: bool,
+
+    /// Target peak level in dBFS for peak normalization (default: -1.0)
+    #[arg(long, allow_hyphen_values = true)]
+    audio_gain_target: Option<f64>,
+
+    /// Loudnorm preset: broadcast (-23 LUFS), streaming (-14 LUFS), loud (-11 LUFS)
+    #[arg(long)]
+    loudnorm_preset: Option<String>,
+
+    /// Target integrated loudness in LUFS for loudnorm (e.g., -14)
+    #[arg(long, allow_hyphen_values = true)]
+    loudnorm_i: Option<f64>,
+
+    /// Target true peak in dBTP for loudnorm (e.g., -1)
+    #[arg(long, allow_hyphen_values = true)]
+    loudnorm_tp: Option<f64>,
+
+    /// Target loudness range in LU for loudnorm (e.g., 11)
+    #[arg(long)]
+    loudnorm_lra: Option<f64>,
+
+    /// Force dynamic (per-frame compression) mode in loudnorm pass 2
+    #[arg(long)]
+    loudnorm_dynamic: bool,
+
+    /// Prepend a mild acompressor before loudnorm to tame extreme peaks
+    #[arg(long)]
+    loudnorm_precompress: bool,
+
     /// Keep original video file after post-processing
     #[arg(long)]
     keep_video: bool,
@@ -494,6 +530,35 @@ fn merge_config(
                     .map_err(|e| anyhow::anyhow!(e))?,
             );
         }
+    }
+
+    // Audio normalization: --loudnorm implies --normalize-audio
+    if args.normalize_audio || args.loudnorm {
+        config.normalize_audio = true;
+    }
+    if args.loudnorm {
+        config.loudnorm = true;
+    }
+    if let Some(target) = args.audio_gain_target {
+        config.audio_gain_target = Some(target);
+    }
+    if let Some(ref preset) = args.loudnorm_preset {
+        config.loudnorm_preset = Some(preset.clone());
+    }
+    if let Some(i) = args.loudnorm_i {
+        config.loudnorm_target_i = Some(i);
+    }
+    if let Some(tp) = args.loudnorm_tp {
+        config.loudnorm_target_tp = Some(tp);
+    }
+    if let Some(lra) = args.loudnorm_lra {
+        config.loudnorm_target_lra = Some(lra);
+    }
+    if args.loudnorm_dynamic {
+        config.loudnorm_dynamic = true;
+    }
+    if args.loudnorm_precompress {
+        config.loudnorm_precompress = true;
     }
 
     if args.keep_video {

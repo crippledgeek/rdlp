@@ -120,16 +120,16 @@ pub mod registry;
 pub use rdlp_ffmpeg::error;
 pub use rdlp_ffmpeg::ffmpeg;
 pub use rdlp_ffmpeg::{
-    AudioExtractOptions, ChapterEntry, FFmpegRunner, MediaInfo, PostProcessError, RemuxOptions,
-    Result, StreamInfo, VideoConvertOptions,
+    AudioExtractOptions, ChapterEntry, CorruptionKind, FFmpegRunner, MediaInfo, PostProcessError,
+    RemuxOptions, Result, StreamInfo, VideoConvertOptions,
 };
 
 pub use registry::{PostProcessorRegistry, PostProcessorRegistryTrait};
 
 // Re-export processor types
 pub use processors::{
-    EmbedThumbnail, FFmpegExtractAudio, FFmpegMerger, FFmpegMetadata, FFmpegRemuxer,
-    FFmpegVideoConvertor,
+    EmbedThumbnail, FFmpegExtractAudio, FFmpegMerger, FFmpegMetadata, FFmpegNormalizeAudio,
+    FFmpegRemuxer, FFmpegVideoConvertor,
 };
 
 // Re-export core types for convenience

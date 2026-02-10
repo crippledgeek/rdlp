@@ -449,6 +449,9 @@ impl FFmpegRunner {
 
             // 6. Set format options
             (*ofmt_ctx).avoid_negative_ts = ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
+            // Disable delta-based interleave flushing. 0 = no delta limit
+            // (not "flush immediately"). Safe here because thumbnail embed
+            // copies packets in input order from a single source.
             (*ofmt_ctx).max_interleave_delta = 0;
             (*ofmt_ctx).flags |= ffi::AVFMT_FLAG_AUTO_BSF;
 

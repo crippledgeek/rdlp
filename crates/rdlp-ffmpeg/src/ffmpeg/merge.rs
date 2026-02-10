@@ -1,12 +1,126 @@
 //! Video + audio stream merging (stream copy).
+//!
+//! Uses two-way timestamp-interleaved merging to avoid ENOMEM when
+//! `av_interleaved_write_frame` buffers one complete stream waiting
+//! for the other.
 
 use std::path::Path;
 
-use log::debug;
+use log::{debug, info};
 
 use crate::error::{PostProcessError, Result};
 
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
+
+/// Common timebase for DTS comparison: 1 microsecond.
+const COMPARE_TB: ffmpeg_the_third::ffi::AVRational = ffmpeg_the_third::ffi::AVRational {
+    num: 1,
+    den: 1_000_000,
+};
+
+/// Read the next packet for `target_stream_idx` from a raw FFI input context.
+///
+/// Skips packets from non-target streams. Returns `true` if a packet was read
+/// into `pkt`, `false` on EOF/error.
+///
+/// # Safety
+///
+/// `ifmt_ctx` must point to a valid, open `AVFormatContext`.
+/// `pkt` must point to a valid (possibly unref'd) `AVPacket`.
+unsafe fn read_next_raw(
+    ifmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
+    target_stream_idx: usize,
+    pkt: *mut ffmpeg_the_third::ffi::AVPacket,
+) -> bool {
+    unsafe {
+        loop {
+            let ret = ffmpeg_the_third::ffi::av_read_frame(ifmt_ctx, pkt);
+            if ret < 0 {
+                return false; // EOF or read error
+            }
+            if (*pkt).stream_index as usize == target_stream_idx {
+                return true;
+            }
+            ffmpeg_the_third::ffi::av_packet_unref(pkt);
+        }
+    }
+}
+
+/// Rescale PTS/DTS/duration from input timebase to output timebase, set the
+/// output stream index, and write via `av_interleaved_write_frame`.
+///
+/// Returns `Err` on write failure instead of silently breaking.
+///
+/// # Safety
+///
+/// `pkt` must point to a valid packet with data.
+/// `in_stream` must point to the source stream.
+/// `ofmt_ctx` must point to a valid, header-written output context.
+/// `out_stream_idx` must be a valid stream index in `ofmt_ctx`.
+unsafe fn rescale_and_write_raw(
+    pkt: *mut ffmpeg_the_third::ffi::AVPacket,
+    in_stream: *const ffmpeg_the_third::ffi::AVStream,
+    ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
+    out_stream_idx: i32,
+) -> Result<()> {
+    unsafe {
+        (*pkt).stream_index = out_stream_idx;
+
+        let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
+        if (*pkt).pts != ffmpeg_the_third::ffi::AV_NOPTS_VALUE {
+            (*pkt).pts = ffmpeg_the_third::ffi::av_rescale_q_rnd(
+                (*pkt).pts,
+                (*in_stream).time_base,
+                (*out_stream).time_base,
+                ffmpeg_the_third::ffi::AVRounding::AV_ROUND_NEAR_INF,
+            );
+        }
+        if (*pkt).dts != ffmpeg_the_third::ffi::AV_NOPTS_VALUE {
+            (*pkt).dts = ffmpeg_the_third::ffi::av_rescale_q_rnd(
+                (*pkt).dts,
+                (*in_stream).time_base,
+                (*out_stream).time_base,
+                ffmpeg_the_third::ffi::AVRounding::AV_ROUND_NEAR_INF,
+            );
+        }
+        if (*pkt).duration > 0 {
+            (*pkt).duration = ffmpeg_the_third::ffi::av_rescale_q(
+                (*pkt).duration,
+                (*in_stream).time_base,
+                (*out_stream).time_base,
+            );
+        }
+        (*pkt).pos = -1;
+
+        let ret = ffmpeg_the_third::ffi::av_interleaved_write_frame(ofmt_ctx, pkt);
+        if ret < 0 {
+            return Err(PostProcessError::FFmpegLibraryError {
+                message: format!("av_interleaved_write_frame failed: error code {ret}"),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Rescale a DTS value to the comparison timebase for merge-sort ordering.
+///
+/// Returns `None` for `AV_NOPTS_VALUE`.
+///
+/// # Safety
+///
+/// `stream` must point to a valid `AVStream`.
+unsafe fn dts_in_us(dts: i64, stream: *const ffmpeg_the_third::ffi::AVStream) -> Option<i64> {
+    if dts == ffmpeg_the_third::ffi::AV_NOPTS_VALUE {
+        return None;
+    }
+    unsafe {
+        Some(ffmpeg_the_third::ffi::av_rescale_q(
+            dts,
+            (*stream).time_base,
+            COMPARE_TB,
+        ))
+    }
+}
 
 impl FFmpegRunner {
     /// Merge separate video and audio files into a single container (stream copy).
@@ -32,7 +146,7 @@ impl FFmpegRunner {
     }
 
     /// Merge separate video and audio files synchronously (stream copy).
-    fn merge_sync(
+    pub(crate) fn merge_sync(
         video_input: &Path,
         audio_input: &Path,
         output: &Path,
@@ -74,15 +188,6 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoVideoStream)?;
 
-        let video_ist_time_base = ictx_video
-            .stream(video_ist_index)
-            .ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "video input stream {video_ist_index} not found"
-                ))
-            })?
-            .time_base();
-
         let mut ost_video = octx
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
@@ -110,15 +215,6 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
-        let audio_ist_time_base = ictx_audio
-            .stream(audio_ist_index)
-            .ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "audio input stream {audio_ist_index} not found"
-                ))
-            })?
-            .time_base();
-
         let mut ost_audio = octx
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
@@ -137,6 +233,11 @@ impl FFmpegRunner {
                 .parameters(),
         );
         Self::clear_codec_tag(ost_audio.parameters().as_ptr());
+        // Set audio as default stream so players select it automatically
+        unsafe {
+            (*ost_audio.as_mut_ptr()).disposition =
+                ffmpeg_the_third::ffi::AV_DISPOSITION_DEFAULT;
+        }
         let audio_ost_index = ost_audio.index();
 
         // Build muxer options dictionary
@@ -153,58 +254,103 @@ impl FFmpegRunner {
                 message: format!("failed to write output header: {e}"),
             })?;
 
-        // Copy video packets
-        for result in ictx_video.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read video packet: {e}"),
-                })?;
-            if stream.index() != video_ist_index {
-                continue;
-            }
-            let ost_time_base = octx
-                .stream(video_ost_index)
-                .ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "video output stream {video_ost_index} not found"
-                    ))
-                })?
-                .time_base();
-            packet.rescale_ts(video_ist_time_base, ost_time_base);
-            packet.set_position(-1);
-            packet.set_stream(video_ost_index);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write video packet: {e}"),
-                }
-            })?;
-        }
+        info!(
+            "Merge: video=stream#{video_ost_index}, audio=stream#{audio_ost_index} (DEFAULT)"
+        );
 
-        // Copy audio packets
-        for result in ictx_audio.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read audio packet: {e}"),
-                })?;
-            if stream.index() != audio_ist_index {
-                continue;
-            }
-            let ost_time_base = octx
-                .stream(audio_ost_index)
-                .ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "audio output stream {audio_ost_index} not found"
-                    ))
-                })?
-                .time_base();
-            packet.rescale_ts(audio_ist_time_base, ost_time_base);
-            packet.set_position(-1);
-            packet.set_stream(audio_ost_index);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write audio packet: {e}"),
+        // Two-way timestamp-interleaved merge: read packets from both inputs
+        // and write them in DTS order to avoid ENOMEM from buffering an entire
+        // stream while waiting for the other.
+        //
+        // SAFETY: ictx_video/ictx_audio own valid AVFormatContext instances.
+        // octx owns a valid, header-written output context.
+        unsafe {
+            use ffmpeg_the_third::ffi;
+
+            let video_ctx = ictx_video.as_mut_ptr();
+            let audio_ctx = ictx_audio.as_mut_ptr();
+            let out_ctx = octx.as_mut_ptr();
+
+            let in_video_stream = *(*video_ctx).streams.add(video_ist_index);
+            let in_audio_stream = *(*audio_ctx).streams.add(audio_ist_index);
+
+            let mut vpkt: ffi::AVPacket = std::mem::zeroed();
+            vpkt.pts = ffi::AV_NOPTS_VALUE;
+            vpkt.dts = ffi::AV_NOPTS_VALUE;
+            vpkt.pos = -1;
+
+            let mut apkt: ffi::AVPacket = std::mem::zeroed();
+            apkt.pts = ffi::AV_NOPTS_VALUE;
+            apkt.dts = ffi::AV_NOPTS_VALUE;
+            apkt.pos = -1;
+
+            let mut have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
+            let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+
+            loop {
+                match (have_video, have_audio) {
+                    (false, false) => break,
+                    (true, false) => {
+                        rescale_and_write_raw(
+                            &mut vpkt,
+                            in_video_stream,
+                            out_ctx,
+                            video_ost_index as i32,
+                        )?;
+                        ffi::av_packet_unref(&mut vpkt);
+                        have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
+                    }
+                    (false, true) => {
+                        rescale_and_write_raw(
+                            &mut apkt,
+                            in_audio_stream,
+                            out_ctx,
+                            audio_ost_index as i32,
+                        )?;
+                        ffi::av_packet_unref(&mut apkt);
+                        have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+                    }
+                    (true, true) => {
+                        let v_us = dts_in_us(vpkt.dts, in_video_stream);
+                        let a_us = dts_in_us(apkt.dts, in_audio_stream);
+
+                        let write_video = match (v_us, a_us) {
+                            // Both NOPTS: write video first (arbitrary)
+                            (None, None) => true,
+                            // Video NOPTS: write it immediately
+                            (None, Some(_)) => true,
+                            // Audio NOPTS: write it immediately
+                            (Some(_), None) => false,
+                            // Both have DTS: write earlier one
+                            (Some(v), Some(a)) => v <= a,
+                        };
+
+                        if write_video {
+                            rescale_and_write_raw(
+                                &mut vpkt,
+                                in_video_stream,
+                                out_ctx,
+                                video_ost_index as i32,
+                            )?;
+                            ffi::av_packet_unref(&mut vpkt);
+                            have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
+                        } else {
+                            rescale_and_write_raw(
+                                &mut apkt,
+                                in_audio_stream,
+                                out_ctx,
+                                audio_ost_index as i32,
+                            )?;
+                            ffi::av_packet_unref(&mut apkt);
+                            have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+                        }
+                    }
                 }
-            })?;
+            }
+
+            // Clean up any unreleased packets
+            ffi::av_packet_unref(&mut vpkt);
+            ffi::av_packet_unref(&mut apkt);
         }
 
         octx.write_trailer()
@@ -224,31 +370,27 @@ impl FFmpegRunner {
     /// - `sample_aspect_ratio` — pixel aspect ratio
     /// - `cluster_time_limit=500` — 500ms clusters for smooth seeking
     /// - `avoid_negative_ts` — timestamp normalization
-    /// - `max_interleave_delta=0` — immediate output
+    /// - `max_interleave_delta=0` — disables delta-based queue flushing (packets
+    ///   still flush via the two-way interleaved merge loop that feeds packets
+    ///   in DTS order, so the queue stays small)
     #[allow(clippy::too_many_lines)]
-    fn merge_mkv_raw_ffi(
-        video_input: &Path,
-        audio_input: &Path,
-        output: &Path,
-    ) -> Result<()> {
+    fn merge_mkv_raw_ffi(video_input: &Path, audio_input: &Path, output: &Path) -> Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
         use std::ptr;
 
         debug!("MKV merge via raw FFI with avg_frame_rate + cluster_time_limit=500");
 
-        let video_cstr =
-            CString::new(video_input.to_string_lossy().as_ref()).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("Invalid video input path: {e}"),
-                }
-            })?;
-        let audio_cstr =
-            CString::new(audio_input.to_string_lossy().as_ref()).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("Invalid audio input path: {e}"),
-                }
-            })?;
+        let video_cstr = CString::new(video_input.to_string_lossy().as_ref()).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("Invalid video input path: {e}"),
+            }
+        })?;
+        let audio_cstr = CString::new(audio_input.to_string_lossy().as_ref()).map_err(|e| {
+            PostProcessError::FFmpegLibraryError {
+                message: format!("Invalid audio input path: {e}"),
+            }
+        })?;
         let output_cstr = CString::new(output.to_string_lossy().as_ref()).map_err(|e| {
             PostProcessError::FFmpegLibraryError {
                 message: format!("Invalid output path: {e}"),
@@ -274,9 +416,7 @@ impl FFmpegRunner {
             if ret < 0 {
                 ffi::avformat_close_input(&mut ifmt_video);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "Failed to find video stream info: error code {ret}"
-                    ),
+                    message: format!("Failed to find video stream info: error code {ret}"),
                 });
             }
 
@@ -300,9 +440,7 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "Failed to find audio stream info: error code {ret}"
-                    ),
+                    message: format!("Failed to find audio stream info: error code {ret}"),
                 });
             }
 
@@ -351,18 +489,14 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "Failed to create output context: error code {ret}"
-                    ),
+                    message: format!("Failed to create output context: error code {ret}"),
                 });
             }
 
             // 6. Add video output stream with full property copying
-            let in_video_stream =
-                *(*ifmt_video).streams.add(video_stream_idx);
+            let in_video_stream = *(*ifmt_video).streams.add(video_stream_idx);
 
-            let out_video_stream =
-                ffi::avformat_new_stream(ofmt_ctx, ptr::null());
+            let out_video_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
             if out_video_stream.is_null() {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);
@@ -381,21 +515,16 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_audio);
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "Failed to copy video codec params: error code {ret}"
-                    ),
+                    message: format!("Failed to copy video codec params: error code {ret}"),
                 });
             }
             (*(*out_video_stream).codecpar).codec_tag = 0;
 
             // CRITICAL: Copy stream timing properties for Matroska
             (*out_video_stream).time_base = (*in_video_stream).time_base;
-            (*out_video_stream).avg_frame_rate =
-                (*in_video_stream).avg_frame_rate;
-            (*out_video_stream).r_frame_rate =
-                (*in_video_stream).r_frame_rate;
-            (*out_video_stream).sample_aspect_ratio =
-                (*in_video_stream).sample_aspect_ratio;
+            (*out_video_stream).avg_frame_rate = (*in_video_stream).avg_frame_rate;
+            (*out_video_stream).r_frame_rate = (*in_video_stream).r_frame_rate;
+            (*out_video_stream).sample_aspect_ratio = (*in_video_stream).sample_aspect_ratio;
 
             let video_out_idx = (*out_video_stream).index;
 
@@ -410,11 +539,9 @@ impl FFmpegRunner {
             );
 
             // 7. Add audio output stream with full property copying
-            let in_audio_stream =
-                *(*ifmt_audio).streams.add(audio_stream_idx);
+            let in_audio_stream = *(*ifmt_audio).streams.add(audio_stream_idx);
 
-            let out_audio_stream =
-                ffi::avformat_new_stream(ofmt_ctx, ptr::null());
+            let out_audio_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
             if out_audio_stream.is_null() {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);
@@ -433,21 +560,19 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_audio);
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "Failed to copy audio codec params: error code {ret}"
-                    ),
+                    message: format!("Failed to copy audio codec params: error code {ret}"),
                 });
             }
             (*(*out_audio_stream).codecpar).codec_tag = 0;
 
             // Copy audio stream timing properties
             (*out_audio_stream).time_base = (*in_audio_stream).time_base;
-            (*out_audio_stream).avg_frame_rate =
-                (*in_audio_stream).avg_frame_rate;
-            (*out_audio_stream).r_frame_rate =
-                (*in_audio_stream).r_frame_rate;
-            (*out_audio_stream).sample_aspect_ratio =
-                (*in_audio_stream).sample_aspect_ratio;
+            (*out_audio_stream).avg_frame_rate = (*in_audio_stream).avg_frame_rate;
+            (*out_audio_stream).r_frame_rate = (*in_audio_stream).r_frame_rate;
+            (*out_audio_stream).sample_aspect_ratio = (*in_audio_stream).sample_aspect_ratio;
+
+            // Set audio as default stream so players select it automatically
+            (*out_audio_stream).disposition = ffi::AV_DISPOSITION_DEFAULT;
 
             let audio_out_idx = (*out_audio_stream).index;
 
@@ -460,8 +585,10 @@ impl FFmpegRunner {
             );
 
             // 8. Set format context options
-            (*ofmt_ctx).avoid_negative_ts =
-                ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
+            (*ofmt_ctx).avoid_negative_ts = ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
+            // Disable delta-based interleave flushing. Safe here because the
+            // two-way merge loop already feeds packets in DTS order, keeping
+            // the interleave queue small. 0 = no delta limit (not "flush immediately").
             (*ofmt_ctx).max_interleave_delta = 0;
             (*ofmt_ctx).flags |= ffi::AVFMT_FLAG_AUTO_BSF;
 
@@ -477,9 +604,7 @@ impl FFmpegRunner {
                     ffi::avformat_close_input(&mut ifmt_audio);
                     ffi::avformat_free_context(ofmt_ctx);
                     return Err(PostProcessError::FFmpegLibraryError {
-                        message: format!(
-                            "Failed to open output file: error code {ret}"
-                        ),
+                        message: format!("Failed to open output file: error code {ret}"),
                     });
                 }
             }
@@ -496,19 +621,12 @@ impl FFmpegRunner {
             // Check for unconsumed options
             let mut e: *mut ffi::AVDictionaryEntry = ptr::null_mut();
             loop {
-                e = ffi::av_dict_get(
-                    opts,
-                    c"".as_ptr(),
-                    e,
-                    ffi::AV_DICT_IGNORE_SUFFIX,
-                );
+                e = ffi::av_dict_get(opts, c"".as_ptr(), e, ffi::AV_DICT_IGNORE_SUFFIX);
                 if e.is_null() {
                     break;
                 }
-                let k =
-                    std::ffi::CStr::from_ptr((*e).key).to_string_lossy();
-                let v =
-                    std::ffi::CStr::from_ptr((*e).value).to_string_lossy();
+                let k = std::ffi::CStr::from_ptr((*e).key).to_string_lossy();
+                let v = std::ffi::CStr::from_ptr((*e).value).to_string_lossy();
                 log::warn!("Unconsumed FFI option: {k}={v}");
             }
             ffi::av_dict_free(&mut opts);
@@ -521,15 +639,12 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_audio);
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "avformat_init_output failed: error code {ret}"
-                    ),
+                    message: format!("avformat_init_output failed: error code {ret}"),
                 });
             }
 
             // 12. Write header
-            let ret =
-                ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
+            let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {
                 if !(*ofmt_ctx).pb.is_null() {
                     ffi::avio_closep(&mut (*ofmt_ctx).pb);
@@ -538,134 +653,96 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_audio);
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: format!(
-                        "avformat_write_header failed: error code {ret}"
-                    ),
+                    message: format!("avformat_write_header failed: error code {ret}"),
                 });
             }
 
-            // 13. Copy video packets
-            let mut pkt = ffi::AVPacket {
-                buf: ptr::null_mut(),
-                pts: ffi::AV_NOPTS_VALUE,
-                dts: ffi::AV_NOPTS_VALUE,
-                data: ptr::null_mut(),
-                size: 0,
-                stream_index: 0,
-                flags: 0,
-                side_data: ptr::null_mut(),
-                side_data_elems: 0,
-                duration: 0,
-                pos: -1,
-                opaque: ptr::null_mut(),
-                opaque_ref: ptr::null_mut(),
-                time_base: ffi::AVRational { num: 0, den: 1 },
-            };
+            info!(
+                "Merge: video=stream#{video_out_idx}, audio=stream#{audio_out_idx} (DEFAULT)"
+            );
 
-            loop {
-                let ret = ffi::av_read_frame(ifmt_video, &mut pkt);
-                if ret < 0 {
-                    break; // EOF or error
+            // 13. Two-way timestamp-interleaved merge
+            //
+            // Write packets from both inputs in DTS order to avoid ENOMEM
+            // from buffering an entire stream while waiting for the other.
+            // Errors are captured and propagated after cleanup.
+            let merge_result: Result<()> = (|| {
+                let mut vpkt: ffi::AVPacket = std::mem::zeroed();
+                vpkt.pts = ffi::AV_NOPTS_VALUE;
+                vpkt.dts = ffi::AV_NOPTS_VALUE;
+                vpkt.pos = -1;
+
+                let mut apkt: ffi::AVPacket = std::mem::zeroed();
+                apkt.pts = ffi::AV_NOPTS_VALUE;
+                apkt.dts = ffi::AV_NOPTS_VALUE;
+                apkt.pos = -1;
+
+                let mut have_video = read_next_raw(ifmt_video, video_stream_idx, &mut vpkt);
+                let mut have_audio = read_next_raw(ifmt_audio, audio_stream_idx, &mut apkt);
+
+                loop {
+                    match (have_video, have_audio) {
+                        (false, false) => break,
+                        (true, false) => {
+                            rescale_and_write_raw(
+                                &mut vpkt,
+                                in_video_stream,
+                                ofmt_ctx,
+                                video_out_idx,
+                            )?;
+                            ffi::av_packet_unref(&mut vpkt);
+                            have_video = read_next_raw(ifmt_video, video_stream_idx, &mut vpkt);
+                        }
+                        (false, true) => {
+                            rescale_and_write_raw(
+                                &mut apkt,
+                                in_audio_stream,
+                                ofmt_ctx,
+                                audio_out_idx,
+                            )?;
+                            ffi::av_packet_unref(&mut apkt);
+                            have_audio = read_next_raw(ifmt_audio, audio_stream_idx, &mut apkt);
+                        }
+                        (true, true) => {
+                            let v_us = dts_in_us(vpkt.dts, in_video_stream);
+                            let a_us = dts_in_us(apkt.dts, in_audio_stream);
+
+                            let write_video = match (v_us, a_us) {
+                                (None, None) => true,
+                                (None, Some(_)) => true,
+                                (Some(_), None) => false,
+                                (Some(v), Some(a)) => v <= a,
+                            };
+
+                            if write_video {
+                                rescale_and_write_raw(
+                                    &mut vpkt,
+                                    in_video_stream,
+                                    ofmt_ctx,
+                                    video_out_idx,
+                                )?;
+                                ffi::av_packet_unref(&mut vpkt);
+                                have_video = read_next_raw(ifmt_video, video_stream_idx, &mut vpkt);
+                            } else {
+                                rescale_and_write_raw(
+                                    &mut apkt,
+                                    in_audio_stream,
+                                    ofmt_ctx,
+                                    audio_out_idx,
+                                )?;
+                                ffi::av_packet_unref(&mut apkt);
+                                have_audio = read_next_raw(ifmt_audio, audio_stream_idx, &mut apkt);
+                            }
+                        }
+                    }
                 }
 
-                if pkt.stream_index as usize != video_stream_idx {
-                    ffi::av_packet_unref(&mut pkt);
-                    continue;
-                }
+                ffi::av_packet_unref(&mut vpkt);
+                ffi::av_packet_unref(&mut apkt);
+                Ok(())
+            })();
 
-                pkt.stream_index = video_out_idx;
-
-                // Rescale timestamps (guard against AV_NOPTS_VALUE)
-                let out_stream =
-                    *(*ofmt_ctx).streams.add(video_out_idx as usize);
-                if pkt.pts != ffi::AV_NOPTS_VALUE {
-                    pkt.pts = ffi::av_rescale_q_rnd(
-                        pkt.pts,
-                        (*in_video_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.dts != ffi::AV_NOPTS_VALUE {
-                    pkt.dts = ffi::av_rescale_q_rnd(
-                        pkt.dts,
-                        (*in_video_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.duration > 0 {
-                    pkt.duration = ffi::av_rescale_q(
-                        pkt.duration,
-                        (*in_video_stream).time_base,
-                        (*out_stream).time_base,
-                    );
-                }
-                pkt.pos = -1;
-
-                let ret =
-                    ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
-                ffi::av_packet_unref(&mut pkt);
-
-                if ret < 0 {
-                    log::error!("Error writing video packet: {ret}");
-                    break;
-                }
-            }
-
-            // 14. Copy audio packets
-            loop {
-                let ret = ffi::av_read_frame(ifmt_audio, &mut pkt);
-                if ret < 0 {
-                    break; // EOF or error
-                }
-
-                if pkt.stream_index as usize != audio_stream_idx {
-                    ffi::av_packet_unref(&mut pkt);
-                    continue;
-                }
-
-                pkt.stream_index = audio_out_idx;
-
-                // Rescale timestamps (guard against AV_NOPTS_VALUE)
-                let out_stream =
-                    *(*ofmt_ctx).streams.add(audio_out_idx as usize);
-                if pkt.pts != ffi::AV_NOPTS_VALUE {
-                    pkt.pts = ffi::av_rescale_q_rnd(
-                        pkt.pts,
-                        (*in_audio_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.dts != ffi::AV_NOPTS_VALUE {
-                    pkt.dts = ffi::av_rescale_q_rnd(
-                        pkt.dts,
-                        (*in_audio_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.duration > 0 {
-                    pkt.duration = ffi::av_rescale_q(
-                        pkt.duration,
-                        (*in_audio_stream).time_base,
-                        (*out_stream).time_base,
-                    );
-                }
-                pkt.pos = -1;
-
-                let ret =
-                    ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
-                ffi::av_packet_unref(&mut pkt);
-
-                if ret < 0 {
-                    log::error!("Error writing audio packet: {ret}");
-                    break;
-                }
-            }
-
-            // 15. Write trailer and cleanup
+            // 14. Write trailer and cleanup (always runs, even on merge error)
             ffi::av_write_trailer(ofmt_ctx);
 
             if !(*ofmt_ctx).pb.is_null() {
@@ -674,6 +751,9 @@ impl FFmpegRunner {
             ffi::avformat_close_input(&mut ifmt_video);
             ffi::avformat_close_input(&mut ifmt_audio);
             ffi::avformat_free_context(ofmt_ctx);
+
+            // Propagate merge errors after cleanup
+            merge_result?;
         }
 
         Ok(())

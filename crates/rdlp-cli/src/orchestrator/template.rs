@@ -295,10 +295,7 @@ impl OutputTemplate {
                 } else {
                     Some(end_str.parse::<i64>().unwrap_or(0))
                 };
-                accessors.push(Accessor::Slice {
-                    start: None,
-                    end,
-                });
+                accessors.push(Accessor::Slice { start: None, end });
                 continue;
             }
 
@@ -312,7 +309,14 @@ impl OutputTemplate {
                 i += 1;
             }
 
-            while i < len && chars[i] != '.' && chars[i] != '+' && chars[i] != '-' && chars[i] != '>' && chars[i] != '*' && chars[i] != '/' {
+            while i < len
+                && chars[i] != '.'
+                && chars[i] != '+'
+                && chars[i] != '-'
+                && chars[i] != '>'
+                && chars[i] != '*'
+                && chars[i] != '/'
+            {
                 if chars[i] == ':' {
                     break;
                 }
@@ -386,10 +390,7 @@ impl OutputTemplate {
     }
 
     /// Parse the format specifier after `)` — e.g. `s`, `#05d`, `.2f`, `#j`
-    fn parse_format_specifier(
-        chars: &[char],
-        i: &mut usize,
-    ) -> Result<FormatSpec, TemplateError> {
+    fn parse_format_specifier(chars: &[char], i: &mut usize) -> Result<FormatSpec, TemplateError> {
         let spec_start = *i;
 
         // Defaults
@@ -412,7 +413,11 @@ impl OutputTemplate {
         }
 
         // Parse `0` flag (zero-pad)
-        if *i < chars.len() && chars[*i] == '0' && *i + 1 < chars.len() && chars[*i + 1].is_ascii_digit() {
+        if *i < chars.len()
+            && chars[*i] == '0'
+            && *i + 1 < chars.len()
+            && chars[*i + 1].is_ascii_digit()
+        {
             zero_pad = true;
             *i += 1;
         }
@@ -540,17 +545,11 @@ impl OutputTemplate {
 
         // Try explicit default
         if let Some(ref default) = spec.default {
-            return Ok(self.format_value(
-                &serde_json::Value::String(default.clone()),
-                &spec.format,
-            ));
+            return Ok(self.format_value(&serde_json::Value::String(default.clone()), &spec.format));
         }
 
         // yt-dlp behavior: missing fields produce "NA" (not an error)
-        Ok(self.format_value(
-            &serde_json::Value::String("NA".to_string()),
-            &spec.format,
-        ))
+        Ok(self.format_value(&serde_json::Value::String("NA".to_string()), &spec.format))
     }
 
     /// Look up a single field reference, applying accessors/arithmetic/date format.
@@ -658,35 +657,33 @@ fn apply_accessor(val: &serde_json::Value, accessor: &Accessor) -> Option<serde_
                 None
             }
         }
-        Accessor::Slice { start, end } => {
-            match val {
-                serde_json::Value::String(s) => {
-                    let chars: Vec<char> = s.chars().collect();
-                    let len = chars.len() as i64;
-                    let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
-                    let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
-                    if start_idx >= end_idx {
-                        Some(serde_json::Value::String(String::new()))
-                    } else {
-                        let sliced: String =
-                            chars[start_idx as usize..end_idx as usize].iter().collect();
-                        Some(serde_json::Value::String(sliced))
-                    }
+        Accessor::Slice { start, end } => match val {
+            serde_json::Value::String(s) => {
+                let chars: Vec<char> = s.chars().collect();
+                let len = chars.len() as i64;
+                let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
+                let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
+                if start_idx >= end_idx {
+                    Some(serde_json::Value::String(String::new()))
+                } else {
+                    let sliced: String =
+                        chars[start_idx as usize..end_idx as usize].iter().collect();
+                    Some(serde_json::Value::String(sliced))
                 }
-                serde_json::Value::Array(arr) => {
-                    let len = arr.len() as i64;
-                    let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
-                    let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
-                    if start_idx >= end_idx {
-                        Some(serde_json::Value::Array(Vec::new()))
-                    } else {
-                        let sliced = arr[start_idx as usize..end_idx as usize].to_vec();
-                        Some(serde_json::Value::Array(sliced))
-                    }
-                }
-                _ => None,
             }
-        }
+            serde_json::Value::Array(arr) => {
+                let len = arr.len() as i64;
+                let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
+                let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
+                if start_idx >= end_idx {
+                    Some(serde_json::Value::Array(Vec::new()))
+                } else {
+                    let sliced = arr[start_idx as usize..end_idx as usize].to_vec();
+                    Some(serde_json::Value::Array(sliced))
+                }
+            }
+            _ => None,
+        },
     }
 }
 
@@ -758,10 +755,9 @@ fn format_as_string(val: &serde_json::Value) -> String {
 /// Format as integer (type `d`)
 fn format_as_integer(val: &serde_json::Value, spec: &FormatSpec) -> String {
     let num = match val {
-        serde_json::Value::Number(n) => {
-            n.as_i64()
-                .unwrap_or_else(|| n.as_f64().unwrap_or(0.0) as i64)
-        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .unwrap_or_else(|| n.as_f64().unwrap_or(0.0) as i64),
         serde_json::Value::String(s) => s.parse::<f64>().unwrap_or(0.0) as i64,
         _ => 0,
     };
@@ -929,10 +925,9 @@ fn format_as_unicode(val: &serde_json::Value, _nfd: bool) -> String {
 /// Format with thousands separator (type `R`)
 fn format_as_thousands(val: &serde_json::Value) -> String {
     let num = match val {
-        serde_json::Value::Number(n) => {
-            n.as_i64()
-                .unwrap_or_else(|| n.as_f64().unwrap_or(0.0) as i64)
-        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .unwrap_or_else(|| n.as_f64().unwrap_or(0.0) as i64),
         serde_json::Value::String(s) => s.parse::<f64>().unwrap_or(0.0) as i64,
         _ => 0,
     };
@@ -957,10 +952,7 @@ fn format_as_thousands(val: &serde_json::Value) -> String {
 /// Apply width padding (for format types that don't handle it internally)
 fn apply_width(raw: &str, spec: &FormatSpec) -> String {
     // Integer and Float handle width internally
-    if matches!(
-        spec.type_char,
-        FormatType::Integer | FormatType::Float
-    ) {
+    if matches!(spec.type_char, FormatType::Integer | FormatType::Float) {
         return raw.to_string();
     }
 
@@ -1077,7 +1069,11 @@ mod tests {
         info.view_count = Some(12345);
         info.upload_date = Some("20231114".to_string());
         info.duration = Some(3661.5);
-        info.tags = Some(vec!["tag1".to_string(), "tag2".to_string(), "tag3".to_string()]);
+        info.tags = Some(vec![
+            "tag1".to_string(),
+            "tag2".to_string(),
+            "tag3".to_string(),
+        ]);
         info
     }
 
@@ -1225,10 +1221,7 @@ mod tests {
         match &t.segments[0] {
             Segment::Field(spec) => {
                 assert_eq!(spec.names[0].name, "upload_date");
-                assert_eq!(
-                    spec.names[0].date_format.as_deref(),
-                    Some("%Y-%m-%d")
-                );
+                assert_eq!(spec.names[0].date_format.as_deref(), Some("%Y-%m-%d"));
             }
             _ => panic!("Expected Field segment"),
         }
@@ -1680,9 +1673,7 @@ mod tests {
             i.title = "My: Video / Title".to_string();
             i
         };
-        let result = t
-            .render(&info, &test_format(), "mp4", &test_ctx())
-            .unwrap();
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
         assert_eq!(result, "My_ Video _ Title");
     }
 
@@ -1694,9 +1685,7 @@ mod tests {
             i.title = "日本語/Test".to_string();
             i
         };
-        let result = t
-            .render(&info, &test_format(), "mp4", &test_ctx())
-            .unwrap();
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
         assert_eq!(result, "____Test");
     }
 
@@ -1717,9 +1706,7 @@ mod tests {
             i.title = "It's a test".to_string();
             i
         };
-        let result = t
-            .render(&info, &test_format(), "mp4", &test_ctx())
-            .unwrap();
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
         // The `\` in `'\''` gets replaced with `_` by render()'s path sanitization
         assert_eq!(result, "'It'_''s a test'");
     }
@@ -1732,9 +1719,7 @@ mod tests {
             i.title = "<b>Bold & \"Fun\"</b>".to_string();
             i
         };
-        let result = t
-            .render(&info, &test_format(), "mp4", &test_ctx())
-            .unwrap();
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
         assert_eq!(result, "&lt;b&gt;Bold &amp; &quot;Fun&quot;&lt;_b&gt;");
     }
 
@@ -1746,9 +1731,7 @@ mod tests {
             i.view_count = Some(65); // ASCII 'A'
             i
         };
-        let result = t
-            .render(&info, &test_format(), "mp4", &test_ctx())
-            .unwrap();
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
         assert_eq!(result, "A");
     }
 
@@ -1786,9 +1769,7 @@ mod tests {
             epoch: 0,
             autonumber: 42,
         };
-        let result = t
-            .render(&test_info(), &test_format(), "mp4", &ctx)
-            .unwrap();
+        let result = t.render(&test_info(), &test_format(), "mp4", &ctx).unwrap();
         assert_eq!(result, "00042");
     }
 
