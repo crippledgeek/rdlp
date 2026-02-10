@@ -453,6 +453,43 @@ pub(crate) fn frame_unref_video(frame: &mut ffmpeg_the_third::frame::Video) {
     unsafe { ffmpeg_the_third::ffi::av_frame_unref((*frame).as_mut_ptr()) }
 }
 
+/// Force single-threaded operation on a codec context.
+///
+/// Must be called **before** `avcodec_open2` (i.e. before `.audio()?` or
+/// `.open_as()`). Setting `thread_count = 1` causes FFmpeg's
+/// `validate_thread_parameters()` to set `active_thread_type = 0`, which
+/// disables both frame threading and slice threading. This eliminates:
+/// - Frame threading's per-thread decode buffer pre-allocation (N × frame_size)
+/// - Slice threading's per-slice scratch buffers
+///
+/// For audio normalization paths this is the primary RSS reduction knob:
+/// the default auto-threading can allocate hundreds of MB in decode/encode
+/// buffers that are unnecessary for a single-stream sequential pipeline.
+///
+/// # Safety
+///
+/// `ctx_ptr` must point to a valid, **unopened** `AVCodecContext`.
+pub(crate) fn set_single_thread_codec(ctx_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext) {
+    // SAFETY: caller guarantees ctx_ptr is valid and unopened.
+    // Setting thread_count before open is the documented way to control threading.
+    unsafe {
+        (*ctx_ptr).thread_count = 1;
+    }
+}
+
+/// Read `thread_count` and `active_thread_type` from an opened codec context.
+///
+/// Returns `(thread_count, active_thread_type)` for diagnostic logging.
+///
+/// # Safety
+///
+/// `ctx_ptr` must point to a valid, opened `AVCodecContext`.
+pub(crate) fn codec_threading_info(
+    ctx_ptr: *const ffmpeg_the_third::ffi::AVCodecContext,
+) -> (i32, i32) {
+    unsafe { ((*ctx_ptr).thread_count, (*ctx_ptr).active_thread_type) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

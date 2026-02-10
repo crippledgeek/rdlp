@@ -14,12 +14,99 @@ use log::{debug, info, warn};
 
 use crate::error::{PostProcessError, Result};
 
+use super::ffi_helpers::{codec_threading_info, frame_unref_audio, set_single_thread_codec};
 use super::log_capture::{LogCaptureGuard, LogSuppressGuard};
 use super::salvage::{prepare_input_with_salvage, salvage_remux_sync};
 use super::transcode::MuxTimingState;
 use super::{
     AudioNormMode, FFmpegRunner, LoudnormMeasurements, NormalizeOptions, PeakAnalysis, ensure_init,
 };
+
+/// Extra headroom (dB) subtracted from the alimiter ceiling to account for
+/// inter-sample true peak overshoot and lossy encoder artifacts.
+///
+/// `alimiter` is a sample-level limiter — it clamps digital sample values but
+/// EBU R128 true peak measurement uses 4× oversampling to detect inter-sample
+/// peaks.  Resampling (e.g. 44.1→48 kHz) and lossy encoding (AAC, Opus) can
+/// also introduce ~0.5-2 dB of peak overshoot.  1.5 dB headroom is standard
+/// broadcast practice (ITU-R BS.1770-5 recommendation).
+const ALIMITER_TP_HEADROOM_DB: f64 = 1.5;
+
+/// Build the alimiter filter spec with true-peak headroom.
+///
+/// Ceiling is `10^((target_tp - headroom) / 20)` in linear scale.
+fn build_alimiter_spec(target_tp: f64) -> String {
+    let ceiling = 10f64.powf((target_tp - ALIMITER_TP_HEADROOM_DB) / 20.0);
+    format!("alimiter=limit={ceiling:.6}:attack=5:release=50")
+}
+
+/// Build the loudnorm pass 2 core filter string (without alimiter).
+///
+/// Returns the loudnorm filter (optionally preceded by acompressor when
+/// `opts.precompress` is true).  The caller is responsible for appending
+/// the alimiter via [`build_alimiter_spec`] at the correct position in
+/// the filter chain:
+///
+/// - **Library path**: after `aresample` so resampling overshoot is caught.
+/// - **CLI path**: after loudnorm (FFmpeg CLI inserts its own converters).
+///
+/// Default strategy: always `linear=true`.  FFmpeg's loudnorm with
+/// `linear=true` falls back to dynamic internally when conditions aren't
+/// met, so forcing `linear=false` is unnecessary and often produces worse
+/// perceived loudness due to over-compression.
+///
+/// When `opts.force_dynamic` is true, uses `linear=false` instead.
+fn build_loudnorm_pass2_filter(
+    opts: &NormalizeOptions,
+    measurements: &LoudnormMeasurements,
+) -> String {
+    let shortfall = measurements.linear_shortfall(opts.target_i, opts.target_tp);
+    let predicted_gain = measurements.predict_linear_gain(opts.target_i, opts.target_tp);
+
+    info!(
+        "Loudnorm analysis: desired_gain={:.1} dB, predicted_linear_gain={:.1} dB, \
+         shortfall={:.1} LU",
+        opts.target_i - measurements.input_i,
+        predicted_gain,
+        shortfall,
+    );
+
+    let linear_mode = if opts.force_dynamic {
+        info!("Strategy: dynamic (forced via --loudnorm-dynamic)");
+        "false"
+    } else {
+        info!(
+            "Strategy: linear (shortfall={shortfall:.1} LU, \
+             loudnorm handles internal fallback to dynamic if needed)"
+        );
+        "true"
+    };
+
+    let m = measurements;
+    let loudnorm = format!(
+        "loudnorm=I={:.1}:TP={:.1}:LRA={:.1}:measured_I={:.2}:measured_TP={:.2}:\
+         measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear={linear_mode}:\
+         print_format=summary",
+        opts.target_i,
+        opts.target_tp,
+        opts.target_lra,
+        m.input_i,
+        m.input_tp,
+        m.input_lra,
+        m.input_thresh,
+        m.target_offset,
+    );
+
+    if opts.precompress {
+        info!("Precompress enabled: prepending acompressor (threshold=-18dB, ratio=3:1)");
+        format!(
+            "acompressor=threshold=0.125893:ratio=3:attack=20:release=200:makeup=2:knee=6,\
+             {loudnorm}"
+        )
+    } else {
+        loudnorm
+    }
+}
 
 impl FFmpegRunner {
     /// Normalize audio levels in a media file.
@@ -105,8 +192,9 @@ impl FFmpegRunner {
         })?;
         let ist_time_base = ist.time_base();
 
-        let decoder_ctx =
+        let mut decoder_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())?;
+        set_single_thread_codec(unsafe { decoder_ctx.as_mut_ptr() });
         let mut decoder = decoder_ctx.decoder().audio()?;
 
         // Build astats filter graph
@@ -384,8 +472,9 @@ impl FFmpegRunner {
                 "audio input stream {audio_ist_index} not found"
             ))
         })?;
-        let audio_dec_ctx =
+        let mut audio_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
+        set_single_thread_codec(unsafe { audio_dec_ctx.as_mut_ptr() });
         let mut audio_decoder = audio_dec_ctx.decoder().audio()?;
 
         let input_audio_bitrate = audio_ist.parameters().bit_rate() as usize;
@@ -445,6 +534,7 @@ impl FFmpegRunner {
         if needs_global_header {
             Self::set_global_header_flag(unsafe { audio_encoder.as_mut_ptr() });
         }
+        set_single_thread_codec(unsafe { audio_encoder.as_mut_ptr() });
 
         let mut audio_encoder =
             audio_encoder
@@ -476,7 +566,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
         }
 
-        // Flush packets to AVIO immediately — prevents Matroska cluster buffering stalls
+        // A2: Flush packets to AVIO immediately — prevents Matroska cluster buffering stalls.
         unsafe {
             (*octx.as_mut_ptr()).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
         }
@@ -494,6 +584,24 @@ impl FFmpegRunner {
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output header: {e}"),
             })?;
+
+        // E1: Log threading knobs and mux flags
+        {
+            let (dec_tc, dec_att) =
+                codec_threading_info(unsafe { audio_decoder.as_ptr() });
+            let (enc_tc, enc_att) =
+                codec_threading_info(unsafe { audio_encoder.as_ptr() });
+            let mux_flags = unsafe { (*octx.as_mut_ptr()).flags };
+            let pb_buf_size = unsafe {
+                let pb = (*octx.as_mut_ptr()).pb;
+                if !pb.is_null() { (*pb).buffer_size } else { 0 }
+            };
+            info!(
+                "[peak encode] decoder: thread_count={dec_tc}, active_thread_type={dec_att}; \
+                 encoder: thread_count={enc_tc}, active_thread_type={enc_att}; \
+                 mux_flags=0x{mux_flags:x}; pb_buffer_size={pb_buf_size}",
+            );
+        }
 
         // Log AVIO state for diagnostics after header write
         // SAFETY: octx owns a valid, header-written output format context.
@@ -734,8 +842,58 @@ impl FFmpegRunner {
             measurements.input_i, measurements.input_tp, measurements.input_lra
         );
 
+        if measurements.input_i < -35.0 {
+            warn!(
+                "Very quiet source ({:.1} LUFS) — normalization will amplify noise",
+                measurements.input_i,
+            );
+        }
+
         info!("Loudnorm pass 2: applying normalization...");
-        Self::loudnorm_pass2_sync(input, output, opts, &measurements)
+        Self::loudnorm_pass2_sync(input, output, opts, &measurements)?;
+
+        // Verify output loudness against targets
+        Self::verify_loudness_sync(output, opts)?;
+
+        Ok(())
+    }
+
+    /// Post-normalization loudness verification.
+    ///
+    /// Runs loudnorm pass 1 on the **output** file and compares measured
+    /// levels against targets. Warns on significant deviations but does
+    /// not fail — the output is already written.
+    fn verify_loudness_sync(output: &Path, opts: &NormalizeOptions) -> Result<()> {
+        info!("Loudness verification: analyzing output...");
+        match Self::loudnorm_pass1_sync(output, opts) {
+            Ok(measured) => {
+                info!(
+                    "Loudness verification: I={:.1} LUFS, TP={:.1} dBTP, LRA={:.1} LU",
+                    measured.input_i, measured.input_tp, measured.input_lra
+                );
+
+                let i_delta = (measured.input_i - opts.target_i).abs();
+                if i_delta > 2.0 {
+                    warn!(
+                        "Loudness verification: integrated loudness off by {i_delta:.1} LU \
+                         (measured={:.1}, target={:.1})",
+                        measured.input_i, opts.target_i
+                    );
+                }
+                if measured.input_tp > opts.target_tp + 0.5 {
+                    warn!(
+                        "Loudness verification: true peak exceeds target \
+                         (measured={:.1} dBTP, target={:.1} dBTP)",
+                        measured.input_tp, opts.target_tp
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Loudness verification failed (non-fatal): {e}");
+                Ok(())
+            }
+        }
     }
 
     /// Loudnorm pass 1: run loudnorm filter in analysis mode, capture JSON from logs.
@@ -761,12 +919,14 @@ impl FFmpegRunner {
         })?;
         let ist_time_base = ist.time_base();
 
-        let decoder_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(
+        let mut decoder_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(
             ist.parameters(),
         )
         .map_err(|e| PostProcessError::FFmpegLibraryError {
             message: format!("failed to create decoder context: {e}"),
         })?;
+        // B1: Single-threaded decode for pass 1 — reduces RSS during analysis.
+        set_single_thread_codec(unsafe { decoder_ctx.as_mut_ptr() });
         let mut decoder =
             decoder_ctx
                 .decoder()
@@ -848,6 +1008,8 @@ impl FFmpegRunner {
                     .map_err(|e| PostProcessError::FFmpegLibraryError {
                         message: format!("filter source add frame failed: {e}"),
                     })?;
+                // B3: Release decode buffer ref immediately — filter holds its own.
+                frame_unref_audio(&mut frame);
 
                 // Drain filter output (discard frames)
                 loop {
@@ -857,6 +1019,7 @@ impl FFmpegRunner {
                     if out_node.sink().frame(&mut filtered).is_err() {
                         break;
                     }
+                    frame_unref_audio(&mut filtered);
                 }
             }
         }
@@ -880,6 +1043,7 @@ impl FFmpegRunner {
                 .map_err(|e| PostProcessError::FFmpegLibraryError {
                     message: format!("filter source add frame (flush) failed: {e}"),
                 })?;
+            frame_unref_audio(&mut frame);
 
             loop {
                 let mut out_node = graph.get("out").ok_or_else(|| {
@@ -888,6 +1052,7 @@ impl FFmpegRunner {
                 if out_node.sink().frame(&mut filtered).is_err() {
                     break;
                 }
+                frame_unref_audio(&mut filtered);
             }
         }
 
@@ -907,6 +1072,7 @@ impl FFmpegRunner {
             if out_node.sink().frame(&mut filtered).is_err() {
                 break;
             }
+            frame_unref_audio(&mut filtered);
         }
 
         // Drop the filter graph to trigger loudnorm's uninit(), which emits
@@ -1042,8 +1208,11 @@ impl FFmpegRunner {
                 "audio input stream {audio_ist_index} not found"
             ))
         })?;
-        let audio_dec_ctx =
+        let mut audio_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
+        // B1: Force single-threaded decode — eliminates frame-threading buffer
+        // pre-allocation that inflates RSS by hundreds of MB on long audio.
+        set_single_thread_codec(unsafe { audio_dec_ctx.as_mut_ptr() });
         let mut audio_decoder = audio_dec_ctx.decoder().audio()?;
 
         let input_audio_bitrate = audio_ist.parameters().bit_rate() as usize;
@@ -1104,6 +1273,9 @@ impl FFmpegRunner {
             Self::set_global_header_flag(unsafe { audio_encoder.as_mut_ptr() });
         }
 
+        // B2: Force single-threaded encode — reduces encoder buffer pool memory.
+        set_single_thread_codec(unsafe { audio_encoder.as_mut_ptr() });
+
         let mut audio_encoder =
             audio_encoder
                 .open_as(enc_codec)
@@ -1134,12 +1306,12 @@ impl FFmpegRunner {
                 ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
         }
 
-        // Flush packets to AVIO immediately — prevents Matroska cluster buffering stalls
+        // A2: Flush packets to AVIO immediately — prevents Matroska cluster buffering stalls.
         unsafe {
             (*octx.as_mut_ptr()).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
         }
 
-        // For audio-only output using av_write_frame (non-interleaved), set
+        // A1: For audio-only output using av_write_frame (non-interleaved), set
         // max_interleave_delta = 0 to disable the muxer's interleave queue entirely.
         // Harmless when using direct writes; prevents any residual queue growth.
         unsafe {
@@ -1152,6 +1324,26 @@ impl FFmpegRunner {
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output header: {e}"),
             })?;
+
+        // E1: Log threading knobs, mux flags, and AVIO state for diagnostics
+        {
+            let (dec_tc, dec_att) =
+                codec_threading_info(unsafe { audio_decoder.as_ptr() });
+            let (enc_tc, enc_att) =
+                codec_threading_info(unsafe { audio_encoder.as_ptr() });
+            let mux_flags = unsafe { (*octx.as_mut_ptr()).flags };
+            let pb_buf_size = unsafe {
+                let pb = (*octx.as_mut_ptr()).pb;
+                if !pb.is_null() { (*pb).buffer_size } else { 0 }
+            };
+            info!(
+                "[loudnorm pass 2] decoder: thread_count={dec_tc}, active_thread_type={dec_att}; \
+                 encoder: thread_count={enc_tc}, active_thread_type={enc_att}; \
+                 mux_flags=0x{mux_flags:x} (flush_packets={}); \
+                 pb_buffer_size={pb_buf_size}",
+                (mux_flags & ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS) != 0,
+            );
+        }
 
         // Log AVIO state for diagnostics after header write
         // SAFETY: octx owns a valid, header-written output format context.
@@ -1187,24 +1379,44 @@ impl FFmpegRunner {
         }
         info!("[loudnorm_encode_audio_only] header written: {file_size} bytes on disk");
 
-        // Build loudnorm pass 2 filter with measured values.
+        // Build loudnorm pass 2 filter chain.
+        //
+        // Chain order matters for true-peak compliance:
+        //   aformat=dbl → [precomp] → loudnorm → aresample → alimiter → aformat
+        //
+        // The alimiter MUST come AFTER aresample because resampling (e.g.
+        // 44100→48000 Hz sinc interpolation) can introduce ~1-2 dB of peak
+        // overshoot.  Placing the limiter last in the chain guarantees the
+        // encoder receives peak-compliant samples.
+        //
         // An explicit aresample bridges dbl→encoder format since FFmpeg 8.0's
         // auto-conversion during graph_config may fail with EINVAL (same issue
         // that required the leading aformat=dbl in pass 1).
-        let m = measurements;
+        // Note: aresample is kept plain (no async/first_pts options) — adding
+        // async=0:first_pts=0 caused silent padding that lowered output volume.
+        let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
+        let limiter = build_alimiter_spec(opts.target_tp);
         let enc_ch_layout_desc = audio_encoder.ch_layout().description();
         let filter_spec = format!(
-            "aformat=sample_fmts=dbl,loudnorm=I={:.1}:TP={:.1}:LRA={:.1}:measured_I={:.2}:measured_TP={:.2}:measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear=true:print_format=summary,aresample,aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
-            opts.target_i,
-            opts.target_tp,
-            opts.target_lra,
-            m.input_i,
-            m.input_tp,
-            m.input_lra,
-            m.input_thresh,
-            m.target_offset,
+            "aformat=sample_fmts=dbl,{loudnorm_core},aresample,{limiter},\
+             aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
             audio_encoder.format().name(),
             audio_encoder.rate(),
+            enc_ch_layout_desc,
+        );
+        info!("Loudnorm pass 2 filter_spec={filter_spec}");
+
+        // Log decoder/encoder audio parameters for diagnostics
+        info!(
+            "Loudnorm pass 2 decoder: sample_rate={}, format={}, ch_layout={}",
+            audio_decoder.rate(),
+            audio_decoder.format().name(),
+            audio_decoder.ch_layout().description(),
+        );
+        info!(
+            "Loudnorm pass 2 encoder: sample_rate={}, format={}, ch_layout={}",
+            audio_encoder.rate(),
+            audio_encoder.format().name(),
             enc_ch_layout_desc,
         );
 
@@ -1577,8 +1789,12 @@ fn audio_only_extension_for(ext: &str) -> &'static str {
 
 /// Two-tier recovery for mux failures during audio normalization.
 ///
-/// Tier 1: Salvage-remux input → retry library encode.
-/// Tier 2: External ffmpeg CLI with `-fflags +discardcorrupt+genpts`.
+/// D2: One-shot salvage retry with deterministic cleanup.
+/// - Tier 1: Salvage-remux input → retry library encode (one attempt only).
+/// - Tier 2: External ffmpeg CLI with `-fflags +discardcorrupt+genpts`.
+/// - Never overwrites the original input.
+/// - Salvage temp is deleted on success unless `RDLP_KEEP_SALVAGE=1`.
+/// - Salvage temp is kept on failure for post-mortem analysis.
 ///
 /// Loudnorm pass 1 measurements remain valid after salvage/CLI because:
 /// - Salvage uses stream copy (audio bit-identical)
@@ -1588,6 +1804,10 @@ where
     F: Fn(&Path) -> Result<()>,
     G: FnOnce(&Path, &Path) -> Result<()>,
 {
+    let keep_salvage = std::env::var("RDLP_KEEP_SALVAGE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     // First attempt: library encode
     match encode_fn(input) {
         Ok(()) => return Ok(()),
@@ -1599,7 +1819,7 @@ where
             return Err(e);
         }
         Err(e) => {
-            warn!("Encode failed with mux error, attempting salvage retry: {e}");
+            warn!("Encode failed with mux error, attempting one-shot salvage retry: {e}");
         }
     }
 
@@ -1613,18 +1833,33 @@ where
         return cli_fallback_fn(input, output);
     }
 
-    // Tier 1: salvage remux → retry library encode
+    // Tier 1: salvage remux → retry library encode (ONE attempt only)
     match salvage_remux_sync(input) {
         Ok(salvaged) => {
             let result = encode_fn(&salvaged);
-            let _ = std::fs::remove_file(&salvaged);
             if result.is_ok() {
+                // D2: Delete salvage temp on success unless RDLP_KEEP_SALVAGE=1
+                if keep_salvage {
+                    info!(
+                        "RDLP_KEEP_SALVAGE=1: keeping salvage temp {}",
+                        salvaged.display()
+                    );
+                } else {
+                    let _ = std::fs::remove_file(&salvaged);
+                }
                 return result;
             }
             warn!(
                 "Salvage retry also failed, falling back to CLI: {}",
                 result.as_ref().unwrap_err()
             );
+            // D2: Keep salvage temp on failure for post-mortem analysis
+            if !keep_salvage {
+                info!(
+                    "Keeping salvage temp for post-mortem: {}",
+                    salvaged.display()
+                );
+            }
             let _ = std::fs::remove_file(output);
             if output.exists() {
                 warn!(
@@ -1715,19 +1950,11 @@ fn cli_fallback_loudnorm(
     // could select a codec incompatible with the temp container.
     let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
     let enc_name = select_audio_encoder_for_container(output_ext);
-    let m = measurements;
-    let filter = format!(
-        "loudnorm=I={:.1}:TP={:.1}:LRA={:.1}:measured_I={:.2}:measured_TP={:.2}:\
-         measured_LRA={:.2}:measured_thresh={:.2}:offset={:.2}:linear=true",
-        opts.target_i,
-        opts.target_tp,
-        opts.target_lra,
-        m.input_i,
-        m.input_tp,
-        m.input_lra,
-        m.input_thresh,
-        m.target_offset,
-    );
+    // Build filter string — ffmpeg CLI handles format negotiation
+    let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
+    let limiter = build_alimiter_spec(opts.target_tp);
+    let filter = format!("{loudnorm_core},{limiter}");
+    info!("CLI fallback loudnorm filter: {filter}");
 
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
@@ -1932,6 +2159,154 @@ mod tests {
         assert!((extract_json_value(text, "target_offset").unwrap() - 0.5).abs() < 0.01);
 
         assert!(extract_json_value(text, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_build_alimiter_spec_headroom() {
+        // target_tp=-1.0 → ceiling = 10^((-1.0 - 1.5) / 20) = 10^(-0.125)
+        let spec = build_alimiter_spec(-1.0);
+        assert!(spec.starts_with("alimiter=limit="));
+        assert!(spec.contains("attack=5"));
+        assert!(spec.contains("release=50"));
+
+        // Verify headroom: ceiling should be lower than 10^(-1/20) ≈ 0.891
+        // With 1.5 dB headroom: 10^(-2.5/20) ≈ 0.750
+        let limit_str = spec
+            .strip_prefix("alimiter=limit=")
+            .unwrap()
+            .split(':')
+            .next()
+            .unwrap();
+        let limit: f64 = limit_str.parse().unwrap();
+        let expected = 10f64.powf((-1.0 - ALIMITER_TP_HEADROOM_DB) / 20.0);
+        assert!(
+            (limit - expected).abs() < 0.001,
+            "limit={limit}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn test_build_loudnorm_pass2_filter_linear_no_shortfall() {
+        // Source I=-20, TP=-7 → target I=-14, TP=-1
+        // shortfall=0 → always linear=true (alimiter added by caller)
+        let opts = NormalizeOptions {
+            mode: AudioNormMode::Loudnorm,
+            target_i: -14.0,
+            target_tp: -1.0,
+            target_lra: 11.0,
+            ..Default::default()
+        };
+        let m = LoudnormMeasurements {
+            input_i: -20.0,
+            input_tp: -7.0,
+            input_lra: 8.0,
+            input_thresh: -30.0,
+            target_offset: 0.0,
+        };
+        let filter = build_loudnorm_pass2_filter(&opts, &m);
+        assert!(filter.contains("linear=true"));
+        // alimiter is no longer part of this function (caller appends it)
+        assert!(!filter.contains("alimiter="));
+        assert!(!filter.contains("volume="));
+        assert!(!filter.contains("acompressor="));
+    }
+
+    #[test]
+    fn test_build_loudnorm_pass2_filter_moderate_shortfall() {
+        // Source I=-17, TP=-1.5 → target I=-14, TP=-1 → shortfall=2.5
+        // V2: still uses linear=true (no volume boost tier)
+        let opts = NormalizeOptions {
+            mode: AudioNormMode::Loudnorm,
+            target_i: -14.0,
+            target_tp: -1.0,
+            target_lra: 11.0,
+            ..Default::default()
+        };
+        let m = LoudnormMeasurements {
+            input_i: -17.0,
+            input_tp: -1.5,
+            input_lra: 8.0,
+            input_thresh: -27.0,
+            target_offset: 0.0,
+        };
+        let filter = build_loudnorm_pass2_filter(&opts, &m);
+        assert!(filter.contains("linear=true"));
+        assert!(!filter.contains("alimiter="));
+        assert!(!filter.contains("volume="));
+    }
+
+    #[test]
+    fn test_build_loudnorm_pass2_filter_large_shortfall() {
+        // Source I=-30, TP=-1 → target I=-14, TP=-1 → shortfall=16
+        // V2: still uses linear=true (loudnorm falls back to dynamic internally)
+        let opts = NormalizeOptions {
+            mode: AudioNormMode::Loudnorm,
+            target_i: -14.0,
+            target_tp: -1.0,
+            target_lra: 11.0,
+            ..Default::default()
+        };
+        let m = LoudnormMeasurements {
+            input_i: -30.0,
+            input_tp: -1.0,
+            input_lra: 12.0,
+            input_thresh: -40.0,
+            target_offset: 0.0,
+        };
+        let filter = build_loudnorm_pass2_filter(&opts, &m);
+        assert!(filter.contains("linear=true"));
+        assert!(!filter.contains("alimiter="));
+        assert!(!filter.contains("linear=false"));
+    }
+
+    #[test]
+    fn test_build_loudnorm_pass2_filter_force_dynamic() {
+        let opts = NormalizeOptions {
+            mode: AudioNormMode::Loudnorm,
+            target_i: -14.0,
+            target_tp: -1.0,
+            target_lra: 11.0,
+            force_dynamic: true,
+            ..Default::default()
+        };
+        let m = LoudnormMeasurements {
+            input_i: -20.0,
+            input_tp: -7.0,
+            input_lra: 8.0,
+            input_thresh: -30.0,
+            target_offset: 0.0,
+        };
+        let filter = build_loudnorm_pass2_filter(&opts, &m);
+        assert!(filter.contains("linear=false"));
+        assert!(!filter.contains("alimiter="));
+        assert!(!filter.contains("linear=true"));
+    }
+
+    #[test]
+    fn test_build_loudnorm_pass2_filter_precompress() {
+        let opts = NormalizeOptions {
+            mode: AudioNormMode::Loudnorm,
+            target_i: -14.0,
+            target_tp: -1.0,
+            target_lra: 11.0,
+            precompress: true,
+            ..Default::default()
+        };
+        let m = LoudnormMeasurements {
+            input_i: -20.0,
+            input_tp: -7.0,
+            input_lra: 8.0,
+            input_thresh: -30.0,
+            target_offset: 0.0,
+        };
+        let filter = build_loudnorm_pass2_filter(&opts, &m);
+        assert!(filter.contains("acompressor="));
+        assert!(filter.contains("linear=true"));
+        assert!(!filter.contains("alimiter="));
+        // acompressor should come BEFORE loudnorm
+        let comp_pos = filter.find("acompressor=").unwrap();
+        let loud_pos = filter.find("loudnorm=").unwrap();
+        assert!(comp_pos < loud_pos, "acompressor must precede loudnorm");
     }
 
     #[test]

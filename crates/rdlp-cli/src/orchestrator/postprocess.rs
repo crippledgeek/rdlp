@@ -27,9 +27,12 @@ impl Orchestrator {
             normalize_audio: self.config.normalize_audio,
             loudnorm: self.config.loudnorm,
             audio_gain_target: self.config.audio_gain_target,
-            loudnorm_target_i: None,
-            loudnorm_target_tp: None,
-            loudnorm_target_lra: None,
+            loudnorm_preset: self.config.loudnorm_preset.clone(),
+            loudnorm_target_i: self.config.loudnorm_target_i,
+            loudnorm_target_tp: self.config.loudnorm_target_tp,
+            loudnorm_target_lra: self.config.loudnorm_target_lra,
+            loudnorm_dynamic: self.config.loudnorm_dynamic,
+            loudnorm_precompress: self.config.loudnorm_precompress,
         }
     }
 

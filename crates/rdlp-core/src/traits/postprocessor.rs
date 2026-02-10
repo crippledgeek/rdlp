@@ -130,7 +130,10 @@ pub struct PostProcessConfig {
     /// Target peak level in dBFS for peak normalization (default -1.0)
     pub audio_gain_target: Option<f64>,
 
-    /// Target integrated loudness in LUFS for loudnorm (default -16.0)
+    /// Loudnorm preset name (broadcast, streaming, loud)
+    pub loudnorm_preset: Option<String>,
+
+    /// Target integrated loudness in LUFS for loudnorm (default -14.0)
     pub loudnorm_target_i: Option<f64>,
 
     /// Target true peak in dBTP for loudnorm (default -1.5)
@@ -138,6 +141,12 @@ pub struct PostProcessConfig {
 
     /// Target loudness range in LU for loudnorm (default 11.0)
     pub loudnorm_target_lra: Option<f64>,
+
+    /// Force dynamic (per-frame compression) mode in loudnorm pass 2
+    pub loudnorm_dynamic: bool,
+
+    /// Prepend a mild acompressor before loudnorm in pass 2
+    pub loudnorm_precompress: bool,
 }
 
 impl Default for PostProcessConfig {
@@ -159,9 +168,12 @@ impl Default for PostProcessConfig {
             normalize_audio: false,
             loudnorm: false,
             audio_gain_target: None,
+            loudnorm_preset: None,
             loudnorm_target_i: None,
             loudnorm_target_tp: None,
             loudnorm_target_lra: None,
+            loudnorm_dynamic: false,
+            loudnorm_precompress: false,
         }
     }
 }

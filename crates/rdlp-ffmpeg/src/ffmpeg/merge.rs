@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use log::debug;
+use log::{debug, info};
 
 use crate::error::{PostProcessError, Result};
 
@@ -233,6 +233,11 @@ impl FFmpegRunner {
                 .parameters(),
         );
         Self::clear_codec_tag(ost_audio.parameters().as_ptr());
+        // Set audio as default stream so players select it automatically
+        unsafe {
+            (*ost_audio.as_mut_ptr()).disposition =
+                ffmpeg_the_third::ffi::AV_DISPOSITION_DEFAULT;
+        }
         let audio_ost_index = ost_audio.index();
 
         // Build muxer options dictionary
@@ -248,6 +253,10 @@ impl FFmpegRunner {
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output header: {e}"),
             })?;
+
+        info!(
+            "Merge: video=stream#{video_ost_index}, audio=stream#{audio_ost_index} (DEFAULT)"
+        );
 
         // Two-way timestamp-interleaved merge: read packets from both inputs
         // and write them in DTS order to avoid ENOMEM from buffering an entire
@@ -562,6 +571,9 @@ impl FFmpegRunner {
             (*out_audio_stream).r_frame_rate = (*in_audio_stream).r_frame_rate;
             (*out_audio_stream).sample_aspect_ratio = (*in_audio_stream).sample_aspect_ratio;
 
+            // Set audio as default stream so players select it automatically
+            (*out_audio_stream).disposition = ffi::AV_DISPOSITION_DEFAULT;
+
             let audio_out_idx = (*out_audio_stream).index;
 
             debug!(
@@ -644,6 +656,10 @@ impl FFmpegRunner {
                     message: format!("avformat_write_header failed: error code {ret}"),
                 });
             }
+
+            info!(
+                "Merge: video=stream#{video_out_idx}, audio=stream#{audio_out_idx} (DEFAULT)"
+            );
 
             // 13. Two-way timestamp-interleaved merge
             //

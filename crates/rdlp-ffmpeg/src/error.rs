@@ -167,6 +167,9 @@ impl PostProcessError {
     }
 
     /// True if this error may be recoverable by salvage-remuxing and retrying.
+    ///
+    /// D1: Triggers on mux write errors (ENOMEM/ENOSPC/EIO/EINVAL),
+    /// stall watchdog aborts, and input container corruption.
     #[must_use]
     pub fn is_salvage_retryable(&self) -> bool {
         matches!(self, Self::MuxWriteError { .. } | Self::InputCorrupt { .. })
@@ -177,6 +180,24 @@ impl PostProcessError {
     pub fn is_enomem(&self) -> bool {
         match self {
             Self::MuxWriteError { message, .. } => message.contains("ret=-12"),
+            _ => false,
+        }
+    }
+
+    /// True if this error indicates an I/O error (EIO/-5).
+    #[must_use]
+    pub fn is_eio(&self) -> bool {
+        match self {
+            Self::MuxWriteError { message, .. } => message.contains("ret=-5"),
+            _ => false,
+        }
+    }
+
+    /// True if this error indicates a mux stall (watchdog abort).
+    #[must_use]
+    pub fn is_stall(&self) -> bool {
+        match self {
+            Self::MuxWriteError { operation, .. } => operation.contains("watchdog"),
             _ => false,
         }
     }

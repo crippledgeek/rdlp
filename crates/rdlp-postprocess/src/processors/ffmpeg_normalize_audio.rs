@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use log::info;
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
-use rdlp_ffmpeg::{AudioNormMode, NormalizeOptions, PostProcessError};
+use rdlp_ffmpeg::{AudioNormMode, LoudnormPreset, NormalizeOptions, PostProcessError};
 
 ffmpeg_processor!(
     FFmpegNormalizeAudio,
@@ -28,6 +28,8 @@ ffmpeg_processor!(
 
 impl FFmpegNormalizeAudio {
     /// Build normalization options from PostProcessConfig.
+    ///
+    /// Resolution order: preset first (defaults to streaming), then individual overrides.
     fn build_options(config: &PostProcessConfig) -> NormalizeOptions {
         let mode = if config.loudnorm {
             AudioNormMode::Loudnorm
@@ -35,13 +37,24 @@ impl FFmpegNormalizeAudio {
             AudioNormMode::Peak
         };
 
+        // Resolve preset → base targets, then allow individual overrides
+        let (default_i, default_tp, default_lra) = match config.loudnorm_preset {
+            Some(ref s) => s
+                .parse::<LoudnormPreset>()
+                .unwrap_or(LoudnormPreset::Streaming)
+                .targets(),
+            None => LoudnormPreset::Streaming.targets(),
+        };
+
         NormalizeOptions {
             mode,
             target_peak_db: config.audio_gain_target.unwrap_or(-1.0),
-            target_i: config.loudnorm_target_i.unwrap_or(-16.0),
-            target_tp: config.loudnorm_target_tp.unwrap_or(-1.5),
-            target_lra: config.loudnorm_target_lra.unwrap_or(11.0),
+            target_i: config.loudnorm_target_i.unwrap_or(default_i),
+            target_tp: config.loudnorm_target_tp.unwrap_or(default_tp),
+            target_lra: config.loudnorm_target_lra.unwrap_or(default_lra),
             salvage: true,
+            force_dynamic: config.loudnorm_dynamic,
+            precompress: config.loudnorm_precompress,
         }
     }
 }
@@ -145,8 +158,9 @@ mod tests {
         };
         let opts = FFmpegNormalizeAudio::build_options(&config);
         assert_eq!(opts.mode, AudioNormMode::Loudnorm);
-        assert!((opts.target_i - (-16.0)).abs() < f64::EPSILON);
-        assert!((opts.target_tp - (-1.5)).abs() < f64::EPSILON);
+        // Default preset is streaming: I=-14, TP=-1, LRA=11
+        assert!((opts.target_i - (-14.0)).abs() < f64::EPSILON);
+        assert!((opts.target_tp - (-1.0)).abs() < f64::EPSILON);
         assert!((opts.target_lra - 11.0).abs() < f64::EPSILON);
     }
 
@@ -159,6 +173,38 @@ mod tests {
         };
         let opts = FFmpegNormalizeAudio::build_options(&config);
         assert!((opts.target_peak_db - (-3.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_build_options_loudnorm_broadcast_preset() {
+        let config = PostProcessConfig {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("broadcast".to_string()),
+            ..PostProcessConfig::default()
+        };
+        let opts = FFmpegNormalizeAudio::build_options(&config);
+        assert_eq!(opts.mode, AudioNormMode::Loudnorm);
+        assert!((opts.target_i - (-23.0)).abs() < f64::EPSILON);
+        assert!((opts.target_tp - (-2.0)).abs() < f64::EPSILON);
+        assert!((opts.target_lra - 7.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_build_options_individual_overrides() {
+        let config = PostProcessConfig {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("broadcast".to_string()),
+            loudnorm_target_i: Some(-16.0),
+            loudnorm_target_tp: Some(-1.5),
+            // lra not overridden → should use broadcast default (7.0)
+            ..PostProcessConfig::default()
+        };
+        let opts = FFmpegNormalizeAudio::build_options(&config);
+        assert!((opts.target_i - (-16.0)).abs() < f64::EPSILON);
+        assert!((opts.target_tp - (-1.5)).abs() < f64::EPSILON);
+        assert!((opts.target_lra - 7.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -161,6 +161,24 @@ pub struct Config {
     /// Target peak level in dBFS for peak normalization (default -1.0)
     pub audio_gain_target: Option<f64>,
 
+    /// Loudnorm preset name (broadcast, streaming, loud)
+    pub loudnorm_preset: Option<String>,
+
+    /// Target integrated loudness in LUFS for loudnorm
+    pub loudnorm_target_i: Option<f64>,
+
+    /// Target true peak in dBTP for loudnorm
+    pub loudnorm_target_tp: Option<f64>,
+
+    /// Target loudness range in LU for loudnorm
+    pub loudnorm_target_lra: Option<f64>,
+
+    /// Force dynamic (per-frame compression) mode in loudnorm pass 2
+    pub loudnorm_dynamic: bool,
+
+    /// Prepend a mild acompressor before loudnorm in pass 2
+    pub loudnorm_precompress: bool,
+
     /// FFmpeg location (if not in PATH)
     pub ffmpeg_location: Option<PathBuf>,
 
@@ -296,6 +314,12 @@ impl Default for Config {
             normalize_audio: false,
             loudnorm: false,
             audio_gain_target: None,
+            loudnorm_preset: None,
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            loudnorm_dynamic: false,
+            loudnorm_precompress: false,
             ffmpeg_location: None,
             ffmpeg_args: Vec::new(),
 

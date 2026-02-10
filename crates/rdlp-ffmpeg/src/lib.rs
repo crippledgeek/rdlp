@@ -41,6 +41,6 @@ pub mod ffmpeg;
 pub use error::{CorruptionKind, PostProcessError, Result};
 pub use ffmpeg::{
     AudioExtractOptions, AudioNormMode, ChapterEntry, FFmpegRunner, LoudnormMeasurements,
-    MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo, VideoConvertOptions,
-    set_verbose,
+    LoudnormPreset, MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo,
+    VideoConvertOptions, set_verbose,
 };
