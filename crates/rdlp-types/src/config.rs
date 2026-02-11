@@ -179,6 +179,12 @@ pub struct Config {
     /// Prepend a mild acompressor before loudnorm in pass 2
     pub loudnorm_precompress: bool,
 
+    /// Enable limiter-boost fallback for over-compressed content
+    pub normalize_boost: bool,
+
+    /// Gain in dB for limiter-boost fallback (default 12.0 when None)
+    pub normalize_boost_db: Option<f64>,
+
     /// FFmpeg location (if not in PATH)
     pub ffmpeg_location: Option<PathBuf>,
 
@@ -320,6 +326,8 @@ impl Default for Config {
             loudnorm_target_lra: None,
             loudnorm_dynamic: false,
             loudnorm_precompress: false,
+            normalize_boost: false,
+            normalize_boost_db: None,
             ffmpeg_location: None,
             ffmpeg_args: Vec::new(),
 

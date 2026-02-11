@@ -381,6 +381,17 @@ pub struct NormalizeOptions {
     /// `threshold=-18dB, ratio=3:1, attack=20ms, release=200ms, makeup=2dB, knee=6dB`.
     /// Corresponds to `--loudnorm-precompress`.
     pub precompress: bool,
+    /// Enable limiter-boost fallback for over-compressed content.
+    ///
+    /// When enabled and loudnorm pass 1 shows shortfall > 6 LU, skips
+    /// loudnorm pass 2 and applies a fixed gain with hard limiter instead.
+    /// Corresponds to `--normalize-boost`.
+    pub boost_enabled: bool,
+    /// Gain in dB for limiter-boost fallback (default 12.0).
+    ///
+    /// Only used when `boost_enabled` is true and shortfall exceeds threshold.
+    /// Corresponds to `--normalize-boost-db`.
+    pub boost_gain_db: f64,
 }
 
 impl Default for NormalizeOptions {
@@ -395,6 +406,8 @@ impl Default for NormalizeOptions {
             salvage: true,
             force_dynamic: false,
             precompress: false,
+            boost_enabled: false,
+            boost_gain_db: 12.0,
         }
     }
 }
@@ -572,6 +585,13 @@ mod tests {
         assert!((opts.target_i - (-14.0)).abs() < f64::EPSILON);
         assert!((opts.target_tp - (-1.0)).abs() < f64::EPSILON);
         assert!((opts.target_lra - 11.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_normalize_options_default_boost_disabled() {
+        let opts = NormalizeOptions::default();
+        assert!(!opts.boost_enabled);
+        assert!((opts.boost_gain_db - 12.0).abs() < f64::EPSILON);
     }
 
     #[test]

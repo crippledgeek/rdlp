@@ -55,6 +55,8 @@ impl FFmpegNormalizeAudio {
             salvage: true,
             force_dynamic: config.loudnorm_dynamic,
             precompress: config.loudnorm_precompress,
+            boost_enabled: config.normalize_boost,
+            boost_gain_db: config.normalize_boost_db.unwrap_or(12.0),
         }
     }
 }
@@ -205,6 +207,34 @@ mod tests {
         assert!((opts.target_i - (-16.0)).abs() < f64::EPSILON);
         assert!((opts.target_tp - (-1.5)).abs() < f64::EPSILON);
         assert!((opts.target_lra - 7.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_build_options_boost_enabled() {
+        let config = PostProcessConfig {
+            normalize_audio: true,
+            loudnorm: true,
+            normalize_boost: true,
+            normalize_boost_db: Some(8.0),
+            ..PostProcessConfig::default()
+        };
+        let opts = FFmpegNormalizeAudio::build_options(&config);
+        assert!(opts.boost_enabled);
+        assert!((opts.boost_gain_db - 8.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_build_options_boost_default_gain() {
+        let config = PostProcessConfig {
+            normalize_audio: true,
+            loudnorm: true,
+            normalize_boost: true,
+            normalize_boost_db: None,
+            ..PostProcessConfig::default()
+        };
+        let opts = FFmpegNormalizeAudio::build_options(&config);
+        assert!(opts.boost_enabled);
+        assert!((opts.boost_gain_db - 12.0).abs() < f64::EPSILON);
     }
 
     #[test]
