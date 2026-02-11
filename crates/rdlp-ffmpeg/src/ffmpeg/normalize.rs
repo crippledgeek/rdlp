@@ -132,6 +132,40 @@ fn build_loudnorm_pass2_filter(
     }
 }
 
+/// Drain filtered frames from the graph "out" pad and update peak/RMS metadata.
+///
+/// Used by `analyze_peak_sync` to collect `Peak_level` and `RMS_level` from
+/// the `astats` filter output.  Called after feeding each decoded frame, after
+/// flushing the decoder, and after flushing the filter graph.
+fn drain_astats_metadata(
+    graph: &mut ffmpeg_the_third::filter::Graph,
+    filtered: &mut ffmpeg_the_third::frame::Audio,
+    peak_db: &mut f64,
+    rms_db: &mut f64,
+) -> Result<()> {
+    loop {
+        let mut out_node = graph
+            .get("out")
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'out' not found"))?;
+        if out_node.sink().frame(filtered).is_err() {
+            break;
+        }
+        if let Some(p) = read_frame_metadata(
+            unsafe { filtered.as_ptr() },
+            "lavfi.astats.Overall.Peak_level",
+        ) {
+            *peak_db = p;
+        }
+        if let Some(r) = read_frame_metadata(
+            unsafe { filtered.as_ptr() },
+            "lavfi.astats.Overall.RMS_level",
+        ) {
+            *rms_db = r;
+        }
+    }
+    Ok(())
+}
+
 impl FFmpegRunner {
     /// Normalize audio levels in a media file.
     ///
@@ -281,27 +315,7 @@ impl FFmpegRunner {
                     .source()
                     .add(&frame)?;
 
-                loop {
-                    let mut out_node = graph.get("out").ok_or_else(|| {
-                        PostProcessError::ffmpeg_failed("filter node 'out' not found")
-                    })?;
-                    if out_node.sink().frame(&mut filtered).is_err() {
-                        break;
-                    }
-                    // Read metadata from filtered frame
-                    if let Some(p) = read_frame_metadata(
-                        unsafe { filtered.as_ptr() },
-                        "lavfi.astats.Overall.Peak_level",
-                    ) {
-                        peak_db = p;
-                    }
-                    if let Some(r) = read_frame_metadata(
-                        unsafe { filtered.as_ptr() },
-                        "lavfi.astats.Overall.RMS_level",
-                    ) {
-                        rms_db = r;
-                    }
-                }
+                drain_astats_metadata(&mut graph, &mut filtered, &mut peak_db, &mut rms_db)?;
             }
         }
 
@@ -322,26 +336,7 @@ impl FFmpegRunner {
                 .source()
                 .add(&frame)?;
 
-            loop {
-                let mut out_node = graph.get("out").ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed("filter node 'out' not found")
-                })?;
-                if out_node.sink().frame(&mut filtered).is_err() {
-                    break;
-                }
-                if let Some(p) = read_frame_metadata(
-                    unsafe { filtered.as_ptr() },
-                    "lavfi.astats.Overall.Peak_level",
-                ) {
-                    peak_db = p;
-                }
-                if let Some(r) = read_frame_metadata(
-                    unsafe { filtered.as_ptr() },
-                    "lavfi.astats.Overall.RMS_level",
-                ) {
-                    rms_db = r;
-                }
-            }
+            drain_astats_metadata(&mut graph, &mut filtered, &mut peak_db, &mut rms_db)?;
         }
 
         // Flush filter
@@ -350,26 +345,7 @@ impl FFmpegRunner {
             .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
             .source()
             .flush()?;
-        loop {
-            let mut out_node = graph
-                .get("out")
-                .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'out' not found"))?;
-            if out_node.sink().frame(&mut filtered).is_err() {
-                break;
-            }
-            if let Some(p) = read_frame_metadata(
-                unsafe { filtered.as_ptr() },
-                "lavfi.astats.Overall.Peak_level",
-            ) {
-                peak_db = p;
-            }
-            if let Some(r) = read_frame_metadata(
-                unsafe { filtered.as_ptr() },
-                "lavfi.astats.Overall.RMS_level",
-            ) {
-                rms_db = r;
-            }
-        }
+        drain_astats_metadata(&mut graph, &mut filtered, &mut peak_db, &mut rms_db)?;
 
         if peak_db == f64::NEG_INFINITY {
             return Err(PostProcessError::NormalizationFailed {
@@ -387,77 +363,22 @@ impl FFmpegRunner {
     }
 
     /// Apply peak gain normalization: encode audio to temp, merge with video.
-    ///
-    /// Same two-step approach as loudnorm pass 2: audio-only encode then merge.
-    /// When `opts.salvage` is true, wraps the encode with `with_mux_retry` for
-    /// two-tier recovery (salvage remux → CLI fallback) on mux write failures.
     fn apply_peak_gain_sync(
         input: &Path,
         output: &Path,
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
     ) -> Result<()> {
-        ensure_init()?;
-
-        let has_video = {
-            let ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open input {}: {e}", input.display()),
-                }
-            })?;
-            ictx.streams()
-                .best(ffmpeg_the_third::media::Type::Video)
-                .is_some()
-        };
-
-        let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-
-        if has_video {
-            let audio_ext = audio_only_extension_for(ext);
-            let temp_audio = output.with_extension(format!("norm_audio.{audio_ext}"));
-
-            if opts.salvage {
-                with_mux_retry(
-                    input,
-                    &temp_audio,
-                    |effective_input| {
-                        Self::peak_encode_audio_only(
-                            effective_input,
-                            &temp_audio,
-                            ext,
-                            analysis,
-                            opts,
-                        )
-                    },
-                    |fallback_in, fallback_out| {
-                        cli_fallback_peak(fallback_in, fallback_out, analysis, opts, ext)
-                    },
-                )?;
-            } else {
-                Self::peak_encode_audio_only(input, &temp_audio, ext, analysis, opts)?;
-            }
-            let merge_result =
-                Self::merge_sync(input, &temp_audio, output, &super::RemuxOptions::default());
-            let _ = std::fs::remove_file(&temp_audio);
-            merge_result
-        } else if opts.salvage {
-            with_mux_retry(
-                input,
-                output,
-                |effective_input| {
-                    Self::peak_encode_audio_only(effective_input, output, ext, analysis, opts)
-                },
-                |fallback_in, fallback_out| {
-                    cli_fallback_peak(fallback_in, fallback_out, analysis, opts, ext)
-                },
-            )
-        } else {
-            Self::peak_encode_audio_only(input, output, ext, analysis, opts)
-        }
+        Self::dispatch_normalize_sync(
+            input,
+            output,
+            opts.salvage,
+            |inp, out, ext| Self::peak_encode_audio_only(inp, out, ext, analysis, opts),
+            |f_in, f_out| cli_fallback_peak(f_in, f_out, analysis, opts),
+        )
     }
 
     /// Encode peak-normalized audio to an output file (video streams discarded).
-    #[allow(clippy::too_many_lines)]
     fn peak_encode_audio_only(
         input: &Path,
         output: &Path,
@@ -465,420 +386,28 @@ impl FFmpegRunner {
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
     ) -> Result<()> {
-        ensure_init()?;
-
         let gain_db = opts.target_peak_db - analysis.peak_db;
         let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
-
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
-
-        let audio_ist_index = ictx
-            .streams()
-            .best(ffmpeg_the_third::media::Type::Audio)
-            .map(|s| s.index())
-            .ok_or(PostProcessError::NoAudioStream)?;
-
-        let audio_ist_time_base = ictx
-            .stream(audio_ist_index)
-            .ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "audio input stream {audio_ist_index} not found"
-                ))
-            })?
-            .time_base();
-
-        let audio_ist = ictx.stream(audio_ist_index).ok_or_else(|| {
-            PostProcessError::ffmpeg_failed(format!(
-                "audio input stream {audio_ist_index} not found"
-            ))
-        })?;
-        let mut audio_dec_ctx =
-            ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
-        set_single_thread_codec(unsafe { audio_dec_ctx.as_mut_ptr() });
-        let mut audio_decoder = audio_dec_ctx.decoder().audio()?;
-
-        let input_audio_bitrate = audio_ist.parameters().bit_rate() as usize;
-
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
-
-        // Use final_output_ext for encoder selection (not temp file ext) to ensure
-        // correct codec for stream copy during merge (e.g., AAC for MP4, Opus for MKV).
-        let enc_name = select_audio_encoder_for_container(final_output_ext);
-        let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
-            PostProcessError::UnsupportedCodec {
-                codec: enc_name.to_string(),
-                operation: "audio normalization".into(),
-            }
-        })?;
-
-        let needs_global_header = octx
-            .format()
-            .flags()
-            .contains(ffmpeg_the_third::format::Flags::GLOBAL_HEADER);
-
-        // Audio-only output — no video stream
-        let audio_ost_index;
-        let audio_enc_context;
-        {
-            let ost =
-                octx.add_stream(enc_codec)
-                    .map_err(|e| PostProcessError::FFmpegLibraryError {
-                        message: format!("failed to add audio output stream: {e}"),
-                    })?;
-            audio_ost_index = ost.index();
-            audio_enc_context =
-                ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
-        }
-
-        let mut audio_encoder = audio_enc_context.encoder().audio()?;
-        let target_format = Self::pick_audio_sample_format(&enc_codec, audio_decoder.format());
-        audio_encoder.set_format(target_format);
-        audio_encoder.set_rate(audio_decoder.rate() as i32);
-        let enc_time_base = ffmpeg_the_third::Rational(1, audio_decoder.rate() as i32);
-        audio_encoder.set_time_base(enc_time_base);
-
-        let channels = audio_decoder.ch_layout().channels();
-        Self::set_default_channel_layout(unsafe { audio_encoder.as_mut_ptr() }, channels as i32);
-
-        let target_bitrate = if input_audio_bitrate > 0 {
-            input_audio_bitrate
-        } else {
-            default_bitrate_for_encoder(enc_name)
-        };
-        audio_encoder.set_bit_rate(target_bitrate);
-
-        if needs_global_header {
-            Self::set_global_header_flag(unsafe { audio_encoder.as_mut_ptr() });
-        }
-        set_single_thread_codec(unsafe { audio_encoder.as_mut_ptr() });
-
-        let mut audio_encoder =
-            audio_encoder
-                .open_as(enc_codec)
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open audio encoder: {e}"),
-                })?;
-
-        // Read actual encoder time_base via FFI (may differ from configured after open)
-        // SAFETY: audio_encoder is a valid opened encoder context.
-        let enc_time_base = unsafe {
-            let tb = (*audio_encoder.as_ptr()).time_base;
-            ffmpeg_the_third::Rational(tb.num, tb.den)
-        };
-        debug!(
-            "Peak encoder time_base: configured=1/{}, actual={}/{}",
-            audio_decoder.rate(),
-            enc_time_base.numerator(),
-            enc_time_base.denominator(),
-        );
-
-        Self::copy_encoder_params_to_stream(&mut octx, audio_ost_index, unsafe {
-            audio_encoder.as_ptr()
-        });
-
-        // Set avoid_negative_ts for timestamp normalization (matches merge.rs/remux.rs)
-        unsafe {
-            (*octx.as_mut_ptr()).avoid_negative_ts =
-                ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
-        }
-
-        // A2: Flush packets to AVIO immediately — prevents Matroska cluster buffering stalls.
-        unsafe {
-            (*octx.as_mut_ptr()).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
-        }
-
-        // For audio-only output, set max_interleave_delta = 0 to disable the
-        // muxer's interleave queue entirely. Prevents residual buffer growth
-        // that can cause ENOMEM on certain MKV files.
-        unsafe {
-            (*octx.as_mut_ptr()).max_interleave_delta = 0;
-        }
-
-        let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
-        muxer_opts.set("cluster_time_limit", "500");
-        octx.write_header_with(muxer_opts)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
-
-        // E1: Log threading knobs and mux flags
-        {
-            let (dec_tc, dec_att) =
-                codec_threading_info(unsafe { audio_decoder.as_ptr() });
-            let (enc_tc, enc_att) =
-                codec_threading_info(unsafe { audio_encoder.as_ptr() });
-            let mux_flags = unsafe { (*octx.as_mut_ptr()).flags };
-            let pb_buf_size = unsafe {
-                let pb = (*octx.as_mut_ptr()).pb;
-                if !pb.is_null() { (*pb).buffer_size } else { 0 }
-            };
-            info!(
-                "[peak encode] decoder: thread_count={dec_tc}, active_thread_type={dec_att}; \
-                 encoder: thread_count={enc_tc}, active_thread_type={enc_att}; \
-                 mux_flags=0x{mux_flags:x}; pb_buffer_size={pb_buf_size}",
-            );
-        }
-
-        // Log AVIO state for diagnostics after header write
-        // SAFETY: octx owns a valid, header-written output format context.
-        unsafe { dump_io_state(octx.as_mut_ptr(), output, "peak_encode_audio_only") };
-
-        // Fail-fast: reject CUSTOM_IO (expected file-based IO)
-        {
-            let flags = unsafe { (*octx.as_mut_ptr()).flags };
-            if flags & ffmpeg_the_third::ffi::AVFMT_FLAG_CUSTOM_IO != 0 {
-                return Err(PostProcessError::FFmpegLibraryError {
-                    message: "[peak_encode_audio_only] AVFMT_FLAG_CUSTOM_IO is set — expected file-based IO".into(),
-                });
-            }
-        }
-
-        // Fail-fast: assert seekable IO context for Matroska (needs seeking for Cues/SeekHead)
-        unsafe {
-            assert_seekable_io(octx.as_mut_ptr(), "peak_encode_audio_only")?;
-        }
-
-        // Flush AVIO after header write to ensure bytes reach disk
-        unsafe {
-            let pb = (*octx.as_mut_ptr()).pb;
-            if !pb.is_null() {
-                ffmpeg_the_third::ffi::avio_flush(pb);
-            }
-        }
-        let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
-        if file_size == 0 {
-            return Err(PostProcessError::FFmpegLibraryError {
-                message: "[peak_encode_audio_only] output file is 0 bytes after header write + avio_flush — IO sink is broken".into(),
-            });
-        }
-        info!("[peak_encode_audio_only] header written: {file_size} bytes on disk");
-
-        // Build audio filter chain.
-        //
-        // Chain order matters for true-peak compliance (matches loudnorm path):
-        //   volume → [aresample=4x] → aresample → alimiter → aformat
-        //
-        // The alimiter MUST come AFTER aresample because resampling (e.g.
-        // 44100→48000 Hz sinc interpolation) can introduce ~1-2 dB of peak
-        // overshoot.  Placing the limiter last guarantees the encoder receives
-        // peak-compliant samples.
-        //
-        // For high-gain scenarios (>= 6 dB), an additional 4x upsample step
-        // is inserted before alimiter.  alimiter is a sample-level limiter —
-        // heavy gain + hard limiting creates near-square waveforms whose
-        // inter-sample true peaks (measured at 4x by EBU R128) significantly
-        // exceed the sample ceiling.  Upsampling to 4x before limiting lets
-        // alimiter catch these inter-sample peaks, simulating a true-peak
-        // limiter.
-        //
-        // An explicit aresample bridges dblp→encoder format since FFmpeg 8.0's
-        // auto-conversion during graph_config may fail (same issue as loudnorm,
-        // see pass 1 comment).
-        let enc_ch_layout_desc = audio_encoder.ch_layout().description();
-        let enc_rate = audio_encoder.rate();
-        let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
-            let rate_4x = enc_rate * 4;
-            format!("aresample={rate_4x},")
-        } else {
-            String::new()
-        };
-        let filter_spec = format!(
-            "volume={gain_db:.6}dB,{oversample_prefix}aresample,alimiter=limit={linear_limit:.6}:attack=5:release=50,aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
-            audio_encoder.format().name(),
-            enc_rate,
-            enc_ch_layout_desc,
-        );
-        info!("Peak filter graph: {filter_spec}");
-
-        let mut filter_graph =
-            build_audio_filter_with_spec(&audio_decoder, audio_ist_time_base, &filter_spec)?;
-
-        // Tell buffersink to output exactly frame_size samples per frame.
-        // The last frame at EOF is zero-padded. Required for fixed-frame-size
-        // encoders (AAC=1024, MP3=1152, Opus=960).
-        Self::set_buffersink_frame_size(&mut filter_graph, "out", audio_encoder.frame_size());
-
-        // Discard non-audio streams to avoid ENOMEM on large video packets
-        Self::discard_non_audio_streams(&mut ictx, audio_ist_index);
-
-        // Read ost_time_base AFTER write_header (Matroska may change it)
-        let ost_time_base = octx
-            .stream(audio_ost_index)
-            .ok_or_else(|| PostProcessError::ffmpeg_failed("output stream not found"))?
-            .time_base();
-
-        let expected_duration = if audio_encoder.frame_size() > 0 {
-            unsafe {
-                ffmpeg_the_third::ffi::av_rescale_q(
-                    i64::from(audio_encoder.frame_size()),
-                    ffmpeg_the_third::ffi::AVRational {
-                        num: enc_time_base.numerator(),
-                        den: enc_time_base.denominator(),
-                    },
-                    ffmpeg_the_third::ffi::AVRational {
-                        num: ost_time_base.numerator(),
-                        den: ost_time_base.denominator(),
-                    },
+        Self::encode_audio_only_sync(
+            input,
+            output,
+            final_output_ext,
+            "peak encode",
+            |fmt, rate, ch_layout| {
+                let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+                    let rate_4x = rate * 4;
+                    format!("aresample={rate_4x},")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "volume={gain_db:.6}dB,{oversample_prefix}aresample,\
+                     alimiter=limit={linear_limit:.6}:attack=5:release=50,\
+                     aformat=sample_fmts={fmt}:sample_rates={rate}:\
+                     channel_layouts={ch_layout}",
                 )
-            }
-        } else {
-            0
-        };
-        info!(
-            "Expected audio packet duration: {} (frame_size={}, enc_tb={}/{}, ost_tb={}/{})",
-            expected_duration, audio_encoder.frame_size(),
-            enc_time_base.numerator(), enc_time_base.denominator(),
-            ost_time_base.numerator(), ost_time_base.denominator(),
-        );
-
-        // Suppress decoder WARNING spam while keeping muxer ERRORs visible.
-        // Uses error_level() instead of new() so Matroska muxer errors are diagnosable.
-        let _log_suppress = LogSuppressGuard::error_level();
-
-        let mut timing = MuxTimingState {
-            encoder_frame_size: audio_encoder.frame_size(),
-            expected_duration,
-            sample_rate: audio_decoder.rate(),
-            use_sample_clock: true,
-            ..Default::default()
-        };
-
-        // Transcode loop (audio only)
-        let mut packets_processed = 0u64;
-        let mut packets_skipped = 0u64;
-        for result in ictx.packets() {
-            let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to read packet: {e}"),
-            })?;
-            if stream.index() != audio_ist_index {
-                continue;
-            }
-            if let Err(e) = audio_decoder.send_packet(&packet) {
-                if packets_skipped == 0 {
-                    // ENOMEM = 12 on all POSIX platforms and Windows CRT
-                    if matches!(&e, ffmpeg_the_third::Error::Other { errno } if *errno == 12) {
-                        warn!(
-                            "Audio decoder allocation failure (ENOMEM) — \
-                             process may be running out of memory"
-                        );
-                    } else {
-                        warn!("Audio decoder error (skipping affected packets): {e}");
-                    }
-                }
-                packets_skipped += 1;
-                // Drain decoder to clear its internal buffer — send_packet buffers
-                // the packet before attempting decode, so receive_frame must be
-                // called to consume it even on failure.
-                if let Err(drain_err) = Self::receive_and_process_audio_direct(
-                    &mut audio_decoder,
-                    &mut filter_graph,
-                    &mut audio_encoder,
-                    &mut octx,
-                    audio_ost_index,
-                    enc_time_base,
-                    &mut timing,
-                    Some(output),
-                ) {
-                    // Propagate MuxWriteError directly for salvage retry eligibility
-                    if drain_err.is_mux_write_error() {
-                        return Err(drain_err);
-                    }
-                    return Err(PostProcessError::FFmpegLibraryError {
-                        message: format!(
-                            "(peak encode) mux/encode pipeline failed while draining after decoder error: {drain_err}"
-                        ),
-                    });
-                }
-                continue;
-            }
-            packets_processed += 1;
-            Self::receive_and_process_audio_direct(
-                &mut audio_decoder,
-                &mut filter_graph,
-                &mut audio_encoder,
-                &mut octx,
-                audio_ost_index,
-                enc_time_base,
-                &mut timing,
-                Some(output),
-            )?;
-        }
-
-        if packets_skipped > 0 {
-            warn!(
-                "Skipped {packets_skipped} of {} audio packet(s) due to decoder errors",
-                packets_processed + packets_skipped,
-            );
-        }
-
-        // If every packet failed, the decoder is in a broken state and the
-        // output would be empty/corrupt. Bail out so the caller can fall back
-        // to copying the file unchanged.
-        if packets_processed == 0 && packets_skipped > 0 {
-            return Err(PostProcessError::NormalizationFailed {
-                message: format!(
-                    "audio decoder failed on all {packets_skipped} packets — cannot normalize"
-                ),
-            });
-        }
-
-        // Flush — send_eof may fail if decoder encountered persistent errors
-        if let Err(e) = audio_decoder.send_eof() {
-            warn!("Decoder send_eof failed (continuing with flush): {e}");
-        }
-        Self::receive_and_process_audio_direct(
-            &mut audio_decoder,
-            &mut filter_graph,
-            &mut audio_encoder,
-            &mut octx,
-            audio_ost_index,
-            enc_time_base,
-            &mut timing,
-            Some(output),
-        )?;
-
-        filter_graph
-            .get("in")
-            .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
-            .source()
-            .flush()?;
-        Self::drain_filter_to_encoder_direct(
-            &mut filter_graph,
-            &mut audio_encoder,
-            &mut octx,
-            audio_ost_index,
-            enc_time_base,
-            &mut timing,
-            Some(output),
-        )?;
-
-        audio_encoder.send_eof()?;
-        Self::drain_encoder_packets_direct(
-            &mut audio_encoder,
-            &mut octx,
-            audio_ost_index,
-            enc_time_base,
-            &mut timing,
-            Some(output),
-        )?;
-
-        // Drop suppress guard before write_trailer so any trailer errors are visible
-        drop(_log_suppress);
-
-        octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
-
-        Ok(())
+            },
+        )
     }
 
     /// EBU R128 loudnorm two-pass normalization.
@@ -1193,23 +722,36 @@ impl FFmpegRunner {
     }
 
     /// Loudnorm pass 2: apply normalization with measured values.
-    ///
-    /// For files with video, uses a two-step approach to avoid ENOMEM from
-    /// large video packets: (1) encode normalized audio to a temp file with
-    /// video discarded, (2) merge original video + normalized audio via
-    /// stream copy.
-    ///
-    /// When `opts.salvage` is true, wraps the encode with `with_mux_retry` for
-    /// two-tier recovery (salvage remux → CLI fallback) on mux write failures.
     fn loudnorm_pass2_sync(
         input: &Path,
         output: &Path,
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
     ) -> Result<()> {
+        Self::dispatch_normalize_sync(
+            input,
+            output,
+            opts.salvage,
+            |inp, out, ext| Self::loudnorm_encode_audio_only(inp, out, ext, opts, measurements),
+            |f_in, f_out| cli_fallback_loudnorm(f_in, f_out, opts, measurements),
+        )
+    }
+
+    /// Common dispatch for normalize encode → merge with optional salvage retry.
+    ///
+    /// Both peak and loudnorm share this pattern: check has_video → audio-only
+    /// encode to temp → merge with original video → cleanup.  When `salvage` is
+    /// true, wraps the encode with `with_mux_retry` for two-tier recovery
+    /// (salvage remux → CLI fallback) on mux write failures.
+    fn dispatch_normalize_sync(
+        input: &Path,
+        output: &Path,
+        salvage: bool,
+        encode_fn: impl Fn(&Path, &Path, &str) -> Result<()>,
+        cli_fallback_fn: impl Fn(&Path, &Path) -> Result<()>,
+    ) -> Result<()> {
         ensure_init()?;
 
-        // Check if input has video
         let has_video = {
             let ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
                 PostProcessError::FFmpegLibraryError {
@@ -1224,65 +766,80 @@ impl FFmpegRunner {
         let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
 
         if has_video {
-            // Two-step: audio-only encode → merge with original video
             let audio_ext = audio_only_extension_for(ext);
             let temp_audio = output.with_extension(format!("norm_audio.{audio_ext}"));
 
-            if opts.salvage {
+            if salvage {
                 with_mux_retry(
                     input,
                     &temp_audio,
-                    |effective_input| {
-                        Self::loudnorm_encode_audio_only(
-                            effective_input,
-                            &temp_audio,
-                            ext,
-                            opts,
-                            measurements,
-                        )
-                    },
-                    |fallback_in, fallback_out| {
-                        cli_fallback_loudnorm(fallback_in, fallback_out, opts, measurements, ext)
-                    },
+                    |effective_input| encode_fn(effective_input, &temp_audio, ext),
+                    |fallback_in, fallback_out| cli_fallback_fn(fallback_in, fallback_out),
                 )?;
             } else {
-                Self::loudnorm_encode_audio_only(input, &temp_audio, ext, opts, measurements)?;
+                encode_fn(input, &temp_audio, ext)?;
             }
             let merge_result =
                 Self::merge_sync(input, &temp_audio, output, &super::RemuxOptions::default());
             let _ = std::fs::remove_file(&temp_audio);
             merge_result
-        } else if opts.salvage {
+        } else if salvage {
             with_mux_retry(
                 input,
                 output,
-                |effective_input| {
-                    Self::loudnorm_encode_audio_only(
-                        effective_input,
-                        output,
-                        ext,
-                        opts,
-                        measurements,
-                    )
-                },
-                |fallback_in, fallback_out| {
-                    cli_fallback_loudnorm(fallback_in, fallback_out, opts, measurements, ext)
-                },
+                |effective_input| encode_fn(effective_input, output, ext),
+                |fallback_in, fallback_out| cli_fallback_fn(fallback_in, fallback_out),
             )
         } else {
-            // Audio-only file: encode directly to output
-            Self::loudnorm_encode_audio_only(input, output, ext, opts, measurements)
+            encode_fn(input, output, ext)
         }
     }
 
-    /// Encode normalized audio to an output file (video streams discarded).
-    #[allow(clippy::too_many_lines)]
+    /// Encode loudnorm-normalized audio to an output file (video streams discarded).
     fn loudnorm_encode_audio_only(
         input: &Path,
         output: &Path,
         final_output_ext: &str,
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
+    ) -> Result<()> {
+        let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
+        let limiter = build_alimiter_spec(opts.target_tp);
+        Self::encode_audio_only_sync(
+            input,
+            output,
+            final_output_ext,
+            "loudnorm pass 2",
+            |fmt, rate, ch_layout| {
+                format!(
+                    "aformat=sample_fmts=dbl,{loudnorm_core},aresample,\
+                     {limiter},aformat=sample_fmts={fmt}:sample_rates={rate}:\
+                     channel_layouts={ch_layout}",
+                )
+            },
+        )
+    }
+
+    /// Unified audio-only encode: decode → filter → encode → mux.
+    ///
+    /// Both peak normalization and loudnorm pass 2 share this pipeline.
+    /// The only difference is the filter chain, built by `build_filter`
+    /// which receives the encoder's sample format name, sample rate, and
+    /// channel layout description.
+    ///
+    /// `label` appears in log and error messages (e.g. "peak encode",
+    /// "loudnorm pass 2").
+    #[allow(clippy::too_many_lines)]
+    fn encode_audio_only_sync(
+        input: &Path,
+        output: &Path,
+        final_output_ext: &str,
+        label: &str,
+        build_filter: impl FnOnce(
+            /*fmt:*/ &str,
+            /*rate:*/ u32,
+            /*ch_layout:*/ &str,
+        ) -> String,
     ) -> Result<()> {
         ensure_init()?;
 
@@ -1333,7 +890,7 @@ impl FFmpegRunner {
         let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
             PostProcessError::UnsupportedCodec {
                 codec: enc_name.to_string(),
-                operation: "audio normalization (loudnorm)".into(),
+                operation: format!("audio normalization ({label})"),
             }
         })?;
 
@@ -1394,7 +951,7 @@ impl FFmpegRunner {
             ffmpeg_the_third::Rational(tb.num, tb.den)
         };
         debug!(
-            "Loudnorm encoder time_base: configured=1/{}, actual={}/{}",
+            "[{label}] encoder time_base: configured=1/{}, actual={}/{}",
             audio_decoder.rate(),
             enc_time_base.numerator(),
             enc_time_base.denominator(),
@@ -1415,9 +972,9 @@ impl FFmpegRunner {
             (*octx.as_mut_ptr()).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
         }
 
-        // A1: For audio-only output using av_write_frame (non-interleaved), set
-        // max_interleave_delta = 0 to disable the muxer's interleave queue entirely.
-        // Harmless when using direct writes; prevents any residual queue growth.
+        // For audio-only output, set max_interleave_delta = 0 to disable the
+        // muxer's interleave queue entirely. Prevents residual buffer growth
+        // that can cause ENOMEM on certain MKV files.
         unsafe {
             (*octx.as_mut_ptr()).max_interleave_delta = 0;
         }
@@ -1431,18 +988,18 @@ impl FFmpegRunner {
 
         // E1: Log threading knobs, mux flags, and AVIO state for diagnostics
         {
-            let (dec_tc, dec_att) =
-                codec_threading_info(unsafe { audio_decoder.as_ptr() });
-            let (enc_tc, enc_att) =
-                codec_threading_info(unsafe { audio_encoder.as_ptr() });
+            let (dec_tc, dec_att) = codec_threading_info(unsafe { audio_decoder.as_ptr() });
+            let (enc_tc, enc_att) = codec_threading_info(unsafe { audio_encoder.as_ptr() });
             let mux_flags = unsafe { (*octx.as_mut_ptr()).flags };
             let pb_buf_size = unsafe {
                 let pb = (*octx.as_mut_ptr()).pb;
                 if !pb.is_null() { (*pb).buffer_size } else { 0 }
             };
             info!(
-                "[loudnorm pass 2] decoder: thread_count={dec_tc}, active_thread_type={dec_att}; \
-                 encoder: thread_count={enc_tc}, active_thread_type={enc_att}; \
+                "[{label}] decoder: thread_count={dec_tc}, \
+                 active_thread_type={dec_att}; \
+                 encoder: thread_count={enc_tc}, \
+                 active_thread_type={enc_att}; \
                  mux_flags=0x{mux_flags:x} (flush_packets={}); \
                  pb_buffer_size={pb_buf_size}",
                 (mux_flags & ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS) != 0,
@@ -1451,21 +1008,24 @@ impl FFmpegRunner {
 
         // Log AVIO state for diagnostics after header write
         // SAFETY: octx owns a valid, header-written output format context.
-        unsafe { dump_io_state(octx.as_mut_ptr(), output, "loudnorm_encode_audio_only") };
+        unsafe { dump_io_state(octx.as_mut_ptr(), output, label) };
 
         // Fail-fast: reject CUSTOM_IO (expected file-based IO)
         {
             let flags = unsafe { (*octx.as_mut_ptr()).flags };
             if flags & ffmpeg_the_third::ffi::AVFMT_FLAG_CUSTOM_IO != 0 {
                 return Err(PostProcessError::FFmpegLibraryError {
-                    message: "[loudnorm_encode_audio_only] AVFMT_FLAG_CUSTOM_IO is set — expected file-based IO".into(),
+                    message: format!(
+                        "[{label}] AVFMT_FLAG_CUSTOM_IO is set \
+                         — expected file-based IO"
+                    ),
                 });
             }
         }
 
         // Fail-fast: assert seekable IO context for Matroska (needs seeking for Cues/SeekHead)
         unsafe {
-            assert_seekable_io(octx.as_mut_ptr(), "loudnorm_encode_audio_only")?;
+            assert_seekable_io(octx.as_mut_ptr(), label)?;
         }
 
         // Flush AVIO after header write to ensure bytes reach disk
@@ -1478,47 +1038,41 @@ impl FFmpegRunner {
         let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
         if file_size == 0 {
             return Err(PostProcessError::FFmpegLibraryError {
-                message: "[loudnorm_encode_audio_only] output file is 0 bytes after header write + avio_flush — IO sink is broken".into(),
+                message: format!(
+                    "[{label}] output file is 0 bytes after header write \
+                     + avio_flush — IO sink is broken"
+                ),
             });
         }
-        info!("[loudnorm_encode_audio_only] header written: {file_size} bytes on disk");
+        info!("[{label}] header written: {file_size} bytes on disk");
 
-        // Build loudnorm pass 2 filter chain.
+        // Build filter chain via caller-supplied closure.
         //
         // Chain order matters for true-peak compliance:
-        //   aformat=dbl → [precomp] → loudnorm → aresample → alimiter → aformat
+        //   Peak:     volume → [aresample=4x] → aresample → alimiter → aformat
+        //   Loudnorm: aformat=dbl → [precomp] → loudnorm → aresample → alimiter → aformat
         //
         // The alimiter MUST come AFTER aresample because resampling (e.g.
         // 44100→48000 Hz sinc interpolation) can introduce ~1-2 dB of peak
         // overshoot.  Placing the limiter last in the chain guarantees the
         // encoder receives peak-compliant samples.
-        //
-        // An explicit aresample bridges dbl→encoder format since FFmpeg 8.0's
-        // auto-conversion during graph_config may fail with EINVAL (same issue
-        // that required the leading aformat=dbl in pass 1).
-        // Note: aresample is kept plain (no async/first_pts options) — adding
-        // async=0:first_pts=0 caused silent padding that lowered output volume.
-        let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
-        let limiter = build_alimiter_spec(opts.target_tp);
         let enc_ch_layout_desc = audio_encoder.ch_layout().description();
-        let filter_spec = format!(
-            "aformat=sample_fmts=dbl,{loudnorm_core},aresample,{limiter},\
-             aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
+        let filter_spec = build_filter(
             audio_encoder.format().name(),
             audio_encoder.rate(),
-            enc_ch_layout_desc,
+            &enc_ch_layout_desc,
         );
-        info!("Loudnorm pass 2 filter_spec={filter_spec}");
+        info!("[{label}] filter_spec={filter_spec}");
 
         // Log decoder/encoder audio parameters for diagnostics
         info!(
-            "Loudnorm pass 2 decoder: sample_rate={}, format={}, ch_layout={}",
+            "[{label}] decoder: sample_rate={}, format={}, ch_layout={}",
             audio_decoder.rate(),
             audio_decoder.format().name(),
             audio_decoder.ch_layout().description(),
         );
         info!(
-            "Loudnorm pass 2 encoder: sample_rate={}, format={}, ch_layout={}",
+            "[{label}] encoder: sample_rate={}, format={}, ch_layout={}",
             audio_encoder.rate(),
             audio_encoder.format().name(),
             enc_ch_layout_desc,
@@ -1560,9 +1114,12 @@ impl FFmpegRunner {
         };
         info!(
             "Expected audio packet duration: {} (frame_size={}, enc_tb={}/{}, ost_tb={}/{})",
-            expected_duration, audio_encoder.frame_size(),
-            enc_time_base.numerator(), enc_time_base.denominator(),
-            ost_time_base.numerator(), ost_time_base.denominator(),
+            expected_duration,
+            audio_encoder.frame_size(),
+            enc_time_base.numerator(),
+            enc_time_base.denominator(),
+            ost_time_base.numerator(),
+            ost_time_base.denominator(),
         );
 
         // Suppress decoder WARNING spam while keeping muxer ERRORs visible.
@@ -1619,7 +1176,8 @@ impl FFmpegRunner {
                     }
                     return Err(PostProcessError::FFmpegLibraryError {
                         message: format!(
-                            "(loudnorm pass 2) mux/encode pipeline failed while draining after decoder error: {drain_err}"
+                            "({label}) mux/encode pipeline failed while \
+                             draining after decoder error: {drain_err}"
                         ),
                     });
                 }
@@ -1917,7 +1475,8 @@ where
         Ok(()) => return Ok(()),
         Err(e) if !e.is_salvage_retryable() => {
             // If decoder failed on ALL packets, CLI won't fare better — abort early
-            if matches!(&e, PostProcessError::NormalizationFailed { message } if message.contains("all") && message.contains("packets")) {
+            if matches!(&e, PostProcessError::NormalizationFailed { message } if message.contains("all") && message.contains("packets"))
+            {
                 warn!("Decoder failed on all packets — skipping salvage/CLI fallback");
             }
             return Err(e);
@@ -1982,26 +1541,58 @@ where
     cli_fallback_fn(input, output)
 }
 
-/// Run peak normalization via external ffmpeg CLI.
+/// Run normalization via external ffmpeg CLI with a pre-built `-af` filter.
 ///
 /// Uses `-fflags +discardcorrupt+genpts` to handle corrupt input that
-/// the library cannot process.
+/// the library cannot process.  `label` identifies the mode in log messages
+/// (e.g. "peak" or "loudnorm").
+fn cli_fallback_normalize(input: &Path, output: &Path, filter: &str, label: &str) -> Result<()> {
+    let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
+    let enc_name = select_audio_encoder_for_container(output_ext);
+
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
+        .arg("-i")
+        .arg(input)
+        .args(["-vn", "-af", filter])
+        .args(["-c:a", enc_name]);
+    if enc_name == "libopus" {
+        cmd.args(["-ar", "48000"]);
+    }
+    let cmd_output = cmd
+        .arg(output)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| PostProcessError::FFmpegFailed {
+            message: format!("failed to spawn ffmpeg CLI: {e}"),
+            source: Some(e),
+        })?;
+
+    if !cmd_output.status.success() {
+        let stderr = String::from_utf8_lossy(&cmd_output.stderr);
+        let excerpt = last_stderr_lines(&stderr, 5);
+        return Err(PostProcessError::NormalizationFailed {
+            message: format!(
+                "CLI fallback {label} normalization failed (exit {}): {}",
+                cmd_output.status.code().unwrap_or(-1),
+                excerpt,
+            ),
+        });
+    }
+    info!("CLI fallback {label} normalization succeeded");
+    Ok(())
+}
+
+/// Run peak normalization via external ffmpeg CLI.
 fn cli_fallback_peak(
     input: &Path,
     output: &Path,
     analysis: &PeakAnalysis,
     opts: &NormalizeOptions,
-    _final_ext: &str,
 ) -> Result<()> {
-    // Use the actual output extension for codec selection — the output is
-    // a temp .mka file, not the final container. Using final_ext (e.g. "mkv")
-    // could select a codec incompatible with the temp container.
-    let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
-    let enc_name = select_audio_encoder_for_container(output_ext);
     let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
     // For high gain (>= 6 dB), upsample to 192 kHz before limiting to catch
-    // inter-sample peaks (same rationale as the library path).  After alimiter,
-    // ffmpeg CLI auto-negotiates the encoder's native sample rate on output.
+    // inter-sample peaks (same rationale as the library path).
     let filter = if analysis.gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
         format!(
             "volume={:.6}dB,aresample={CLI_OVERSAMPLE_RATE},\
@@ -2014,94 +1605,33 @@ fn cli_fallback_peak(
             analysis.gain_db, linear_limit
         )
     };
-
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
-        .arg("-i")
-        .arg(input)
-        .args(["-vn", "-af", &filter])
-        .args(["-c:a", enc_name]);
-    if enc_name == "libopus" {
-        cmd.args(["-ar", "48000"]);
-    }
-    let cmd_output = cmd
-        .arg(output)
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| PostProcessError::FFmpegFailed {
-            message: format!("failed to spawn ffmpeg CLI: {e}"),
-            source: Some(e),
-        })?;
-
-    if !cmd_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cmd_output.stderr);
-        let excerpt: String = stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-        return Err(PostProcessError::NormalizationFailed {
-            message: format!(
-                "CLI fallback peak normalization failed (exit {}): {}",
-                cmd_output.status.code().unwrap_or(-1),
-                excerpt,
-            ),
-        });
-    }
-    info!("CLI fallback peak normalization succeeded");
-    Ok(())
+    cli_fallback_normalize(input, output, &filter, "peak")
 }
 
 /// Run loudnorm two-pass normalization via external ffmpeg CLI.
-///
-/// Uses `-fflags +discardcorrupt+genpts` to handle corrupt input that
-/// the library cannot process. Pass 1 measurements are reused from the
-/// prior library analysis.
 fn cli_fallback_loudnorm(
     input: &Path,
     output: &Path,
     opts: &NormalizeOptions,
     measurements: &LoudnormMeasurements,
-    _final_ext: &str,
 ) -> Result<()> {
-    // Use the actual output extension for codec selection — the output is
-    // a temp .mka file, not the final container. Using final_ext (e.g. "mkv")
-    // could select a codec incompatible with the temp container.
-    let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
-    let enc_name = select_audio_encoder_for_container(output_ext);
-    // Build filter string — ffmpeg CLI handles format negotiation
     let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
     let limiter = build_alimiter_spec(opts.target_tp);
     let filter = format!("{loudnorm_core},{limiter}");
     info!("CLI fallback loudnorm filter: {filter}");
+    cli_fallback_normalize(input, output, &filter, "loudnorm")
+}
 
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
-        .arg("-i")
-        .arg(input)
-        .args(["-vn", "-af", &filter])
-        .args(["-c:a", enc_name]);
-    if enc_name == "libopus" {
-        cmd.args(["-ar", "48000"]);
-    }
-    let cmd_output = cmd
-        .arg(output)
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| PostProcessError::FFmpegFailed {
-            message: format!("failed to spawn ffmpeg CLI: {e}"),
-            source: Some(e),
-        })?;
-
-    if !cmd_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cmd_output.stderr);
-        let excerpt: String = stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-        return Err(PostProcessError::NormalizationFailed {
-            message: format!(
-                "CLI fallback loudnorm normalization failed (exit {}): {}",
-                cmd_output.status.code().unwrap_or(-1),
-                excerpt,
-            ),
-        });
-    }
-    info!("CLI fallback loudnorm normalization succeeded");
-    Ok(())
+/// Extract the last `n` lines from a string, preserving their original order.
+fn last_stderr_lines(text: &str, n: usize) -> String {
+    text.lines()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Build an audio filter graph with a custom filter spec string.
@@ -2611,9 +2141,7 @@ mod tests {
                  alimiter=limit={linear_limit:.6}:attack=5:release=50"
             )
         } else {
-            format!(
-                "volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50"
-            )
+            format!("volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50")
         };
         assert!(
             filter.contains("aresample=192000"),
@@ -2639,13 +2167,20 @@ mod tests {
                  alimiter=limit={linear_limit:.6}:attack=5:release=50"
             )
         } else {
-            format!(
-                "volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50"
-            )
+            format!("volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50")
         };
         assert!(
             !filter.contains("aresample="),
             "CLI low gain should not oversample: {filter}"
         );
+    }
+
+    #[test]
+    fn test_last_stderr_lines() {
+        let text = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+        assert_eq!(last_stderr_lines(text, 3), "line5\nline6\nline7");
+        assert_eq!(last_stderr_lines(text, 1), "line7");
+        assert_eq!(last_stderr_lines("single", 5), "single");
+        assert_eq!(last_stderr_lines("", 5), "");
     }
 }
