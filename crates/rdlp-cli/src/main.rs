@@ -155,6 +155,15 @@ struct Args {
     #[arg(long)]
     loudnorm_precompress: bool,
 
+    /// Enable limiter-boost fallback (+12 dB gain + hard limiter) for
+    /// over-compressed content (implies --loudnorm)
+    #[arg(long)]
+    normalize_boost: bool,
+
+    /// Gain in dB for limiter-boost fallback (default: 12.0)
+    #[arg(long, allow_hyphen_values = true)]
+    normalize_boost_db: Option<f64>,
+
     /// Keep original video file after post-processing
     #[arg(long)]
     keep_video: bool,
@@ -532,12 +541,20 @@ fn merge_config(
         }
     }
 
-    // Audio normalization: --loudnorm implies --normalize-audio
-    if args.normalize_audio || args.loudnorm {
+    // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
+    // implies --normalize-audio
+    let boost_enabled = args.normalize_boost || args.normalize_boost_db.is_some();
+    if args.normalize_audio || args.loudnorm || boost_enabled {
         config.normalize_audio = true;
     }
-    if args.loudnorm {
+    if args.loudnorm || boost_enabled {
         config.loudnorm = true;
+    }
+    if boost_enabled {
+        config.normalize_boost = true;
+    }
+    if let Some(db) = args.normalize_boost_db {
+        config.normalize_boost_db = Some(db);
     }
     if let Some(target) = args.audio_gain_target {
         config.audio_gain_target = Some(target);

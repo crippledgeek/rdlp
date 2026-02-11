@@ -147,6 +147,12 @@ pub struct PostProcessConfig {
 
     /// Prepend a mild acompressor before loudnorm in pass 2
     pub loudnorm_precompress: bool,
+
+    /// Enable limiter-boost fallback for over-compressed content
+    pub normalize_boost: bool,
+
+    /// Gain in dB for limiter-boost fallback (default 12.0 when None)
+    pub normalize_boost_db: Option<f64>,
 }
 
 impl Default for PostProcessConfig {
@@ -174,6 +180,8 @@ impl Default for PostProcessConfig {
             loudnorm_target_lra: None,
             loudnorm_dynamic: false,
             loudnorm_precompress: false,
+            normalize_boost: false,
+            normalize_boost_db: None,
         }
     }
 }

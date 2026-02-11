@@ -32,6 +32,30 @@ use super::{
 /// broadcast practice (ITU-R BS.1770-5 recommendation).
 const ALIMITER_TP_HEADROOM_DB: f64 = 1.5;
 
+/// Minimum shortfall (LU) required to trigger limiter-boost fallback.
+///
+/// When `boost_enabled` is true and loudnorm pass 1 shows shortfall exceeding
+/// this threshold, the normal loudnorm pass 2 is skipped in favor of a fixed
+/// gain + hard limiter pass via `apply_peak_gain_sync()`.
+const LIMITER_BOOST_SHORTFALL_THRESHOLD: f64 = 6.0;
+
+/// Minimum gain (dB) that triggers 4x oversampled limiting.
+///
+/// When peak-normalize gain >= this threshold, the filter chain upsamples to
+/// 4x the encoder sample rate before `alimiter`, then downsamples back.
+/// This simulates a true-peak limiter — `alimiter` is sample-level only, so
+/// heavy gain + hard limiting creates near-square waveforms whose inter-sample
+/// true peaks (measured at 4x by EBU R128) significantly exceed the sample
+/// ceiling.  Below this threshold, inter-sample overshoot is negligible.
+const TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD: f64 = 6.0;
+
+/// Fixed oversample rate (Hz) used in the CLI fallback path.
+///
+/// 192 kHz is >= 4x for both 44.1 kHz and 48 kHz content, which are the two
+/// standard rates.  The library path computes an exact 4x rate from the
+/// encoder sample rate instead.
+const CLI_OVERSAMPLE_RATE: u32 = 192_000;
+
 /// Build the alimiter filter spec with true-peak headroom.
 ///
 /// Ceiling is `10^((target_tp - headroom) / 20)` in linear scale.
@@ -637,17 +661,42 @@ impl FFmpegRunner {
         }
         info!("[peak_encode_audio_only] header written: {file_size} bytes on disk");
 
-        // Build audio filter: volume → alimiter → aresample → aformat → abuffersink
-        // The alimiter filter only supports dblp format. An explicit aresample
-        // bridges dblp→encoder format since FFmpeg 8.0's auto-conversion during
-        // graph_config may fail (same issue as loudnorm, see pass 1 comment).
+        // Build audio filter chain.
+        //
+        // Chain order matters for true-peak compliance (matches loudnorm path):
+        //   volume → [aresample=4x] → aresample → alimiter → aformat
+        //
+        // The alimiter MUST come AFTER aresample because resampling (e.g.
+        // 44100→48000 Hz sinc interpolation) can introduce ~1-2 dB of peak
+        // overshoot.  Placing the limiter last guarantees the encoder receives
+        // peak-compliant samples.
+        //
+        // For high-gain scenarios (>= 6 dB), an additional 4x upsample step
+        // is inserted before alimiter.  alimiter is a sample-level limiter —
+        // heavy gain + hard limiting creates near-square waveforms whose
+        // inter-sample true peaks (measured at 4x by EBU R128) significantly
+        // exceed the sample ceiling.  Upsampling to 4x before limiting lets
+        // alimiter catch these inter-sample peaks, simulating a true-peak
+        // limiter.
+        //
+        // An explicit aresample bridges dblp→encoder format since FFmpeg 8.0's
+        // auto-conversion during graph_config may fail (same issue as loudnorm,
+        // see pass 1 comment).
         let enc_ch_layout_desc = audio_encoder.ch_layout().description();
+        let enc_rate = audio_encoder.rate();
+        let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+            let rate_4x = enc_rate * 4;
+            format!("aresample={rate_4x},")
+        } else {
+            String::new()
+        };
         let filter_spec = format!(
-            "volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50,aresample,aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
+            "volume={gain_db:.6}dB,{oversample_prefix}aresample,alimiter=limit={linear_limit:.6}:attack=5:release=50,aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
             audio_encoder.format().name(),
-            audio_encoder.rate(),
+            enc_rate,
             enc_ch_layout_desc,
         );
+        info!("Peak filter graph: {filter_spec}");
 
         let mut filter_graph =
             build_audio_filter_with_spec(&audio_decoder, audio_ist_time_base, &filter_spec)?;
@@ -849,6 +898,26 @@ impl FFmpegRunner {
             );
         }
 
+        // LimiterBoost: if enabled and shortfall exceeds threshold, use fixed
+        // gain + hard limiter instead of loudnorm pass 2.
+        let shortfall = measurements.linear_shortfall(opts.target_i, opts.target_tp);
+        if opts.boost_enabled {
+            if shortfall > LIMITER_BOOST_SHORTFALL_THRESHOLD {
+                info!(
+                    "LimiterBoost: shortfall={shortfall:.1} LU, \
+                     gain={:.1} dB — using fixed gain + limiter",
+                    opts.boost_gain_db
+                );
+                Self::apply_limiter_boost_sync(input, output, opts)?;
+                Self::verify_loudness_sync(output, opts)?;
+                return Ok(());
+            }
+            info!(
+                "LimiterBoost: enabled but shortfall={shortfall:.1} LU <= \
+                 {LIMITER_BOOST_SHORTFALL_THRESHOLD:.1} threshold — using standard loudnorm",
+            );
+        }
+
         info!("Loudnorm pass 2: applying normalization...");
         Self::loudnorm_pass2_sync(input, output, opts, &measurements)?;
 
@@ -856,6 +925,41 @@ impl FFmpegRunner {
         Self::verify_loudness_sync(output, opts)?;
 
         Ok(())
+    }
+
+    /// LimiterBoost fallback: fixed gain + hard limiter via `apply_peak_gain_sync`.
+    ///
+    /// Constructs a synthetic [`PeakAnalysis`] so that `apply_peak_gain_sync`
+    /// computes `gain_db = boost_gain_db` and `linear_limit = ceiling`.
+    /// The ceiling is `target_tp - headroom` to stay within true-peak budget.
+    fn apply_limiter_boost_sync(
+        input: &Path,
+        output: &Path,
+        opts: &NormalizeOptions,
+    ) -> Result<()> {
+        let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
+        let limit_linear = 10f64.powf(ceiling_db / 20.0);
+        info!(
+            "LimiterBoost: gain_db={:.1}, ceiling_db={:.1} (TP={:.1} - headroom={:.1}), \
+             limit_linear={:.6}",
+            opts.boost_gain_db, ceiling_db, opts.target_tp, ALIMITER_TP_HEADROOM_DB, limit_linear,
+        );
+
+        // Synthetic analysis: peak_encode_audio_only computes
+        //   gain_db = target_peak_db - analysis.peak_db
+        //   linear_limit = 10^(target_peak_db / 20)
+        // We want gain_db = boost_gain_db, limit = 10^(ceiling_db/20)
+        // So: target_peak_db = ceiling_db, peak_db = ceiling_db - boost_gain_db
+        let synthetic_analysis = PeakAnalysis {
+            peak_db: ceiling_db - opts.boost_gain_db,
+            rms_db: -99.0, // unused for encoding
+            gain_db: opts.boost_gain_db,
+        };
+
+        let mut boost_opts = opts.clone();
+        boost_opts.target_peak_db = ceiling_db;
+
+        Self::apply_peak_gain_sync(input, output, &synthetic_analysis, &boost_opts)
     }
 
     /// Post-normalization loudness verification.
@@ -1895,10 +1999,21 @@ fn cli_fallback_peak(
     let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
     let enc_name = select_audio_encoder_for_container(output_ext);
     let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
-    let filter = format!(
-        "volume={:.6}dB,alimiter=limit={:.6}:attack=5:release=50",
-        analysis.gain_db, linear_limit
-    );
+    // For high gain (>= 6 dB), upsample to 192 kHz before limiting to catch
+    // inter-sample peaks (same rationale as the library path).  After alimiter,
+    // ffmpeg CLI auto-negotiates the encoder's native sample rate on output.
+    let filter = if analysis.gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+        format!(
+            "volume={:.6}dB,aresample={CLI_OVERSAMPLE_RATE},\
+             alimiter=limit={:.6}:attack=5:release=50",
+            analysis.gain_db, linear_limit
+        )
+    } else {
+        format!(
+            "volume={:.6}dB,alimiter=limit={:.6}:attack=5:release=50",
+            analysis.gain_db, linear_limit
+        )
+    };
 
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
@@ -2336,5 +2451,201 @@ mod tests {
 
         // Default
         assert_eq!(audio_only_extension_for("xyz"), "mka");
+    }
+
+    #[test]
+    fn test_limiter_boost_synthetic_analysis() {
+        // Default streaming targets: TP=-1.0, headroom=1.5 → ceiling=-2.5
+        // boost_gain_db=12.0 → synthetic peak_db = -2.5 - 12.0 = -14.5
+        // apply_peak_gain_sync computes: gain = target_peak - peak = -2.5 - (-14.5) = 12.0
+        // linear_limit = 10^(-2.5/20) ≈ 0.750
+        let opts = NormalizeOptions {
+            target_tp: -1.0,
+            boost_enabled: true,
+            boost_gain_db: 12.0,
+            ..Default::default()
+        };
+        let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
+        assert!((ceiling_db - (-2.5)).abs() < f64::EPSILON);
+
+        let synthetic_peak = ceiling_db - opts.boost_gain_db;
+        assert!((synthetic_peak - (-14.5)).abs() < f64::EPSILON);
+
+        // Verify gain computation matches apply_peak_gain_sync logic
+        let computed_gain = ceiling_db - synthetic_peak;
+        assert!((computed_gain - 12.0).abs() < f64::EPSILON);
+
+        let linear_limit = 10f64.powf(ceiling_db / 20.0);
+        let expected_limit = 10f64.powf(-2.5 / 20.0);
+        assert!((linear_limit - expected_limit).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_limiter_boost_threshold_below() {
+        // Shortfall of 5.0 should NOT trigger boost (threshold is 6.0)
+        let m = LoudnormMeasurements {
+            input_i: -20.0,
+            input_tp: -7.0,
+            input_lra: 8.0,
+            input_thresh: -30.0,
+            target_offset: 0.0,
+        };
+        // desired=-14-(-20)=6, tp_headroom=-1-(-7)=6, gain=min(6,6)=6
+        // shortfall=-14-(-20+6)=-14+14=0
+        let shortfall = m.linear_shortfall(-14.0, -1.0);
+        assert!(shortfall <= LIMITER_BOOST_SHORTFALL_THRESHOLD);
+    }
+
+    #[test]
+    fn test_limiter_boost_limit_linear() {
+        // Default: TP=-1.0, headroom=1.5, ceiling=-2.5
+        let ceiling = -1.0 - ALIMITER_TP_HEADROOM_DB;
+        let limit = 10f64.powf(ceiling / 20.0);
+        assert!(
+            (limit - 0.749894).abs() < 0.001,
+            "default limit={limit}, expected ~0.749894"
+        );
+
+        // Custom TP=-2.0: ceiling=-3.5 → more conservative limit
+        let ceiling2 = -2.0 - ALIMITER_TP_HEADROOM_DB;
+        let limit2 = 10f64.powf(ceiling2 / 20.0);
+        assert!(
+            limit2 < limit,
+            "lower TP should produce lower limit: {limit2} vs {limit}"
+        );
+    }
+
+    #[test]
+    fn test_limiter_boost_threshold_above() {
+        // Shortfall of 8.0 should trigger boost (threshold is 6.0)
+        let m = LoudnormMeasurements {
+            input_i: -24.0,
+            input_tp: -3.0,
+            input_lra: 8.0,
+            input_thresh: -34.0,
+            target_offset: 0.0,
+        };
+        // desired=-14-(-24)=10, tp_headroom=-1-(-3)=2, gain=min(10,2)=2
+        // shortfall=-14-(-24+2)=-14+22=8
+        let shortfall = m.linear_shortfall(-14.0, -1.0);
+        assert!((shortfall - 8.0).abs() < f64::EPSILON);
+        assert!(shortfall > LIMITER_BOOST_SHORTFALL_THRESHOLD);
+    }
+
+    #[test]
+    fn test_peak_filter_high_gain_uses_oversample() {
+        // gain=14 dB (>= threshold) → filter should contain aresample=4x
+        let gain_db: f64 = 14.0;
+        let linear_limit: f64 = 10f64.powf(-1.0 / 20.0);
+        let enc_rate: u32 = 44100;
+        let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+            let rate_4x = enc_rate * 4;
+            format!("aresample={rate_4x},")
+        } else {
+            String::new()
+        };
+        let spec = format!(
+            "volume={gain_db:.6}dB,{oversample_prefix}aresample,\
+             alimiter=limit={linear_limit:.6}:attack=5:release=50,\
+             aformat=sample_fmts=flt:sample_rates={enc_rate}:channel_layouts=stereo",
+        );
+        // Must contain the 4x upsample before alimiter
+        assert!(
+            spec.contains("aresample=176400,"),
+            "high gain should insert 4x oversample: {spec}"
+        );
+        // aresample (downsample) must appear between upsample and alimiter
+        assert!(
+            spec.contains("aresample=176400,aresample,alimiter="),
+            "chain order: upsample → aresample → alimiter: {spec}"
+        );
+    }
+
+    #[test]
+    fn test_peak_filter_low_gain_no_oversample() {
+        // gain=3 dB (< threshold) → no 4x oversample, but aresample before alimiter
+        let gain_db: f64 = 3.0;
+        let linear_limit: f64 = 10f64.powf(-1.0 / 20.0);
+        let enc_rate: u32 = 48000;
+        let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+            let rate_4x = enc_rate * 4;
+            format!("aresample={rate_4x},")
+        } else {
+            String::new()
+        };
+        let spec = format!(
+            "volume={gain_db:.6}dB,{oversample_prefix}aresample,\
+             alimiter=limit={linear_limit:.6}:attack=5:release=50,\
+             aformat=sample_fmts=flt:sample_rates={enc_rate}:channel_layouts=stereo",
+        );
+        // Must NOT contain a 4x upsample
+        assert!(
+            !spec.contains("aresample=192000"),
+            "low gain should not oversample: {spec}"
+        );
+        // aresample must still appear before alimiter (fixed order)
+        assert!(
+            spec.contains("aresample,alimiter="),
+            "aresample before alimiter even at low gain: {spec}"
+        );
+    }
+
+    #[test]
+    fn test_peak_filter_at_threshold_uses_oversample() {
+        // gain=6.0 dB (exactly at threshold) → should oversample
+        let gain_db: f64 = 6.0;
+        assert!(gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD);
+        let enc_rate: u32 = 48000;
+        let rate_4x = enc_rate * 4;
+        assert_eq!(rate_4x, 192_000);
+    }
+
+    #[test]
+    fn test_cli_fallback_peak_high_gain_filter() {
+        // Simulate CLI filter construction for high gain
+        let gain_db: f64 = 12.0;
+        let linear_limit: f64 = 10f64.powf(-2.5 / 20.0);
+        let filter = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+            format!(
+                "volume={gain_db:.6}dB,aresample={CLI_OVERSAMPLE_RATE},\
+                 alimiter=limit={linear_limit:.6}:attack=5:release=50"
+            )
+        } else {
+            format!(
+                "volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50"
+            )
+        };
+        assert!(
+            filter.contains("aresample=192000"),
+            "CLI high gain should oversample to 192kHz: {filter}"
+        );
+        // aresample must be before alimiter
+        let resample_pos = filter.find("aresample=192000").unwrap();
+        let limiter_pos = filter.find("alimiter=").unwrap();
+        assert!(
+            resample_pos < limiter_pos,
+            "aresample must precede alimiter in CLI filter"
+        );
+    }
+
+    #[test]
+    fn test_cli_fallback_peak_low_gain_filter() {
+        // Simulate CLI filter construction for low gain
+        let gain_db: f64 = 4.0;
+        let linear_limit: f64 = 10f64.powf(-1.0 / 20.0);
+        let filter = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
+            format!(
+                "volume={gain_db:.6}dB,aresample={CLI_OVERSAMPLE_RATE},\
+                 alimiter=limit={linear_limit:.6}:attack=5:release=50"
+            )
+        } else {
+            format!(
+                "volume={gain_db:.6}dB,alimiter=limit={linear_limit:.6}:attack=5:release=50"
+            )
+        };
+        assert!(
+            !filter.contains("aresample="),
+            "CLI low gain should not oversample: {filter}"
+        );
     }
 }

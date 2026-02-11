@@ -33,6 +33,8 @@ impl Orchestrator {
             loudnorm_target_lra: self.config.loudnorm_target_lra,
             loudnorm_dynamic: self.config.loudnorm_dynamic,
             loudnorm_precompress: self.config.loudnorm_precompress,
+            normalize_boost: self.config.normalize_boost,
+            normalize_boost_db: self.config.normalize_boost_db,
         }
     }
 

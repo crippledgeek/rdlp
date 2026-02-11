@@ -266,6 +266,22 @@ Rate limit supports binary unit suffixes: `K` (1024), `M` (1048576), `G` (107374
 | `--keep-video` | | Keep original file after post-processing |
 | `--ffmpeg-location <PATH>` | | Path to FFmpeg if not in PATH |
 
+#### Audio Normalization
+
+| Flag | Description |
+|------|-------------|
+| `--normalize-audio` | Normalize audio levels (peak mode: volume + limiter) |
+| `--loudnorm` | EBU R128 two-pass normalization (implies `--normalize-audio`) |
+| `--normalize-boost` | Limiter-boost fallback: +12 dB gain + hard limiter for over-compressed content (implies `--loudnorm`) |
+| `--normalize-boost-db <DB>` | Custom gain for limiter-boost (default: `12.0`) |
+| `--audio-gain-target <DB>` | Target peak level in dBFS for peak normalization (default: `-1.0`) |
+| `--loudnorm-preset <PRESET>` | Loudnorm preset: `broadcast` (-23 LUFS), `streaming` (-14 LUFS), `loud` (-11 LUFS) |
+| `--loudnorm-i <LUFS>` | Target integrated loudness (e.g., `-14`) |
+| `--loudnorm-tp <DBTP>` | Target true peak (e.g., `-1`) |
+| `--loudnorm-lra <LU>` | Target loudness range (e.g., `11`) |
+| `--loudnorm-dynamic` | Force dynamic (per-frame compression) mode in loudnorm pass 2 |
+| `--loudnorm-precompress` | Prepend a mild acompressor before loudnorm to tame extreme peaks |
+
 #### Cookies
 
 | Flag | Description |
