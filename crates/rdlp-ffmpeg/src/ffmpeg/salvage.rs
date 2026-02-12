@@ -45,6 +45,36 @@ const EBML_CORRUPTION_MARKERS: &[&str] = &[
     "Duplicate element",
 ];
 
+/// Open an input file with resilient format flags (`discardcorrupt+genpts`).
+///
+/// This is the library-equivalent of FFmpeg CLI's `-fflags +discardcorrupt+genpts`.
+/// The flags instruct the demuxer to skip corrupt packets and regenerate PTS/DTS
+/// timestamps, allowing decode of partially corrupt containers that would otherwise
+/// produce invalid packets and cascade into muxer failures.
+///
+/// Used as Tier 3 recovery in [`super::normalize::helpers::with_mux_retry`] when
+/// both normal encode and salvage remux fail.
+pub(crate) fn open_input_resilient(
+    path: &Path,
+) -> Result<ffmpeg_the_third::format::context::Input> {
+    ensure_init()?;
+
+    let mut opts = ffmpeg_the_third::Dictionary::new();
+    opts.set("fflags", "+discardcorrupt+genpts");
+
+    let ictx = ffmpeg_the_third::format::input_with_dictionary(path, opts).map_err(|e| {
+        PostProcessError::FFmpegLibraryError {
+            message: format!("resilient open failed for {}: {e}", path.display()),
+        }
+    })?;
+
+    debug!(
+        "[resilient] opened {} with discardcorrupt+genpts",
+        path.display()
+    );
+    Ok(ictx)
+}
+
 /// Check a media input for Matroska/WebM container-level corruption.
 ///
 /// Opens the input with log capture active, reads all packets (no decoding),

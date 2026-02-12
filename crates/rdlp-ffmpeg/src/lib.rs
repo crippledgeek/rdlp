@@ -3,6 +3,14 @@
 //! FFmpeg library bindings wrapper for rdlp, providing media operations
 //! via `ffmpeg-the-third` (no CLI process spawning).
 //!
+//! # CLI Usage Policy
+//!
+//! This crate MUST NOT use `std::process::Command` or spawn external
+//! processes. All FFmpeg operations use library bindings via
+//! `ffmpeg-the-third`. Corrupt input recovery uses `discardcorrupt+genpts`
+//! format flags on the input context (library API), not CLI fallback.
+//! Violations are caught by CI check: `scripts/check-no-cli.sh`.
+//!
 //! This crate provides:
 //! - **Media probing**: Extract stream info, codecs, duration, resolution
 //! - **Remuxing**: Container conversion without re-encoding (stream copy)
