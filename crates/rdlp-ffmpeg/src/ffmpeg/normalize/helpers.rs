@@ -1,7 +1,7 @@
 //! Helper functions for audio normalization.
 //!
-//! Filter builders, JSON parsing, CLI fallbacks, codec/extension maps,
-//! and the two-tier mux retry wrapper.
+//! Filter builders, JSON parsing, codec/extension maps, and the
+//! three-tier mux retry wrapper (library encode → salvage → resilient).
 
 use std::path::Path;
 
@@ -40,13 +40,6 @@ pub(super) const LIMITER_BOOST_SHORTFALL_THRESHOLD: f64 = 6.0;
 /// ceiling.  Below this threshold, inter-sample overshoot is negligible.
 pub(super) const TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD: f64 = 6.0;
 
-/// Fixed oversample rate (Hz) used in the CLI fallback path.
-///
-/// 192 kHz is >= 4x for both 44.1 kHz and 48 kHz content, which are the two
-/// standard rates.  The library path computes an exact 4x rate from the
-/// encoder sample rate instead.
-pub(super) const CLI_OVERSAMPLE_RATE: u32 = 192_000;
-
 /// Build the alimiter filter spec with true-peak headroom.
 ///
 /// Ceiling is `10^((target_tp - headroom) / 20)` in linear scale.
@@ -60,10 +53,7 @@ pub(super) fn build_alimiter_spec(target_tp: f64) -> String {
 /// Returns the loudnorm filter (optionally preceded by acompressor when
 /// `opts.precompress` is true).  The caller is responsible for appending
 /// the alimiter via [`build_alimiter_spec`] at the correct position in
-/// the filter chain:
-///
-/// - **Library path**: after `aresample` so resampling overshoot is caught.
-/// - **CLI path**: after loudnorm (FFmpeg CLI inserts its own converters).
+/// the filter chain (after `aresample` so resampling overshoot is caught).
 ///
 /// Default strategy: always `linear=true`.  FFmpeg's loudnorm with
 /// `linear=true` falls back to dynamic internally when conditions aren't
@@ -261,39 +251,34 @@ pub(super) fn audio_only_extension_for(ext: &str) -> &'static str {
     }
 }
 
-/// Two-tier recovery for mux failures during audio normalization.
+/// Three-tier recovery for mux failures during audio normalization.
 ///
-/// D2: One-shot salvage retry with deterministic cleanup.
-/// - Tier 1: Salvage-remux input → retry library encode (one attempt only).
-/// - Tier 2: External ffmpeg CLI with `-fflags +discardcorrupt+genpts`.
+/// - Tier 1: Library encode (normal input open).
+/// - Tier 2: Salvage-remux input → retry library encode (one attempt only).
+/// - Tier 3: Library encode with resilient input (discardcorrupt+genpts flags).
 /// - Never overwrites the original input.
 /// - Salvage temp is deleted on success unless `RDLP_KEEP_SALVAGE=1`.
 /// - Salvage temp is kept on failure for post-mortem analysis.
 ///
-/// Loudnorm pass 1 measurements remain valid after salvage/CLI because:
-/// - Salvage uses stream copy (audio bit-identical)
-/// - CLI pass 2 uses the same measured values from pass 1
-pub(super) fn with_mux_retry<F, G>(
-    input: &Path,
-    output: &Path,
-    encode_fn: F,
-    cli_fallback_fn: G,
-) -> Result<()>
+/// Loudnorm pass 1 measurements remain valid after salvage/resilient retry
+/// because salvage uses stream copy (audio bit-identical) and resilient
+/// mode only affects demuxer behavior (discard corrupt packets, regenerate
+/// timestamps), not the audio content of valid packets.
+pub(super) fn with_mux_retry<F>(input: &Path, output: &Path, encode_fn: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<()>,
-    G: FnOnce(&Path, &Path) -> Result<()>,
+    F: Fn(&Path, bool) -> Result<()>,
 {
     let keep_salvage = std::env::var("RDLP_KEEP_SALVAGE")
         .map(|v| v == "1")
         .unwrap_or(false);
 
-    // First attempt: library encode
-    match encode_fn(input) {
+    // Tier 1: library encode (normal input open)
+    match encode_fn(input, false) {
         Ok(()) => return Ok(()),
         Err(e) if !e.is_salvage_retryable() => {
             if matches!(&e, PostProcessError::NormalizationFailed { message } if message.contains("all") && message.contains("packets"))
             {
-                warn!("Decoder failed on all packets — skipping salvage/CLI fallback");
+                warn!("Decoder failed on all packets — skipping salvage/resilient retry");
             }
             return Err(e);
         }
@@ -306,16 +291,16 @@ where
     let _ = std::fs::remove_file(output);
     if output.exists() {
         warn!(
-            "Cannot remove partial output {}; skipping salvage, falling to CLI",
+            "Cannot remove partial output {}; skipping salvage, trying resilient open",
             output.display()
         );
-        return cli_fallback_fn(input, output);
+        return encode_fn(input, true);
     }
 
-    // Tier 1: salvage remux → retry library encode (ONE attempt only)
+    // Tier 2: salvage remux → retry library encode (ONE attempt only)
     match salvage_remux_sync(input) {
         Ok(salvaged) => {
-            let result = encode_fn(&salvaged);
+            let result = encode_fn(&salvaged, false);
             if result.is_ok() {
                 if keep_salvage {
                     info!(
@@ -328,7 +313,7 @@ where
                 return result;
             }
             warn!(
-                "Salvage retry also failed, falling back to CLI: {}",
+                "Salvage retry also failed, trying resilient open: {}",
                 result.as_ref().unwrap_err()
             );
             if !keep_salvage {
@@ -340,115 +325,19 @@ where
             let _ = std::fs::remove_file(output);
             if output.exists() {
                 warn!(
-                    "Cannot remove failed retry output {}; falling to CLI",
+                    "Cannot remove failed retry output {}; trying resilient open",
                     output.display()
                 );
             }
         }
         Err(e) => {
-            warn!("Salvage remux failed, falling back to CLI: {e}");
+            warn!("Salvage remux failed, trying resilient open: {e}");
         }
     }
 
-    // Tier 2: external ffmpeg CLI
-    info!("Attempting CLI fallback normalization...");
-    cli_fallback_fn(input, output)
-}
-
-/// Run normalization via external ffmpeg CLI with a pre-built `-af` filter.
-///
-/// Uses `-fflags +discardcorrupt+genpts` to handle corrupt input that
-/// the library cannot process.  `label` identifies the mode in log messages
-/// (e.g. "peak" or "loudnorm").
-pub(super) fn cli_fallback_normalize(
-    input: &Path,
-    output: &Path,
-    filter: &str,
-    label: &str,
-) -> Result<()> {
-    let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mka");
-    let enc_name = select_audio_encoder_for_container(output_ext);
-
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-fflags", "+discardcorrupt+genpts"])
-        .arg("-i")
-        .arg(input)
-        .args(["-vn", "-af", filter])
-        .args(["-c:a", enc_name]);
-    if enc_name == "libopus" {
-        cmd.args(["-ar", "48000"]);
-    }
-    let cmd_output = cmd
-        .arg(output)
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| PostProcessError::FFmpegFailed {
-            message: format!("failed to spawn ffmpeg CLI: {e}"),
-            source: Some(e),
-        })?;
-
-    if !cmd_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cmd_output.stderr);
-        let excerpt = last_stderr_lines(&stderr, 5);
-        return Err(PostProcessError::NormalizationFailed {
-            message: format!(
-                "CLI fallback {label} normalization failed (exit {}): {}",
-                cmd_output.status.code().unwrap_or(-1),
-                excerpt,
-            ),
-        });
-    }
-    info!("CLI fallback {label} normalization succeeded");
-    Ok(())
-}
-
-/// Run peak normalization via external ffmpeg CLI.
-pub(super) fn cli_fallback_peak(
-    input: &Path,
-    output: &Path,
-    analysis: &super::super::PeakAnalysis,
-    opts: &NormalizeOptions,
-) -> Result<()> {
-    let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
-    let filter = if analysis.gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
-        format!(
-            "volume={:.6}dB,aresample={CLI_OVERSAMPLE_RATE},\
-             alimiter=limit={:.6}:attack=5:release=50",
-            analysis.gain_db, linear_limit
-        )
-    } else {
-        format!(
-            "volume={:.6}dB,alimiter=limit={:.6}:attack=5:release=50",
-            analysis.gain_db, linear_limit
-        )
-    };
-    cli_fallback_normalize(input, output, &filter, "peak")
-}
-
-/// Run loudnorm two-pass normalization via external ffmpeg CLI.
-pub(super) fn cli_fallback_loudnorm(
-    input: &Path,
-    output: &Path,
-    opts: &NormalizeOptions,
-    measurements: &LoudnormMeasurements,
-) -> Result<()> {
-    let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
-    let limiter = build_alimiter_spec(opts.target_tp);
-    let filter = format!("{loudnorm_core},{limiter}");
-    info!("CLI fallback loudnorm filter: {filter}");
-    cli_fallback_normalize(input, output, &filter, "loudnorm")
-}
-
-/// Extract the last `n` lines from a string, preserving their original order.
-pub(super) fn last_stderr_lines(text: &str, n: usize) -> String {
-    text.lines()
-        .rev()
-        .take(n)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Tier 3: library encode with resilient input (discardcorrupt+genpts)
+    info!("Attempting resilient encode (discardcorrupt+genpts)...");
+    encode_fn(input, true)
 }
 
 /// Capture loudnorm pass 1 JSON from FFmpeg log output.

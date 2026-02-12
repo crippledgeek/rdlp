@@ -12,6 +12,7 @@ use crate::error::{PostProcessError, Result};
 use super::super::FFmpegRunner;
 use super::super::ffi_helpers::set_single_thread_codec;
 use super::super::log_capture::LogSuppressGuard;
+use super::super::salvage::open_input_resilient;
 use super::super::transcode::MuxTimingState;
 use super::helpers::{
     build_audio_filter_with_spec, default_bitrate_for_encoder, select_audio_encoder_for_container,
@@ -28,12 +29,17 @@ impl FFmpegRunner {
     ///
     /// `label` appears in log and error messages (e.g. "peak encode",
     /// "loudnorm pass 2").
+    ///
+    /// When `resilient` is true, the input is opened with
+    /// `discardcorrupt+genpts` format flags to recover from corrupt
+    /// containers. This is used as Tier 3 recovery in `with_mux_retry`.
     #[allow(clippy::too_many_lines)]
     pub(super) fn encode_audio_only_sync(
         input: &Path,
         output: &Path,
         final_output_ext: &str,
         label: &str,
+        resilient: bool,
         build_filter: impl FnOnce(
             /*fmt:*/ &str,
             /*rate:*/ u32,
@@ -42,11 +48,16 @@ impl FFmpegRunner {
     ) -> Result<()> {
         crate::ffmpeg::ensure_init()?;
 
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = if resilient {
+            info!("[{label}] opening input with resilient flags (discardcorrupt+genpts)");
+            open_input_resilient(input)?
+        } else {
+            ffmpeg_the_third::format::input(input).map_err(|e| {
+                PostProcessError::FFmpegLibraryError {
+                    message: format!("failed to open input {}: {e}", input.display()),
+                }
+            })?
+        };
 
         let audio_ist_index = ictx
             .streams()
@@ -348,11 +359,25 @@ impl FFmpegRunner {
 
         drop(_log_suppress);
 
+        // Explicit teardown with debug-level lifecycle markers.
+        // Resources are RAII-managed, but logging confirms cleanup order.
+        drop(audio_encoder);
+        drop(audio_decoder);
+        debug!("[mem] codec contexts dropped");
+
+        drop(filter_graph);
+        debug!("[mem] filter graph freed");
+
         octx.write_trailer()
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output trailer: {e}"),
             })?;
 
+        drop(octx);
+        drop(ictx);
+        debug!("[mem] format contexts closed");
+
+        debug!("[mem] encode_audio_only_sync complete — resources released");
         Ok(())
     }
 }
