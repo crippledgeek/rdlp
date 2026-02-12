@@ -8,6 +8,7 @@
 //!   them with `linear=true` for high-quality correction.
 
 mod analysis;
+mod dispatch;
 mod encode;
 mod helpers;
 mod io_diag;
