@@ -54,20 +54,12 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
-        let audio_ist_time_base = ictx
-            .stream(audio_ist_index)
-            .ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "audio input stream {audio_ist_index} not found"
-                ))
-            })?
-            .time_base();
-
         let audio_ist = ictx.stream(audio_ist_index).ok_or_else(|| {
             PostProcessError::ffmpeg_failed(format!(
                 "audio input stream {audio_ist_index} not found"
             ))
         })?;
+        let audio_ist_time_base = audio_ist.time_base();
         let mut audio_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
         set_single_thread_codec(unsafe { audio_dec_ctx.as_mut_ptr() });
@@ -153,16 +145,10 @@ impl FFmpegRunner {
         });
 
         unsafe {
-            (*octx.as_mut_ptr()).avoid_negative_ts =
-                ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
-        }
-
-        unsafe {
-            (*octx.as_mut_ptr()).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
-        }
-
-        unsafe {
-            (*octx.as_mut_ptr()).max_interleave_delta = 0;
+            let ctx = octx.as_mut_ptr();
+            (*ctx).avoid_negative_ts = ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
+            (*ctx).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
+            (*ctx).max_interleave_delta = 0;
         }
 
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
