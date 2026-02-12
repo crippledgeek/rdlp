@@ -314,9 +314,12 @@ impl FFmpegRunner {
         };
         info!(
             "Expected audio packet duration: {} (frame_size={}, enc_tb={}/{}, ost_tb={}/{})",
-            expected_duration, audio_encoder.frame_size(),
-            enc_time_base.numerator(), enc_time_base.denominator(),
-            ost_time_base.numerator(), ost_time_base.denominator(),
+            expected_duration,
+            audio_encoder.frame_size(),
+            enc_time_base.numerator(),
+            enc_time_base.denominator(),
+            ost_time_base.numerator(),
+            ost_time_base.denominator(),
         );
 
         // Build filter graph for sample format/rate conversion
@@ -573,16 +576,15 @@ impl FFmpegRunner {
             }
 
             // Unified timestamp + duration fix
-            let (new_dts, new_pts, new_dur, updated) = fix_audio_timestamps(
-                packet.dts(),
-                packet.pts(),
-                packet.duration(),
-                timing,
-            );
+            let (new_dts, new_pts, new_dur, updated) =
+                fix_audio_timestamps(packet.dts(), packet.pts(), packet.duration(), timing);
             if new_dts != packet.dts() || new_dur != packet.duration() {
                 debug!(
                     "Timestamp fix: pkt#{} dts={:?}->{new_dts:?}, pts={:?}->{new_pts:?}, dur={}->{new_dur}",
-                    timing.pkt_count, packet.dts(), packet.pts(), packet.duration(),
+                    timing.pkt_count,
+                    packet.dts(),
+                    packet.pts(),
+                    packet.duration(),
                 );
             }
             packet.set_dts(new_dts);
@@ -743,7 +745,14 @@ impl FFmpegRunner {
                     message: format!("avcodec_send_frame failed: {e}"),
                 })?;
             frame_unref_audio(&mut filtered);
-            Self::drain_encoder_packets_direct(encoder, octx, ost_index, enc_time_base, timing, output_path)?;
+            Self::drain_encoder_packets_direct(
+                encoder,
+                octx,
+                ost_index,
+                enc_time_base,
+                timing,
+                output_path,
+            )?;
         }
         Ok(())
     }
@@ -793,8 +802,12 @@ impl FFmpegRunner {
                     num: ost_time_base.numerator(),
                     den: ost_time_base.denominator(),
                 };
-                let dts = unsafe { ffmpeg_the_third::ffi::av_rescale_q(timing.samples_written, sr_tb, ost_tb) };
-                let dur_tb = unsafe { ffmpeg_the_third::ffi::av_rescale_q(dur_samples, sr_tb, ost_tb) }.max(1);
+                let dts = unsafe {
+                    ffmpeg_the_third::ffi::av_rescale_q(timing.samples_written, sr_tb, ost_tb)
+                };
+                let dur_tb =
+                    unsafe { ffmpeg_the_third::ffi::av_rescale_q(dur_samples, sr_tb, ost_tb) }
+                        .max(1);
 
                 packet.set_dts(Some(dts));
                 packet.set_pts(Some(dts));
@@ -828,16 +841,15 @@ impl FFmpegRunner {
                     );
                 }
 
-                let (new_dts, new_pts, new_dur, updated) = fix_audio_timestamps(
-                    packet.dts(),
-                    packet.pts(),
-                    packet.duration(),
-                    timing,
-                );
+                let (new_dts, new_pts, new_dur, updated) =
+                    fix_audio_timestamps(packet.dts(), packet.pts(), packet.duration(), timing);
                 if new_dts != packet.dts() || new_dur != packet.duration() {
                     debug!(
                         "Timestamp fix: pkt#{} dts={:?}->{new_dts:?}, pts={:?}->{new_pts:?}, dur={}->{new_dur}",
-                        timing.pkt_count, packet.dts(), packet.pts(), packet.duration(),
+                        timing.pkt_count,
+                        packet.dts(),
+                        packet.pts(),
+                        packet.duration(),
                     );
                 }
                 packet.set_dts(new_dts);
@@ -929,8 +941,13 @@ impl FFmpegRunner {
                 let rss_kb = get_process_rss_kb();
                 info!(
                     "[mux progress] pkt={}, dts={:?}, dur={}, samples={}, pos={}, file={}KB, rss={}KB",
-                    timing.pkt_count, dts, dur,
-                    timing.samples_written, pb_pos, file_sz / 1024, rss_kb,
+                    timing.pkt_count,
+                    dts,
+                    dur,
+                    timing.samples_written,
+                    pb_pos,
+                    file_sz / 1024,
+                    rss_kb,
                 );
             }
 
@@ -1066,7 +1083,14 @@ impl FFmpegRunner {
                     message: format!("avcodec_send_frame failed: {e}"),
                 })?;
             frame_unref_audio(&mut filtered);
-            Self::drain_encoder_packets_interleaved(encoder, octx, ost_index, enc_time_base, timing, output_path)?;
+            Self::drain_encoder_packets_interleaved(
+                encoder,
+                octx,
+                ost_index,
+                enc_time_base,
+                timing,
+                output_path,
+            )?;
         }
         Ok(())
     }
@@ -1113,16 +1137,15 @@ impl FFmpegRunner {
             }
 
             // Unified timestamp + duration fix
-            let (new_dts, new_pts, new_dur, updated) = fix_audio_timestamps(
-                packet.dts(),
-                packet.pts(),
-                packet.duration(),
-                timing,
-            );
+            let (new_dts, new_pts, new_dur, updated) =
+                fix_audio_timestamps(packet.dts(), packet.pts(), packet.duration(), timing);
             if new_dts != packet.dts() || new_dur != packet.duration() {
                 debug!(
                     "Timestamp fix: pkt#{} dts={:?}->{new_dts:?}, pts={:?}->{new_pts:?}, dur={}->{new_dur}",
-                    timing.pkt_count, packet.dts(), packet.pts(), packet.duration(),
+                    timing.pkt_count,
+                    packet.dts(),
+                    packet.pts(),
+                    packet.duration(),
                 );
             }
             packet.set_dts(new_dts);
@@ -1184,8 +1207,13 @@ impl FFmpegRunner {
                 let rss_kb = get_process_rss_kb();
                 info!(
                     "[mux progress] pkt={}, dts={:?}, dur={}, pos={}, file={}KB, rss={}KB, exp_dur={}",
-                    timing.pkt_count, dts, dur, current_pos_for_log, file_size / 1024,
-                    rss_kb, timing.expected_duration,
+                    timing.pkt_count,
+                    dts,
+                    dur,
+                    current_pos_for_log,
+                    file_size / 1024,
+                    rss_kb,
+                    timing.expected_duration,
                 );
             }
 
@@ -2296,7 +2324,12 @@ mod tests {
 
     /// Helper: compute expected DTS/duration for sample-clock synthesis
     /// using `av_rescale_q(samples, 1/sample_rate, ost_tb)`.
-    fn sample_clock_rescale(samples: i64, sample_rate: i32, ost_tb_num: i32, ost_tb_den: i32) -> i64 {
+    fn sample_clock_rescale(
+        samples: i64,
+        sample_rate: i32,
+        ost_tb_num: i32,
+        ost_tb_den: i32,
+    ) -> i64 {
         // av_rescale_q(a, bq, cq) = a * bq.num * cq.den / (bq.den * cq.num)
         // bq = {1, sample_rate}, cq = {ost_tb_num, ost_tb_den}
         // = samples * 1 * ost_tb_den / (sample_rate * ost_tb_num)
