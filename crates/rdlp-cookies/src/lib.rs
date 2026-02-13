@@ -55,23 +55,18 @@ impl Default for SimpleCookieJar {
 #[async_trait]
 impl CookieJar for SimpleCookieJar {
     async fn get_cookies(&self, url: &str) -> Result<Vec<String>> {
-        let parsed = match Url::parse(url) {
-            Ok(u) => u,
-            Err(_) => return Ok(Vec::new()),
+        let Ok(parsed) = Url::parse(url) else {
+            return Ok(Vec::new());
         };
-
-        // reqwest::cookie::Jar returns cookies as a single header value
-        match self.jar.cookies(&parsed) {
-            Some(header_value) => {
-                let cookie_str = header_value.to_str().unwrap_or("");
-                Ok(cookie_str
-                    .split("; ")
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect())
-            }
-            None => Ok(Vec::new()),
-        }
+        let Some(header_value) = self.jar.cookies(&parsed) else {
+            return Ok(Vec::new());
+        };
+        let cookie_str = header_value.to_str().unwrap_or("");
+        Ok(cookie_str
+            .split("; ")
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect())
     }
 
     async fn add_cookie(&self, url: &str, cookie: &str) -> Result<()> {

@@ -178,28 +178,19 @@ impl PostProcessError {
     /// True if this error indicates memory exhaustion (ENOMEM/-12).
     #[must_use]
     pub fn is_enomem(&self) -> bool {
-        match self {
-            Self::MuxWriteError { message, .. } => message.contains("ret=-12"),
-            _ => false,
-        }
+        matches!(self, Self::MuxWriteError { message, .. } if message.contains("ret=-12"))
     }
 
     /// True if this error indicates an I/O error (EIO/-5).
     #[must_use]
     pub fn is_eio(&self) -> bool {
-        match self {
-            Self::MuxWriteError { message, .. } => message.contains("ret=-5"),
-            _ => false,
-        }
+        matches!(self, Self::MuxWriteError { message, .. } if message.contains("ret=-5"))
     }
 
     /// True if this error indicates a mux stall (watchdog abort).
     #[must_use]
     pub fn is_stall(&self) -> bool {
-        match self {
-            Self::MuxWriteError { operation, .. } => operation.contains("watchdog"),
-            _ => false,
-        }
+        matches!(self, Self::MuxWriteError { operation, .. } if operation.contains("watchdog"))
     }
 }
 

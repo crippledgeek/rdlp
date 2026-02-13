@@ -91,7 +91,7 @@ impl HttpDownloader {
             .file_name()
             .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
             .to_string_lossy()
-            .to_string();
+            .into_owned();
 
         let downloaded = Arc::new(AtomicU64::new(0));
 
@@ -211,7 +211,7 @@ impl HttpDownloader {
             .file_name()
             .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
             .to_string_lossy()
-            .to_string();
+            .into_owned();
 
         let downloaded = Arc::new(AtomicU64::new(resume_from));
 

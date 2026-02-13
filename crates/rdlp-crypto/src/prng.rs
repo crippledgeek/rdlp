@@ -148,18 +148,16 @@ impl ByteGenerator {
     ///
     /// Reference: <https://en.wikipedia.org/wiki/Linear_congruential_generator>
     fn lcg(&mut self) -> i32 {
-        let s = lcg_step(self.state, LCG_MULT, LCG_INC);
-        self.state = s;
-        s
+        self.state = lcg_step(self.state, LCG_MULT, LCG_INC);
+        self.state
     }
 
     /// Xorshift32 (shifts: 13, 17, 5).
     ///
     /// Reference: <https://en.wikipedia.org/wiki/Xorshift>
     fn xorshift32(&mut self) -> i32 {
-        let s = xorshift(self.state, 13, 17, 5);
-        self.state = s;
-        s
+        self.state = xorshift(self.state, 13, 17, 5);
+        self.state
     }
 
     /// Weyl Sequence + MurmurHash3 fmix32.
@@ -167,41 +165,36 @@ impl ByteGenerator {
     /// Uses the golden ratio constant (`PHI`) as the Weyl increment,
     /// then applies the MurmurHash3 32-bit finalizer (fmix32) for mixing.
     fn weyl_fmix32(&mut self) -> i32 {
-        let s = weyl_step(self.state, PHI);
-        self.state = s;
-        fmix32(s)
+        self.state = weyl_step(self.state, PHI);
+        fmix32(self.state)
     }
 
     /// Weyl Sequence + ROL-7 scrambling.
     fn weyl_rol7(&mut self) -> i32 {
-        let s = weyl_step(self.state, WEYL_ROL_INC);
-        self.state = s;
-        rol_scramble(s, 7)
+        self.state = weyl_step(self.state, WEYL_ROL_INC);
+        rol_scramble(self.state, 7)
     }
 
     /// Xorshift variant with constant addition (shifts: 7, 9, 8).
     fn xorshift_add(&mut self) -> i32 {
-        let s = xorshift(self.state, 7, 9, 8).wrapping_add(XORSHIFT_ADD_CONST as i32);
-        self.state = s;
-        s
+        self.state = xorshift(self.state, 7, 9, 8).wrapping_add(XORSHIFT_ADD_CONST as i32);
+        self.state
     }
 
     /// LCG with PCG-style variable right-shift scrambler.
     fn lcg_pcg(&mut self) -> i32 {
-        let s = lcg_step(self.state, PCG_MULT, PCG_INC);
-        self.state = s;
+        self.state = lcg_step(self.state, PCG_MULT, PCG_INC);
         // PCG output function: xor-shift then variable right-shift
-        let s2 = to_signed_32((s as i64) ^ (((s as u32) >> 18) as i64));
-        let shift = ((s as u32) >> 27) & 31;
+        let s2 = to_signed_32((self.state as i64) ^ (((self.state as u32) >> 18) as i64));
+        let shift = ((self.state as u32) >> 27) & 31;
         ((s2 as u32) >> shift) as i32
     }
 
     /// Weyl Sequence + multiply-xor-shift (MXS) mixing.
     fn weyl_mxs(&mut self) -> i32 {
-        let s = weyl_step(self.state, PHI);
-        self.state = s;
+        self.state = weyl_step(self.state, PHI);
         // MXS: xor-shift, multiply, xor-shift, multiply
-        let mut x = to_signed_32((s as i64) ^ ((s as i64) << 5));
+        let mut x = to_signed_32((self.state as i64) ^ ((self.state as i64) << 5));
         x = to_signed_32(x as i64 * MXS_MULT1 as i64);
         x = to_signed_32((x as i64) ^ (((x as u32) >> 15) as i64));
         to_signed_32(x as i64 * MXS_MULT2 as i64)

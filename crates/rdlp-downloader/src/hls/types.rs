@@ -1,7 +1,5 @@
 //! HLS type definitions for segment and playlist parsing.
 
-use std::path::PathBuf;
-
 /// EXT-X-MAP initialization segment info (fMP4 streams)
 ///
 /// Per the HLS spec, `EXT-X-MAP` applies to every segment after it until
@@ -11,7 +9,7 @@ use std::path::PathBuf;
 pub(crate) struct InitSegmentInfo {
     /// Fully-resolved URL of the initialization segment
     pub url: String,
-    /// Optional byte range `(length, offset)` — when the init data is
+    /// Optional byte range `(length, offset)` when the init data is
     /// packed inside a larger resource (e.g. the same URI as the segments)
     pub byte_range: Option<(u64, Option<u64>)>,
 }
@@ -32,23 +30,4 @@ pub(crate) struct SegmentInfo {
 pub(crate) struct PlaylistParseResult {
     /// Media segments (each carrying its own init segment reference)
     pub segments: Vec<SegmentInfo>,
-}
-
-/// Segment download result containing index, path, and bytes downloaded
-pub(crate) struct SegmentDownloadResult {
-    pub index: usize,
-    pub path: PathBuf,
-    pub bytes: u64,
-}
-
-impl From<(usize, PathBuf, u64)> for SegmentDownloadResult {
-    fn from((index, path, bytes): (usize, PathBuf, u64)) -> Self {
-        Self { index, path, bytes }
-    }
-}
-
-impl From<SegmentDownloadResult> for (usize, PathBuf, u64) {
-    fn from(result: SegmentDownloadResult) -> Self {
-        (result.index, result.path, result.bytes)
-    }
 }

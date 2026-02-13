@@ -38,13 +38,12 @@ impl FFmpegNormalizeAudio {
         };
 
         // Resolve preset → base targets, then allow individual overrides
-        let (default_i, default_tp, default_lra) = match config.loudnorm_preset {
-            Some(ref s) => s
-                .parse::<LoudnormPreset>()
-                .unwrap_or(LoudnormPreset::Streaming)
-                .targets(),
-            None => LoudnormPreset::Streaming.targets(),
-        };
+        let (default_i, default_tp, default_lra) = config
+            .loudnorm_preset
+            .as_deref()
+            .and_then(|s| s.parse::<LoudnormPreset>().ok())
+            .unwrap_or(LoudnormPreset::Streaming)
+            .targets();
 
         NormalizeOptions {
             mode,
@@ -121,16 +120,10 @@ impl PostProcessor for FFmpegNormalizeAudio {
 
         info!("Audio normalization complete: {}", output_path.display());
 
-        let temp_files = if config.keep_video {
-            Vec::new()
-        } else {
-            files.clone()
-        };
-
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files,
+            temp_files: if config.keep_video { Vec::new() } else { files },
         })
     }
 }

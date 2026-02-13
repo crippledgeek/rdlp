@@ -256,17 +256,13 @@ pub(crate) async fn download_segments_with_resume(
     let mut all_segment_paths: Vec<(usize, PathBuf)> = Vec::with_capacity(total_segments);
 
     // Add downloaded segments from this run
-    for (idx, path, _) in results {
-        all_segment_paths.push((idx, path));
-    }
+    all_segment_paths.extend(results.into_iter().map(|(idx, path, _)| (idx, path)));
 
     // Add pre-existing segments
-    for idx in completed {
+    all_segment_paths.extend(completed.into_iter().filter_map(|idx| {
         let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
-        if segment_path.exists() {
-            all_segment_paths.push((idx, segment_path));
-        }
-    }
+        segment_path.exists().then_some((idx, segment_path))
+    }));
 
     // Sort by index for correct merge order
     all_segment_paths.sort_by_key(|(idx, _)| *idx);
@@ -301,7 +297,7 @@ pub(crate) async fn download_segments_with_resume(
 pub(crate) async fn merge_segments(
     buffer_size: usize,
     merge_timeout: Duration,
-    segment_paths: Vec<PathBuf>,
+    segment_paths: &[PathBuf],
     output_path: &Path,
     segment_init_paths: &[Option<PathBuf>],
 ) -> Result<u64> {
@@ -373,12 +369,12 @@ pub(crate) async fn merge_segments(
 ///
 /// # Arguments
 /// * `segment_paths` - Paths to segment files to delete
-pub(crate) async fn cleanup_segments(segment_paths: Vec<PathBuf>) {
+pub(crate) async fn cleanup_segments(segment_paths: &[PathBuf]) {
     debug!(count = segment_paths.len(); "Cleaning up segment files");
 
     let mut deleted = 0;
     for path in segment_paths {
-        if tokio::fs::remove_file(&path).await.is_ok() {
+        if tokio::fs::remove_file(path).await.is_ok() {
             deleted += 1;
         }
     }

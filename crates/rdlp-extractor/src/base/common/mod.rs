@@ -812,12 +812,7 @@ impl BaseExtractor {
         ext: String,
         height: Option<u32>,
     ) -> Format {
-        let mut format = Format::new(
-            format_id,
-            url,
-            ext.clone(),
-            rdlp_core::DownloadProtocol::Https,
-        );
+        let mut format = Format::new(&format_id, &url, &ext, rdlp_core::DownloadProtocol::Https);
 
         if let Some(h) = height {
             format.height = Some(h);

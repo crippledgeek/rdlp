@@ -56,15 +56,12 @@ pub fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
             line
         };
 
-        match parse_cookie_line(line) {
-            Some(cookie) => {
-                if insert_cookie(&cookie, jar) {
-                    count += 1;
-                }
-            }
-            None => {
-                debug!("Skipping malformed cookie line: {line}");
-            }
+        let Some(cookie) = parse_cookie_line(line) else {
+            debug!("Skipping malformed cookie line: {line}");
+            continue;
+        };
+        if insert_cookie(&cookie, jar) {
+            count += 1;
         }
     }
 

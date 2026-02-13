@@ -204,9 +204,9 @@ pub(crate) fn extract_categories(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
 /// Create thumbnail list from JSON-LD thumbnailUrl field
 pub(crate) fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_core::Thumbnail>> {
     json_ld.thumbnail_url.as_ref().map(|thumb| {
-        let urls = match thumb {
-            JsonLdThumbnail::Single(url) => vec![url.clone()],
-            JsonLdThumbnail::Multiple(urls) => urls.clone(),
+        let urls: &[String] = match thumb {
+            JsonLdThumbnail::Single(url) => std::slice::from_ref(url),
+            JsonLdThumbnail::Multiple(urls) => urls,
         };
 
         urls.iter()
@@ -227,9 +227,9 @@ pub(crate) fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_core:
 pub(crate) fn get_thumbnail_url(json_ld: &JsonLdVideo) -> Option<String> {
     json_ld.thumbnail_url.as_ref().and_then(|thumb| {
         let url = match thumb {
-            JsonLdThumbnail::Single(url) => Some(url.clone()),
-            JsonLdThumbnail::Multiple(urls) => urls.first().cloned(),
+            JsonLdThumbnail::Single(url) => url,
+            JsonLdThumbnail::Multiple(urls) => urls.first()?,
         };
-        url.filter(|u| !u.is_empty())
+        (!url.is_empty()).then(|| url.clone())
     })
 }

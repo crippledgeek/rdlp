@@ -391,7 +391,7 @@ impl DownloaderRegistryTrait for DownloaderRegistry {
         headers: Option<&std::collections::HashMap<String, String>>,
     ) -> Option<Arc<dyn Downloader>> {
         // If no headers, use shared downloader
-        if headers.is_none() || headers.is_none_or(|h| h.is_empty()) {
+        if headers.is_none_or(|h| h.is_empty()) {
             return self.find_downloader(url);
         }
 

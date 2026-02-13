@@ -2319,7 +2319,6 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "log",
- "once_cell",
  "regex",
  "tokio",
  "url",

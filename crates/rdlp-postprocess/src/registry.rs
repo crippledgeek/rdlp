@@ -225,10 +225,8 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             faststart: true,
             ..Default::default()
         };
-        self.ffmpeg
-            .remux(input, output, &opts)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+        self.ffmpeg.remux(input, output, &opts).await?;
+        Ok(())
     }
 
     fn list_processors(&self) -> Vec<String> {

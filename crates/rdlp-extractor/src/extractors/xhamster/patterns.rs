@@ -149,12 +149,13 @@ pub fn extract_user_info(url: &str) -> Option<(String, bool)> {
     })
 }
 
+/// Pattern to strip `m.` subdomain from mobile xHamster URLs.
+static MOBILE_URL_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(https?://(?:.+?\.)?)m\.").expect("Valid mobile URL pattern"));
+
 /// Rewrite mobile URL to desktop (strip `m.` subdomain).
 pub fn rewrite_mobile_url(url: &str) -> String {
-    Regex::new(r"^(https?://(?:.+?\.)?)m\.")
-        .unwrap()
-        .replace(url, "$1")
-        .to_string()
+    MOBILE_URL_PATTERN.replace(url, "$1").into_owned()
 }
 
 #[cfg(test)]

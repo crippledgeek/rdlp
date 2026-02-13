@@ -78,7 +78,7 @@ impl PostProcessor for FFmpegRemuxer {
         }
 
         info!(
-            file = input_file.display().to_string().as_str(),
+            file:? = input_file.display(),
             from = input_ext.as_str(),
             to = target_container.as_ext();
             "Remuxing to improve seeking"
@@ -100,21 +100,14 @@ impl PostProcessor for FFmpegRemuxer {
         self.ffmpeg.remux(input_file, &output_path, &opts).await?;
 
         info!(
-            output = output_path.display().to_string().as_str();
+            output:? = output_path.display();
             "Remuxed successfully"
         );
-
-        // Keep or delete original
-        let temp_files = if config.keep_video {
-            Vec::new()
-        } else {
-            files.clone()
-        };
 
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files,
+            temp_files: if config.keep_video { Vec::new() } else { files },
         })
     }
 }
