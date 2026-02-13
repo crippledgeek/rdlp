@@ -154,25 +154,14 @@ impl Orchestrator {
 /// - `validto=TIMESTAMP` (PornHub direct MP4)
 /// - `~exp=TIMESTAMP~` (PornHub HLS / Akamai)
 fn parse_url_expiry(url: &str) -> Option<u64> {
-    // Try `validto=DIGITS`
-    if let Some(pos) = url.find("validto=") {
-        let rest = &url[pos + 8..];
+    /// Extract a `u64` timestamp immediately following `prefix` in `url`.
+    fn extract_ts_after(url: &str, prefix: &str) -> Option<u64> {
+        let rest = &url[url.find(prefix)? + prefix.len()..];
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(ts) = digits.parse::<u64>() {
-            return Some(ts);
-        }
+        digits.parse::<u64>().ok()
     }
 
-    // Try `~exp=DIGITS~` (Akamai-style)
-    if let Some(pos) = url.find("~exp=") {
-        let rest = &url[pos + 5..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(ts) = digits.parse::<u64>() {
-            return Some(ts);
-        }
-    }
-
-    None
+    extract_ts_after(url, "validto=").or_else(|| extract_ts_after(url, "~exp="))
 }
 
 #[cfg(test)]

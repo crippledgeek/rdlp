@@ -27,7 +27,10 @@ struct NetscapeCookie {
 /// Parse a Netscape-format cookie file and insert cookies into the jar.
 ///
 /// Returns the number of cookies successfully loaded.
-pub fn load_cookie_file(path: &Path, jar: &impl CookieStore) -> Result<usize, std::io::Error> {
+pub(crate) fn load_cookie_file(
+    path: &Path,
+    jar: &impl CookieStore,
+) -> Result<usize, std::io::Error> {
     let content = std::fs::read_to_string(path)?;
     Ok(load_cookie_string(&content, jar))
 }
@@ -35,7 +38,7 @@ pub fn load_cookie_file(path: &Path, jar: &impl CookieStore) -> Result<usize, st
 /// Parse cookie string content and insert into jar.
 ///
 /// Returns the number of cookies loaded.
-pub fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
+fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
     let mut count = 0;
 
     for line in content.lines() {

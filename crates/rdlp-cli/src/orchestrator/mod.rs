@@ -85,11 +85,8 @@ impl Orchestrator {
     fn create_postprocessor_registry(
         config: &Config,
     ) -> Option<Arc<dyn PostProcessorRegistryTrait>> {
-        let registry_result = if let Some(ref ffmpeg_path) = config.ffmpeg_location {
-            PostProcessorRegistry::with_ffmpeg_location(Some(ffmpeg_path.as_path()))
-        } else {
-            PostProcessorRegistry::new()
-        };
+        let registry_result =
+            PostProcessorRegistry::with_ffmpeg_location(config.ffmpeg_location.as_deref());
 
         match registry_result {
             Ok(registry) => {

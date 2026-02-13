@@ -132,7 +132,7 @@ impl InfoExtractor for PornHubExtractor {
         let (formats_with_size, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all metadata
-        let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
+        let mut info = InfoDict::new(video_id, title, self.name(), url);
         info.description = description;
         info.thumbnail = thumbnail;
         info.uploader = uploader;

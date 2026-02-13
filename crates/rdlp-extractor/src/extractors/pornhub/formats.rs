@@ -13,6 +13,15 @@ use super::patterns::{
 use crate::base::common::BaseExtractor;
 use std::collections::HashSet;
 
+/// Extend `dest` with `formats`, skipping URLs already in `seen`.
+fn extend_deduped(dest: &mut Vec<Format>, seen: &mut HashSet<String>, formats: Vec<Format>) {
+    for format in formats {
+        if seen.insert(format.url.clone()) {
+            dest.push(format);
+        }
+    }
+}
+
 /// Extract all formats using multiple strategies
 ///
 /// Tries strategies in order:
@@ -25,32 +34,25 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
 
     // Strategy 1: flashvars (primary)
     if let Ok(formats) = extract_from_flashvars(webpage, ctx).await {
-        for format in formats {
-            if seen_urls.insert(format.url.clone()) {
-                all_formats.push(format);
-            }
-        }
+        extend_deduped(&mut all_formats, &mut seen_urls, formats);
         if !all_formats.is_empty() {
-            debug!(
-                "[PornHub] Extracted {} formats from flashvars",
-                all_formats.len()
-            );
+            debug!(count = all_formats.len(); "[PornHub] Extracted formats from flashvars");
         }
     }
 
     // Strategy 2: JavaScript variables
-    for format in extract_from_js_vars(webpage) {
-        if seen_urls.insert(format.url.clone()) {
-            all_formats.push(format);
-        }
-    }
+    extend_deduped(
+        &mut all_formats,
+        &mut seen_urls,
+        extract_from_js_vars(webpage),
+    );
 
     // Strategy 3: Download buttons
-    for format in extract_from_download_buttons(webpage) {
-        if seen_urls.insert(format.url.clone()) {
-            all_formats.push(format);
-        }
-    }
+    extend_deduped(
+        &mut all_formats,
+        &mut seen_urls,
+        extract_from_download_buttons(webpage),
+    );
 
     if all_formats.is_empty() {
         return Err(RdlpError::Extraction(
@@ -232,29 +234,26 @@ fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
 
 /// Extract formats from download buttons
 fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
-    let mut formats = Vec::new();
-
-    for caps in DOWNLOAD_BTN_PATTERN.captures_iter(webpage) {
-        if let Some(url_match) = caps.get(1) {
-            let url = url_match.as_str();
+    DOWNLOAD_BTN_PATTERN
+        .captures_iter(webpage)
+        .filter_map(|caps| {
+            let url = caps.get(1)?.as_str();
             let quality = parse_quality_from_url(url);
-
             let format_id = quality
                 .map(|q| format!("{q}p"))
                 .unwrap_or_else(|| "download".to_string());
-
             let height = quality.map(|q| q as u32);
 
             debug!(format_id:?; "[PornHub] Found format from download button");
 
-            let format =
-                BaseExtractor::build_format(format_id, url.to_string(), "mp4".to_string(), height);
-
-            formats.push(format);
-        }
-    }
-
-    formats
+            Some(BaseExtractor::build_format(
+                format_id,
+                url.to_string(),
+                "mp4".to_string(),
+                height,
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

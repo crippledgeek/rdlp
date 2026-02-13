@@ -195,8 +195,7 @@ impl HttpDownloader {
             .headers()
             .get("accept-ranges")
             .and_then(|v| v.to_str().ok())
-            .map(|v| v != "none")
-            .unwrap_or(false))
+            .is_some_and(|v| v != "none"))
     }
 
     /// Download a specific byte range with shared progress tracking
@@ -551,8 +550,7 @@ impl Downloader for HttpDownloader {
                     .headers()
                     .get("accept-ranges")
                     .and_then(|v| v.to_str().ok())
-                    .map(|v| v != "none")
-                    .unwrap_or(true);
+                    != Some("none");
 
                 debug!(
                     "Resume analysis: {:.1}% ({} MB / {} MB), remaining={} MB, concurrent={}, ranges={}",
@@ -589,9 +587,6 @@ impl Downloader for HttpDownloader {
                     supports_ranges
                 );
             }
-
-            let total_size =
-                total_size.or_else(|| response.content_length().map(|size| size + resume_from));
 
             let file = tokio::fs::OpenOptions::new()
                 .append(true)

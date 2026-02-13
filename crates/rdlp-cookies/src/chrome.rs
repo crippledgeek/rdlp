@@ -23,7 +23,7 @@ const V10_PREFIX: &[u8] = b"v10";
 /// Extract cookies from Chrome and insert them into the jar.
 ///
 /// Returns the number of cookies loaded.
-pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
+pub(crate) fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let cookie_db = find_cookie_db()?;
     let local_state = find_local_state()?;
 

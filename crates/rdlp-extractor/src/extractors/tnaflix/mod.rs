@@ -26,7 +26,7 @@ use patterns::{EMPFLIX_URL_PATTERN, MOVIEFAP_URL_PATTERN, TNAFLIX_URL_PATTERN};
 ///
 /// Uses [`TnaFlixNetworkBase`] for shared extraction logic.
 pub struct TNAFlixExtractor {
-    name: String,
+    name: &'static str,
     url_pattern: &'static Regex,
     base: TnaFlixNetworkBase,
 }
@@ -36,7 +36,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn tnaflix() -> Self {
         Self {
-            name: "TNAFlix".to_string(),
+            name: "TNAFlix",
             url_pattern: &TNAFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -46,7 +46,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn empflix() -> Self {
         Self {
-            name: "EMPFlix".to_string(),
+            name: "EMPFlix",
             url_pattern: &EMPFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -56,7 +56,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn moviefap() -> Self {
         Self {
-            name: "MovieFap".to_string(),
+            name: "MovieFap",
             url_pattern: &MOVIEFAP_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -72,7 +72,7 @@ impl TNAFlixExtractor {
 #[async_trait]
 impl InfoExtractor for TNAFlixExtractor {
     fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     fn valid_url(&self) -> &Regex {
@@ -159,7 +159,7 @@ impl InfoExtractor for TNAFlixExtractor {
         }
 
         // Build InfoDict with all extracted metadata
-        let mut info = InfoDict::new(video_id, metadata.title, self.name.clone(), url.to_string());
+        let mut info = InfoDict::new(video_id, metadata.title, self.name, url);
         info.description = metadata.description;
         info.uploader = metadata.uploader;
         info.uploader_id = metadata.uploader_id;

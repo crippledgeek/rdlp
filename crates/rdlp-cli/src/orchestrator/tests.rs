@@ -13,10 +13,10 @@ pub(crate) fn create_test_orchestrator() -> Orchestrator {
 /// Helper function to wrap formats in an InfoDict for testing
 fn create_test_info_dict(formats: Vec<Format>) -> InfoDict {
     let mut info = InfoDict::new(
-        "test_id".to_string(),
-        "Test Video".to_string(),
-        "TestExtractor".to_string(),
-        "https://example.com/video".to_string(),
+        "test_id",
+        "Test Video",
+        "TestExtractor",
+        "https://example.com/video",
     );
     info.formats = formats;
     info
@@ -25,9 +25,9 @@ fn create_test_info_dict(formats: Vec<Format>) -> InfoDict {
 /// Helper function to create a test format
 fn create_test_format(format_id: &str, quality: &str, filesize: Option<u64>) -> Format {
     let mut format = Format::new(
-        format_id.to_string(),
-        "https://example.com/video.mp4".to_string(),
-        "mp4".to_string(),
+        format_id,
+        "https://example.com/video.mp4",
+        "mp4",
         rdlp_core::DownloadProtocol::Https,
     );
     format.format_note = Some(quality.to_string());
@@ -153,12 +153,8 @@ fn test_sanitize_filename_length_truncation() {
 #[test]
 fn test_generate_output_path() {
     let orchestrator = create_test_orchestrator();
-    let mut info = rdlp_core::InfoDict::new(
-        "test123".to_string(),
-        "Test Video".to_string(),
-        "test".to_string(),
-        "https://example.com/test".to_string(),
-    );
+    let mut info =
+        rdlp_core::InfoDict::new("test123", "Test Video", "test", "https://example.com/test");
     info.formats = vec![];
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -173,10 +169,10 @@ fn test_generate_output_path() {
 fn test_generate_output_path_sanitizes_invalid_chars() {
     let orchestrator = create_test_orchestrator();
     let mut info = rdlp_core::InfoDict::new(
-        "test123".to_string(),
-        "Invalid/Characters\\In:Title*?.mp4".to_string(),
-        "test".to_string(),
-        "https://example.com/test".to_string(),
+        "test123",
+        "Invalid/Characters\\In:Title*?.mp4",
+        "test",
+        "https://example.com/test",
     );
     info.formats = vec![];
     let format = create_test_format("720p", "720p", Some(1000000));
@@ -192,10 +188,10 @@ fn test_generate_output_path_sanitizes_invalid_chars() {
 fn test_generate_output_path_hls_extension() {
     let orchestrator = create_test_orchestrator();
     let mut info = rdlp_core::InfoDict::new(
-        "test123".to_string(),
-        "HLS Test Video".to_string(),
-        "test".to_string(),
-        "https://example.com/test".to_string(),
+        "test123",
+        "HLS Test Video",
+        "test",
+        "https://example.com/test",
     );
     info.formats = vec![];
 

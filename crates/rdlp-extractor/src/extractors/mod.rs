@@ -1,3 +1,9 @@
+//! Site-specific extractor implementations
+//!
+//! Each submodule implements a single extractor (or extractor family) for a
+//! particular website. Re-exports provide convenient access to the top-level
+//! extractor types.
+
 pub mod nine_anime;
 pub mod pornhub;
 pub mod redtube;

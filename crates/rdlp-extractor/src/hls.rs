@@ -133,10 +133,9 @@ struct MediaPlaylistInfo {
 
 /// Detect container format from segment URL extension
 fn detect_segment_container(segment_uri: &str) -> Option<String> {
-    let path = segment_uri.split('?').next().unwrap_or(segment_uri);
-    path.rfind('.')
-        .map(|pos| path[pos + 1..].to_lowercase())
-        .filter(|ext| !ext.is_empty())
+    let path = segment_uri.split('?').next()?;
+    let ext = path[path.rfind('.')? + 1..].to_lowercase();
+    if ext.is_empty() { None } else { Some(ext) }
 }
 
 /// HLS playlist size detector
@@ -847,14 +846,14 @@ impl HlsSizeDetector {
         }
 
         // Try Content-Range header: "bytes 0-0/123456"
-        if let Some(content_range) = range_response.headers().get("content-range") {
-            if let Ok(range_str) = content_range.to_str() {
-                if let Some(total) = range_str.split('/').nth(1) {
-                    if let Ok(size) = total.parse::<u64>() {
-                        return Ok(size);
-                    }
-                }
-            }
+        if let Some(size) = range_response
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split('/').nth(1))
+            .and_then(|total| total.parse::<u64>().ok())
+        {
+            return Ok(size);
         }
 
         // Last fallback: Content-Length from Range response
@@ -1013,32 +1012,7 @@ async fn enrich_single_hls_format(
         }
     };
 
-    // Enrich format with metadata
-    if let Some((w, h)) = hls_info.resolution {
-        format.width = Some(w as u32);
-        format.height = Some(h as u32);
-        format.format_note = Some(format!("{h}p"));
-    }
-    if let Some(vc) = &hls_info.video_codec {
-        format.vcodec = Some(vc.clone());
-    }
-    if let Some(ac) = &hls_info.audio_codec {
-        format.acodec = Some(ac.clone());
-    }
-    format.fps = hls_info.frame_rate;
-    if let Some(bw) = hls_info.bandwidth {
-        format.tbr = Some(bw as f64 / 1000.0);
-    }
-    format.duration = hls_info.total_duration;
-    format.filesize_approx = Some(hls_info.segment_count as u64);
-    format.container = hls_info.segment_container;
-    if hls_info.has_encryption {
-        format.has_drm = Some(true);
-    }
-    if let Some(h) = format.height {
-        format.quality = Some((h / 100) as i32);
-    }
-
+    // Log before moving fields out of hls_info
     if verbose {
         debug!(
             extractor:? = extractor_name,
@@ -1049,7 +1023,36 @@ async fn enrich_single_hls_format(
         );
     }
 
-    (Some(hls_info.is_live), Some(hls_info.has_encryption))
+    let is_live = hls_info.is_live;
+    let has_encryption = hls_info.has_encryption;
+
+    // Enrich format with metadata — move owned fields to avoid cloning.
+    if let Some((w, h)) = hls_info.resolution {
+        format.width = Some(w as u32);
+        format.height = Some(h as u32);
+        format.format_note = Some(format!("{h}p"));
+    }
+    if hls_info.video_codec.is_some() {
+        format.vcodec = hls_info.video_codec;
+    }
+    if hls_info.audio_codec.is_some() {
+        format.acodec = hls_info.audio_codec;
+    }
+    format.fps = hls_info.frame_rate;
+    if let Some(bw) = hls_info.bandwidth {
+        format.tbr = Some(bw as f64 / 1000.0);
+    }
+    format.duration = hls_info.total_duration;
+    format.filesize_approx = Some(hls_info.segment_count as u64);
+    format.container = hls_info.segment_container;
+    if has_encryption {
+        format.has_drm = Some(true);
+    }
+    if let Some(h) = format.height {
+        format.quality = Some((h / 100) as i32);
+    }
+
+    (Some(is_live), Some(has_encryption))
 }
 
 /// Detect file sizes and segment counts for all formats in parallel
@@ -1244,15 +1247,12 @@ pub async fn detect_format_sizes(
                             existing.filesize_approx = format.filesize_approx;
                             existing.duration = format.duration;
                             existing.filesize = format.filesize;
-                            existing
-                                .fallback_urls
-                                .get_or_insert_with(Vec::new)
-                                .push(old_url);
+                            existing.fallback_urls.get_or_insert_default().push(old_url);
                         } else {
                             // Existing has equal or more segments - keep it, add new as fallback
                             existing
                                 .fallback_urls
-                                .get_or_insert_with(Vec::new)
+                                .get_or_insert_default()
                                 .push(format.url.clone());
                         }
                     }

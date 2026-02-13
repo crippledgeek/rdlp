@@ -126,11 +126,8 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
         // Structured HTTP errors: retry 5xx and 429, not other 4xx
         RdlpError::Http { status, .. } => *status == 429 || *status >= 500,
-        // Legacy network errors are generally retryable
-        RdlpError::Network(_) => true,
-        // I/O errors might be retryable (disk full, temp failure)
-        RdlpError::Io(_) => true,
-        // Other errors are not retryable
+        // Network and I/O errors are generally retryable (transient)
+        RdlpError::Network(_) | RdlpError::Io(_) => true,
         _ => false,
     }
 }

@@ -26,8 +26,8 @@ pub fn js_to_json(value: &JsValue, ctx: &mut Context) -> JsResult<JsonValue> {
             .unwrap_or(JsonValue::Null));
     }
 
-    if let Ok(s) = value.to_string(ctx) {
-        if value.is_string() {
+    if value.is_string() {
+        if let Ok(s) = value.to_string(ctx) {
             return Ok(JsonValue::String(s.to_std_string_escaped()));
         }
     }
