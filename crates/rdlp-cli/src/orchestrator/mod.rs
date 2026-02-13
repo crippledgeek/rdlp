@@ -11,6 +11,7 @@ mod postprocess;
 mod resume;
 mod selection;
 mod state;
+mod subtitle;
 mod template;
 mod thumbnail;
 
@@ -246,6 +247,24 @@ impl Orchestrator {
     /// Extract metadata without downloading (for --dump-json / --print / --simulate)
     pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
         self.extract_playlist_info(url).await
+    }
+
+    /// Download only subtitles (no video) for `--list-subs-only` mode.
+    ///
+    /// Shows interactive subtitle selection, downloads selected subtitle
+    /// files, and returns their paths.
+    ///
+    /// # Arguments
+    /// * `info` - Pre-extracted video metadata
+    ///
+    /// # Returns
+    /// - `Ok(Some(paths))` - Downloaded subtitle file paths
+    /// - `Ok(None)` - User cancelled
+    pub async fn download_subtitles_only(
+        &self,
+        info: &rdlp_core::InfoDict,
+    ) -> Result<Option<Vec<PathBuf>>> {
+        self.download_subtitles_standalone(info).await
     }
 
     /// List all available extractors
