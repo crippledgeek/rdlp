@@ -80,15 +80,13 @@ pub fn select_subtitles(
             }
         }
         // Also include auto-captions languages not already covered
-        if include_auto {
-            if let Some(auto) = auto_captions {
-                for (lang, subs) in auto {
-                    let already_have = result.iter().any(|(l, _)| l.eq_ignore_ascii_case(lang));
-                    if !already_have {
-                        if let Some(sub) = pick_subtitle(subs, preferred_format) {
-                            result.push((lang.clone(), sub));
-                        }
-                    }
+        if include_auto && let Some(auto) = auto_captions {
+            for (lang, subs) in auto {
+                if result.iter().any(|(l, _)| l.eq_ignore_ascii_case(lang)) {
+                    continue;
+                }
+                if let Some(sub) = pick_subtitle(subs, preferred_format) {
+                    result.push((lang.clone(), sub));
                 }
             }
         }
@@ -98,20 +96,18 @@ pub fn select_subtitles(
             let manual = find_lang(subtitles, requested);
             if let Some((lang, subs)) = manual {
                 if let Some(sub) = pick_subtitle(subs, preferred_format) {
-                    result.push((lang.clone(), sub));
+                    result.push((lang.to_owned(), sub));
                     continue;
                 }
             }
 
             // Fallback to auto-captions if enabled
-            if include_auto {
-                if let Some(auto) = auto_captions {
-                    if let Some((lang, subs)) = find_lang(auto, requested) {
-                        if let Some(sub) = pick_subtitle(subs, preferred_format) {
-                            result.push((lang.clone(), sub));
-                        }
-                    }
-                }
+            if include_auto
+                && let Some(auto) = auto_captions
+                && let Some((lang, subs)) = find_lang(auto, requested)
+                && let Some(sub) = pick_subtitle(subs, preferred_format)
+            {
+                result.push((lang.to_owned(), sub));
             }
         }
     }
@@ -151,8 +147,10 @@ pub fn subtitle_filename(base_stem: &str, lang: &str, ext: &str) -> String {
 fn find_lang<'a>(
     map: &'a HashMap<String, Vec<Subtitle>>,
     lang: &str,
-) -> Option<(&'a String, &'a Vec<Subtitle>)> {
-    map.iter().find(|(k, _)| k.eq_ignore_ascii_case(lang))
+) -> Option<(&'a str, &'a [Subtitle])> {
+    map.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(lang))
+        .map(|(k, v)| (k.as_str(), v.as_slice()))
 }
 
 /// Pick the best subtitle entry from a list based on preferred format.
@@ -160,10 +158,6 @@ fn find_lang<'a>(
 /// If `preferred_format` is set, returns the first entry matching that format.
 /// Otherwise, returns the first entry in the list.
 fn pick_subtitle(subs: &[Subtitle], preferred_format: Option<SubtitleFormat>) -> Option<Subtitle> {
-    if subs.is_empty() {
-        return None;
-    }
-
     if let Some(pref) = preferred_format {
         let ext = pref.as_ext();
         if let Some(sub) = subs.iter().find(|s| s.ext.eq_ignore_ascii_case(ext)) {
@@ -172,7 +166,7 @@ fn pick_subtitle(subs: &[Subtitle], preferred_format: Option<SubtitleFormat>) ->
     }
 
     // Fallback to first available
-    Some(subs[0].clone())
+    subs.first().cloned()
 }
 
 #[cfg(test)]

@@ -12,25 +12,25 @@ use std::time::Duration;
 // =============================================================================
 
 /// Minimum file size to enable parallel downloads (10 MB)
-pub const PARALLEL_THRESHOLD: u64 = 10 * 1024 * 1024;
+pub(super) const PARALLEL_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 /// Progress callback update interval
-pub const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Default buffer size for I/O operations (2 MB)
-pub const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 
 /// Maximum concurrent connections cap
-pub const MAX_CONCURRENT_CONNECTIONS: usize = 8;
+const MAX_CONCURRENT_CONNECTIONS: usize = 8;
 
 /// Default per-read idle timeout (60 seconds)
-pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Default total download timeout (1 hour)
-pub const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
+const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// Default merge operation timeout (30 minutes)
-pub const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
+const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// Downloader configuration (shared across clones via Arc)
 ///

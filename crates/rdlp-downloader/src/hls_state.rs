@@ -108,24 +108,24 @@ impl HlsDownloadState {
         }
 
         // Read and parse state file
-        let state: Self = match File::open(&state_path).await {
-            Ok(mut file) => {
-                let mut contents = String::new();
-                if let Err(e) = file.read_to_string(&mut contents).await {
-                    warn!("Failed to read HLS state file: {e}");
-                    return None;
-                }
-
-                match serde_json::from_str(&contents) {
-                    Ok(state) => state,
-                    Err(e) => {
-                        warn!("Failed to parse HLS state file: {e}");
-                        return None;
-                    }
-                }
-            }
+        let mut file = match File::open(&state_path).await {
+            Ok(file) => file,
             Err(e) => {
                 warn!("Failed to open HLS state file: {e}");
+                return None;
+            }
+        };
+
+        let mut contents = String::new();
+        if let Err(e) = file.read_to_string(&mut contents).await {
+            warn!("Failed to read HLS state file: {e}");
+            return None;
+        }
+
+        let state: Self = match serde_json::from_str(&contents) {
+            Ok(state) => state,
+            Err(e) => {
+                warn!("Failed to parse HLS state file: {e}");
                 return None;
             }
         };

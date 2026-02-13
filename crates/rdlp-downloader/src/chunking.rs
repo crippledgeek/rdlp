@@ -120,13 +120,6 @@ pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, 
     (chunk_size, total_chunks)
 }
 
-/// Check if a number is a power of two
-#[inline]
-#[allow(dead_code)] // Used in tests and property tests
-pub(crate) const fn is_power_of_two(n: usize) -> bool {
-    n != 0 && (n & (n - 1)) == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +174,7 @@ mod tests {
         for file_size in test_sizes {
             let chunk_size = chunk_size_for_file(file_size);
             assert!(
-                is_power_of_two(chunk_size),
+                chunk_size.is_power_of_two(),
                 "Chunk size {chunk_size} for file {file_size} is not power of two"
             );
         }
@@ -257,16 +250,16 @@ mod tests {
 
     #[test]
     fn test_is_power_of_two() {
-        assert!(is_power_of_two(1));
-        assert!(is_power_of_two(2));
-        assert!(is_power_of_two(64));
-        assert!(is_power_of_two(1024));
-        assert!(is_power_of_two(1024 * 1024));
+        assert!(1usize.is_power_of_two());
+        assert!(2usize.is_power_of_two());
+        assert!(64usize.is_power_of_two());
+        assert!(1024usize.is_power_of_two());
+        assert!((1024 * 1024usize).is_power_of_two());
 
-        assert!(!is_power_of_two(0));
-        assert!(!is_power_of_two(3));
-        assert!(!is_power_of_two(100));
-        assert!(!is_power_of_two(1000));
+        assert!(!0usize.is_power_of_two());
+        assert!(!3usize.is_power_of_two());
+        assert!(!100usize.is_power_of_two());
+        assert!(!1000usize.is_power_of_two());
     }
 }
 
@@ -281,7 +274,7 @@ mod property_tests {
             file_size in 1u64..100_000_000_000u64 // 1 byte to 100 GB
         ) {
             let chunk_size = chunk_size_for_file(file_size);
-            prop_assert!(is_power_of_two(chunk_size));
+            prop_assert!(chunk_size.is_power_of_two());
         }
 
         #[test]

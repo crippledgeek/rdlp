@@ -134,51 +134,45 @@ pub fn spawn_progress_reporter(
 ) -> ProgressGuard {
     let task = callback.map(|cb| {
         tokio::spawn(async move {
-            let mut last_update = Instant::now();
-
             loop {
                 tokio::time::sleep(config.update_interval).await;
-                let now = Instant::now();
 
-                if now.duration_since(last_update) >= config.update_interval {
-                    let bytes = metrics.downloaded.load(Ordering::Relaxed);
-                    let elapsed = now.duration_since(config.start_time).as_secs_f64();
-                    let speed = if elapsed > 0.0 {
-                        (bytes - config.resume_from) as f64 / elapsed
-                    } else {
-                        0.0
-                    };
+                let bytes = metrics.downloaded.load(Ordering::Relaxed);
+                let elapsed = Instant::now()
+                    .duration_since(config.start_time)
+                    .as_secs_f64();
+                let speed = if elapsed > 0.0 {
+                    (bytes - config.resume_from) as f64 / elapsed
+                } else {
+                    0.0
+                };
 
-                    let progress_info = if let (Some(segments_counter), Some(duration_counter)) =
-                        (&metrics.segments_completed, &metrics.duration_completed)
-                    {
-                        // HLS: duration-based progress
-                        let segments = segments_counter.load(Ordering::Relaxed);
-                        let dur_centis = duration_counter.load(Ordering::Relaxed);
-                        let dur_downloaded = dur_centis as f64 / 100.0;
+                let progress_info = if let (Some(segments_counter), Some(duration_counter)) =
+                    (&metrics.segments_completed, &metrics.duration_completed)
+                {
+                    // HLS: duration-based progress
+                    let segments = segments_counter.load(Ordering::Relaxed);
+                    let dur_centis = duration_counter.load(Ordering::Relaxed);
+                    let dur_downloaded = dur_centis as f64 / 100.0;
 
-                        DownloadProgress::new_with_duration(
-                            bytes,
-                            speed,
-                            segments,
-                            config.total_segments.unwrap_or(0),
-                            dur_downloaded,
-                            config.total_duration.unwrap_or(0.0),
-                        )
-                    } else {
-                        // HTTP: byte-based progress
-                        DownloadProgress::new(bytes, config.total_size, speed)
-                    };
+                    DownloadProgress::new_with_duration(
+                        bytes,
+                        speed,
+                        segments,
+                        config.total_segments.unwrap_or(0),
+                        dur_downloaded,
+                        config.total_duration.unwrap_or(0.0),
+                    )
+                } else {
+                    // HTTP: byte-based progress
+                    DownloadProgress::new(bytes, config.total_size, speed)
+                };
 
-                    cb.on_progress(&progress_info);
-                    last_update = now;
+                cb.on_progress(&progress_info);
 
-                    // Exit when download is complete (HTTP only - has known total)
-                    if let Some(total) = config.total_size {
-                        if bytes >= total {
-                            break;
-                        }
-                    }
+                // Exit when download is complete (HTTP only - has known total)
+                if config.total_size.is_some_and(|total| bytes >= total) {
+                    break;
                 }
             }
         })

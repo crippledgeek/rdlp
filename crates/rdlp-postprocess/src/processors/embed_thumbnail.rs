@@ -113,15 +113,11 @@ impl EmbedThumbnail {
         let result = tokio::task::spawn_blocking(move || {
             let cover_bytes = std::fs::read(&thumb)?;
 
-            let img = match thumb
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase()
-                .as_str()
-            {
-                "png" => mp4ameta::Img::png(cover_bytes),
-                _ => mp4ameta::Img::jpeg(cover_bytes),
+            let ext = thumb.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let img = if ext.eq_ignore_ascii_case("png") {
+                mp4ameta::Img::png(cover_bytes)
+            } else {
+                mp4ameta::Img::jpeg(cover_bytes)
             };
 
             let mut tag =

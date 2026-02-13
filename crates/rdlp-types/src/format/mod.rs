@@ -306,7 +306,8 @@ impl Format {
     /// Subsequent calls return a reference to the cached value.
     pub fn description(&self) -> &str {
         self.cached_description.get_or_init(|| {
-            let mut parts = Vec::new();
+            // At most 6 parts: note, resolution, fps, vcodec, acodec, ext
+            let mut parts = Vec::with_capacity(6);
 
             if let Some(note) = &self.format_note {
                 parts.push(note.clone());

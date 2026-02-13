@@ -10,7 +10,7 @@ use url::Url;
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.
 ///
 /// Returns `true` if the cookie was successfully inserted.
-pub fn insert_cookie_into_jar(
+pub(crate) fn insert_cookie_into_jar(
     jar: &impl CookieStore,
     domain: &str,
     name: &str,
@@ -52,7 +52,11 @@ pub fn insert_cookie_into_jar(
 ///
 /// Browsers lock their SQLite databases while running. Copying to a temp file
 /// avoids `SQLITE_BUSY` / `SQLITE_LOCKED` errors.
-pub fn with_temp_db_copy<F, T>(db_path: &Path, temp_name: &str, f: F) -> Result<T, std::io::Error>
+pub(crate) fn with_temp_db_copy<F, T>(
+    db_path: &Path,
+    temp_name: &str,
+    f: F,
+) -> Result<T, std::io::Error>
 where
     F: FnOnce(&Path) -> Result<T, std::io::Error>,
 {
@@ -68,7 +72,7 @@ where
 
 /// Read the `HOME` environment variable, returning an `io::Error` if unset.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn home_dir() -> Result<std::path::PathBuf, std::io::Error> {
+pub(crate) fn home_dir() -> Result<std::path::PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))

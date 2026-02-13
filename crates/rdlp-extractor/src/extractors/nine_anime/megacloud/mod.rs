@@ -231,25 +231,15 @@ async fn extract_client_key(source_id: &str, ctx: &ExtractionContext) -> Result<
 /// Parse the client key from embed page HTML using pattern matching.
 fn parse_client_key(html: &str) -> Result<String> {
     // Find the first matching obfuscation pattern
-    let mut matched_pattern_idx = None;
-    let mut matched_text = None;
-
-    for (idx, pattern) in CLIENT_KEY_PATTERNS.iter().enumerate() {
-        if let Some(m) = pattern.find(html) {
-            matched_pattern_idx = Some(idx);
-            matched_text = Some(m.as_str().to_string());
-            break;
-        }
-    }
-
-    let (pattern_idx, text) = match (matched_pattern_idx, matched_text) {
-        (Some(idx), Some(text)) => (idx, text),
-        _ => {
-            return Err(RdlpError::Extraction(
+    let (pattern_idx, text) = CLIENT_KEY_PATTERNS
+        .iter()
+        .enumerate()
+        .find_map(|(idx, pattern)| pattern.find(html).map(|m| (idx, m.as_str().to_string())))
+        .ok_or_else(|| {
+            RdlpError::Extraction(
                 "Could not find client key in embed page (no pattern matched)".to_string(),
-            ));
-        }
-    };
+            )
+        })?;
 
     match pattern_idx {
         // Pattern 1: Comment — key follows colon, no quotes

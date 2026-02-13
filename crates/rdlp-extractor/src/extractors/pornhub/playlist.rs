@@ -295,7 +295,7 @@ fn calculate_page_count(video_count: usize) -> usize {
     if video_count <= 36 {
         1
     } else {
-        ((video_count - 36) as f64 / 40.0).ceil() as usize + 1
+        (video_count - 36).div_ceil(40) + 1
     }
 }
 

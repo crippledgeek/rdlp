@@ -74,10 +74,11 @@ pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<S
 fn reverse_layer(dec_src: &mut Vec<char>, layer_key: &str, chars: &[char]) {
     // Step 1: Reverse substitution mapping
     let sub_values = seed_shuffle(chars, layer_key);
-    let mut char_map = std::collections::HashMap::new();
-    for (i, &ch) in sub_values.iter().enumerate() {
-        char_map.insert(ch, chars[i]);
-    }
+    let char_map: std::collections::HashMap<char, char> = sub_values
+        .iter()
+        .zip(chars.iter())
+        .map(|(&shuffled, &original)| (shuffled, original))
+        .collect();
     for ch in dec_src.iter_mut() {
         if let Some(&mapped) = char_map.get(ch) {
             *ch = mapped;
@@ -155,9 +156,7 @@ fn columnar_cipher(src: &[char], key: &str) -> Vec<char> {
     // Read grid row-by-row
     let mut result = Vec::with_capacity(src.len());
     for row in &grid {
-        for &ch in row {
-            result.push(ch);
-        }
+        result.extend(row);
     }
     result
 }
@@ -204,13 +203,13 @@ fn keygen(megacloud_key: &str, client_key: &str) -> String {
     // Interleave with reversed client key char codes
     let leaf: Vec<u32> = client_key.chars().rev().map(|c| c as u32).collect();
     let max_len = shifted.len().max(leaf.len());
-    let mut return_codes: Vec<u32> = Vec::with_capacity(max_len * 2);
+    let mut return_codes = Vec::with_capacity(max_len * 2);
     for i in 0..max_len {
-        if i < shifted.len() {
-            return_codes.push(shifted[i]);
+        if let Some(&code) = shifted.get(i) {
+            return_codes.push(code);
         }
-        if i < leaf.len() {
-            return_codes.push(leaf[i]);
+        if let Some(&code) = leaf.get(i) {
+            return_codes.push(code);
         }
     }
 

@@ -13,7 +13,7 @@ use crate::util;
 /// Extract cookies from Firefox and insert them into the jar.
 ///
 /// Returns the number of cookies loaded.
-pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
+pub(crate) fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let cookie_db = find_cookie_db()?;
     debug!("Firefox cookie DB: {}", cookie_db.display());
 
@@ -92,8 +92,8 @@ fn find_default_profile() -> Result<PathBuf, std::io::Error> {
 fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
     let content = std::fs::read_to_string(ini_path).ok()?;
 
-    let try_commit = |path: &Option<String>, is_relative: bool| -> Option<PathBuf> {
-        let path = path.as_ref()?;
+    let try_commit = |path: Option<&str>, is_relative: bool| -> Option<PathBuf> {
+        let path = path?;
         let profile_path = if is_relative {
             profiles_dir.join(path)
         } else {
@@ -114,7 +114,7 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
 
         if line.starts_with('[') {
             if current_is_default {
-                if let Some(profile) = try_commit(&current_path, current_is_relative) {
+                if let Some(profile) = try_commit(current_path.as_deref(), current_is_relative) {
                     return Some(profile);
                 }
             }
@@ -137,7 +137,7 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
 
     // Check last section
     if current_is_default {
-        return try_commit(&current_path, current_is_relative);
+        return try_commit(current_path.as_deref(), current_is_relative);
     }
 
     None

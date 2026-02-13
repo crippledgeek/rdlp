@@ -116,12 +116,7 @@ impl InfoExtractor for RedTubeExtractor {
         let (formats, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
 
         // Build InfoDict with all extracted metadata
-        let mut info = InfoDict::new(
-            video_id,
-            metadata.title,
-            self.name().to_string(),
-            url.to_string(),
-        );
+        let mut info = InfoDict::new(video_id, metadata.title, self.name(), url);
         info.description = metadata.description;
         info.uploader = metadata.uploader;
         info.uploader_id = metadata.uploader_id;

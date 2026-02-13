@@ -65,11 +65,10 @@ impl PostProcessor for FFmpegRemuxer {
         let input_ext = input_file
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+            .unwrap_or("");
 
         // Skip if already in target container
-        if input_ext == target_container.as_ext() {
+        if input_ext.eq_ignore_ascii_case(target_container.as_ext()) {
             debug!(
                 container = target_container.as_ext();
                 "File already in target container, skipping remux"
@@ -79,7 +78,7 @@ impl PostProcessor for FFmpegRemuxer {
 
         info!(
             file:? = input_file.display(),
-            from = input_ext.as_str(),
+            from = input_ext,
             to = target_container.as_ext();
             "Remuxing to improve seeking"
         );

@@ -386,8 +386,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 
     let bytes_f = bytes as f64;
-    let exponent = (bytes_f.log2() / 10.0).floor() as usize;
-    let exponent = exponent.min(UNITS.len() - 1);
+    let exponent = ((bytes_f.log2() / 10.0).floor() as usize).min(UNITS.len() - 1);
 
     let value = bytes_f / 1024_f64.powi(exponent as i32);
     let unit = UNITS[exponent];

@@ -14,9 +14,8 @@ use std::path::Path;
 /// Returns an empty set if the file does not exist. Blank lines and lines
 /// starting with `#` are ignored.
 pub fn load_archive(path: &Path) -> HashSet<String> {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return HashSet::new(),
+    let Ok(file) = std::fs::File::open(path) else {
+        return HashSet::new();
     };
 
     BufReader::new(file)
@@ -53,7 +52,6 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use tempfile::NamedTempFile;
 
     #[test]

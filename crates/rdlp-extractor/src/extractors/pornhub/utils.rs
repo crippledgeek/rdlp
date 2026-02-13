@@ -77,17 +77,9 @@ pub async fn set_age_cookies(host: &str, ctx: &ExtractionContext) -> Result<()> 
 ///
 /// Returns error message if video is unavailable, None otherwise
 pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
-    // Check for removed/flagged videos
-    if let Some(caps) = REMOVED_VIDEO_PATTERN.captures(webpage) {
-        if let Some(error) = caps.name("error") {
-            let cleaned = BaseExtractor::clean_html_tags(error.as_str(), Some(200));
-            return Some(format!("Video unavailable: {cleaned}"));
-        }
-    }
-
-    // Check for noVideo section
-    if let Some(caps) = NO_VIDEO_PATTERN.captures(webpage) {
-        if let Some(error) = caps.name("error") {
+    // Check for removed/flagged videos or noVideo section
+    for pattern in [&*REMOVED_VIDEO_PATTERN, &*NO_VIDEO_PATTERN] {
+        if let Some(error) = pattern.captures(webpage).and_then(|c| c.name("error")) {
             let cleaned = BaseExtractor::clean_html_tags(error.as_str(), Some(200));
             return Some(format!("Video unavailable: {cleaned}"));
         }
@@ -127,16 +119,12 @@ pub fn extract_title(html: &Html, webpage: &str) -> String {
     }
 
     // Strategy 3: PornHub-specific shareTitle JavaScript variable
-    if let Some(caps) = SHARE_TITLE_PATTERN.captures(webpage) {
-        if let Some(m) = caps.get(1) {
-            let title = m.as_str().trim();
-            if !title.is_empty() {
-                return title.to_string();
-            }
-        }
-    }
-
-    "Untitled".to_string()
+    SHARE_TITLE_PATTERN
+        .captures(webpage)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().trim())
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| "Untitled".to_string(), |s| s.to_string())
 }
 
 /// Extract video description from HTML.
@@ -216,31 +204,25 @@ pub fn extract_channel_url(html: &Html) -> Option<String> {
 
 /// Extract view count from HTML
 pub fn extract_view_count(html: &Html) -> Option<u64> {
-    BaseExtractor::extract_element_text_str(html, ".count")
-        .and_then(|t| parse_view_count(&t))
-        .or_else(|| {
-            BaseExtractor::extract_element_text_str(html, ".views")
-                .and_then(|t| parse_view_count(&t))
-        })
+    [".count", ".views"].iter().find_map(|sel| {
+        BaseExtractor::extract_element_text_str(html, sel).and_then(|t| parse_view_count(&t))
+    })
 }
 
 /// Parse view count string (handles "1.5M", "500K", etc.)
 fn parse_view_count(text: &str) -> Option<u64> {
     let text = text.trim().to_uppercase();
-    let text = text.replace(',', "").replace(" ", "");
+    let text = text.replace([',', ' '], "");
 
-    if text.ends_with('K') {
-        let num: f64 = text.trim_end_matches('K').parse().ok()?;
-        Some((num * 1000.0) as u64)
-    } else if text.ends_with('M') {
-        let num: f64 = text.trim_end_matches('M').parse().ok()?;
-        Some((num * 1_000_000.0) as u64)
-    } else if text.ends_with('B') {
-        let num: f64 = text.trim_end_matches('B').parse().ok()?;
-        Some((num * 1_000_000_000.0) as u64)
-    } else {
-        text.parse().ok()
-    }
+    let (suffix_multiplier, num_str) = match text.as_bytes().last()? {
+        b'K' => (1_000.0, &text[..text.len() - 1]),
+        b'M' => (1_000_000.0, &text[..text.len() - 1]),
+        b'B' => (1_000_000_000.0, &text[..text.len() - 1]),
+        _ => return text.parse().ok(),
+    };
+
+    let num: f64 = num_str.parse().ok()?;
+    Some((num * suffix_multiplier) as u64)
 }
 
 /// Extract rating percentage from HTML

@@ -155,9 +155,8 @@ impl DownloadPhase {
             }
 
             Self::SelectingFormat { info } => {
-                let format = match orchestrator.select_format(&info, interactive).await? {
-                    Some(format) => format,
-                    None => return Ok(Self::Cancelled),
+                let Some(format) = orchestrator.select_format(&info, interactive).await? else {
+                    return Ok(Self::Cancelled);
                 };
 
                 Ok(Self::SelectingSubtitles {
@@ -168,12 +167,11 @@ impl DownloadPhase {
 
             Self::SelectingSubtitles { info, format } => {
                 let list_subs = orchestrator.config.list_subs;
-                let subtitle_selection = match orchestrator
+                let Some(subtitle_selection) = orchestrator
                     .select_subtitles_if_needed(&info, interactive, list_subs)
                     .await?
-                {
-                    Some(sel) => sel,
-                    None => return Ok(Self::Cancelled),
+                else {
+                    return Ok(Self::Cancelled);
                 };
 
                 Ok(Self::Preparing {
@@ -225,12 +223,11 @@ impl DownloadPhase {
                 subtitle_selection,
             } => {
                 // Execute download with CDN fallback (shared implementation)
-                let outcome = match orchestrator
+                let Some(outcome) = orchestrator
                     .download_with_cdn_fallback(&format, &output_path, state.offset())
                     .await?
-                {
-                    Some(outcome) => outcome,
-                    None => return Ok(Self::Cancelled),
+                else {
+                    return Ok(Self::Cancelled);
                 };
 
                 // Download thumbnail for embedding or standalone use

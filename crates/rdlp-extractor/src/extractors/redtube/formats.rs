@@ -3,10 +3,10 @@
 //! Extracts video formats from JavaScript sources and mediaDefinition arrays.
 
 use log::{debug, warn};
+use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format};
 use regex::Regex;
 use serde_json::Value;
-use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 use crate::utils::{extract_extension_from_url, make_absolute_url};
@@ -29,8 +29,8 @@ pub fn parse_quality(item: &Value) -> String {
 fn extract_bitrate_from_url(url: &str) -> Option<f64> {
     // Pattern: digits followed by K (case insensitive) before file extension
     // Example: 4000K, 2000K, 1500K
-    static BITRATE_PATTERN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(\d+)[Kk]_\d+\.[a-zA-Z0-9]+$").unwrap());
+    static BITRATE_PATTERN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(\d+)[Kk]_\d+\.[a-zA-Z0-9]+$").expect("Valid bitrate pattern"));
 
     BITRATE_PATTERN
         .captures(url)
@@ -173,7 +173,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
                             let has_quality = item.get("quality").is_some();
 
                             // If format is mp4/hls without quality, fetch JSON to get actual formats
-                            if (format_type == "mp4" || format_type == "hls") && !has_quality {
+                            if matches!(format_type, "mp4" | "hls") && !has_quality {
                                 if let Some(fetched) =
                                     fetch_formats_from_endpoint(video_url, ctx).await
                                 {

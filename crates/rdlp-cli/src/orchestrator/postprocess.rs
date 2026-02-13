@@ -215,18 +215,22 @@ impl Orchestrator {
         let mut deleted = 0;
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                // Match pattern: base_name.part{number}
-                if filename.starts_with(base_name) && filename.contains(".part") {
-                    // Verify it's a segment file (has numeric suffix after .part)
-                    if let Some(part_idx) = filename.rfind(".part") {
-                        let suffix = &filename[part_idx + 5..];
-                        if suffix.chars().all(|c| c.is_ascii_digit())
-                            && tokio::fs::remove_file(&path).await.is_ok()
-                        {
-                            deleted += 1;
-                        }
-                    }
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                continue;
+            };
+
+            // Match pattern: base_name.part{number}
+            if !filename.starts_with(base_name) || !filename.contains(".part") {
+                continue;
+            }
+
+            // Verify it's a segment file (has numeric suffix after .part)
+            if let Some(part_idx) = filename.rfind(".part") {
+                let suffix = &filename[part_idx + 5..];
+                if suffix.chars().all(|c| c.is_ascii_digit())
+                    && tokio::fs::remove_file(&path).await.is_ok()
+                {
+                    deleted += 1;
                 }
             }
         }

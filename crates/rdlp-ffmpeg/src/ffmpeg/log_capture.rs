@@ -95,10 +95,7 @@ impl LogCaptureGuard {
                 message: format!("failed to lock log buffer: {e}"),
             })?;
 
-        match buf.as_mut() {
-            Some(v) => Ok(std::mem::take(v)),
-            None => Ok(Vec::new()),
-        }
+        Ok(buf.as_mut().map(std::mem::take).unwrap_or_default())
     }
 }
 
