@@ -130,6 +130,9 @@ impl PostProcessorRegistry {
         // Priority 30: Metadata embedding
         self.register(Arc::new(FFmpegMetadata::new(self.ffmpeg.clone())));
 
+        // Priority 25: Subtitle embedding
+        self.register(Arc::new(EmbedSubtitles::new(self.ffmpeg.clone())));
+
         // Priority 20: Thumbnail embedding
         self.register(Arc::new(EmbedThumbnail::new(self.ffmpeg.clone())));
     }

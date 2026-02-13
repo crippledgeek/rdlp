@@ -21,6 +21,7 @@ impl Orchestrator {
             write_thumbnail: self.config.write_thumbnail,
             embed_metadata: self.config.embed_metadata,
             embed_subtitles: self.config.embed_subtitles,
+            write_subtitles: self.config.write_subtitles,
             keep_video: self.config.keep_video,
             ffmpeg_location: self.config.ffmpeg_location.clone(),
             ffmpeg_args: self.config.ffmpeg_args.clone(),
@@ -43,6 +44,7 @@ impl Orchestrator {
         self.config.extract_audio
             || self.config.embed_metadata
             || self.config.embed_thumbnail
+            || self.config.embed_subtitles
             || self.config.recode_video.is_some()
             || self.config.remux_container.is_some()
             || self.config.normalize_audio

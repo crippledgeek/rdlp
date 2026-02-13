@@ -112,6 +112,9 @@ pub struct PostProcessConfig {
     /// Embed subtitles in video file
     pub embed_subtitles: bool,
 
+    /// Keep subtitle files after embedding
+    pub write_subtitles: bool,
+
     /// Keep original files after processing
     pub keep_video: bool,
 
@@ -168,6 +171,7 @@ impl Default for PostProcessConfig {
             write_thumbnail: false,
             embed_metadata: false,
             embed_subtitles: false,
+            write_subtitles: false,
             keep_video: false,
             ffmpeg_location: None,
             ffmpeg_args: Vec::new(),

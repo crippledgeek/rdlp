@@ -40,6 +40,8 @@ use rdlp_core::{
 };
 use scraper::Html;
 
+use std::collections::HashMap;
+
 use crate::base::common::BaseExtractor;
 use crate::hls::{HlsStreamFlags, detect_format_sizes};
 
@@ -83,7 +85,7 @@ impl Default for NineAnimeExtractor {
 pub(crate) async fn resolve_episode_formats(
     episode_id: &str,
     ctx: &ExtractionContext,
-) -> Result<(Vec<Format>, HlsStreamFlags)> {
+) -> Result<(Vec<Format>, HlsStreamFlags, Vec<megacloud::SubtitleTrack>)> {
     let mut servers = api::fetch_servers(episode_id, ctx).await?;
     if servers.is_empty() {
         return Err(RdlpError::Extraction(
@@ -100,6 +102,7 @@ pub(crate) async fn resolve_episode_formats(
 
     let mut last_error = None;
     let mut all_formats = Vec::new();
+    let mut subtitle_tracks = Vec::new();
 
     for server in &servers {
         debug!(
@@ -131,6 +134,11 @@ pub(crate) async fn resolve_episode_formats(
                     tracks = mega_sources.tracks.len();
                     "Megacloud extraction succeeded"
                 );
+
+                // Capture subtitle tracks from first successful extraction
+                if subtitle_tracks.is_empty() && !mega_sources.tracks.is_empty() {
+                    subtitle_tracks = mega_sources.tracks.clone();
+                }
 
                 // Build formats from the resolved sources
                 for (i, src) in mega_sources.sources.iter().enumerate() {
@@ -211,7 +219,32 @@ pub(crate) async fn resolve_episode_formats(
         }
     }
 
-    Ok((all_formats, hls_flags))
+    Ok((all_formats, hls_flags, subtitle_tracks))
+}
+
+/// Convert Megacloud subtitle tracks into an `InfoDict`-compatible subtitle map.
+///
+/// Groups tracks by label (language name), using the URL's file extension
+/// (usually "vtt") as the subtitle format.
+fn build_subtitle_map(
+    tracks: &[megacloud::SubtitleTrack],
+) -> HashMap<String, Vec<rdlp_core::Subtitle>> {
+    let mut map: HashMap<String, Vec<rdlp_core::Subtitle>> = HashMap::new();
+
+    for track in tracks {
+        // Derive extension from URL (e.g., ".../en.vtt" → "vtt")
+        let ext = track.url.rsplit('.').next().unwrap_or("vtt").to_string();
+
+        let subtitle = rdlp_core::Subtitle {
+            url: track.url.clone(),
+            ext,
+            name: Some(track.label.clone()),
+        };
+
+        map.entry(track.label.clone()).or_default().push(subtitle);
+    }
+
+    map
 }
 
 #[async_trait]
@@ -260,7 +293,7 @@ impl InfoExtractor for NineAnimeExtractor {
             api::fetch_episode_info(&anime_id, &episode_id, ctx),
         );
 
-        let (all_formats, hls_flags) = formats_result?;
+        let (all_formats, hls_flags, subtitle_tracks) = formats_result?;
         let episode_info = episode_info.ok().flatten();
 
         // Build InfoDict
@@ -281,6 +314,12 @@ impl InfoExtractor for NineAnimeExtractor {
         info.thumbnail = anime_metadata.thumbnail;
         info.description = anime_metadata.description;
         info.is_live = Some(hls_flags.is_live);
+
+        // Populate subtitles from Megacloud tracks
+        if !subtitle_tracks.is_empty() {
+            info.subtitles = Some(build_subtitle_map(&subtitle_tracks));
+        }
+
         info.propagate_duration();
 
         Ok(info)
@@ -321,5 +360,38 @@ mod tests {
     #[test]
     fn test_default() {
         let _extractor = NineAnimeExtractor::default();
+    }
+
+    #[test]
+    fn test_build_subtitle_map() {
+        let tracks = vec![
+            megacloud::SubtitleTrack {
+                url: "https://example.com/en.vtt".to_string(),
+                label: "English".to_string(),
+                is_default: true,
+            },
+            megacloud::SubtitleTrack {
+                url: "https://example.com/ja.vtt".to_string(),
+                label: "Japanese".to_string(),
+                is_default: false,
+            },
+        ];
+
+        let map = build_subtitle_map(&tracks);
+
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key("English"));
+        assert!(map.contains_key("Japanese"));
+
+        let en = &map["English"];
+        assert_eq!(en.len(), 1);
+        assert_eq!(en[0].ext, "vtt");
+        assert_eq!(en[0].name.as_deref(), Some("English"));
+    }
+
+    #[test]
+    fn test_build_subtitle_map_empty() {
+        let map = build_subtitle_map(&[]);
+        assert!(map.is_empty());
     }
 }

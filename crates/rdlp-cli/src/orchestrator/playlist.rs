@@ -4,7 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::{Orchestrator, OrchestratorError, Result, archive};
-use log::{error, info};
+use log::{debug, error, info};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -131,6 +131,34 @@ impl Orchestrator {
             }
         }
 
+        // Interactive subtitle selection (once for the whole playlist, before confirm)
+        let list_subs = self.config.list_subs;
+        let has_subs = infos[0]
+            .subtitles
+            .as_ref()
+            .is_some_and(|s| !s.is_empty());
+        let has_auto = infos[0]
+            .automatic_captions
+            .as_ref()
+            .is_some_and(|a| !a.is_empty());
+        debug!(
+            has_subs, has_auto, interactive, list_subs;
+            "Playlist subtitle selection check"
+        );
+
+        let subtitle_selection = if interactive || list_subs {
+            // Use the first episode's subtitle data as representative
+            match self
+                .select_subtitles_if_needed(&infos[0], interactive, list_subs)
+                .await?
+            {
+                Some(sel) => sel,
+                None => return Ok(None),
+            }
+        } else {
+            Vec::new()
+        };
+
         // Confirm before downloading (unless non-interactive)
         if interactive && remaining > 0 {
             use dialoguer::Confirm;
@@ -207,7 +235,7 @@ impl Orchestrator {
             // Race download against Ctrl+C signal
             tokio::select! {
                 // Download single video to playlist folder (non-interactive)
-                result = self.download_from_info_to_dir(info, false, &playlist_dir) => {
+                result = self.download_from_info_to_dir(info, false, &playlist_dir, &subtitle_selection) => {
                     match result {
                         Ok(Some(path)) => {
                             info!(position, total, path:? = path.display(); "Saved");
@@ -238,30 +266,34 @@ impl Orchestrator {
 
         // Summary report
         let newly_downloaded = downloaded.len() - already_downloaded;
+        let dl_count = downloaded.len();
 
         info!("");
         info!("{}", "=".repeat(60));
         info!("Playlist Download Summary");
         info!("{}", "=".repeat(60));
-        info!(path:? = playlist_dir.display(); "Folder");
-        info!(downloaded = downloaded.len(), total; "Total downloaded");
+        info!("Folder: {}", playlist_dir.display());
+        info!("Downloaded: {dl_count}/{total}");
 
         if already_downloaded > 0 {
-            info!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
+            info!("  (previously: {already_downloaded}, this session: {newly_downloaded})");
+        }
+
+        if !subtitle_selection.is_empty() {
+            let langs: Vec<&str> = subtitle_selection.iter().map(|(l, _)| l.as_str()).collect();
+            info!("Subtitles: {}", langs.join(", "));
         }
 
         if !failed.is_empty() {
-            error!(count = failed.len(); "Failed");
-            error!("Failed videos:");
+            error!("Failed: {}", failed.len());
             for (pos, title, err) in &failed {
-                error!(position = pos, title:?; "Failed video");
-                error!(err:?; "Error");
+                error!("  [{pos}/{total}] {title}: {err}");
             }
         }
 
         if interrupted {
-            let remaining_after = total - downloaded.len();
-            info!(remaining = remaining_after; "Interrupted with videos remaining");
+            let remaining_after = total - dl_count;
+            info!("Interrupted — {remaining_after} videos remaining");
             info!("Run the same command again to resume");
         }
 
@@ -382,7 +414,7 @@ impl Orchestrator {
         info: &rdlp_core::InfoDict,
         interactive: bool,
     ) -> Result<Option<PathBuf>> {
-        self.download_from_info_to_dir(info, interactive, &self.config.output_directory)
+        self.download_from_info_to_dir(info, interactive, &self.config.output_directory, &[])
             .await
     }
 
@@ -390,11 +422,18 @@ impl Orchestrator {
     ///
     /// This method is used by playlist downloads to save files to the playlist folder.
     /// Uses the shared CDN fallback loop via `download_with_cdn_fallback()`.
+    ///
+    /// # Arguments
+    /// * `info` - Pre-extracted video metadata
+    /// * `interactive` - Whether interactive mode is active
+    /// * `output_dir` - Directory to save the file in
+    /// * `subtitle_selection` - Pre-selected subtitles from interactive menu (empty = config-based)
     pub(super) async fn download_from_info_to_dir(
         &self,
         info: &rdlp_core::InfoDict,
         interactive: bool,
         output_dir: &std::path::Path,
+        subtitle_selection: &[(String, rdlp_core::Subtitle)],
     ) -> Result<Option<PathBuf>> {
         // Select format
         let format = match self.select_format(info, interactive).await? {
@@ -440,6 +479,10 @@ impl Orchestrator {
         if self.config.embed_thumbnail || self.config.write_thumbnail {
             self.download_thumbnail(info, &output_path).await;
         }
+
+        // Download subtitles (interactive selection or config-based)
+        self.download_subtitles(info, &output_path, subtitle_selection)
+            .await?;
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self

@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 
-use super::{api, metadata, patterns, resolve_episode_formats};
+use super::{api, build_subtitle_map, metadata, patterns, resolve_episode_formats};
 use crate::base::common::BaseExtractor;
 
 /// Timeout for extracting a single episode (60 seconds).
@@ -103,7 +103,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
 
             match result {
-                Ok(Ok((formats, hls_flags))) => {
+                Ok(Ok((formats, hls_flags, subtitle_tracks))) => {
                     if formats.is_empty() {
                         warn!(
                             done, total, episode:% = ep_label;
@@ -133,6 +133,12 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
                     info.thumbnail = thumbnail;
                     info.description = description;
                     info.is_live = Some(hls_flags.is_live);
+
+                    // Populate subtitles from Megacloud tracks
+                    if !subtitle_tracks.is_empty() {
+                        info.subtitles = Some(build_subtitle_map(&subtitle_tracks));
+                    }
+
                     info.propagate_duration();
 
                     // Set playlist fields
