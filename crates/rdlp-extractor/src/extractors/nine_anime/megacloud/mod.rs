@@ -426,10 +426,21 @@ fn parse_source_array_from_values(arr: &[serde_json::Value]) -> Vec<VideoSource>
 /// Parse subtitle tracks from JSON.
 fn parse_tracks(tracks_json: &serde_json::Value) -> Vec<SubtitleTrack> {
     let Some(arr) = tracks_json.as_array() else {
+        debug!("No tracks array in response");
         return Vec::new();
     };
 
-    arr.iter()
+    debug!(total = arr.len(); "Raw tracks in API response");
+
+    // Log all track kinds for diagnostics
+    for t in arr {
+        let kind = t["kind"].as_str().unwrap_or("(none)");
+        let label = t["label"].as_str().unwrap_or("(none)");
+        debug!(kind, label; "Track entry");
+    }
+
+    let result: Vec<SubtitleTrack> = arr
+        .iter()
         .filter_map(|t| {
             let kind = t["kind"].as_str().unwrap_or("");
             if !kind.eq_ignore_ascii_case("captions") && !kind.eq_ignore_ascii_case("subtitles") {
@@ -444,7 +455,14 @@ fn parse_tracks(tracks_json: &serde_json::Value) -> Vec<SubtitleTrack> {
                 is_default,
             })
         })
-        .collect()
+        .collect();
+
+    debug!(
+        subtitle_tracks = result.len();
+        "Filtered subtitle tracks (captions/subtitles only)"
+    );
+
+    result
 }
 
 #[cfg(test)]

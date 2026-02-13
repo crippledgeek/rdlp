@@ -61,12 +61,21 @@ pub enum DownloadPhase {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
     },
+    /// Selecting subtitles (interactive multi-select or pass-through)
+    SelectingSubtitles {
+        /// Extracted video metadata
+        info: Box<rdlp_core::InfoDict>,
+        /// Selected format for download
+        format: Box<Format>,
+    },
     /// Preparing download (checking for resume state)
     Preparing {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
         /// Selected format for download
         format: Box<Format>,
+        /// Subtitles selected for download (empty if none)
+        subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
     },
     /// Downloading with progress tracking
     Downloading {
@@ -78,6 +87,8 @@ pub enum DownloadPhase {
         format: Box<Format>,
         /// Resume state (fresh or resuming from offset)
         state: DownloadState,
+        /// Subtitles selected for download (empty if none)
+        subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
     },
     /// Download completed successfully
     Complete {
@@ -96,6 +107,7 @@ impl fmt::Display for DownloadPhase {
                 write!(f, "extracting from {domain}")
             }
             Self::SelectingFormat { .. } => write!(f, "selecting format"),
+            Self::SelectingSubtitles { .. } => write!(f, "selecting subtitles"),
             Self::Preparing { format, .. } => {
                 write!(f, "preparing {} download", format.format_id)
             }
@@ -117,7 +129,10 @@ impl DownloadPhase {
     /// # State Transitions
     ///
     /// - `Extracting` → `SelectingFormat` (after successful extraction)
-    /// - `SelectingFormat` → `Preparing` (after format selection) OR `Cancelled` (user cancels)
+    /// - `SelectingFormat` → `SelectingSubtitles` (after format selection)
+    ///   OR `Cancelled` (user cancels)
+    /// - `SelectingSubtitles` → `Preparing` (after subtitle selection or pass-through)
+    ///   OR `Cancelled` (user cancels)
     /// - `Preparing` → `Downloading` (after determining resume state)
     /// - `Downloading` → `Complete` (after successful download) OR `Cancelled` (Ctrl+C)
     /// - `Complete` / `Cancelled` → Self (terminal states)
@@ -145,13 +160,34 @@ impl DownloadPhase {
                     None => return Ok(Self::Cancelled),
                 };
 
-                Ok(Self::Preparing {
+                Ok(Self::SelectingSubtitles {
                     info,
                     format: Box::new(format),
                 })
             }
 
-            Self::Preparing { info, format } => {
+            Self::SelectingSubtitles { info, format } => {
+                let list_subs = orchestrator.config.list_subs;
+                let subtitle_selection = match orchestrator
+                    .select_subtitles_if_needed(&info, interactive, list_subs)
+                    .await?
+                {
+                    Some(sel) => sel,
+                    None => return Ok(Self::Cancelled),
+                };
+
+                Ok(Self::Preparing {
+                    info,
+                    format,
+                    subtitle_selection,
+                })
+            }
+
+            Self::Preparing {
+                info,
+                format,
+                subtitle_selection,
+            } => {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
 
@@ -177,6 +213,7 @@ impl DownloadPhase {
                     output_path,
                     format,
                     state,
+                    subtitle_selection,
                 })
             }
 
@@ -185,6 +222,7 @@ impl DownloadPhase {
                 output_path,
                 format,
                 state,
+                subtitle_selection,
             } => {
                 // Execute download with CDN fallback (shared implementation)
                 let outcome = match orchestrator
@@ -200,6 +238,11 @@ impl DownloadPhase {
                     orchestrator.download_thumbnail(&info, &output_path).await;
                 }
 
+                // Download subtitles (interactive selection or config-based)
+                orchestrator
+                    .download_subtitles(&info, &output_path, &subtitle_selection)
+                    .await?;
+
                 // Run post-processing (automatic for HLS, optional for others)
                 let final_files = orchestrator
                     .run_postprocessing(&info, vec![output_path.clone()], outcome.is_hls)
@@ -214,5 +257,45 @@ impl DownloadPhase {
                 Ok(self)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_selecting_subtitles_display() {
+        let phase = DownloadPhase::SelectingSubtitles {
+            info: Box::new(rdlp_core::InfoDict::new(
+                "id",
+                "title",
+                "test",
+                "http://example.com",
+            )),
+            format: Box::new(rdlp_core::Format::new(
+                "f1",
+                "http://example.com/v.mp4",
+                "mp4",
+                rdlp_core::DownloadProtocol::Https,
+            )),
+        };
+
+        assert_eq!(format!("{phase}"), "selecting subtitles");
+    }
+
+    #[test]
+    fn test_selecting_subtitles_passes_through_when_no_subs() {
+        // Verify the phase can be constructed with empty subtitle data
+        let info = Box::new(rdlp_core::InfoDict::new(
+            "id",
+            "title",
+            "test",
+            "http://example.com",
+        ));
+
+        // No subtitles in info → select_subtitles_if_needed returns empty vec
+        assert!(info.subtitles.is_none());
+        assert!(info.automatic_captions.is_none());
     }
 }

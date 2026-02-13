@@ -204,6 +204,9 @@ pub struct Config {
     /// Subtitle format
     pub subtitle_format: Option<SubtitleFormat>,
 
+    /// Show interactive subtitle selection (--list-subs)
+    pub list_subs: bool,
+
     // === Thumbnail ===
     /// Write thumbnail image to disk
     pub write_thumbnail: bool,
@@ -336,6 +339,7 @@ impl Default for Config {
             write_auto_subtitles: false,
             subtitle_langs: Vec::new(),
             subtitle_format: None,
+            list_subs: false,
 
             // Thumbnail
             write_thumbnail: false,
