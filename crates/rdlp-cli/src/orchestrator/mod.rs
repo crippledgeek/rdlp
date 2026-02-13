@@ -28,7 +28,7 @@ use rdlp_core::{Config, ExtractionContext};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::SimpleJsEngine;
+use rdlp_jsinterp::BoaJsEngine;
 use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -53,7 +53,7 @@ impl Orchestrator {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
-        let js_engine = Arc::new(SimpleJsEngine::new());
+        let js_engine = Arc::new(BoaJsEngine::new());
 
         // Wrap config in Arc once and share it
         let config = Arc::new(config);
@@ -119,7 +119,7 @@ impl Orchestrator {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
-        let js_engine = Arc::new(SimpleJsEngine::new());
+        let js_engine = Arc::new(BoaJsEngine::new());
 
         let config = Arc::new(config);
 
