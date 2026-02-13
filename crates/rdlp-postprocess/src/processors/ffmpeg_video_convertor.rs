@@ -122,7 +122,6 @@ impl FFmpegVideoConvertor {
             "h264" | "h265" | "hevc" | "vvc" | "h266" => (Some("medium".to_string()), Some(23)),
             "vp9" | "vp8" => (None, Some(30)),
             "av1" => (None, Some(28)),
-            "mpeg2" | "mpeg4" | "theora" => (None, None),
             _ => (None, None),
         };
 
@@ -218,17 +217,10 @@ impl PostProcessor for FFmpegVideoConvertor {
 
         info!(output:? = output_path.display(); "Converted");
 
-        // Keep or delete original
-        let temp_files = if config.keep_video {
-            Vec::new()
-        } else {
-            files.clone()
-        };
-
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files,
+            temp_files: if config.keep_video { Vec::new() } else { files },
         })
     }
 }

@@ -1148,6 +1148,7 @@ pub async fn detect_format_sizes(
                         expanded_format.fps = variant.frame_rate;
                         expanded_format.tbr = Some(variant.bandwidth as f64 / 1000.0);
                         expanded_format.http_headers = format.http_headers.clone();
+                        expanded_format.language = format.language.clone();
                         expanded_format.filesize_approx = Some(variant.segment_count as u64);
                         expanded_format.duration = variant.total_duration;
                         expanded_format.container = variant.segment_container.clone();
@@ -1198,8 +1199,10 @@ pub async fn detect_format_sizes(
     // Flatten expanded formats, deduplicate HLS CDN mirrors, aggregate flags
     let mut formats: Vec<rdlp_core::Format> = Vec::new();
     let mut flags = HlsStreamFlags::default();
-    let mut seen_hls: std::collections::HashSet<(Option<u32>, Option<String>, Option<String>)> =
-        std::collections::HashSet::new();
+    // Key: (height, vcodec, acodec, language) — language prevents merging
+    // different audio tracks (e.g. SUB/DUB) at the same resolution.
+    type HlsDedup = (Option<u32>, Option<String>, Option<String>, Option<String>);
+    let mut seen_hls: std::collections::HashSet<HlsDedup> = std::collections::HashSet::new();
 
     for format_group in results {
         for (format, is_live, has_encryption) in format_group {
@@ -1210,12 +1213,17 @@ pub async fn detect_format_sizes(
                 flags.has_any_drm = true;
             }
 
-            // Deduplicate expanded HLS formats: keep format with most segments per (height, vcodec, acodec),
-            // collect other URLs as fallbacks on the kept format.
-            // This handles CDN bugs where some sources have incomplete playlists (missing first segments).
+            // Deduplicate expanded HLS formats: keep format with most segments per
+            // (height, vcodec, acodec, language), collect other URLs as fallbacks.
+            // Language is included so SUB/DUB tracks at the same resolution aren't merged.
             // Note: HLS segment count is stored in filesize_approx during extraction.
             if format.is_hls() {
-                let key = (format.height, format.vcodec.clone(), format.acodec.clone());
+                let key = (
+                    format.height,
+                    format.vcodec.clone(),
+                    format.acodec.clone(),
+                    format.language.clone(),
+                );
                 if !seen_hls.insert(key) {
                     // Find existing format with same key
                     if let Some(existing) = formats.iter_mut().find(|f| {
@@ -1223,6 +1231,7 @@ pub async fn detect_format_sizes(
                             && f.height == format.height
                             && f.vcodec == format.vcodec
                             && f.acodec == format.acodec
+                            && f.language == format.language
                     }) {
                         // Compare segment counts (stored in filesize_approx for HLS)
                         // Keep the one with more segments (more complete playlist)

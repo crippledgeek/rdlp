@@ -40,7 +40,8 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, XHamsterExtractor, XTitsExtractor,
+    NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, XHamsterExtractor,
+    XTitsExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -88,6 +89,9 @@ impl ExtractorRegistry {
 
         // Register XHamster extractor
         registry.register(Arc::new(XHamsterExtractor::new()));
+
+        // Register 9anime extractor
+        registry.register(Arc::new(NineAnimeExtractor::new()));
 
         registry
     }
@@ -169,6 +173,7 @@ mod tests {
         assert!(extractors.contains(&"PornHub"));
         assert!(extractors.contains(&"XTits"));
         assert!(extractors.contains(&"XHamster"));
+        assert!(extractors.contains(&"9anime"));
     }
 
     #[test]
@@ -194,6 +199,11 @@ mod tests {
         let xhamster = registry.find_extractor("https://xhamster.com/videos/test-video-1509445");
         assert!(xhamster.is_some());
         assert_eq!(xhamster.unwrap().name(), "XHamster");
+
+        let nine_anime =
+            registry.find_extractor("https://9animetv.to/watch/sword-art-online-2274?ep=26565");
+        assert!(nine_anime.is_some());
+        assert_eq!(nine_anime.unwrap().name(), "9anime");
 
         let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
         assert!(unknown.is_none());

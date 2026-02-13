@@ -7,7 +7,9 @@ use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
 use rdlp_cli::{Orchestrator, OrchestratorError};
-use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, InfoDict, config_io};
+use rdlp_core::{
+    AudioFormat, BrowserType, Config, ContainerFormat, InfoDict, SubtitleFormat, config_io,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -108,6 +110,36 @@ struct Args {
     /// Write thumbnail image to disk alongside media file
     #[arg(long)]
     write_thumbnail: bool,
+
+    // === Subtitle options ===
+    /// Download subtitles
+    #[arg(long, alias = "write-subs")]
+    write_subtitles: bool,
+
+    /// Download auto-generated subtitles
+    #[arg(long, alias = "write-auto-subs")]
+    write_auto_subtitles: bool,
+
+    /// Subtitle languages to download (comma-separated, e.g., "en,es")
+    /// Use "all" to download all available
+    #[arg(long, alias = "sub-langs")]
+    sub_langs: Option<String>,
+
+    /// Preferred subtitle format (srt, vtt, ass, ssa, lrc)
+    #[arg(long, alias = "sub-format")]
+    sub_format: Option<String>,
+
+    /// Embed subtitles in video file (requires FFmpeg)
+    #[arg(long, alias = "embed-subs")]
+    embed_subtitles: bool,
+
+    /// Interactive subtitle selection + video download (implies --write-subtitles)
+    #[arg(long, alias = "list-subs")]
+    list_subs: bool,
+
+    /// Show subtitle menu, download only subtitles (no video), then exit
+    #[arg(long, alias = "list-subs-only")]
+    list_subs_only: bool,
 
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
@@ -528,6 +560,36 @@ fn merge_config(
         config.write_thumbnail = true;
     }
 
+    // Subtitles
+    if args.write_subtitles {
+        config.write_subtitles = true;
+    }
+    if args.write_auto_subtitles {
+        config.write_auto_subtitles = true;
+    }
+    if let Some(ref langs) = args.sub_langs {
+        config.subtitle_langs = langs.split(',').map(|s| s.trim().to_string()).collect();
+    }
+    if let Some(ref format) = args.sub_format {
+        config.subtitle_format = Some(
+            format
+                .parse::<SubtitleFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
+    }
+    if args.embed_subtitles {
+        config.embed_subtitles = true;
+    }
+    // --list-subs implies --write-subtitles
+    if args.list_subs || args.list_subs_only {
+        config.write_subtitles = true;
+        config.list_subs = true;
+    }
+    // --embed-subtitles implies --write-subtitles for the download step
+    if config.embed_subtitles && !config.write_subtitles {
+        config.write_subtitles = true;
+    }
+
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
         config.recode_video = Some(fmt);
@@ -774,6 +836,35 @@ async fn async_main() -> Result<()> {
         .url
         .ok_or_else(|| anyhow::anyhow!("No URL provided. Use --help for usage information."))?;
 
+    // --list-subs-only: show subtitle menu, download subs, exit (no video)
+    if args.list_subs_only {
+        let infos = match orchestrator.extract_info(&url).await {
+            Ok(infos) => infos,
+            Err(e) => fail_with(e, args.verbose),
+        };
+
+        // Use the first video's metadata for subtitle selection
+        if let Some(info) = infos.first() {
+            match orchestrator.download_subtitles_only(info).await {
+                Ok(Some(paths)) => {
+                    if paths.is_empty() {
+                        info!("No subtitles downloaded");
+                    } else {
+                        for path in &paths {
+                            info!("Subtitle saved: {}", path.display());
+                        }
+                    }
+                }
+                Ok(None) => {
+                    info!("Subtitle selection cancelled");
+                }
+                Err(e) => fail_with(e, args.verbose),
+            }
+        }
+
+        return Ok(());
+    }
+
     // Metadata-only modes: --dump-json, --print, --simulate
     if args.dump_json || args.print.is_some() || args.simulate {
         let infos = match orchestrator.extract_info(&url).await {
@@ -819,5 +910,336 @@ async fn async_main() -> Result<()> {
             Ok(())
         }
         Err(e) => fail_with(e, args.verbose),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create default Args for testing (all fields at defaults).
+    fn default_args() -> Args {
+        Args {
+            url: None,
+            output: None,
+            output_dir: None,
+            format: None,
+            quiet: false,
+            verbose: false,
+            list_extractors: false,
+            list_downloaders: false,
+            list_codecs: false,
+            simulate: false,
+            dump_json: false,
+            print: None,
+            interactive: false,
+            extract_audio: false,
+            audio_format: None,
+            audio_quality: None,
+            embed_metadata: false,
+            no_thumbnail: false,
+            write_thumbnail: false,
+            write_subtitles: false,
+            write_auto_subtitles: false,
+            sub_langs: None,
+            sub_format: None,
+            embed_subtitles: false,
+            list_subs: false,
+            list_subs_only: false,
+            recode_video: None,
+            remux: None,
+            normalize_audio: false,
+            loudnorm: false,
+            audio_gain_target: None,
+            loudnorm_preset: None,
+            loudnorm_i: None,
+            loudnorm_tp: None,
+            loudnorm_lra: None,
+            loudnorm_dynamic: false,
+            loudnorm_precompress: false,
+            normalize_boost: false,
+            normalize_boost_db: None,
+            keep_video: false,
+            ffmpeg_location: None,
+            proxy: None,
+            limit_rate: None,
+            cookies_from_browser: None,
+            cookies: None,
+            download_archive: None,
+            ignore_config: false,
+            config_location: None,
+        }
+    }
+
+    /// Helper: no-op interactive values (nothing interactive selected).
+    fn no_interactive() -> ResolvedInteractiveValues {
+        ResolvedInteractiveValues {
+            audio_format: None,
+            recode_video: None,
+            remux_container: None,
+        }
+    }
+
+    // === Subtitle config merge tests ===
+
+    #[test]
+    fn test_merge_config_write_subtitles() {
+        let mut args = default_args();
+        args.write_subtitles = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.write_subtitles);
+        assert!(!config.write_auto_subtitles);
+        assert!(!config.embed_subtitles);
+    }
+
+    #[test]
+    fn test_merge_config_write_auto_subtitles() {
+        let mut args = default_args();
+        args.write_auto_subtitles = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.write_auto_subtitles);
+    }
+
+    #[test]
+    fn test_merge_config_sub_langs_parsing() {
+        let mut args = default_args();
+        args.sub_langs = Some("en, es , fr".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(
+            config.subtitle_langs,
+            vec!["en".to_string(), "es".to_string(), "fr".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_merge_config_sub_langs_single() {
+        let mut args = default_args();
+        args.sub_langs = Some("en".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.subtitle_langs, vec!["en".to_string()]);
+    }
+
+    #[test]
+    fn test_merge_config_sub_langs_all() {
+        let mut args = default_args();
+        args.sub_langs = Some("all".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.subtitle_langs, vec!["all".to_string()]);
+    }
+
+    #[test]
+    fn test_merge_config_sub_format_parsing() {
+        let mut args = default_args();
+        args.sub_format = Some("srt".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.subtitle_format, Some(SubtitleFormat::Srt));
+    }
+
+    #[test]
+    fn test_merge_config_sub_format_vtt() {
+        let mut args = default_args();
+        args.sub_format = Some("vtt".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.subtitle_format, Some(SubtitleFormat::Vtt));
+    }
+
+    #[test]
+    fn test_merge_config_sub_format_ass() {
+        let mut args = default_args();
+        args.sub_format = Some("ass".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.subtitle_format, Some(SubtitleFormat::Ass));
+    }
+
+    #[test]
+    fn test_merge_config_sub_format_invalid() {
+        let mut args = default_args();
+        args.sub_format = Some("invalid_format".to_string());
+
+        let result = merge_config(&args, Config::default(), no_interactive());
+        assert!(result.is_err(), "Invalid subtitle format should fail");
+    }
+
+    #[test]
+    fn test_merge_config_embed_implies_write() {
+        let mut args = default_args();
+        args.embed_subtitles = true;
+        // write_subtitles is NOT explicitly set
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.embed_subtitles);
+        assert!(
+            config.write_subtitles,
+            "--embed-subtitles should imply --write-subtitles"
+        );
+    }
+
+    #[test]
+    fn test_merge_config_embed_with_write_already_set() {
+        let mut args = default_args();
+        args.embed_subtitles = true;
+        args.write_subtitles = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.embed_subtitles);
+        assert!(config.write_subtitles);
+    }
+
+    #[test]
+    fn test_merge_config_subtitle_defaults_are_off() {
+        let args = default_args();
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(!config.write_subtitles);
+        assert!(!config.write_auto_subtitles);
+        assert!(!config.embed_subtitles);
+        assert!(config.subtitle_langs.is_empty());
+        assert!(config.subtitle_format.is_none());
+    }
+
+    #[test]
+    fn test_merge_config_subtitle_combined_options() {
+        let mut args = default_args();
+        args.write_subtitles = true;
+        args.write_auto_subtitles = true;
+        args.sub_langs = Some("en,es".to_string());
+        args.sub_format = Some("vtt".to_string());
+        args.embed_subtitles = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.write_subtitles);
+        assert!(config.write_auto_subtitles);
+        assert!(config.embed_subtitles);
+        assert_eq!(
+            config.subtitle_langs,
+            vec!["en".to_string(), "es".to_string()]
+        );
+        assert_eq!(config.subtitle_format, Some(SubtitleFormat::Vtt));
+    }
+
+    #[test]
+    fn test_merge_config_list_subs() {
+        let mut args = default_args();
+        args.list_subs = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(
+            config.write_subtitles,
+            "--list-subs should imply --write-subtitles"
+        );
+        assert!(config.list_subs, "--list-subs should set list_subs");
+    }
+
+    #[test]
+    fn test_merge_config_list_subs_only() {
+        let mut args = default_args();
+        args.list_subs_only = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(
+            config.write_subtitles,
+            "--list-subs-only should imply --write-subtitles"
+        );
+        assert!(config.list_subs, "--list-subs-only should set list_subs");
+    }
+
+    // === Existing config merge tests for non-subtitle features ===
+
+    #[test]
+    fn test_merge_config_defaults() {
+        let args = default_args();
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.output_template, "%(title)s.%(ext)s");
+        assert!(!config.quiet);
+        assert!(!config.verbose);
+    }
+
+    #[test]
+    fn test_merge_config_output_template() {
+        let mut args = default_args();
+        args.output = Some("%(id)s.%(ext)s".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.output_template, "%(id)s.%(ext)s");
+    }
+
+    #[test]
+    fn test_merge_config_extract_audio() {
+        let mut args = default_args();
+        args.extract_audio = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.extract_audio);
+        // extract_audio without format defaults to mp3
+        assert_eq!(config.audio_format, Some(AudioFormat::Mp3));
+    }
+
+    #[test]
+    fn test_merge_config_audio_format_direct() {
+        let mut args = default_args();
+        args.audio_format = Some("flac".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert_eq!(config.audio_format, Some(AudioFormat::Flac));
+    }
+
+    #[test]
+    fn test_merge_config_normalize_boost_implies_loudnorm() {
+        let mut args = default_args();
+        args.normalize_boost = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.normalize_boost);
+        assert!(config.loudnorm, "normalize_boost should imply loudnorm");
+        assert!(
+            config.normalize_audio,
+            "normalize_boost should imply normalize_audio"
+        );
     }
 }

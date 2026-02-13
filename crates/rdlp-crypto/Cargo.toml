@@ -8,7 +8,6 @@ description = "Cryptographic utilities for rdlp including PRNG-based URL decrypt
 
 [dependencies]
 log = { workspace = true }
-once_cell = { workspace = true }
 regex = { workspace = true }
 url = { workspace = true }
 hex = { workspace = true }

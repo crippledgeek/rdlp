@@ -24,13 +24,11 @@ impl Orchestrator {
     ) -> Result<Option<Format>> {
         let formats = &info.formats;
         let format = if interactive {
-            match self.select_format_interactive(info).await? {
-                Some(format) => format,
-                None => {
-                    info!("Selection cancelled by user");
-                    return Ok(None);
-                }
-            }
+            let Some(format) = self.select_format_interactive(info).await? else {
+                info!("Selection cancelled by user");
+                return Ok(None);
+            };
+            format
         } else {
             let format_selector = FormatSelector::parse(&self.config.format)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;
@@ -75,13 +73,14 @@ impl Orchestrator {
             warn!("LIVE stream detected — download may be incomplete");
         }
 
-        // Group formats by (height, is_hls), picking the best format per group.
-        // This gives the user a choice between direct MP4 and HLS at each resolution.
-        let mut by_key: BTreeMap<(u32, bool), &Format> = BTreeMap::new();
+        // Group formats by (height, is_hls, language), picking the best per group.
+        // Language is included so SUB/DUB tracks at the same resolution are separate options.
+        let mut by_key: BTreeMap<(u32, bool, Option<&str>), &Format> = BTreeMap::new();
         for fmt in &info.formats {
             let h = fmt.height.unwrap_or(0);
             let hls = fmt.is_hls();
-            let entry = by_key.entry((h, hls)).or_insert(fmt);
+            let lang = fmt.language.as_deref();
+            let entry = by_key.entry((h, hls, lang)).or_insert(fmt);
             if pick_better(fmt, entry) {
                 *entry = fmt;
             }

@@ -331,14 +331,14 @@ impl Downloader for HlsDownloader {
             let total_bytes = merge_segments(
                 self.buffer_size,
                 self.merge_timeout,
-                segment_paths.clone(),
+                &segment_paths,
                 path,
                 &segment_init_paths,
             )
             .await?;
 
             // Step 7: Cleanup segments, init segments, and state file
-            cleanup_segments(segment_paths).await;
+            cleanup_segments(&segment_paths).await;
             for init_path in init_file_map.values() {
                 let _ = tokio::fs::remove_file(init_path).await;
             }

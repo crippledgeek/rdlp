@@ -59,13 +59,10 @@ impl Orchestrator {
     /// Splits on `/` (the template directory separator), sanitizes each component
     /// with `sanitize_filename()`, and reassembles as a `PathBuf`.
     fn sanitize_template_path(&self, rendered: &str) -> PathBuf {
-        let components: Vec<&str> = rendered.split('/').collect();
-        let mut path = PathBuf::new();
-        for component in components {
-            let sanitized = self.sanitize_filename(component);
-            path.push(sanitized);
-        }
-        path
+        rendered
+            .split('/')
+            .map(|component| self.sanitize_filename(component))
+            .collect()
     }
 
     /// Determine the actual file extension for a format

@@ -11,6 +11,7 @@ mod postprocess;
 mod resume;
 mod selection;
 mod state;
+mod subtitle;
 mod template;
 mod thumbnail;
 
@@ -28,7 +29,7 @@ use rdlp_core::{Config, ExtractionContext};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::SimpleJsEngine;
+use rdlp_jsinterp::BoaJsEngine;
 use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -53,7 +54,7 @@ impl Orchestrator {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
-        let js_engine = Arc::new(SimpleJsEngine::new());
+        let js_engine = Arc::new(BoaJsEngine::new());
 
         // Wrap config in Arc once and share it
         let config = Arc::new(config);
@@ -119,7 +120,7 @@ impl Orchestrator {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
-        let js_engine = Arc::new(SimpleJsEngine::new());
+        let js_engine = Arc::new(BoaJsEngine::new());
 
         let config = Arc::new(config);
 
@@ -246,6 +247,24 @@ impl Orchestrator {
     /// Extract metadata without downloading (for --dump-json / --print / --simulate)
     pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
         self.extract_playlist_info(url).await
+    }
+
+    /// Download only subtitles (no video) for `--list-subs-only` mode.
+    ///
+    /// Shows interactive subtitle selection, downloads selected subtitle
+    /// files, and returns their paths.
+    ///
+    /// # Arguments
+    /// * `info` - Pre-extracted video metadata
+    ///
+    /// # Returns
+    /// - `Ok(Some(paths))` - Downloaded subtitle file paths
+    /// - `Ok(None)` - User cancelled
+    pub async fn download_subtitles_only(
+        &self,
+        info: &rdlp_core::InfoDict,
+    ) -> Result<Option<Vec<PathBuf>>> {
+        self.download_subtitles_standalone(info).await
     }
 
     /// List all available extractors

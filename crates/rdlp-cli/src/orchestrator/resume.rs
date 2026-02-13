@@ -104,10 +104,9 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
     use tokio::io::{AsyncWriteExt, BufWriter};
 
     let chunk_count = chunk_info.chunk_paths.len();
-    let chunk_type = if chunk_info.download_id.is_some() {
-        format!("new-style (ID: {})", chunk_info.download_id.unwrap())
-    } else {
-        "old-style".to_string()
+    let chunk_type = match chunk_info.download_id {
+        Some(id) => format!("new-style (ID: {id})"),
+        None => "old-style".to_string(),
     };
 
     info!(chunk_count, chunk_type:?; "Merging chunks");
@@ -161,10 +160,10 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
 
 /// Clean up old-style chunks when new-style chunks are used
 async fn cleanup_old_chunks(output_path: &Path) {
-    let base_name = match output_path.file_name() {
-        Some(name) => name.to_string_lossy(),
-        None => return,
+    let Some(name) = output_path.file_name() else {
+        return;
     };
+    let base_name = name.to_string_lossy();
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut deleted = 0;

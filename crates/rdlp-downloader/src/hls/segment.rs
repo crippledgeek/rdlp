@@ -48,7 +48,7 @@ pub(crate) async fn download_segment_with_retry(
     let hdrs = http_downloader.headers();
 
     // Use backon for retry with exponential backoff and jitter
-    let result = (|| {
+    (|| {
         let client = http_client.clone();
         let url = url.clone();
         let segment_path = segment_path.clone();
@@ -112,9 +112,7 @@ pub(crate) async fn download_segment_with_retry(
     .notify(|err, dur| {
         warn!(segment = idx, delay:? = dur; "Segment download failed, retrying: {err}");
     })
-    .await?;
-
-    Ok(result)
+    .await
 }
 
 /// Download an fMP4 initialization segment, respecting optional byte range.

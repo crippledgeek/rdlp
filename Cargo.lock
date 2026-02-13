@@ -2319,7 +2319,6 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "log",
- "once_cell",
  "regex",
  "tokio",
  "url",
@@ -2357,6 +2356,7 @@ name = "rdlp-extractor"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "futures",
  "inventory",
  "log",
@@ -2405,7 +2405,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "boa_engine",
- "once_cell",
+ "log",
  "rdlp-core",
  "serde_json",
  "tokio",

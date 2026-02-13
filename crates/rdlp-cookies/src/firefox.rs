@@ -24,17 +24,14 @@ pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> 
 
 /// Find Firefox's cookie database.
 fn find_cookie_db() -> Result<PathBuf, std::io::Error> {
-    let profile_dir = find_default_profile()?;
-    let db_path = profile_dir.join("cookies.sqlite");
-
-    if db_path.exists() {
-        Ok(db_path)
-    } else {
-        Err(std::io::Error::new(
+    let db_path = find_default_profile()?.join("cookies.sqlite");
+    if !db_path.exists() {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Firefox cookies.sqlite not found at {}", db_path.display()),
-        ))
+        ));
     }
+    Ok(db_path)
 }
 
 /// Find the default Firefox profile directory.

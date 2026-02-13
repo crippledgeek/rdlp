@@ -98,10 +98,9 @@ impl EmbedThumbnail {
 
     /// Check if the container is an MP4-family format (supports covr atom).
     fn is_mp4_family(extension: &str) -> bool {
-        matches!(
-            extension.to_lowercase().as_str(),
-            "mp4" | "m4a" | "m4v" | "mov"
-        )
+        ["mp4", "m4a", "m4v", "mov"]
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(extension))
     }
 
     /// Write the iTunes `covr` metadata atom for Windows Explorer thumbnail visibility.
@@ -179,12 +178,9 @@ impl PostProcessor for EmbedThumbnail {
         }
 
         // Find thumbnail file
-        let thumbnail_file = match Self::find_thumbnail(media_file) {
-            Some(path) => path,
-            None => {
-                debug!(file:? = media_file.display(); "No thumbnail file found");
-                return Ok(PostProcessResult::new(info.clone(), files));
-            }
+        let Some(thumbnail_file) = Self::find_thumbnail(media_file) else {
+            debug!(file:? = media_file.display(); "No thumbnail file found");
+            return Ok(PostProcessResult::new(info.clone(), files));
         };
 
         info!(

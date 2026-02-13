@@ -33,8 +33,8 @@
 //! ```
 
 use log::{debug, warn};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use url::Url;
 
 use crate::prng::ByteGenerator;
@@ -43,7 +43,7 @@ use crate::prng::ByteGenerator;
 ///
 /// The path starts with `/{hex}{remainder}` where hex is 12+ hex chars
 /// and remainder starts with `/` or `,`.
-static HEX_PATH_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static HEX_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/(?P<hex>[0-9a-fA-F]{12,})(?P<rem>[/,].+)$").expect("Valid hex path pattern")
 });
 
@@ -113,7 +113,7 @@ fn decipher_bare_hex(hex_str: &str) -> Option<String> {
     if hex_str.len() < 12 || hex_str.len() % 2 != 0 {
         return None;
     }
-    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !hex_str.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
 
@@ -135,12 +135,9 @@ fn decipher_hex_bytes(hex_str: &str) -> Option<String> {
     let algo_id = byte_data[0];
     let seed = i32::from_le_bytes([byte_data[1], byte_data[2], byte_data[3], byte_data[4]]);
 
-    let mut rng = match ByteGenerator::new(algo_id, seed) {
-        Some(g) => g,
-        None => {
-            warn!("[XHamster] Unknown algorithm ID: {algo_id}");
-            return None;
-        }
+    let Some(mut rng) = ByteGenerator::new(algo_id, seed) else {
+        warn!("[XHamster] Unknown algorithm ID: {algo_id}");
+        return None;
     };
 
     // XOR remaining bytes with PRNG stream

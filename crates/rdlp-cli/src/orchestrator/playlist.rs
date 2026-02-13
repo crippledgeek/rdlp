@@ -4,7 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::{Orchestrator, OrchestratorError, Result, archive};
-use log::{error, info};
+use log::{debug, error, info};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -53,7 +53,7 @@ impl Orchestrator {
     /// and skips them, allowing interrupted downloads to be resumed.
     pub(super) async fn download_playlist_internal(
         &self,
-        infos: Vec<rdlp_core::InfoDict>,
+        mut infos: Vec<rdlp_core::InfoDict>,
         interactive: bool,
         archive: Option<HashSet<String>>,
     ) -> Result<Option<Vec<PathBuf>>> {
@@ -74,10 +74,17 @@ impl Orchestrator {
         let already_downloaded = existing_files.len();
         let remaining = total - already_downloaded;
 
+        // Detect available audio/language types across all episodes
+        let audio_types = detect_audio_types(&infos);
+
         info!("{}", "=".repeat(60));
         info!(title:? = playlist_title; "Playlist");
         info!(path:? = playlist_dir.display(); "Folder");
         info!(total; "Total videos");
+
+        if audio_types.len() > 1 {
+            info!(types:% = audio_types.join(", "); "Audio types available");
+        }
 
         if already_downloaded > 0 || partial_count > 0 {
             if already_downloaded > 0 {
@@ -97,6 +104,60 @@ impl Orchestrator {
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
         }
+
+        // Audio type selection for playlists with multiple language tracks
+        if interactive && audio_types.len() > 1 && remaining > 0 {
+            use dialoguer::Select;
+
+            let mut options: Vec<String> = audio_types.clone();
+            options.push("All (keep both)".to_string());
+            let type_count = audio_types.len();
+
+            let selection = tokio::task::spawn_blocking(move || {
+                Select::new()
+                    .with_prompt("Select audio type")
+                    .items(&options)
+                    .default(0)
+                    .interact()
+                    .unwrap_or(options.len() - 1)
+            })
+            .await
+            .unwrap_or(type_count);
+
+            if selection < type_count {
+                let selected = &audio_types[selection];
+                info!(audio:% = selected; "Filtering to selected audio type");
+                filter_formats_by_language(&mut infos, selected);
+            }
+        }
+
+        // Interactive subtitle selection (once for the whole playlist, before confirm)
+        let list_subs = self.config.list_subs;
+        let has_subs = infos[0]
+            .subtitles
+            .as_ref()
+            .is_some_and(|s| !s.is_empty());
+        let has_auto = infos[0]
+            .automatic_captions
+            .as_ref()
+            .is_some_and(|a| !a.is_empty());
+        debug!(
+            has_subs, has_auto, interactive, list_subs;
+            "Playlist subtitle selection check"
+        );
+
+        let subtitle_selection = if interactive || list_subs {
+            // Use the first episode's subtitle data as representative
+            match self
+                .select_subtitles_if_needed(&infos[0], interactive, list_subs)
+                .await?
+            {
+                Some(sel) => sel,
+                None => return Ok(None),
+            }
+        } else {
+            Vec::new()
+        };
 
         // Confirm before downloading (unless non-interactive)
         if interactive && remaining > 0 {
@@ -174,7 +235,7 @@ impl Orchestrator {
             // Race download against Ctrl+C signal
             tokio::select! {
                 // Download single video to playlist folder (non-interactive)
-                result = self.download_from_info_to_dir(info, false, &playlist_dir) => {
+                result = self.download_from_info_to_dir(info, false, &playlist_dir, &subtitle_selection) => {
                     match result {
                         Ok(Some(path)) => {
                             info!(position, total, path:? = path.display(); "Saved");
@@ -205,30 +266,34 @@ impl Orchestrator {
 
         // Summary report
         let newly_downloaded = downloaded.len() - already_downloaded;
+        let dl_count = downloaded.len();
 
         info!("");
         info!("{}", "=".repeat(60));
         info!("Playlist Download Summary");
         info!("{}", "=".repeat(60));
-        info!(path:? = playlist_dir.display(); "Folder");
-        info!(downloaded = downloaded.len(), total; "Total downloaded");
+        info!("Folder: {}", playlist_dir.display());
+        info!("Downloaded: {dl_count}/{total}");
 
         if already_downloaded > 0 {
-            info!("   (previously: {already_downloaded}, this session: {newly_downloaded})");
+            info!("  (previously: {already_downloaded}, this session: {newly_downloaded})");
+        }
+
+        if !subtitle_selection.is_empty() {
+            let langs: Vec<&str> = subtitle_selection.iter().map(|(l, _)| l.as_str()).collect();
+            info!("Subtitles: {}", langs.join(", "));
         }
 
         if !failed.is_empty() {
-            error!(count = failed.len(); "Failed");
-            error!("Failed videos:");
+            error!("Failed: {}", failed.len());
             for (pos, title, err) in &failed {
-                error!(position = pos, title:?; "Failed video");
-                error!(err:?; "Error");
+                error!("  [{pos}/{total}] {title}: {err}");
             }
         }
 
         if interrupted {
-            let remaining_after = total - downloaded.len();
-            info!(remaining = remaining_after; "Interrupted with videos remaining");
+            let remaining_after = total - dl_count;
+            info!("Interrupted — {remaining_after} videos remaining");
             info!("Run the same command again to resume");
         }
 
@@ -349,7 +414,7 @@ impl Orchestrator {
         info: &rdlp_core::InfoDict,
         interactive: bool,
     ) -> Result<Option<PathBuf>> {
-        self.download_from_info_to_dir(info, interactive, &self.config.output_directory)
+        self.download_from_info_to_dir(info, interactive, &self.config.output_directory, &[])
             .await
     }
 
@@ -357,11 +422,18 @@ impl Orchestrator {
     ///
     /// This method is used by playlist downloads to save files to the playlist folder.
     /// Uses the shared CDN fallback loop via `download_with_cdn_fallback()`.
+    ///
+    /// # Arguments
+    /// * `info` - Pre-extracted video metadata
+    /// * `interactive` - Whether interactive mode is active
+    /// * `output_dir` - Directory to save the file in
+    /// * `subtitle_selection` - Pre-selected subtitles from interactive menu (empty = config-based)
     pub(super) async fn download_from_info_to_dir(
         &self,
         info: &rdlp_core::InfoDict,
         interactive: bool,
         output_dir: &std::path::Path,
+        subtitle_selection: &[(String, rdlp_core::Subtitle)],
     ) -> Result<Option<PathBuf>> {
         // Select format
         let format = match self.select_format(info, interactive).await? {
@@ -408,6 +480,10 @@ impl Orchestrator {
             self.download_thumbnail(info, &output_path).await;
         }
 
+        // Download subtitles (interactive selection or config-based)
+        self.download_subtitles(info, &output_path, subtitle_selection)
+            .await?;
+
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self
             .run_postprocessing(info, vec![output_path.clone()], outcome.is_hls)
@@ -415,5 +491,121 @@ impl Orchestrator {
         let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
         Ok(Some(final_path))
+    }
+}
+
+/// Detect distinct audio/language types across all playlist episodes.
+///
+/// Scans format `language` fields and returns sorted unique values.
+/// Used to offer SUB/DUB selection before batch download.
+fn detect_audio_types(infos: &[rdlp_core::InfoDict]) -> Vec<String> {
+    let mut types = HashSet::new();
+    for info in infos {
+        for format in &info.formats {
+            if let Some(lang) = &format.language {
+                if !lang.is_empty() {
+                    types.insert(lang.clone());
+                }
+            }
+        }
+    }
+    let mut result: Vec<String> = types.into_iter().collect();
+    result.sort();
+    result
+}
+
+/// Filter episode formats to only include the selected audio/language type.
+///
+/// Removes all formats whose `language` field does not match the given value.
+fn filter_formats_by_language(infos: &mut [rdlp_core::InfoDict], language: &str) {
+    for info in infos.iter_mut() {
+        info.formats
+            .retain(|f| f.language.as_deref() == Some(language));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_audio_types_empty() {
+        let infos: Vec<rdlp_core::InfoDict> = Vec::new();
+        assert!(detect_audio_types(&infos).is_empty());
+    }
+
+    #[test]
+    fn test_detect_audio_types_single() {
+        let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
+        let mut fmt = rdlp_core::Format::new(
+            "f1",
+            "http://example.com/v.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        fmt.language = Some("SUB".to_string());
+        info.formats = vec![fmt];
+        assert_eq!(detect_audio_types(&[info]), vec!["SUB"]);
+    }
+
+    #[test]
+    fn test_detect_audio_types_multiple() {
+        let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
+        let mut sub = rdlp_core::Format::new(
+            "f1",
+            "http://example.com/v.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        sub.language = Some("SUB".to_string());
+        let mut dub = rdlp_core::Format::new(
+            "f2",
+            "http://example.com/v2.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        dub.language = Some("DUB".to_string());
+        info.formats = vec![dub, sub];
+        // Should be sorted alphabetically
+        assert_eq!(detect_audio_types(&[info]), vec!["DUB", "SUB"]);
+    }
+
+    #[test]
+    fn test_detect_audio_types_no_language() {
+        let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
+        let fmt = rdlp_core::Format::new(
+            "f1",
+            "http://example.com/v.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        info.formats = vec![fmt];
+        assert!(detect_audio_types(&[info]).is_empty());
+    }
+
+    #[test]
+    fn test_filter_formats_by_language() {
+        let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
+        let mut sub = rdlp_core::Format::new(
+            "f1",
+            "http://example.com/v.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        sub.language = Some("SUB".to_string());
+        let mut dub = rdlp_core::Format::new(
+            "f2",
+            "http://example.com/v2.m3u8",
+            "mp4",
+            rdlp_core::DownloadProtocol::M3u8,
+        );
+        dub.language = Some("DUB".to_string());
+        info.formats = vec![sub, dub];
+
+        let mut infos = vec![info];
+        filter_formats_by_language(&mut infos, "SUB");
+
+        assert_eq!(infos[0].formats.len(), 1);
+        assert_eq!(infos[0].formats[0].language.as_deref(), Some("SUB"));
     }
 }
