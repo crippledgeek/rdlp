@@ -46,12 +46,21 @@ impl EmbedSubtitles {
     /// # Returns
     /// The appropriate subtitle codec name, or `"srt"` as fallback.
     fn subtitle_codec_for_container(container_ext: &str) -> &'static str {
-        let lower = container_ext.to_lowercase();
-        match lower.as_str() {
-            "mp4" | "m4a" | "m4v" | "mov" => "mov_text",
-            "mkv" | "mka" => "srt",
-            "webm" => "webvtt",
-            _ => "srt",
+        // Use case-insensitive matching to avoid allocating a lowercase copy
+        if ["mp4", "m4a", "m4v", "mov"]
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(container_ext))
+        {
+            "mov_text"
+        } else if ["mkv", "mka"]
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(container_ext))
+        {
+            "srt"
+        } else if container_ext.eq_ignore_ascii_case("webm") {
+            "webvtt"
+        } else {
+            "srt"
         }
     }
 
@@ -65,13 +74,11 @@ impl EmbedSubtitles {
     /// # Returns
     /// A vector of `(language_code, subtitle_path)` pairs.
     fn find_subtitle_files(media_file: &Path) -> Vec<(String, PathBuf)> {
-        let stem = match media_file.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => return Vec::new(),
+        let Some(stem) = media_file.file_stem().and_then(|s| s.to_str()) else {
+            return Vec::new();
         };
-        let parent = match media_file.parent() {
-            Some(p) => p,
-            None => return Vec::new(),
+        let Some(parent) = media_file.parent() else {
+            return Vec::new();
         };
 
         let candidates = Self::stem_candidates(stem);
@@ -89,29 +96,29 @@ impl EmbedSubtitles {
                     continue;
                 }
 
-                let filename = match path.file_name().and_then(|f| f.to_str()) {
-                    Some(f) => f.to_string(),
-                    None => continue,
+                let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                    continue;
                 };
 
                 // Check pattern: {candidate}.{lang}.{ext}
                 for sub_ext in SUBTITLE_EXTENSIONS {
-                    let suffix = format!(".{sub_ext}");
-                    if !filename.ends_with(&suffix) {
+                    // Strip the subtitle extension
+                    let Some(without_ext) = filename
+                        .strip_suffix(sub_ext)
+                        .and_then(|s| s.strip_suffix('.'))
+                    else {
                         continue;
-                    }
+                    };
 
-                    // Strip the subtitle extension to get {candidate}.{lang}
-                    let without_ext = &filename[..filename.len() - suffix.len()];
-
-                    // Must start with the candidate stem followed by a dot
-                    let prefix = format!("{candidate}.");
-                    if !without_ext.starts_with(&prefix) {
+                    // Strip the candidate stem prefix + dot
+                    let Some(lang) = without_ext
+                        .strip_prefix(candidate)
+                        .and_then(|s| s.strip_prefix('.'))
+                    else {
                         continue;
-                    }
+                    };
 
                     // The remainder is the language code
-                    let lang = &without_ext[prefix.len()..];
                     if !lang.is_empty() {
                         result.push((lang.to_string(), path.clone()));
                         break; // Found match for this entry, move on

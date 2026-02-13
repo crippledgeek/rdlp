@@ -49,6 +49,7 @@
 #![warn(missing_docs)]
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -368,11 +369,14 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 5]> = LazyLock::new(|| {
 /// ```
 #[must_use]
 pub fn sanitize_for_logging(s: &str) -> String {
-    let mut result = s.to_string();
+    let mut result = Cow::Borrowed(s);
     for (re, replacement) in SANITIZE_PATTERNS.iter() {
-        result = re.replace_all(&result, *replacement).to_string();
+        match re.replace_all(&result, *replacement) {
+            Cow::Borrowed(_) => {} // No match — keep existing result
+            Cow::Owned(replaced) => result = Cow::Owned(replaced),
+        }
     }
-    result
+    result.into_owned()
 }
 
 #[cfg(test)]

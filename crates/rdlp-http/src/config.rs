@@ -60,20 +60,21 @@ impl HttpClientConfig {
     pub fn from_rdlp_config(config: &rdlp_types::Config) -> Self {
         let mut http_config = Self::default();
 
-        if let Some(ref user_agent) = config.user_agent {
-            http_config.user_agent = user_agent.clone();
+        if let Some(user_agent) = &config.user_agent {
+            http_config.user_agent.clone_from(user_agent);
         }
 
         if let Some(timeout) = config.socket_timeout {
             http_config.connect_timeout_secs = timeout;
         }
 
-        http_config.proxy = config.proxy.clone();
+        http_config.proxy.clone_from(&config.proxy);
 
         http_config
     }
 
     /// Set the user agent string
+    #[must_use]
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
         self
@@ -122,6 +123,7 @@ impl HttpClientConfig {
     }
 
     /// Set a proxy URL
+    #[must_use]
     pub fn with_proxy(mut self, proxy: impl Into<String>) -> Self {
         self.proxy = Some(proxy.into());
         self

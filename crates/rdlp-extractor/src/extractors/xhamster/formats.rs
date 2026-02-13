@@ -23,24 +23,18 @@ fn get_height(s: &str) -> Option<u32> {
 }
 
 /// Detect vcodec from URL by checking for `.av1.` or `.h264.` in the path.
-fn detect_vcodec(url: &str) -> Option<String> {
-    if url.contains(".av1.") {
-        Some("av1".to_string())
-    } else if url.contains(".h264.") {
-        Some("h264".to_string())
-    } else {
-        None
-    }
+fn detect_vcodec(url: &str) -> Option<&'static str> {
+    [(".av1.", "av1"), (".h264.", "h264")]
+        .iter()
+        .find(|(pattern, _)| url.contains(pattern))
+        .map(|(_, codec)| *codec)
 }
 
 /// Apply codec fixup to all formats (detect vcodec from URL patterns).
 pub fn fixup_formats(formats: &mut [Format]) {
-    for f in formats {
-        if f.vcodec.is_some() {
-            continue;
-        }
+    for f in formats.iter_mut().filter(|f| f.vcodec.is_none()) {
         if let Some(vcodec) = detect_vcodec(&f.url) {
-            f.vcodec = Some(vcodec);
+            f.vcodec = Some(vcodec.to_string());
         }
     }
 }
@@ -208,30 +202,22 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
                             continue;
                         }
 
-                        let quality = std_obj
+                        // Extract quality as a displayable string from "quality" (string or int)
+                        // or "label" as fallback.
+                        let quality_str = std_obj
                             .get("quality")
-                            .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
-                            .or_else(|| std_obj.get("label").and_then(|v| v.as_str()))
-                            .unwrap_or("");
-
-                        let quality_str = if !quality.is_empty() {
-                            std_obj
-                                .get("quality")
-                                .and_then(|v| {
-                                    v.as_str()
-                                        .map(|s| s.to_string())
-                                        .or_else(|| v.as_i64().map(|i| i.to_string()))
-                                })
-                                .or_else(|| {
-                                    std_obj
-                                        .get("label")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+                            .and_then(|v| {
+                                v.as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| v.as_i64().map(|i| i.to_string()))
+                            })
+                            .or_else(|| {
+                                std_obj
+                                    .get("label")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_default();
 
                         let format_id = if quality_str.is_empty() {
                             identifier.clone()
@@ -292,26 +278,26 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
     let mut seen_urls: HashSet<String> = HashSet::new();
 
     // Strategy 1: sources: {...} JS object
-    if let Some(caps) = patterns::LEGACY_SOURCES_PATTERN.captures(webpage) {
-        if let Some(json_str) = caps.get(1) {
-            if let Ok(sources) = serde_json::from_str::<Value>(json_str.as_str()) {
-                if let Some(obj) = sources.as_object() {
-                    for (format_id, url_val) in obj {
-                        if let Some(url) = url_val.as_str() {
-                            if url.is_empty() || !seen_urls.insert(url.to_string()) {
-                                continue;
-                            }
-                            let height = get_height(format_id);
-                            let format = BaseExtractor::build_format(
-                                format_id.clone(),
-                                url.to_string(),
-                                "mp4".to_string(),
-                                height,
-                            );
-                            formats.push(format);
-                        }
-                    }
+    if let Some(sources) = patterns::LEGACY_SOURCES_PATTERN
+        .captures(webpage)
+        .and_then(|caps| caps.get(1))
+        .and_then(|json_str| serde_json::from_str::<Value>(json_str.as_str()).ok())
+    {
+        if let Some(obj) = sources.as_object() {
+            for (format_id, url_val) in obj {
+                let Some(url) = url_val.as_str().filter(|u| !u.is_empty()) else {
+                    continue;
+                };
+                if !seen_urls.insert(url.to_string()) {
+                    continue;
                 }
+                let height = get_height(format_id);
+                formats.push(BaseExtractor::build_format(
+                    format_id.clone(),
+                    url.to_string(),
+                    "mp4".to_string(),
+                    height,
+                ));
             }
         }
     }
@@ -324,14 +310,19 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
     ];
 
     for pattern in &url_patterns {
-        if let Some(caps) = pattern.captures(webpage) {
-            if let Some(url_match) = caps.name("url") {
-                let url = url_match.as_str();
-                if !url.is_empty() && seen_urls.insert(url.to_string()) {
-                    let format =
-                        Format::new("video", url, "mp4", rdlp_core::DownloadProtocol::Https);
-                    formats.push(format);
-                }
+        if let Some(url) = pattern
+            .captures(webpage)
+            .and_then(|caps| caps.name("url"))
+            .map(|m| m.as_str())
+            .filter(|u| !u.is_empty())
+        {
+            if seen_urls.insert(url.to_string()) {
+                formats.push(Format::new(
+                    "video",
+                    url,
+                    "mp4",
+                    rdlp_core::DownloadProtocol::Https,
+                ));
             }
         }
     }
@@ -361,11 +352,11 @@ mod tests {
     fn test_detect_vcodec() {
         assert_eq!(
             detect_vcodec("https://example.com/video.h264.mp4"),
-            Some("h264".to_string())
+            Some("h264")
         );
         assert_eq!(
             detect_vcodec("https://example.com/video.av1.mp4"),
-            Some("av1".to_string())
+            Some("av1")
         );
         assert_eq!(detect_vcodec("https://example.com/video.mp4"), None);
     }

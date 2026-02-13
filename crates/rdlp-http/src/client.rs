@@ -79,7 +79,7 @@ impl HttpClientFactory {
             builder = builder.cookie_provider(jar);
         }
 
-        if let Some(ref proxy_url) = self.config.proxy {
+        if let Some(proxy_url) = &self.config.proxy {
             match reqwest::Proxy::all(proxy_url) {
                 Ok(proxy) => builder = builder.proxy(proxy),
                 Err(e) => tracing::warn!("Invalid proxy URL '{}': {}", proxy_url, e),

@@ -160,29 +160,29 @@ impl XHamsterExtractor {
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
         // Try to find the real video URL in the embed page
-        if let Some(caps) = patterns::EMBED_VIDEO_URL_PATTERN.captures(&webpage) {
-            if let Some(video_url) = caps.get(1) {
-                debug!(video_url:? = video_url.as_str(); "[XHamster] Found video URL in embed page");
-                return self.extract_video(video_url.as_str(), ctx).await;
-            }
+        if let Some(video_url) = patterns::EMBED_VIDEO_URL_PATTERN
+            .captures(&webpage)
+            .and_then(|caps| caps.get(1))
+        {
+            debug!(video_url:? = video_url.as_str(); "[XHamster] Found video URL in embed page");
+            return self.extract_video(video_url.as_str(), ctx).await;
         }
 
         // Try extracting from embed vars JSON
-        if let Some(caps) = patterns::EMBED_VARS_PATTERN.captures(&webpage) {
-            if let Some(json_str) = caps.get(1) {
-                if let Ok(vars) = serde_json::from_str::<serde_json::Value>(json_str.as_str()) {
-                    if let Some(video_url) = vars
-                        .get("downloadLink")
-                        .or_else(|| vars.get("mp4File"))
-                        .and_then(|v| v.as_str())
-                    {
-                        if !video_url.is_empty() {
-                            debug!(video_url:?; "[XHamster] Found video URL in embed vars");
-                            return self.extract_video(video_url, ctx).await;
-                        }
-                    }
-                }
-            }
+        if let Some(video_url) = patterns::EMBED_VARS_PATTERN
+            .captures(&webpage)
+            .and_then(|caps| caps.get(1))
+            .and_then(|json_str| serde_json::from_str::<serde_json::Value>(json_str.as_str()).ok())
+            .and_then(|vars| {
+                vars.get("downloadLink")
+                    .or_else(|| vars.get("mp4File"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            })
+        {
+            debug!(video_url:?; "[XHamster] Found video URL in embed vars");
+            return self.extract_video(&video_url, ctx).await;
         }
 
         Err(RdlpError::Extraction(format!(
@@ -379,19 +379,18 @@ impl InfoExtractor for XHamsterExtractor {
 /// Try to extract and parse `window.initials` JSON from the page source.
 fn extract_initials_json(webpage: &str) -> Option<serde_json::Value> {
     // Try strict pattern first, then fallback
-    let json_str = patterns::INITIALS_PATTERN
-        .captures(webpage)
-        .or_else(|| patterns::INITIALS_FALLBACK_PATTERN.captures(webpage))
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str())?;
+    let json_str = [
+        &*patterns::INITIALS_PATTERN,
+        &*patterns::INITIALS_FALLBACK_PATTERN,
+    ]
+    .iter()
+    .find_map(|pat| pat.captures(webpage))
+    .and_then(|caps| caps.get(1))
+    .map(|m| m.as_str())?;
 
-    match serde_json::from_str(json_str) {
-        Ok(val) => Some(val),
-        Err(e) => {
-            debug!("[XHamster] Failed to parse window.initials JSON: {e}");
-            None
-        }
-    }
+    serde_json::from_str(json_str)
+        .inspect_err(|e| debug!("[XHamster] Failed to parse window.initials JSON: {e}"))
+        .ok()
 }
 
 /// Extract video URLs from a user/creator page HTML.

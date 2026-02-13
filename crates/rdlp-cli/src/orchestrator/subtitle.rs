@@ -184,9 +184,8 @@ impl Orchestrator {
         .map_err(|e| super::OrchestratorError::Io(std::io::Error::other(e)))?
         .map_err(|e| super::OrchestratorError::Io(e.into()))?;
 
-        let selected_indices = match selection {
-            Some(indices) => indices,
-            None => return Ok(None), // ESC pressed
+        let Some(selected_indices) = selection else {
+            return Ok(None); // ESC pressed
         };
 
         if selected_indices.is_empty() {
@@ -279,6 +278,37 @@ impl Orchestrator {
 
         // Fallback to first entry
         Some(entries[0].clone())
+    }
+
+    /// Resolve subtitle entries for a specific episode from language names.
+    ///
+    /// Used by playlist downloads: the user selects languages once (from the
+    /// first episode's menu), then each episode resolves its own subtitle
+    /// URLs for those languages.
+    ///
+    /// # Arguments
+    /// * `info` - Episode metadata with subtitle URLs
+    /// * `langs` - Language names selected by the user
+    ///
+    /// # Returns
+    /// Vec of (lang, Subtitle) pairs with URLs specific to this episode
+    pub(super) fn resolve_subtitles_for_episode(
+        &self,
+        info: &InfoDict,
+        langs: &[String],
+    ) -> Vec<(String, rdlp_core::Subtitle)> {
+        let mut result = Vec::new();
+        for lang in langs {
+            // Try manual subtitles first, then auto-captions
+            if let Some(sub) = self.pick_best_subtitle_for_lang(info, lang, false) {
+                result.push((lang.clone(), sub));
+            } else if let Some(sub) = self.pick_best_subtitle_for_lang(info, lang, true) {
+                result.push((lang.clone(), sub));
+            } else {
+                debug!(lang:%; "No subtitle found for language in this episode");
+            }
+        }
+        result
     }
 
     /// Download subtitles for a video.
@@ -421,9 +451,8 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
     ) -> Result<Option<Vec<PathBuf>>> {
-        let selected = match self.select_subtitles_interactive(info).await? {
-            Some(sel) => sel,
-            None => return Ok(None),
+        let Some(selected) = self.select_subtitles_interactive(info).await? else {
+            return Ok(None);
         };
 
         if selected.is_empty() {

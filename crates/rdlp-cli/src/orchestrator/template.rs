@@ -966,8 +966,7 @@ fn apply_width(raw: &str, spec: &FormatSpec) -> String {
     } else if let Some(prec) = spec.precision {
         // For strings, precision truncates
         if spec.type_char == FormatType::String {
-            let truncated: String = raw.chars().take(prec).collect();
-            truncated
+            raw.chars().take(prec).collect()
         } else {
             raw.to_string()
         }

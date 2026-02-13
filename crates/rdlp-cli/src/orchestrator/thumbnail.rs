@@ -44,13 +44,12 @@ impl Orchestrator {
                 let filename = filename.split('?').next().unwrap_or(filename);
                 filename.rsplit('.').next()
             })
-            .and_then(|ext| {
-                let ext = ext.to_lowercase();
-                match ext.as_str() {
-                    "jpg" | "jpeg" | "png" | "webp" => Some(ext),
-                    _ => None,
-                }
+            .filter(|ext| {
+                ["jpg", "jpeg", "png", "webp"]
+                    .iter()
+                    .any(|known| ext.eq_ignore_ascii_case(known))
             })
+            .map(str::to_lowercase)
             .unwrap_or_else(|| "jpg".to_string());
 
         // Build output path: {media_stem}.{ext}

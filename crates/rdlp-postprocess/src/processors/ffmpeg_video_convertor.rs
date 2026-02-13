@@ -63,38 +63,47 @@ impl FFmpegVideoConvertor {
 
     /// Determine if we can remux (copy) or need to transcode.
     fn can_remux(input_ext: &str, output_ext: &str, video_codec: Option<&str>) -> bool {
+        /// Check if `codec` case-insensitively matches any of the given names.
+        fn codec_is(codec: &str, names: &[&str]) -> bool {
+            names.iter().any(|n| n.eq_ignore_ascii_case(codec))
+        }
+
+        /// Check if `ext` case-insensitively matches any of the given extensions.
+        fn ext_is(ext: &str, exts: &[&str]) -> bool {
+            exts.iter().any(|e| e.eq_ignore_ascii_case(ext))
+        }
+
         // Check if the codec is compatible with the target container
-        match (output_ext.to_lowercase().as_str(), video_codec) {
-            // MP4/F4v supports H.264, H.265, MPEG-4, AV1
-            ("mp4" | "f4v", Some(c)) => matches!(
-                c.to_lowercase().as_str(),
-                "h264" | "avc" | "h265" | "hevc" | "mpeg4" | "av1"
-            ),
+        if ext_is(output_ext, &["mp4", "f4v"]) {
+            // MP4/F4V supports H.264, H.265, MPEG-4, AV1
+            video_codec
+                .is_some_and(|c| codec_is(c, &["h264", "avc", "h265", "hevc", "mpeg4", "av1"]))
+        } else if ext_is(output_ext, &["mkv", "mka", "nut", "mxf"]) {
             // MKV, MKA, NUT, MXF accept almost everything
-            ("mkv" | "mka" | "nut" | "mxf", _) => true,
+            true
+        } else if output_ext.eq_ignore_ascii_case("webm") {
             // WebM supports VP8, VP9, AV1
-            ("webm", Some(c)) => matches!(c.to_lowercase().as_str(), "vp8" | "vp9" | "av1"),
+            video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
+        } else if output_ext.eq_ignore_ascii_case("ivf") {
             // IVF supports VP8, VP9, AV1
-            ("ivf", Some(c)) => matches!(c.to_lowercase().as_str(), "vp8" | "vp9" | "av1"),
+            video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
+        } else if output_ext.eq_ignore_ascii_case("3gp") {
             // 3GP supports H.264, H.263, MPEG-4
-            ("3gp", Some(c)) => {
-                matches!(c.to_lowercase().as_str(), "h264" | "avc" | "h263" | "mpeg4")
-            }
+            video_codec.is_some_and(|c| codec_is(c, &["h264", "avc", "h263", "mpeg4"]))
+        } else if output_ext.eq_ignore_ascii_case("asf") {
             // ASF/WMV supports WMV, H.264, MPEG-4
-            ("asf", Some(c)) => matches!(
-                c.to_lowercase().as_str(),
-                "wmv1" | "wmv2" | "h264" | "avc" | "mpeg4"
-            ),
+            video_codec.is_some_and(|c| codec_is(c, &["wmv1", "wmv2", "h264", "avc", "mpeg4"]))
+        } else if ext_is(output_ext, &["mpg", "vob"]) {
             // MPEG/VOB supports MPEG-1, MPEG-2, MPEG-4
-            ("mpg" | "vob", Some(c)) => matches!(
-                c.to_lowercase().as_str(),
-                "mpeg1" | "mpeg1video" | "mpeg2" | "mpeg2video" | "mpeg4"
-            ),
+            video_codec.is_some_and(|c| {
+                codec_is(c, &["mpeg1", "mpeg1video", "mpeg2", "mpeg2video", "mpeg4"])
+            })
+        } else if output_ext.eq_ignore_ascii_case("avi") {
             // AVI supports most codecs
-            ("avi", _) => true,
+            true
+        } else {
             // Same container - can copy
-            _ if input_ext.eq_ignore_ascii_case(output_ext) => true,
-            _ => false,
+            input_ext.eq_ignore_ascii_case(output_ext)
         }
     }
 

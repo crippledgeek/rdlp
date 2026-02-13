@@ -123,10 +123,7 @@ impl Orchestrator {
         .map_err(|e| OrchestratorError::Io(std::io::Error::other(e)))?
         .map_err(|e| OrchestratorError::Io(e.into()))?;
 
-        match selection {
-            Some(index) => Ok(Some(grouped[index].clone())),
-            None => Ok(None),
-        }
+        Ok(selection.map(|index| grouped[index].clone()))
     }
 }
 
@@ -135,8 +132,7 @@ impl Orchestrator {
 /// Prefer formats with audio over video-only, then higher quality, then larger filesize.
 fn pick_better(candidate: &Format, current: &Format) -> bool {
     // Prefer formats that have audio over video-only
-    let has_audio = |f: &Format| f.acodec.is_some();
-    match (has_audio(candidate), has_audio(current)) {
+    match (candidate.acodec.is_some(), current.acodec.is_some()) {
         (true, false) => return true,
         (false, true) => return false,
         _ => {}
@@ -148,8 +144,8 @@ fn pick_better(candidate: &Format, current: &Format) -> bool {
     }
 
     // Larger filesize wins (more likely to be higher quality)
-    match (candidate.filesize, current.filesize) {
-        (Some(a), Some(b)) if a != b => a > b,
-        _ => false,
-    }
+    matches!(
+        (candidate.filesize, current.filesize),
+        (Some(a), Some(b)) if a > b
+    )
 }

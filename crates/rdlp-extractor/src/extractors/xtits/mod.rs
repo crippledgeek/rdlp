@@ -56,11 +56,20 @@ fn extract_models(html: &Html) -> Vec<String> {
     extract_link_texts(html, ".info-block .list-items", "Models:")
 }
 
-/// Extract link texts from a labeled list-items section.
+/// Extract values from `<a>` links inside a labeled `.list-items` section.
 ///
 /// KVS pages use `.list-items` divs with a `.title-row` label followed by `<a>` links.
-/// This finds the section whose label matches `label_text` and collects all link texts.
-fn extract_link_texts(html: &Html, container_sel: &str, label_text: &str) -> Vec<String> {
+/// This finds the section whose label matches `label_text` and applies `extract_fn`
+/// to each link element.
+fn extract_from_labeled_links<F>(
+    html: &Html,
+    container_sel: &str,
+    label_text: &str,
+    extract_fn: F,
+) -> Vec<String>
+where
+    F: Fn(&scraper::ElementRef) -> Option<String>,
+{
     let container_selector = match scraper::Selector::parse(container_sel) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
@@ -75,20 +84,26 @@ fn extract_link_texts(html: &Html, container_sel: &str, label_text: &str) -> Vec
     };
 
     for container in html.select(&container_selector) {
-        // Check if this container's title-row matches the label
         if let Some(title_el) = container.select(&title_selector).next() {
             let title = title_el.text().collect::<String>();
             if title.trim() == label_text {
                 return container
                     .select(&link_selector)
-                    .map(|el| el.text().collect::<String>().trim().to_string())
-                    .filter(|s| !s.is_empty())
+                    .filter_map(|el| extract_fn(&el))
                     .collect();
             }
         }
     }
 
     Vec::new()
+}
+
+/// Extract link texts from a labeled list-items section.
+fn extract_link_texts(html: &Html, container_sel: &str, label_text: &str) -> Vec<String> {
+    extract_from_labeled_links(html, container_sel, label_text, |el| {
+        let text = el.text().collect::<String>().trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    })
 }
 
 /// Extract rating percentage from the voters section
@@ -117,75 +132,42 @@ fn extract_like_count(html: &Html) -> Option<u64> {
 ///
 /// The "Models:" section contains `<a href="/models/jenni-lee/">Jenni Lee</a>`.
 fn extract_model_url(html: &Html) -> Option<String> {
-    extract_link_hrefs(html, ".info-block .list-items", "Models:")
-        .into_iter()
-        .next()
+    extract_from_labeled_links(html, ".info-block .list-items", "Models:", |el| {
+        el.value()
+            .attr("href")
+            .map(|href| crate::utils::make_absolute_url(XTITS_BASE_URL, href))
+    })
+    .into_iter()
+    .next()
 }
 
-/// Extract link hrefs from a labeled list-items section.
-fn extract_link_hrefs(html: &Html, container_sel: &str, label_text: &str) -> Vec<String> {
-    let container_selector = match scraper::Selector::parse(container_sel) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let title_selector = match scraper::Selector::parse(".title-row") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let link_selector = match scraper::Selector::parse("a.link") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+/// Extract text from a `.buttons-info .item` element identified by its icon class.
+///
+/// KVS info bars use `.item` divs with an icon element (e.g. `.icon-eye`, `.icon-clock`)
+/// followed by a text value. This returns the combined text of the matching item.
+fn extract_info_bar_text(html: &Html, icon_class: &str) -> Option<String> {
+    let item_selector = scraper::Selector::parse(".buttons-info .item").ok()?;
+    let icon_selector = scraper::Selector::parse(icon_class).ok()?;
 
-    for container in html.select(&container_selector) {
-        if let Some(title_el) = container.select(&title_selector).next() {
-            let title = title_el.text().collect::<String>();
-            if title.trim() == label_text {
-                return container
-                    .select(&link_selector)
-                    .filter_map(|el| {
-                        el.value()
-                            .attr("href")
-                            .map(|href| crate::utils::make_absolute_url(XTITS_BASE_URL, href))
-                    })
-                    .collect();
-            }
+    for item in html.select(&item_selector) {
+        if item.select(&icon_selector).next().is_some() {
+            return Some(item.text().collect());
         }
     }
 
-    Vec::new()
+    None
 }
 
 /// Extract view count from the page
 fn extract_view_count(html: &Html) -> Option<u64> {
-    // Views are in a `.buttons-info .item` containing `.icon-eye`
-    let item_selector = scraper::Selector::parse(".buttons-info .item").ok()?;
-    let icon_selector = scraper::Selector::parse(".icon-eye").ok()?;
-
-    for item in html.select(&item_selector) {
-        if item.select(&icon_selector).next().is_some() {
-            let text: String = item.text().collect();
-            let cleaned = text.trim().replace([' ', ',', '\u{a0}'], "");
-            return cleaned.parse().ok();
-        }
-    }
-
-    None
+    extract_info_bar_text(html, ".icon-eye")
+        .and_then(|text| text.trim().replace([' ', ',', '\u{a0}'], "").parse().ok())
 }
 
 /// Parse duration text like "28min 18sec" into seconds
 fn parse_duration_text(html: &Html) -> Option<f64> {
-    let item_selector = scraper::Selector::parse(".buttons-info .item").ok()?;
-    let icon_selector = scraper::Selector::parse(".icon-clock").ok()?;
-
-    for item in html.select(&item_selector) {
-        if item.select(&icon_selector).next().is_some() {
-            let text: String = item.text().collect();
-            return BaseExtractor::parse_text_duration(text.trim());
-        }
-    }
-
-    None
+    extract_info_bar_text(html, ".icon-clock")
+        .and_then(|text| BaseExtractor::parse_text_duration(text.trim()))
 }
 
 #[async_trait]
@@ -282,7 +264,7 @@ impl InfoExtractor for XTitsExtractor {
             )
         };
 
-        let mut info = InfoDict::new(video_id, title, self.name().to_string(), url.to_string());
+        let mut info = InfoDict::new(video_id, title, self.name(), url);
         info.description = description;
         info.thumbnail = thumbnail;
         info.categories = Some(categories);

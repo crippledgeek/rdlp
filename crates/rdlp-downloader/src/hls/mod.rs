@@ -266,7 +266,7 @@ impl Downloader for HlsDownloader {
                 self.buffer_size,
                 self.concurrent_segments,
                 self.max_segment_failures,
-                segments.clone(),
+                &segments,
                 temp_dir,
                 base_filename,
                 downloaded.clone(),
@@ -294,27 +294,19 @@ impl Downloader for HlsDownloader {
 
             // Step 5: Download unique init segments (fMP4 EXT-X-MAP)
             // Collect unique init segments and download each once.
-            let mut init_file_map: HashMap<InitSegmentInfo, std::path::PathBuf> = HashMap::new();
-            {
-                let unique_inits: Vec<InitSegmentInfo> = segments
-                    .iter()
-                    .filter_map(|s| s.init_segment.clone())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect();
+            let unique_inits: HashSet<InitSegmentInfo> = segments
+                .iter()
+                .filter_map(|s| s.init_segment.clone())
+                .collect();
 
-                for (i, init) in unique_inits.into_iter().enumerate() {
-                    let init_path = temp_dir.join(format!("{base_filename}.init{i}"));
-                    info!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
-                    download_init_segment(
-                        &self.http_downloader,
-                        &self.retry_config,
-                        &init,
-                        &init_path,
-                    )
+            let mut init_file_map: HashMap<InitSegmentInfo, std::path::PathBuf> =
+                HashMap::with_capacity(unique_inits.len());
+            for (i, init) in unique_inits.into_iter().enumerate() {
+                let init_path = temp_dir.join(format!("{base_filename}.init{i}"));
+                info!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
+                download_init_segment(&self.http_downloader, &self.retry_config, &init, &init_path)
                     .await?;
-                    init_file_map.insert(init, init_path);
-                }
+                init_file_map.insert(init, init_path);
             }
 
             // Build per-segment init path mapping for merge

@@ -87,7 +87,7 @@ struct Filter {
 }
 
 /// Format fields that can be filtered on.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterField {
     Height,
     Width,
@@ -105,7 +105,7 @@ enum FilterField {
 }
 
 /// Comparison operators for filters.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterOp {
     Eq,
     Ne,
@@ -417,6 +417,7 @@ fn compare_str(val: &str, op: &FilterOp, filter_val: &FilterValue) -> bool {
     }
 }
 
+#[derive(Clone, Copy)]
 enum SortDirection {
     Best,
     Worst,

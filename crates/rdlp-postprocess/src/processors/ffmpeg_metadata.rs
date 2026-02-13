@@ -31,7 +31,7 @@ ffmpeg_processor!(
 impl FFmpegMetadata {
     /// Build a metadata `HashMap` from `InfoDict`.
     fn build_metadata(info: &InfoDict) -> HashMap<String, String> {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::with_capacity(10);
 
         // Title
         meta.insert("title".to_string(), info.title.clone());

@@ -421,9 +421,7 @@ impl FFmpegRunner {
                     break;
                 }
                 let sample = ffmpeg_the_third::format::Sample::from(fmt);
-                if first.is_none() {
-                    first = Some(sample);
-                }
+                first.get_or_insert(sample);
                 if sample == preferred {
                     return preferred;
                 }
@@ -1635,9 +1633,7 @@ impl FFmpegRunner {
                     break;
                 }
                 let pixel = ffmpeg_the_third::format::Pixel::from(fmt);
-                if first.is_none() {
-                    first = Some(pixel);
-                }
+                first.get_or_insert(pixel);
                 if pixel == preferred {
                     return preferred;
                 }

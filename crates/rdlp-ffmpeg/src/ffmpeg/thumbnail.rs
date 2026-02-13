@@ -95,9 +95,10 @@ impl FFmpegRunner {
                 continue;
             }
 
-            if medium != ffmpeg_the_third::media::Type::Video
-                && medium != ffmpeg_the_third::media::Type::Audio
-            {
+            if !matches!(
+                medium,
+                ffmpeg_the_third::media::Type::Video | ffmpeg_the_third::media::Type::Audio
+            ) {
                 continue;
             }
 

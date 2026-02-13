@@ -34,7 +34,7 @@ pub mod patterns;
 pub mod playlist;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, info};
 use rdlp_core::{
     DownloadProtocol, ExtractionContext, Format, InfoDict, InfoExtractor, RdlpError, Result,
 };
@@ -116,7 +116,7 @@ pub(crate) async fn resolve_episode_formats(
         let source = match api::fetch_source(&server.data_id, ctx).await {
             Ok(s) => s,
             Err(e) => {
-                warn!(
+                debug!(
                     server:% = server.server_name;
                     "Failed to fetch source: {e}"
                 );
@@ -154,10 +154,8 @@ pub(crate) async fn resolve_episode_formats(
                         DownloadProtocol::Https
                     };
 
-                    let ext = "mp4";
                     let audio_label = server.audio_type.to_string();
-
-                    let mut format = Format::new(&format_id, &src.url, ext, protocol);
+                    let mut format = Format::new(&format_id, &src.url, "mp4", protocol);
                     format.format_note =
                         Some(format!("{} ({})", server.audio_type, server.server_name));
                     format.language = Some(audio_label);
@@ -186,7 +184,7 @@ pub(crate) async fn resolve_episode_formats(
                 }
             }
             Err(e) => {
-                warn!(
+                debug!(
                     server:% = server.server_name;
                     "Megacloud extraction failed: {e}"
                 );

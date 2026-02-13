@@ -137,7 +137,7 @@ impl FFmpegRunner {
             let mut stream_info = StreamInfo {
                 index: stream.index(),
                 codec_type: codec_type_str.to_string(),
-                codec_name: Some(codec_name.clone()),
+                codec_name: Some(codec_name),
                 metadata: HashMap::new(),
             };
 
@@ -152,7 +152,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::media::Type::Video => {
                     info.has_video = true;
                     if info.video_codec.is_none() {
-                        info.video_codec = Some(codec_name);
+                        info.video_codec = stream_info.codec_name.clone();
                     }
 
                     if let Ok(codec_ctx) =
@@ -183,7 +183,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::media::Type::Audio => {
                     info.has_audio = true;
                     if info.audio_codec.is_none() {
-                        info.audio_codec = Some(codec_name);
+                        info.audio_codec = stream_info.codec_name.clone();
                     }
 
                     if let Ok(codec_ctx) =

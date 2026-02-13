@@ -43,10 +43,10 @@ impl MergeMode {
 }
 
 /// Global atomic counter for generating unique download IDs
-pub(super) static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Cleanup chunk files on error
-pub(super) async fn cleanup_chunk_files(
+async fn cleanup_chunk_files(
     temp_dir: &Path,
     filename: &str,
     download_id: u64,

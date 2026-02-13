@@ -34,7 +34,7 @@ pub fn extract_metadata(html: &Html, webpage: &str) -> AnimeMetadata {
 }
 
 /// Extract the anime title, trying multiple strategies.
-fn extract_title(html: &Html, webpage: &str) -> String {
+fn extract_title(html: &Html, _webpage: &str) -> String {
     // Strategy 1: h2 element — 9anime puts the clean title here
     for selector_str in &["h2.film-name", "h2"] {
         if let Ok(sel) = Selector::parse(selector_str) {
@@ -67,7 +67,6 @@ fn extract_title(html: &Html, webpage: &str) -> String {
         }
     }
 
-    let _ = webpage;
     "Unknown Anime".to_string()
 }
 
@@ -90,16 +89,13 @@ fn clean_9anime_title(title: &str) -> String {
 
 /// Extract thumbnail URL from the page.
 fn extract_thumbnail(html: &Html) -> Option<String> {
-    // Try OG image
-    if let Some(url) = BaseExtractor::extract_thumbnail_multi_strategy(html) {
-        return Some(url);
-    }
-
-    // Fallback: look for poster image
-    let img_selector = Selector::parse("img.film-poster-img").ok()?;
-    html.select(&img_selector)
-        .next()
-        .and_then(|e| e.value().attr("src").map(String::from))
+    // Try OG image first, then fall back to poster image
+    BaseExtractor::extract_thumbnail_multi_strategy(html).or_else(|| {
+        let img_selector = Selector::parse("img.film-poster-img").ok()?;
+        html.select(&img_selector)
+            .next()
+            .and_then(|e| e.value().attr("src").map(String::from))
+    })
 }
 
 #[cfg(test)]

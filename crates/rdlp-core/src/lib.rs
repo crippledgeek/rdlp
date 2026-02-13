@@ -12,12 +12,12 @@
 //! ```rust,no_run
 //! use rdlp_core::{InfoDict, Format, Config};
 //!
-//! // Create a new InfoDict
+//! // Create a new InfoDict (constructor accepts impl Into<String>)
 //! let info = InfoDict::new(
-//!     "video123".to_string(),
-//!     "My Video".to_string(),
-//!     "YouTube".to_string(),
-//!     "https://youtube.com/watch?v=video123".to_string(),
+//!     "video123",
+//!     "My Video",
+//!     "YouTube",
+//!     "https://youtube.com/watch?v=video123",
 //! );
 //!
 //! // Create a default configuration

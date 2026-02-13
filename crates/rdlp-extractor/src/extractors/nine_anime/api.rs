@@ -114,17 +114,14 @@ fn extract_inner_text(html: &str) -> Option<String> {
     static INNER_TEXT: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#">([^<]+)<"#).expect("Valid inner text pattern"));
 
-    INNER_TEXT
-        .captures_iter(html)
-        .filter_map(|c| {
-            let text = c[1].trim();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text.to_string())
-            }
-        })
-        .next()
+    INNER_TEXT.captures_iter(html).find_map(|c| {
+        let text = c[1].trim();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
+        }
+    })
 }
 
 /// Parse all server items from the AJAX HTML response.
@@ -139,10 +136,10 @@ fn parse_server_items(html: &str) -> Vec<ServerEntry> {
     for block_match in SERVER_ITEM_BLOCK.find_iter(html) {
         let block = block_match.as_str();
 
-        let data_id = match DATA_ID_ATTR.captures(block) {
-            Some(c) => c[1].to_string(),
-            None => continue,
+        let Some(data_id_caps) = DATA_ID_ATTR.captures(block) else {
+            continue;
         };
+        let data_id = data_id_caps[1].to_string();
 
         let server_id: u32 = SERVER_ID_ATTR
             .captures(block)
@@ -154,9 +151,8 @@ fn parse_server_items(html: &str) -> Vec<ServerEntry> {
             _ => AudioType::Sub,
         };
 
-        let server_name = match extract_inner_text(block) {
-            Some(name) => name,
-            None => continue,
+        let Some(server_name) = extract_inner_text(block) else {
+            continue;
         };
 
         // Avoid duplicates
@@ -179,10 +175,14 @@ const PREFERRED_SERVERS: &[&str] = &["Vidcloud", "Vidstreaming", "DouVideo"];
 /// Sort servers by preference (Vidcloud first, then Vidstreaming, then others).
 pub fn sort_by_preference(servers: &mut [ServerEntry]) {
     servers.sort_by_key(|s| {
-        let name_lower = s.server_name.to_lowercase();
         PREFERRED_SERVERS
             .iter()
-            .position(|p| name_lower.contains(&p.to_lowercase()))
+            .position(|p| {
+                s.server_name
+                    .as_bytes()
+                    .windows(p.len())
+                    .any(|w| w.eq_ignore_ascii_case(p.as_bytes()))
+            })
             .unwrap_or(PREFERRED_SERVERS.len())
     });
 }
@@ -292,8 +292,8 @@ fn parse_episode_info(html: &str, episode_data_id: &str) -> Option<EpisodeInfo> 
         let block = block_match.as_str();
 
         // Check if this block's data-id matches
-        let data_id = EP_ITEM_DATA_ID.captures(block).map(|c| c[1].to_string())?;
-        if data_id != episode_data_id {
+        let id_caps = EP_ITEM_DATA_ID.captures(block)?;
+        if &id_caps[1] != episode_data_id {
             continue;
         }
 
@@ -332,14 +332,11 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
     for block_match in EP_ITEM_BLOCK.find_iter(html) {
         let block = block_match.as_str();
 
-        let data_id = match EP_ITEM_DATA_ID.captures(block) {
-            Some(c) => c[1].to_string(),
-            None => continue,
+        let Some(id_caps) = EP_ITEM_DATA_ID.captures(block) else {
+            continue;
         };
-
-        let number = match EP_DATA_NUMBER.captures(block) {
-            Some(c) => c[1].to_string(),
-            None => continue,
+        let Some(num_caps) = EP_DATA_NUMBER.captures(block) else {
+            continue;
         };
 
         let title = EP_TITLE_ATTR
@@ -348,8 +345,11 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
             .filter(|t| !t.is_empty());
 
         entries.push(EpisodeListEntry {
-            data_id,
-            info: EpisodeInfo { number, title },
+            data_id: id_caps[1].to_string(),
+            info: EpisodeInfo {
+                number: num_caps[1].to_string(),
+                title,
+            },
         });
     }
 

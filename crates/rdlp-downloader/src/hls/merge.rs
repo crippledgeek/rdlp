@@ -51,7 +51,7 @@ pub(crate) async fn download_segments_with_resume(
     buffer_size: usize,
     concurrent_segments: usize,
     max_segment_failures: usize,
-    segments: Vec<SegmentInfo>,
+    segments: &[SegmentInfo],
     temp_dir: &Path,
     base_filename: &str,
     progress_counter: Arc<AtomicU64>,
@@ -66,21 +66,22 @@ pub(crate) async fn download_segments_with_resume(
     let original_completed: HashSet<usize> = state.lock().await.completed_segments.clone();
 
     // Verify completed segments actually exist on disk (handles corrupted/deleted files)
-    let mut completed: HashSet<usize> = HashSet::new();
-    let mut missing_segments = Vec::new();
-    for idx in &original_completed {
+    let is_valid_on_disk = |idx: &usize| -> bool {
         let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
-        if segment_path.exists() {
-            // Also verify file is non-empty
-            if let Ok(meta) = std::fs::metadata(&segment_path) {
-                if meta.len() > 0 {
-                    completed.insert(*idx);
-                    continue;
-                }
-            }
-        }
-        missing_segments.push(*idx);
-    }
+        std::fs::metadata(&segment_path)
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false)
+    };
+    let completed: HashSet<usize> = original_completed
+        .iter()
+        .copied()
+        .filter(is_valid_on_disk)
+        .collect();
+    let mut missing_segments: Vec<usize> = original_completed
+        .iter()
+        .copied()
+        .filter(|idx| !completed.contains(idx))
+        .collect();
 
     if !missing_segments.is_empty() {
         missing_segments.sort_unstable();

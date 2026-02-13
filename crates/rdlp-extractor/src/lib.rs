@@ -70,7 +70,7 @@ impl ExtractorRegistry {
     #[must_use]
     pub fn new() -> Self {
         let mut registry = Self {
-            extractors: Vec::new(),
+            extractors: Vec::with_capacity(8),
         };
 
         // Register TNAFlix network extractors

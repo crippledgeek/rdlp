@@ -63,32 +63,32 @@ impl FFmpegRunner {
         let mut ost_index: i32 = 0;
 
         // Find minimum start_time across all video/audio streams for normalization
-        let mut min_start_time_seconds: f64 = f64::MAX;
-        for ist in ictx.streams() {
-            let medium = ist.parameters().medium();
-            if medium == ffmpeg_the_third::media::Type::Video
-                || medium == ffmpeg_the_third::media::Type::Audio
-            {
+        let min_start_time_seconds: f64 = ictx
+            .streams()
+            .filter(|ist| {
+                matches!(
+                    ist.parameters().medium(),
+                    ffmpeg_the_third::media::Type::Video | ffmpeg_the_third::media::Type::Audio
+                )
+            })
+            .filter_map(|ist| {
                 let start = ist.start_time();
                 if start > 0 {
                     let tb = ist.time_base();
-                    let start_secs = start as f64 * tb.0 as f64 / tb.1 as f64;
-                    if start_secs < min_start_time_seconds {
-                        min_start_time_seconds = start_secs;
-                    }
+                    Some(start as f64 * tb.0 as f64 / tb.1 as f64)
+                } else {
+                    None
                 }
-            }
-        }
-        // If no positive start_time found, no normalization needed
-        if min_start_time_seconds == f64::MAX {
-            min_start_time_seconds = 0.0;
-        }
+            })
+            .reduce(f64::min)
+            .unwrap_or(0.0);
 
         for (ist_index, ist) in ictx.streams().enumerate() {
             let medium = ist.parameters().medium();
-            if medium != ffmpeg_the_third::media::Type::Video
-                && medium != ffmpeg_the_third::media::Type::Audio
-            {
+            if !matches!(
+                medium,
+                ffmpeg_the_third::media::Type::Video | ffmpeg_the_third::media::Type::Audio
+            ) {
                 continue;
             }
 

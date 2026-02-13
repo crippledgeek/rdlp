@@ -89,11 +89,7 @@ pub fn detect_video_unavailable(webpage: &str) -> Option<String> {
 /// Returns 18 if the RTA tag is present, `None` otherwise.
 /// The caller should default to 18 for xHamster regardless.
 pub fn extract_age_limit(webpage: &str) -> Option<u8> {
-    if RTA_PATTERN.is_match(webpage) {
-        Some(18)
-    } else {
-        None
-    }
+    RTA_PATTERN.is_match(webpage).then_some(18)
 }
 
 /// Extract metadata from `videoModel` JSON and build an `InfoDict`.
@@ -113,7 +109,7 @@ pub fn extract_metadata_from_json(
         .unwrap_or("Untitled")
         .to_string();
 
-    let mut info = InfoDict::new(video_id, title, extractor_name.to_string(), url.to_string());
+    let mut info = InfoDict::new(video_id, title, extractor_name, url);
 
     info.description = video_model
         .get("description")
@@ -154,15 +150,14 @@ pub fn extract_metadata_from_json(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let uploader_url = author
+        info.uploader_url = author
             .get("pageURL")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        if let Some(ref u_url) = uploader_url {
+        if let Some(ref u_url) = info.uploader_url {
             info.uploader_id = u_url.split('/').next_back().map(|s| s.to_string());
         }
-        info.uploader_url = uploader_url;
     }
 
     // Categories
@@ -214,7 +209,7 @@ pub fn extract_metadata_from_html(
         })
         .unwrap_or_else(|| "Untitled".to_string());
 
-    let mut info = InfoDict::new(video_id, title, extractor_name.to_string(), url.to_string());
+    let mut info = InfoDict::new(video_id, title, extractor_name, url);
 
     // Description
     info.description = LEGACY_DESCRIPTION_PATTERN
@@ -247,17 +242,13 @@ pub fn extract_metadata_from_html(
     });
 
     // Duration (parse "PT1M30S" or "1:30" formats)
-    for pattern in &LEGACY_DURATION_PATTERNS {
-        if let Some(caps) = Regex::new(pattern).ok().and_then(|re| re.captures(webpage)) {
-            if let Some(m) = caps.get(1) {
-                let dur_str = m.as_str().trim();
-                info.duration = BaseExtractor::parse_duration(dur_str);
-                if info.duration.is_some() {
-                    break;
-                }
-            }
-        }
-    }
+    info.duration = LEGACY_DURATION_PATTERNS.iter().find_map(|pattern| {
+        Regex::new(pattern)
+            .ok()
+            .and_then(|re| re.captures(webpage))
+            .and_then(|caps| caps.get(1))
+            .and_then(|m| BaseExtractor::parse_duration(m.as_str().trim()))
+    });
 
     // View count
     info.view_count = LEGACY_VIEW_COUNT_PATTERN

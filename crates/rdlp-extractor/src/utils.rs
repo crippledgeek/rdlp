@@ -219,24 +219,15 @@ pub fn decode_html_entities(text: &str) -> String {
 /// ```
 #[must_use]
 pub fn extract_extension_from_url(url: &str) -> Option<String> {
-    // Parse URL to get path
+    // url::Url::path() strips query strings, so no need to handle '?' in the extension
     let parsed = url::Url::parse(url).ok()?;
-    let path = parsed.path();
+    let last_segment = parsed.path().split('/').next_back()?;
+    let ext = &last_segment[last_segment.rfind('.')? + 1..];
 
-    // Get last segment
-    let last_segment = path.split('/').next_back()?;
-
-    // Find extension (after last dot)
-    let dot_pos = last_segment.rfind('.')?;
-    let ext = &last_segment[dot_pos + 1..];
-
-    // Filter out query strings that might be attached
-    let ext_clean = ext.split('?').next().unwrap_or(ext);
-
-    if ext_clean.is_empty() || ext_clean.len() > 10 {
+    if ext.is_empty() || ext.len() > 10 {
         None
     } else {
-        Some(ext_clean.to_lowercase())
+        Some(ext.to_lowercase())
     }
 }
 
