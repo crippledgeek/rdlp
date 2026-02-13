@@ -35,7 +35,7 @@ fn detect_vcodec(url: &str) -> Option<String> {
 
 /// Apply codec fixup to all formats (detect vcodec from URL patterns).
 pub fn fixup_formats(formats: &mut [Format]) {
-    for f in formats.iter_mut() {
+    for f in formats {
         if f.vcodec.is_some() {
             continue;
         }
@@ -63,11 +63,11 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
         }
     };
 
+    let empty_map = serde_json::Map::new();
     let sources = video_model
         .get("sources")
         .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
+        .unwrap_or(&empty_map);
 
     // Collect download sizes from sources.download
     let mut format_sizes: HashMap<String, f64> = HashMap::new();
@@ -80,7 +80,7 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
     }
 
     // Extract direct formats from sources (skip "download" key)
-    for (format_id, formats_dict) in &sources {
+    for (format_id, formats_dict) in sources {
         let Some(formats_obj) = formats_dict.as_object() else {
             continue;
         };
@@ -342,9 +342,7 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
 
 /// Create HTTP headers map with Referer.
 fn referer_headers(page_url: &str) -> HashMap<String, String> {
-    let mut headers = HashMap::new();
-    headers.insert("Referer".to_string(), page_url.to_string());
-    headers
+    HashMap::from([("Referer".to_string(), page_url.to_string())])
 }
 
 #[cfg(test)]

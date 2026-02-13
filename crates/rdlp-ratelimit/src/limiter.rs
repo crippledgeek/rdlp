@@ -54,12 +54,9 @@ impl RateLimiter {
             let now = Instant::now();
             let elapsed = now.duration_since(state.last_refill).as_secs_f64();
 
-            // Refill tokens based on elapsed time
-            state.tokens += elapsed * self.bytes_per_second;
-            // Cap at burst size (1 second worth)
-            if state.tokens > self.bytes_per_second {
-                state.tokens = self.bytes_per_second;
-            }
+            // Refill tokens based on elapsed time, capped at burst size (1s)
+            state.tokens =
+                (state.tokens + elapsed * self.bytes_per_second).min(self.bytes_per_second);
             state.last_refill = now;
 
             // Consume tokens

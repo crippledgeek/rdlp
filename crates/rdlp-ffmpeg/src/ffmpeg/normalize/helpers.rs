@@ -208,7 +208,7 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 
 /// Select the appropriate audio encoder for a container extension.
 pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
-    match ext.to_lowercase().as_str() {
+    match ext.to_ascii_lowercase().as_str() {
         "mp4" | "m4a" | "mov" | "f4v" | "3gp" => "aac",
         "webm" | "ogg" | "opus" => "libopus",
         "mkv" | "mka" => "libopus",
@@ -240,7 +240,7 @@ pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
 /// causing allocation failures on long audio tracks. Matroska writes metadata
 /// incrementally without unbounded buffering.
 pub(super) fn audio_only_extension_for(ext: &str) -> &'static str {
-    match ext.to_lowercase().as_str() {
+    match ext.to_ascii_lowercase().as_str() {
         "mp4" | "m4a" | "mov" | "f4v" | "3gp" | "ts" | "mpg" | "flv" => "mka",
         "mkv" | "mka" | "webm" => "mka",
         "avi" | "mp3" => "mp3",
@@ -268,9 +268,7 @@ pub(super) fn with_mux_retry<F>(input: &Path, output: &Path, encode_fn: F) -> Re
 where
     F: Fn(&Path, bool) -> Result<()>,
 {
-    let keep_salvage = std::env::var("RDLP_KEEP_SALVAGE")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let keep_salvage = std::env::var("RDLP_KEEP_SALVAGE").is_ok_and(|v| v == "1");
 
     // Tier 1: library encode (normal input open)
     match encode_fn(input, false) {

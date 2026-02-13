@@ -68,9 +68,7 @@ impl HttpClientConfig {
             http_config.connect_timeout_secs = timeout;
         }
 
-        if let Some(ref proxy) = config.proxy {
-            http_config.proxy = Some(proxy.clone());
-        }
+        http_config.proxy = config.proxy.clone();
 
         http_config
     }

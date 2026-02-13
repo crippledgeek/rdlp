@@ -40,41 +40,36 @@ pub fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> 
 
 /// Find Chrome's cookie database path.
 fn find_cookie_db() -> Result<PathBuf, std::io::Error> {
-    let path = chrome_user_data_dir()?.join("Default").join("Cookies");
+    let user_data = chrome_user_data_dir()?;
+    let path = user_data.join("Default").join("Cookies");
     if path.exists() {
-        Ok(path)
-    } else {
-        // Try Network/Cookies (Chrome 96+)
-        let network_path = chrome_user_data_dir()?
-            .join("Default")
-            .join("Network")
-            .join("Cookies");
-        if network_path.exists() {
-            Ok(network_path)
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!(
-                    "Chrome cookie database not found at {} or {}",
-                    path.display(),
-                    network_path.display()
-                ),
-            ))
-        }
+        return Ok(path);
     }
+    // Try Network/Cookies (Chrome 96+)
+    let network_path = user_data.join("Default").join("Network").join("Cookies");
+    if network_path.exists() {
+        return Ok(network_path);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!(
+            "Chrome cookie database not found at {} or {}",
+            path.display(),
+            network_path.display()
+        ),
+    ))
 }
 
 /// Find Chrome's Local State file (contains the encryption key).
 fn find_local_state() -> Result<PathBuf, std::io::Error> {
     let path = chrome_user_data_dir()?.join("Local State");
-    if path.exists() {
-        Ok(path)
-    } else {
-        Err(std::io::Error::new(
+    if !path.exists() {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Chrome Local State file not found",
-        ))
+        ));
     }
+    Ok(path)
 }
 
 /// Get Chrome's User Data directory.
@@ -291,13 +286,11 @@ fn read_cookies_from_db(
         let value = if !plaintext_value.is_empty() {
             plaintext_value
         } else {
-            match decrypt_cookie_value(&encrypted_value, key) {
-                Some(v) => v,
-                None => {
-                    debug!("Failed to decrypt cookie: {name} for {host_key}");
-                    continue;
-                }
-            }
+            let Some(v) = decrypt_cookie_value(&encrypted_value, key) else {
+                debug!("Failed to decrypt cookie: {name} for {host_key}");
+                continue;
+            };
+            v
         };
 
         if value.is_empty() {

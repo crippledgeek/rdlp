@@ -11,21 +11,14 @@ use async_trait::async_trait;
 use rdlp_core::{JsEngine, RdlpError, Result};
 
 /// Simple JS engine stub (will be properly implemented in Phase 3)
-pub struct SimpleJsEngine {
-    // Will use boa_engine in Phase 3
-}
+#[derive(Default)]
+pub struct SimpleJsEngine;
 
 impl SimpleJsEngine {
     /// Create a new JavaScript engine instance
     #[must_use]
     pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for SimpleJsEngine {
-    fn default() -> Self {
-        Self::new()
+        Self
     }
 }
 

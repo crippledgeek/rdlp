@@ -24,13 +24,11 @@ impl Orchestrator {
     ) -> Result<Option<Format>> {
         let formats = &info.formats;
         let format = if interactive {
-            match self.select_format_interactive(info).await? {
-                Some(format) => format,
-                None => {
-                    info!("Selection cancelled by user");
-                    return Ok(None);
-                }
-            }
+            let Some(format) = self.select_format_interactive(info).await? else {
+                info!("Selection cancelled by user");
+                return Ok(None);
+            };
+            format
         } else {
             let format_selector = FormatSelector::parse(&self.config.format)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;

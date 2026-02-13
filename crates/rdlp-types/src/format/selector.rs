@@ -297,47 +297,26 @@ fn parse_filter_value(input: &mut &str) -> ModalResult<FilterValue> {
 /// Evaluate a `FormatSpec` against the format list.
 fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&'a Format> {
     match spec {
-        FormatSpec::Single(sel) => {
-            if let Some(f) = select_one(sel, formats) {
-                vec![f]
-            } else {
-                Vec::new()
-            }
-        }
+        FormatSpec::Single(sel) => select_one(sel, formats).into_iter().collect(),
         FormatSpec::Merge { video, audio } => {
             let v = select_one(video, formats);
             let a = select_one(audio, formats);
-            match (v, a) {
-                (Some(v), Some(a)) => vec![v, a],
-                // If only one side matched, return it (downloader can handle single-stream)
-                (Some(v), None) => vec![v],
-                (None, Some(a)) => vec![a],
-                (None, None) => Vec::new(),
-            }
+            v.into_iter().chain(a).collect()
         }
     }
 }
 
 /// Select a single format matching a `Selector`.
 fn select_one<'a>(sel: &Selector, formats: &'a [Format]) -> Option<&'a Format> {
-    let candidates: Vec<&Format> = formats
+    let candidates = formats
         .iter()
         .filter(|f| !f.has_drm.unwrap_or(false))
         .filter(|f| matches_base(&sel.base, f))
-        .filter(|f| sel.filters.iter().all(|filter| matches_filter(filter, f)))
-        .collect();
-
-    if candidates.is_empty() {
-        return None;
-    }
+        .filter(|f| sel.filters.iter().all(|filter| matches_filter(filter, f)));
 
     match sort_direction(&sel.base) {
-        SortDirection::Best => candidates
-            .into_iter()
-            .max_by(|a, b| rank_formats(&sel.base, a, b)),
-        SortDirection::Worst => candidates
-            .into_iter()
-            .min_by(|a, b| rank_formats(&sel.base, a, b)),
+        SortDirection::Best => candidates.max_by(|a, b| rank_formats(&sel.base, a, b)),
+        SortDirection::Worst => candidates.min_by(|a, b| rank_formats(&sel.base, a, b)),
     }
 }
 
@@ -391,16 +370,17 @@ fn matches_filter(filter: &Filter, f: &Format) -> bool {
 /// Compare an optional numeric value against a filter.
 /// Returns `false` if the value is `None` (conservative — missing data doesn't match).
 fn compare_opt_num(val: Option<f64>, op: &FilterOp, filter_val: &FilterValue) -> bool {
-    let val = match val {
-        Some(v) => v,
-        None => return false,
+    let Some(val) = val else {
+        return false;
     };
     let target = match filter_val {
         FilterValue::Number(n) => *n,
-        FilterValue::Text(s) => match s.parse::<f64>() {
-            Ok(n) => n,
-            Err(_) => return false,
-        },
+        FilterValue::Text(s) => {
+            let Ok(n) = s.parse::<f64>() else {
+                return false;
+            };
+            n
+        }
     };
     match op {
         FilterOp::Eq => (val - target).abs() < f64::EPSILON,
@@ -498,12 +478,7 @@ mod tests {
     // ---- Test helpers ----
 
     fn make_combined(id: &str, ext: &str, height: u32, quality: i32) -> Format {
-        let mut f = Format::new(
-            id.to_string(),
-            format!("url_{id}"),
-            ext.to_string(),
-            DownloadProtocol::Https,
-        );
+        let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
         f.vcodec = Some("h264".to_string());
         f.acodec = Some("aac".to_string());
         f.height = Some(height);
@@ -514,12 +489,7 @@ mod tests {
     }
 
     fn make_video_only(id: &str, ext: &str, height: u32) -> Format {
-        let mut f = Format::new(
-            id.to_string(),
-            format!("url_{id}"),
-            ext.to_string(),
-            DownloadProtocol::Https,
-        );
+        let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
         f.vcodec = Some("h264".to_string());
         f.acodec = Some("none".to_string());
         f.height = Some(height);
@@ -529,12 +499,7 @@ mod tests {
     }
 
     fn make_audio_only(id: &str, ext: &str, abr: f64) -> Format {
-        let mut f = Format::new(
-            id.to_string(),
-            format!("url_{id}"),
-            ext.to_string(),
-            DownloadProtocol::Https,
-        );
+        let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
         f.vcodec = Some("none".to_string());
         f.acodec = Some("aac".to_string());
         f.abr = Some(abr);

@@ -104,14 +104,11 @@ pub type Result<T> = std::result::Result<T, RdlpError>;
 /// }
 /// ```
 pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
-    if !response.status().is_success() {
+    let status = response.status();
+    if !status.is_success() {
         return Err(RdlpError::Http {
-            status: response.status().as_u16(),
-            reason: response
-                .status()
-                .canonical_reason()
-                .unwrap_or("Unknown")
-                .to_string(),
+            status: status.as_u16(),
+            reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
         });
     }
     Ok(())

@@ -244,14 +244,11 @@ fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
                 .unwrap_or_else(|| "download".to_string());
 
             let height = quality.map(|q| q as u32);
-            let format = BaseExtractor::build_format(
-                format_id.clone(),
-                url.to_string(),
-                "mp4".to_string(),
-                height,
-            );
 
             debug!(format_id:?; "[PornHub] Found format from download button");
+
+            let format =
+                BaseExtractor::build_format(format_id, url.to_string(), "mp4".to_string(), height);
 
             formats.push(format);
         }

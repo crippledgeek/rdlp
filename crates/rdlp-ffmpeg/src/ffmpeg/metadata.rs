@@ -25,7 +25,7 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let metadata = metadata.clone();
-        let chapters: Vec<ChapterEntry> = chapters.to_vec();
+        let chapters = chapters.to_vec();
         Self::spawn_blocking("embed_metadata", move || {
             Self::embed_metadata_sync(&input, &output, &metadata, &chapters)
         })

@@ -351,10 +351,10 @@ mod tests {
     #[test]
     fn test_info_dict_creation() {
         let info = InfoDict::new(
-            "test123".to_string(),
-            "Test Video".to_string(),
-            "TestExtractor".to_string(),
-            "https://example.com/watch?v=test123".to_string(),
+            "test123",
+            "Test Video",
+            "TestExtractor",
+            "https://example.com/watch?v=test123",
         );
 
         assert_eq!(info.id, "test123");
@@ -366,10 +366,10 @@ mod tests {
     #[test]
     fn test_serialize_deserialize() {
         let info = InfoDict::new(
-            "test123".to_string(),
-            "Test Video".to_string(),
-            "TestExtractor".to_string(),
-            "https://example.com/watch?v=test123".to_string(),
+            "test123",
+            "Test Video",
+            "TestExtractor",
+            "https://example.com/watch?v=test123",
         );
 
         let json = serde_json::to_string(&info).unwrap();

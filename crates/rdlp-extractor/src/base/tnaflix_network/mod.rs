@@ -136,9 +136,7 @@ impl TnaFlixNetworkBase {
 
         // Strategy 2: Open Graph title
         if let Some(og_title) = extract_meta_content(html, &OG_TITLE_SELECTOR) {
-            if !og_title.is_empty() {
-                return Some(og_title);
-            }
+            return Some(og_title);
         }
 
         // Strategy 3: Input field
@@ -178,16 +176,12 @@ impl TnaFlixNetworkBase {
 
         // Strategy 2: Open Graph description
         if let Some(og_desc) = extract_meta_content(html, &OG_DESC_SELECTOR) {
-            if !og_desc.is_empty() {
-                return Some(og_desc);
-            }
+            return Some(og_desc);
         }
 
         // Strategy 3: Meta description
         if let Some(meta_desc) = extract_meta_content(html, &META_DESC_SELECTOR) {
-            if !meta_desc.is_empty() {
-                return Some(meta_desc);
-            }
+            return Some(meta_desc);
         }
 
         // Strategy 4: Input field
@@ -230,16 +224,12 @@ impl TnaFlixNetworkBase {
 
         // Strategy 2: Open Graph image
         if let Some(og_image) = extract_meta_content(html, &THUMBNAIL_SELECTOR) {
-            if !og_image.is_empty() {
-                return Some(og_image);
-            }
+            return Some(og_image);
         }
 
         // Strategy 3: Twitter card image
         if let Some(twitter_image) = extract_meta_content(html, &TWITTER_IMAGE_SELECTOR) {
-            if !twitter_image.is_empty() {
-                return Some(twitter_image);
-            }
+            return Some(twitter_image);
         }
 
         // Strategy 4: Link rel image_src
@@ -448,5 +438,6 @@ fn extract_meta_content(html: &Html, selector: &Selector) -> Option<String> {
     html.select(selector)
         .next()
         .and_then(|meta| meta.value().attr("content"))
-        .map(|s| s.to_string())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }

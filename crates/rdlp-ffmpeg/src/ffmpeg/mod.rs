@@ -328,13 +328,16 @@ impl std::str::FromStr for LoudnormPreset {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "broadcast" => Ok(Self::Broadcast),
-            "streaming" => Ok(Self::Streaming),
-            "loud" => Ok(Self::Loud),
-            _ => Err(format!(
+        if s.eq_ignore_ascii_case("broadcast") {
+            Ok(Self::Broadcast)
+        } else if s.eq_ignore_ascii_case("streaming") {
+            Ok(Self::Streaming)
+        } else if s.eq_ignore_ascii_case("loud") {
+            Ok(Self::Loud)
+        } else {
+            Err(format!(
                 "unknown loudnorm preset '{s}': expected broadcast, streaming, or loud"
-            )),
+            ))
         }
     }
 }

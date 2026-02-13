@@ -159,7 +159,7 @@ unsafe extern "C" fn capture_callback(
             .to_string_lossy()
             .to_string();
         if let Ok(mut guard) = LOG_BUFFER.lock() {
-            if let Some(ref mut v) = *guard {
+            if let Some(v) = guard.as_mut() {
                 v.push(msg);
             }
         }

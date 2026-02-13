@@ -62,15 +62,11 @@ impl PostProcessor for FFmpegMerger {
 
     fn should_run(&self, info: &InfoDict, _config: &PostProcessConfig) -> bool {
         // Run if there are multiple requested formats (video + audio separately)
-        if let Some(ref formats) = info.requested_formats {
-            if formats.len() > 1 {
-                // Check if we have both video and audio streams
-                let has_video = formats.iter().any(|f| f.has_video());
-                let has_audio = formats.iter().any(|f| f.has_audio());
-                return has_video && has_audio;
-            }
-        }
-        false
+        info.requested_formats.as_ref().is_some_and(|formats| {
+            formats.len() > 1
+                && formats.iter().any(|f| f.has_video())
+                && formats.iter().any(|f| f.has_audio())
+        })
     }
 
     async fn process(
