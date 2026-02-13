@@ -35,35 +35,57 @@ pub fn extract_metadata(html: &Html, webpage: &str) -> AnimeMetadata {
 
 /// Extract the anime title, trying multiple strategies.
 fn extract_title(html: &Html, webpage: &str) -> String {
-    // Try OG title first (most reliable)
+    // Strategy 1: h2 element — 9anime puts the clean title here
+    for selector_str in &["h2.film-name", "h2"] {
+        if let Ok(sel) = Selector::parse(selector_str) {
+            if let Some(elem) = html.select(&sel).next() {
+                let text: String = elem.text().collect();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+
+    // Strategy 2: OG/Twitter/title tag with suffix cleaning
     if let Some(title) = BaseExtractor::extract_title_multi_strategy(html) {
-        // Strip common suffixes like " - 9anime" or "Watch ... Online"
-        let title = title
-            .trim_end_matches(" - 9anime")
-            .trim_end_matches(" | 9anime")
-            .trim();
-        if !title.is_empty() {
-            return title.to_string();
+        let cleaned = clean_9anime_title(&title);
+        if !cleaned.is_empty() {
+            return cleaned;
         }
     }
 
-    // Fallback: look for the anime name in heading elements
-    let h2_selector = Selector::parse("h2.film-name").unwrap_or_else(|_| {
-        // If that selector fails, try a broader one
-        Selector::parse("h2").expect("h2 selector must parse")
-    });
-
-    if let Some(elem) = html.select(&h2_selector).next() {
-        let text: String = elem.text().collect();
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+    // Strategy 3: breadcrumb — "Watching Sword Art Online"
+    if let Ok(sel) = Selector::parse("ol li:last-child") {
+        if let Some(elem) = html.select(&sel).next() {
+            let text: String = elem.text().collect();
+            let trimmed = text.trim().trim_start_matches("Watching ").trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
         }
     }
 
-    // Last resort: extract from page content
-    let _ = webpage; // Used implicitly via html
+    let _ = webpage;
     "Unknown Anime".to_string()
+}
+
+/// Strip 9anime boilerplate from a page title.
+fn clean_9anime_title(title: &str) -> String {
+    let t = title
+        .trim_end_matches(" - 9anime")
+        .trim_end_matches(" | 9anime")
+        .trim();
+
+    // "Watch Sword Art Online online free on 9anime"
+    let t = t.strip_prefix("Watch ").unwrap_or(t);
+    let t = t
+        .strip_suffix(" online free on 9anime")
+        .or_else(|| t.strip_suffix(" on 9anime"))
+        .unwrap_or(t);
+
+    t.trim().to_string()
 }
 
 /// Extract thumbnail URL from the page.
@@ -85,7 +107,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_title_strips_suffix() {
+    fn test_extract_title_h2_preferred() {
+        // h2 should be preferred over og:title when present
+        let html_str = r#"<html><head>
+            <title>Watch Sword Art Online online free on 9anime</title>
+        </head><body>
+            <h2>Sword Art Online</h2>
+        </body></html>"#;
+        let html = Html::parse_document(html_str);
+        let title = extract_title(&html, html_str);
+        assert_eq!(title, "Sword Art Online");
+    }
+
+    #[test]
+    fn test_extract_title_h2_film_name() {
+        let html_str = r#"<html><head></head><body>
+            <h2 class="film-name">Attack on Titan</h2>
+        </body></html>"#;
+        let html = Html::parse_document(html_str);
+        let title = extract_title(&html, html_str);
+        assert_eq!(title, "Attack on Titan");
+    }
+
+    #[test]
+    fn test_extract_title_fallback_og_cleaned() {
+        // No h2 → falls back to og:title with cleaning
+        let html_str = r#"<html><head>
+            <title>Watch Sword Art Online online free on 9anime</title>
+        </head><body></body></html>"#;
+        let html = Html::parse_document(html_str);
+        let title = extract_title(&html, html_str);
+        assert_eq!(title, "Sword Art Online");
+    }
+
+    #[test]
+    fn test_extract_title_suffix_dash() {
         let html_str = r#"<html><head>
             <meta property="og:title" content="Sword Art Online - 9anime">
         </head><body></body></html>"#;
@@ -95,13 +151,30 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_title_fallback_h2() {
+    fn test_extract_title_breadcrumb() {
         let html_str = r#"<html><head></head><body>
-            <h2 class="film-name">Attack on Titan</h2>
+            <ol><li>Home</li><li>Watching Sword Art Online</li></ol>
         </body></html>"#;
         let html = Html::parse_document(html_str);
         let title = extract_title(&html, html_str);
-        assert_eq!(title, "Attack on Titan");
+        assert_eq!(title, "Sword Art Online");
+    }
+
+    #[test]
+    fn test_clean_9anime_title() {
+        assert_eq!(
+            clean_9anime_title("Watch Sword Art Online online free on 9anime"),
+            "Sword Art Online"
+        );
+        assert_eq!(
+            clean_9anime_title("Sword Art Online - 9anime"),
+            "Sword Art Online"
+        );
+        assert_eq!(
+            clean_9anime_title("Sword Art Online | 9anime"),
+            "Sword Art Online"
+        );
+        assert_eq!(clean_9anime_title("Watch One Piece on 9anime"), "One Piece");
     }
 
     #[test]

@@ -57,6 +57,14 @@ pub fn extract_slug(url: &str) -> Option<String> {
         .and_then(|caps| caps.name("slug").map(|m| m.as_str().to_string()))
 }
 
+/// Check if the URL contains an `?ep=` episode parameter.
+///
+/// URLs with `?ep=` target a single episode; URLs without it target the
+/// entire anime (season/playlist).
+pub fn has_episode_param(url: &str) -> bool {
+    WATCH_URL_PATTERN.is_match(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +100,16 @@ mod tests {
         assert!(!is_suitable("https://youtube.com/watch?v=test"));
         assert!(!is_suitable("https://9animetv.to/home"));
         assert!(!is_suitable("https://9animetv.to/search?keyword=test"));
+    }
+
+    #[test]
+    fn test_has_episode_param() {
+        assert!(has_episode_param(
+            "https://9animetv.to/watch/sword-art-online-2274?ep=26565"
+        ));
+        assert!(!has_episode_param(
+            "https://9animetv.to/watch/sword-art-online-2274"
+        ));
     }
 
     #[test]
