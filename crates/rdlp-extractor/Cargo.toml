@@ -20,6 +20,7 @@ regex = { workspace = true }
 url = { workspace = true }
 inventory = { workspace = true }
 once_cell = { workspace = true }
+base64 = { workspace = true }
 m3u8-rs = { workspace = true }
 futures = { workspace = true }
 
