@@ -125,7 +125,7 @@ impl FFmpegRunner {
             let params = stream.parameters();
             let medium = params.medium();
 
-            let codec_name = stream.parameters().id().name().to_string();
+            let codec_name = params.id().name().to_string();
             let codec_type_str = match medium {
                 ffmpeg_the_third::media::Type::Video => "video",
                 ffmpeg_the_third::media::Type::Audio => "audio",

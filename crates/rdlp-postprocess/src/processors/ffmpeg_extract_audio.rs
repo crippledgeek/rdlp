@@ -133,17 +133,10 @@ impl PostProcessor for FFmpegExtractAudio {
 
         info!(output:? = output_path.display(); "Audio extracted");
 
-        // Determine if we should keep original
-        let temp_files = if config.keep_video {
-            Vec::new()
-        } else {
-            files.clone()
-        };
-
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files,
+            temp_files: if config.keep_video { Vec::new() } else { files },
         })
     }
 }

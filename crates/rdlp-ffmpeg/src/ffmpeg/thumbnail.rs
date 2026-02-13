@@ -53,7 +53,7 @@ impl FFmpegRunner {
         ensure_init()?;
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility
-        let is_mkv = matches!(container.to_lowercase().as_str(), "mkv" | "mka");
+        let is_mkv = container.eq_ignore_ascii_case("mkv") || container.eq_ignore_ascii_case("mka");
         if is_mkv {
             return Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output);
         }
@@ -80,7 +80,6 @@ impl FFmpegRunner {
         })?;
 
         let is_mp3 = container.eq_ignore_ascii_case("mp3");
-        // Note: MKV is handled by embed_thumbnail_mkv_raw_ffi() above
 
         // Map media streams to output
         let stream_count = ictx.streams().count();
@@ -156,10 +155,10 @@ impl FFmpegRunner {
         let mut dict = ffmpeg_the_third::Dictionary::new();
 
         // MP4/MOV: enable faststart (moov atom at beginning) for Windows Explorer thumbnail visibility
-        let is_mp4_mov = matches!(
-            container.to_lowercase().as_str(),
-            "mp4" | "m4a" | "m4v" | "mov"
-        );
+        let is_mp4_mov = container.eq_ignore_ascii_case("mp4")
+            || container.eq_ignore_ascii_case("m4a")
+            || container.eq_ignore_ascii_case("m4v")
+            || container.eq_ignore_ascii_case("mov");
         if is_mp4_mov {
             dict.set("movflags", "+faststart");
         }
@@ -174,8 +173,9 @@ impl FFmpegRunner {
         // These formats store picture metadata in the file header (METADATA_BLOCK_PICTURE
         // for FLAC, Vorbis comment for OGG/Opus), so the muxer needs picture data before
         // audio frames are flushed. For other formats (MP4, MP3), order doesn't matter.
-        let is_header_picture_format =
-            matches!(container.to_lowercase().as_str(), "flac" | "ogg" | "opus");
+        let is_header_picture_format = container.eq_ignore_ascii_case("flac")
+            || container.eq_ignore_ascii_case("ogg")
+            || container.eq_ignore_ascii_case("opus");
 
         if is_header_picture_format {
             Self::write_thumbnail_packets(

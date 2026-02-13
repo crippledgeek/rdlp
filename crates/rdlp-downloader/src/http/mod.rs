@@ -408,26 +408,18 @@ impl Downloader for HttpDownloader {
                 })
                 .await
                 {
-                    Ok(response) => {
-                        if let Some(content_range) = response.headers().get("content-range") {
-                            if let Ok(range_str) = content_range.to_str() {
-                                if let Some(total_str) = range_str.split('/').nth(1) {
-                                    let detected_size = total_str.parse::<u64>().ok();
-                                    debug!(
-                                        "Detected size from Range: {} MB",
-                                        detected_size.map(|s| s / 1024 / 1024).unwrap_or(0)
-                                    );
-                                    detected_size
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
+                    Ok(response) => response
+                        .headers()
+                        .get("content-range")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.split('/').nth(1))
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .inspect(|size| {
+                            debug!(
+                                "Detected size from Range: {} MB",
+                                size / 1024 / 1024
+                            );
+                        }),
                     Err(_) => None,
                 }
             } else {
@@ -449,20 +441,20 @@ impl Downloader for HttpDownloader {
                 return self
                     .download_parallel(url, path, size.unwrap(), progress)
                     .await;
-            } else {
-                let reason = match size {
-                    None | Some(0) => "could not detect file size",
-                    Some(s) if s <= PARALLEL_THRESHOLD => "file too small for parallel",
-                    Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
-                    Some(_) if !supports_ranges => "server doesn't support ranges",
-                    Some(_) => "unknown reason",
-                };
-                warn!(
-                    "Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
-                    size.map(|s| s / 1024 / 1024),
-                    self.config.concurrent_fragments
-                );
             }
+
+            let reason = match size {
+                None | Some(0) => "could not detect file size",
+                Some(s) if s <= PARALLEL_THRESHOLD => "file too small for parallel",
+                Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
+                Some(_) if !supports_ranges => "server doesn't support ranges",
+                Some(_) => "unknown reason",
+            };
+            warn!(
+                "Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
+                size.map(|s| s / 1024 / 1024),
+                self.config.concurrent_fragments
+            );
 
             self.download_sequential(url, path, progress).await
         })
@@ -543,19 +535,13 @@ impl Downloader for HttpDownloader {
             })
             .await?;
 
-            let total_size = if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    if let Some(total_str) = range_str.split('/').nth(1) {
-                        total_str.parse::<u64>().ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                response.content_length().map(|size| size + resume_from)
-            };
+            let total_size = response
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split('/').nth(1))
+                .and_then(|s| s.parse::<u64>().ok())
+                .or_else(|| response.content_length().map(|size| size + resume_from));
 
             // Check for parallel resume
             if let Some(total) = total_size {
@@ -594,18 +580,18 @@ impl Downloader for HttpDownloader {
                     return self
                         .download_parallel_resume(url, path, resume_from, total, progress)
                         .await;
-                } else if !can_parallel {
-                    warn!(
-                        "Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
-                        remaining_size / 1024 / 1024,
-                        self.config.concurrent_fragments,
-                        supports_ranges
-                    );
                 }
+
+                warn!(
+                    "Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
+                    remaining_size / 1024 / 1024,
+                    self.config.concurrent_fragments,
+                    supports_ranges
+                );
             }
 
-            let content_length = response.content_length();
-            let total_size = total_size.or_else(|| content_length.map(|size| size + resume_from));
+            let total_size =
+                total_size.or_else(|| response.content_length().map(|size| size + resume_from));
 
             let file = tokio::fs::OpenOptions::new()
                 .append(true)

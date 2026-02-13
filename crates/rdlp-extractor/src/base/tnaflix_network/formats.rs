@@ -53,9 +53,8 @@ pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
     let mut video_data = Vec::new();
 
     for source_elem in html.select(&SOURCE_SELECTOR) {
-        let video_url = match source_elem.value().attr("src") {
-            Some(url) => url,
-            None => continue,
+        let Some(video_url) = source_elem.value().attr("src") else {
+            continue;
         };
 
         let quality_str = source_elem.value().attr("size").unwrap_or("unknown");
@@ -84,14 +83,12 @@ pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
 /// Extract config URL from HTML using multiple fallback patterns
 #[allow(dead_code)] // Tested but not used by current extractors
 pub(crate) fn extract_config_url(html_text: &str) -> Option<String> {
-    for pattern in CONFIG_URL_PATTERNS.iter() {
-        if let Some(caps) = pattern.captures(html_text) {
-            if let Some(url_match) = caps.get(1) {
-                return Some(url_match.as_str().to_string());
-            }
-        }
-    }
-    None
+    CONFIG_URL_PATTERNS.iter().find_map(|pattern| {
+        pattern
+            .captures(html_text)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+    })
 }
 
 /// Extract cdn.php URL from MovieFap JavaScript
@@ -148,12 +145,7 @@ pub(crate) async fn build_formats(
     let mut formats = Vec::new();
 
     for (format_id, video_url, ext, height, width) in video_data {
-        let mut format = Format::new(
-            format_id,
-            video_url.clone(),
-            ext.clone(),
-            DownloadProtocol::Https,
-        );
+        let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
 
         format.height = height;
         format.width = width;

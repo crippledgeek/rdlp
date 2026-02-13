@@ -198,11 +198,9 @@ fn extract_segment_number(url: &str) -> Option<u32> {
     let filename = path.rsplit('/').next().unwrap_or(path);
 
     // Pattern 1: seg-N-... (XHamster style)
-    if filename.starts_with("seg-") {
-        if let Some(num_part) = filename.strip_prefix("seg-") {
-            if let Some(end) = num_part.find('-') {
-                return num_part[..end].parse().ok();
-            }
+    if let Some(num_part) = filename.strip_prefix("seg-") {
+        if let Some(end) = num_part.find('-') {
+            return num_part[..end].parse().ok();
         }
     }
 

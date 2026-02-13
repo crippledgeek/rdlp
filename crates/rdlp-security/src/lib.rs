@@ -50,6 +50,7 @@
 
 use regex::Regex;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 // ============================================================================
@@ -131,7 +132,7 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 
     // Scheme check
     let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
+    if !matches!(scheme, "http" | "https") {
         return Err(SecurityError::InvalidScheme(scheme.to_string()));
     }
 
@@ -177,8 +178,8 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// ```
 #[must_use]
 pub fn is_private_host(host: &str) -> bool {
-    // Check for localhost variants
-    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+    // Check for localhost (IP variants handled by the IP parser below)
+    if host == "localhost" {
         return true;
     }
 
@@ -314,14 +315,37 @@ pub fn extract_url_path(url: &str) -> String {
 // Sanitization for Safe Logging
 // ============================================================================
 
+/// Pre-compiled regex patterns for sensitive parameter redaction.
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 5]> = LazyLock::new(|| {
+    [
+        (
+            Regex::new(r"token=[^&\s]+").expect("valid regex"),
+            "token=***",
+        ),
+        (Regex::new(r"key=[^&\s]+").expect("valid regex"), "key=***"),
+        (
+            Regex::new(r"password=[^&\s]+").expect("valid regex"),
+            "password=***",
+        ),
+        (
+            Regex::new(r"secret=[^&\s]+").expect("valid regex"),
+            "secret=***",
+        ),
+        (
+            Regex::new(r"api_key=[^&\s]+").expect("valid regex"),
+            "api_key=***",
+        ),
+    ]
+});
+
 /// Sanitize a string for safe logging by redacting sensitive data
 ///
 /// This function uses pattern matching to redact common sensitive parameters:
-/// - `token=...` → `token=***`
-/// - `key=...` → `key=***`
-/// - `password=...` → `password=***`
-/// - `secret=...` → `secret=***`
-/// - `api_key=...` → `api_key=***`
+/// - `token=...` -> `token=***`
+/// - `key=...` -> `key=***`
+/// - `password=...` -> `password=***`
+/// - `secret=...` -> `secret=***`
+/// - `api_key=...` -> `api_key=***`
 ///
 /// # Arguments
 /// * `s` - The string to sanitize
@@ -344,20 +368,9 @@ pub fn extract_url_path(url: &str) -> String {
 /// ```
 #[must_use]
 pub fn sanitize_for_logging(s: &str) -> String {
-    // Common patterns to redact
-    let patterns = [
-        (r"token=[^&\s]+", "token=***"),
-        (r"key=[^&\s]+", "key=***"),
-        (r"password=[^&\s]+", "password=***"),
-        (r"secret=[^&\s]+", "secret=***"),
-        (r"api_key=[^&\s]+", "api_key=***"),
-    ];
-
     let mut result = s.to_string();
-    for (pattern, replacement) in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            result = re.replace_all(&result, replacement).to_string();
-        }
+    for (re, replacement) in SANITIZE_PATTERNS.iter() {
+        result = re.replace_all(&result, *replacement).to_string();
     }
     result
 }

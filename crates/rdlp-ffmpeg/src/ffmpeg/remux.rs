@@ -125,8 +125,6 @@ impl FFmpegRunner {
             dict.set("movflags", "+faststart");
         }
 
-        // Note: MKV is handled by remux_mkv_raw_ffi() with proper stream property copying
-
         // Write header with muxer options
         octx.write_header_with(dict)
             .map_err(|e| PostProcessError::FFmpegLibraryError {

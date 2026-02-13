@@ -320,16 +320,12 @@ impl Format {
                 parts.push(format!("{fps}fps"));
             }
 
-            if let Some(vcodec) = &self.vcodec {
-                if vcodec != "none" {
-                    parts.push(format!("vcodec:{vcodec}"));
-                }
+            if let Some(vcodec) = self.vcodec.as_deref().filter(|c| *c != "none") {
+                parts.push(format!("vcodec:{vcodec}"));
             }
 
-            if let Some(acodec) = &self.acodec {
-                if acodec != "none" {
-                    parts.push(format!("acodec:{acodec}"));
-                }
+            if let Some(acodec) = self.acodec.as_deref().filter(|c| *c != "none") {
+                parts.push(format!("acodec:{acodec}"));
             }
 
             parts.push(self.ext.clone());
@@ -400,10 +396,11 @@ impl Format {
 
         // Quality column: append fps when non-standard (e.g. "1080p60")
         let quality_base = self.format_note.as_deref().unwrap_or("unknown");
+        let col_start = buf.len();
         match self.fps {
             Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
                 let _ = write!(buf, "{quality_base}{fps:.0}");
-                let col_len = quality_base.len() + format!("{fps:.0}").len();
+                let col_len = buf.len() - col_start;
                 for _ in col_len..rdlp_table::QUALITY_WIDTH {
                     buf.push(' ');
                 }
@@ -543,9 +540,9 @@ mod tests {
     #[test]
     fn test_format_has_video() {
         let mut format = Format::new(
-            "137".to_string(),
-            "https://example.com/video".to_string(),
-            "mp4".to_string(),
+            "137",
+            "https://example.com/video",
+            "mp4",
             DownloadProtocol::Https,
         );
         format.vcodec = Some("h264".to_string());
@@ -558,9 +555,9 @@ mod tests {
     #[test]
     fn test_format_has_audio() {
         let mut format = Format::new(
-            "140".to_string(),
-            "https://example.com/audio".to_string(),
-            "m4a".to_string(),
+            "140",
+            "https://example.com/audio",
+            "m4a",
             DownloadProtocol::Https,
         );
         format.vcodec = Some("none".to_string());

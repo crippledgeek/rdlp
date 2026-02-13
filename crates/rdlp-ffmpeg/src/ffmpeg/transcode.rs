@@ -7,7 +7,7 @@ use std::path::Path;
 
 use log::{debug, info, warn};
 
-use ffmpeg_the_third::packet::Ref as PacketRef;
+use ffmpeg_the_third::packet::Ref as _;
 
 use crate::error::{PostProcessError, Result};
 
@@ -1666,16 +1666,8 @@ impl FFmpegRunner {
 
         // Pixel aspect ratio (default 1:1 if unknown)
         let sar = decoder.aspect_ratio();
-        let sar_num = if sar.numerator() > 0 {
-            sar.numerator()
-        } else {
-            1
-        };
-        let sar_den = if sar.denominator() > 0 {
-            sar.denominator()
-        } else {
-            1
-        };
+        let sar_num = sar.numerator().max(1);
+        let sar_den = sar.denominator().max(1);
 
         let args = format!(
             "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",

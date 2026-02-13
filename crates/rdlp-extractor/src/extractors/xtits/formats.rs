@@ -80,7 +80,6 @@ fn build_kvs_format(quality_str: &str, url: &str) -> Format {
     );
 
     format.container = Some("mp4".to_owned());
-    format.ext = "mp4".to_owned();
 
     // KVS quality labels without height info get stored as format_note
     if height.is_none() {
