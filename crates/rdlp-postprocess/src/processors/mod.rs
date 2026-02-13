@@ -7,6 +7,7 @@
 //! - [`FFmpegRemuxer`]: Remux to different container (MP4/MKV) for better seeking
 //! - [`FFmpegVideoConvertor`]: Convert video formats
 //! - [`FFmpegMetadata`]: Embed metadata into files
+//! - [`EmbedSubtitles`]: Embed subtitle streams
 //! - [`EmbedThumbnail`]: Embed thumbnail images
 
 /// Declare an FFmpeg-backed post-processor struct with standard boilerplate.
@@ -62,6 +63,7 @@ macro_rules! ffmpeg_processor {
     };
 }
 
+mod embed_subtitles;
 mod embed_thumbnail;
 mod ffmpeg_extract_audio;
 mod ffmpeg_merger;
@@ -70,6 +72,7 @@ mod ffmpeg_normalize_audio;
 mod ffmpeg_remuxer;
 mod ffmpeg_video_convertor;
 
+pub use embed_subtitles::EmbedSubtitles;
 pub use embed_thumbnail::EmbedThumbnail;
 pub use ffmpeg_extract_audio::FFmpegExtractAudio;
 pub use ffmpeg_merger::FFmpegMerger;
