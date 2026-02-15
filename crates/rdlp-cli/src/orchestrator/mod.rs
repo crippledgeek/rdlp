@@ -10,6 +10,7 @@ mod playlist;
 mod postprocess;
 mod resume;
 mod selection;
+mod session_state;
 mod state;
 mod subtitle;
 mod template;

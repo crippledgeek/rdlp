@@ -4,6 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::errors::is_reextractable_error;
+use super::session_state::{self, PlaylistState, SessionState};
 use super::{Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
@@ -68,11 +69,11 @@ impl Orchestrator {
         let total = infos.len();
         let playlist_title = infos[0]
             .playlist_title
-            .as_deref()
-            .unwrap_or("Unnamed Playlist");
+            .clone()
+            .unwrap_or_else(|| "Unnamed Playlist".to_string());
 
         // Create playlist folder
-        let playlist_folder_name = self.sanitize_filename(playlist_title);
+        let playlist_folder_name = self.sanitize_filename(&playlist_title);
         let playlist_dir = self.config.output_directory.join(&playlist_folder_name);
 
         // Check for existing files (resume detection)
@@ -84,6 +85,16 @@ impl Orchestrator {
 
         // Detect available audio/language types across all episodes
         let audio_types = detect_audio_types(&infos);
+
+        // Try loading saved session state to skip interactive prompts.
+        // Use playlist_id as a stable identifier; fall back to first episode URL.
+        let state_path = session_state::playlist_state_path(&playlist_dir);
+        let source_url = infos
+            .iter()
+            .find_map(|i| i.playlist_id.clone())
+            .unwrap_or_else(|| infos[0].webpage_url.clone());
+        let saved_state = SessionState::load(&state_path, &source_url).await;
+        let resuming = matches!(&saved_state, Some(SessionState::Playlist(_)));
 
         info!("{}", "=".repeat(60));
         info!(title:? = playlist_title; "Playlist");
@@ -104,93 +115,127 @@ impl Orchestrator {
             info!(remaining; "Remaining");
         }
 
+        if resuming {
+            info!("Resuming with saved selections");
+        }
+
         info!("{}", "=".repeat(60));
 
         // If all videos are already downloaded, return early
         if remaining == 0 {
             info!("All videos already downloaded");
+            SessionState::delete(&state_path).await;
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
         }
 
-        // Audio type selection for playlists with multiple language tracks
-        let mut selected_audio: Option<String> = None;
-        if interactive && audio_types.len() > 1 && remaining > 0 {
-            use dialoguer::Select;
+        // Restore or prompt for selections
+        let mut selected_audio: Option<String>;
+        let selected_sub_langs: Vec<String>;
 
-            let mut options: Vec<String> = audio_types.clone();
-            options.push("All (keep both)".to_string());
-            let type_count = audio_types.len();
+        if let Some(SessionState::Playlist(ref saved)) = saved_state {
+            // Restore selections from saved state
+            selected_audio = saved.selected_audio.clone();
+            selected_sub_langs = saved.selected_sub_langs.clone();
 
-            let selection = tokio::task::spawn_blocking(move || {
-                Select::new()
-                    .with_prompt("Select audio type")
-                    .items(&options)
-                    .default(0)
-                    .interact()
-                    .unwrap_or(options.len() - 1)
-            })
-            .await
-            .unwrap_or(type_count);
-
-            if selection < type_count {
-                let selected = &audio_types[selection];
-                info!(audio:% = selected; "Filtering to selected audio type");
-                selected_audio = Some(selected.clone());
-                filter_formats_by_language(&mut infos, selected);
+            // Apply audio filter from saved state
+            if let Some(ref lang) = selected_audio {
+                info!(audio:% = lang; "Restoring audio type from saved state");
+                filter_formats_by_language(&mut infos, lang);
             }
-        }
+            if !selected_sub_langs.is_empty() {
+                info!(
+                    subs:% = selected_sub_langs.join(", ");
+                    "Restoring subtitle selection from saved state"
+                );
+            }
+        } else {
+            // Audio type selection for playlists with multiple language tracks
+            selected_audio = None;
+            if interactive && audio_types.len() > 1 && remaining > 0 {
+                use dialoguer::Select;
 
-        // Interactive subtitle selection (once for the whole playlist, before confirm)
-        // We select language names using the first episode that has subtitles, then
-        // resolve actual subtitle URLs per-episode during download.
-        let list_subs = self.config.list_subs;
-        let sub_representative = infos.iter().find(|i| {
-            i.subtitles.as_ref().is_some_and(|s| !s.is_empty())
-                || i.automatic_captions.as_ref().is_some_and(|a| !a.is_empty())
-        });
-        debug!(
-            has_subs = sub_representative.is_some(), interactive, list_subs;
-            "Playlist subtitle selection check"
-        );
+                let mut options: Vec<String> = audio_types.clone();
+                options.push("All (keep both)".to_string());
+                let type_count = audio_types.len();
 
-        let selected_sub_langs: Vec<String> =
-            if let Some(rep) = sub_representative.filter(|_| interactive || list_subs) {
-                match self
-                    .select_subtitles_if_needed(rep, interactive, list_subs)
-                    .await?
-                {
-                    Some(sel) => sel.into_iter().map(|(lang, _)| lang).collect(),
-                    None => return Ok(None),
+                let selection = tokio::task::spawn_blocking(move || {
+                    Select::new()
+                        .with_prompt("Select audio type")
+                        .items(&options)
+                        .default(0)
+                        .interact()
+                        .unwrap_or(options.len() - 1)
+                })
+                .await
+                .unwrap_or(type_count);
+
+                if selection < type_count {
+                    let selected = &audio_types[selection];
+                    info!(audio:% = selected; "Filtering to selected audio type");
+                    selected_audio = Some(selected.clone());
+                    filter_formats_by_language(&mut infos, selected);
                 }
-            } else {
-                Vec::new()
-            };
-
-        // Confirm before downloading (unless non-interactive)
-        if interactive && remaining > 0 {
-            use dialoguer::Confirm;
-
-            let prompt = if already_downloaded > 0 {
-                format!("Resume downloading {remaining} remaining videos?")
-            } else {
-                format!("Download {total} videos to '{playlist_folder_name}'?")
-            };
-
-            let proceed = tokio::task::spawn_blocking(move || {
-                Confirm::new()
-                    .with_prompt(prompt)
-                    .default(true)
-                    .interact()
-                    .unwrap_or(false)
-            })
-            .await
-            .unwrap_or(false);
-
-            if !proceed {
-                info!("Cancelled by user");
-                return Ok(None);
             }
+
+            // Interactive subtitle selection (once for the whole playlist)
+            let list_subs = self.config.list_subs;
+            let sub_representative = infos.iter().find(|i| {
+                i.subtitles.as_ref().is_some_and(|s| !s.is_empty())
+                    || i.automatic_captions.as_ref().is_some_and(|a| !a.is_empty())
+            });
+            debug!(
+                has_subs = sub_representative.is_some(), interactive, list_subs;
+                "Playlist subtitle selection check"
+            );
+
+            selected_sub_langs =
+                if let Some(rep) = sub_representative.filter(|_| interactive || list_subs) {
+                    match self
+                        .select_subtitles_if_needed(rep, interactive, list_subs)
+                        .await?
+                    {
+                        Some(sel) => sel.into_iter().map(|(lang, _)| lang).collect(),
+                        None => return Ok(None),
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            // Confirm before downloading (unless non-interactive)
+            if interactive && remaining > 0 {
+                use dialoguer::Confirm;
+
+                let prompt = if already_downloaded > 0 {
+                    format!("Resume downloading {remaining} remaining videos?")
+                } else {
+                    format!("Download {total} videos to '{playlist_folder_name}'?")
+                };
+
+                let proceed = tokio::task::spawn_blocking(move || {
+                    Confirm::new()
+                        .with_prompt(prompt)
+                        .default(true)
+                        .interact()
+                        .unwrap_or(false)
+                })
+                .await
+                .unwrap_or(false);
+
+                if !proceed {
+                    info!("Cancelled by user");
+                    return Ok(None);
+                }
+            }
+
+            // Save session state after user confirms selections
+            let state = SessionState::Playlist(PlaylistState::new(
+                &source_url,
+                &playlist_title,
+                selected_audio.clone(),
+                selected_sub_langs.clone(),
+            ));
+            state.save(&state_path).await;
         }
 
         // Batch-resolve all episode URLs upfront with bounded parallelism.
@@ -428,6 +473,11 @@ impl Orchestrator {
         }
 
         info!("{}", "=".repeat(60));
+
+        // Delete session state only when fully complete (no failures, no interruption)
+        if !interrupted && failed.is_empty() && dl_count == total {
+            SessionState::delete(&state_path).await;
+        }
 
         if downloaded.is_empty() {
             Err(OrchestratorError::ExtractionFailed(
