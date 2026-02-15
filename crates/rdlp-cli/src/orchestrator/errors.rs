@@ -86,5 +86,22 @@ pub enum OrchestratorError {
     Configuration(String),
 }
 
+/// Check if an error warrants re-extracting fresh URLs.
+///
+/// CDN failures (Cloudflare challenges, expired tokens, server errors)
+/// return `Extraction` errors containing "invalid M3U8". These can be
+/// resolved by calling `extract_lazy()` again for a fresh CDN assignment.
+pub(super) fn is_reextractable_error(err: &OrchestratorError) -> bool {
+    match err {
+        OrchestratorError::DownloadFailed(RdlpError::Extraction(msg)) => {
+            msg.contains("invalid M3U8")
+        }
+        OrchestratorError::DownloadFailed(RdlpError::Http {
+            status: 403 | 503, ..
+        }) => true,
+        _ => false,
+    }
+}
+
 /// Result type for orchestrator operations
 pub type Result<T> = std::result::Result<T, OrchestratorError>;

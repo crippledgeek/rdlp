@@ -3,10 +3,13 @@
 //! Provides batch download support with progress tracking, resume capability,
 //! and graceful degradation for failed videos.
 
+use super::errors::is_reextractable_error;
 use super::{Orchestrator, OrchestratorError, Result, archive};
-use log::{debug, error, info};
+use futures_util::StreamExt;
+use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 impl Orchestrator {
     /// Download all videos from a playlist
@@ -106,6 +109,7 @@ impl Orchestrator {
         }
 
         // Audio type selection for playlists with multiple language tracks
+        let mut selected_audio: Option<String> = None;
         if interactive && audio_types.len() > 1 && remaining > 0 {
             use dialoguer::Select;
 
@@ -127,6 +131,7 @@ impl Orchestrator {
             if selection < type_count {
                 let selected = &audio_types[selection];
                 info!(audio:% = selected; "Filtering to selected audio type");
+                selected_audio = Some(selected.clone());
                 filter_formats_by_language(&mut infos, selected);
             }
         }
@@ -183,6 +188,83 @@ impl Orchestrator {
             }
         }
 
+        // Batch-resolve all episode URLs upfront with bounded parallelism.
+        // Resolving 3 episodes concurrently keeps CDN tokens fresh while
+        // avoiding rate-limits. Layer 3 retry handles any that expire later.
+        const RESOLVE_CONCURRENCY: usize = 4;
+
+        // Collect work items: (index, url, title) for episodes needing resolution
+        let to_resolve: Vec<(usize, String, String)> = infos
+            .iter()
+            .enumerate()
+            .filter_map(|(i, ep)| {
+                let sanitized = self.sanitize_filename(&ep.title);
+                if existing_files.contains_key(&sanitized) || ep.webpage_url.is_empty() {
+                    None
+                } else {
+                    Some((i, ep.webpage_url.clone(), ep.title.clone()))
+                }
+            })
+            .collect();
+
+        let resolve_count = to_resolve.len();
+        info!(count = resolve_count, concurrency = RESOLVE_CONCURRENCY; "Resolving episode URLs");
+
+        // Resolve with buffer_unordered: starts the next future as soon as
+        // any one completes, keeping the pipeline always full at N concurrent.
+        let futs = to_resolve.iter().map(|(i, url, title)| {
+            let i = *i;
+            let url = url.clone();
+            let title = title.clone();
+            async move {
+                info!(position = i + 1, title:? = title; "Resolving episode");
+                (i, self.extract_lazy_formats(&url).await)
+            }
+        });
+
+        let results: Vec<_> = futures_util::stream::iter(futs)
+            .buffer_unordered(RESOLVE_CONCURRENCY)
+            .collect()
+            .await;
+
+        for (i, result) in results {
+            match result {
+                Ok(resolved) => {
+                    let mut formats = resolved.formats;
+
+                    // Apply audio type filter
+                    if let Some(ref lang) = selected_audio {
+                        formats
+                            .retain(|f| f.language.as_deref() == Some(lang.as_str()));
+                    }
+
+                    infos[i].formats = formats;
+
+                    // Carry over subtitles from lazy resolution
+                    if infos[i].subtitles.is_none() {
+                        infos[i].subtitles = resolved.subtitles;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        title:? = infos[i].title;
+                        "Failed to resolve: {e} — will retry at download time"
+                    );
+                    infos[i].formats.clear();
+                }
+            }
+        }
+
+        // Clear formats for already-downloaded episodes
+        for ep in infos.iter_mut() {
+            let sanitized = self.sanitize_filename(&ep.title);
+            if existing_files.contains_key(&sanitized) {
+                ep.formats.clear();
+            }
+        }
+
+        info!("Batch resolution complete ({resolve_count} episodes)");
+
         // Create playlist directory if it doesn't exist
         if !playlist_dir.exists() {
             tokio::fs::create_dir_all(&playlist_dir)
@@ -233,7 +315,7 @@ impl Orchestrator {
             // Race download against Ctrl+C signal
             tokio::select! {
                 // Download single video to playlist folder (non-interactive)
-                result = self.download_from_info_to_dir(info, false, &playlist_dir, &selected_sub_langs) => {
+                result = self.download_from_info_to_dir(info, false, &playlist_dir, &selected_sub_langs, selected_audio.as_deref()) => {
                     match result {
                         Ok(Some(path)) => {
                             info!(position, total, path:? = path.display(); "Saved");
@@ -411,7 +493,7 @@ impl Orchestrator {
         info: &rdlp_core::InfoDict,
         interactive: bool,
     ) -> Result<Option<PathBuf>> {
-        self.download_from_info_to_dir(info, interactive, &self.config.output_directory, &[])
+        self.download_from_info_to_dir(info, interactive, &self.config.output_directory, &[], None)
             .await
     }
 
@@ -420,73 +502,186 @@ impl Orchestrator {
     /// This method is used by playlist downloads to save files to the playlist folder.
     /// Uses the shared CDN fallback loop via `download_with_cdn_fallback()`.
     ///
+    /// Supports lazy format resolution: if `info.formats` is empty and
+    /// `info.webpage_url` is set, formats are resolved on-the-fly via
+    /// `extract_video_info()`.
+    ///
+    /// On CDN failure (invalid M3U8, 403/503), re-extracts fresh URLs up to
+    /// `MAX_EXTRACT_RETRIES` times with a delay between attempts. This mirrors
+    /// yt-dlp's `--extractor-retries` behavior.
+    ///
     /// # Arguments
     /// * `info` - Pre-extracted video metadata
     /// * `interactive` - Whether interactive mode is active
     /// * `output_dir` - Directory to save the file in
     /// * `subtitle_langs` - Pre-selected subtitle language names (empty = config-based)
+    /// * `audio_type_filter` - If set, filter lazily-resolved formats to this language
     pub(super) async fn download_from_info_to_dir(
         &self,
         info: &rdlp_core::InfoDict,
         interactive: bool,
         output_dir: &std::path::Path,
         subtitle_langs: &[String],
+        audio_type_filter: Option<&str>,
     ) -> Result<Option<PathBuf>> {
-        // Select format
-        let Some(format) = self.select_format(info, interactive).await? else {
-            return Ok(None);
-        };
+        const MAX_EXTRACT_RETRIES: usize = 3;
+        /// Exponential backoff delays: 5s, 15s, 30s — gives Cloudflare time
+        /// to clear rate-limits between re-extraction attempts.
+        const RETRY_DELAYS: [u64; MAX_EXTRACT_RETRIES] = [5, 15, 30];
 
-        // Generate output path in the specified directory
-        let file_ext = self.determine_file_extension(&format);
-        let sanitized_title = self.sanitize_filename(&info.title);
-        let filename = format!("{sanitized_title}.{file_ext}");
-        let output_path = output_dir.join(&filename);
+        let mut output_path: Option<PathBuf> = None;
+        let mut download_outcome = None;
+        let mut last_info_ref: Option<rdlp_core::InfoDict> = None;
 
-        // Clean up any leftover HLS segment files from interrupted downloads
-        self.cleanup_leftover_segments(output_dir, &sanitized_title)
-            .await;
+        for attempt in 0..=MAX_EXTRACT_RETRIES {
+            if attempt > 0 {
+                let delay = Duration::from_secs(RETRY_DELAYS[attempt - 1]);
+                warn!(
+                    attempt = attempt + 1,
+                    max = MAX_EXTRACT_RETRIES + 1,
+                    delay_secs = delay.as_secs();
+                    "Re-extracting fresh CDN URLs after backoff"
+                );
+                tokio::time::sleep(delay).await;
+            }
 
-        info!(path:? = output_path.display(); "Downloading to");
+            // Lazy resolve: always re-extract on retry, only if empty on first
+            let resolved_info;
+            let info_ref =
+                if (attempt > 0 || info.formats.is_empty()) && !info.webpage_url.is_empty() {
+                    info!(title:? = info.title; "Lazily resolving episode formats");
+                    let mut resolved = match self.extract_lazy_formats(&info.webpage_url).await {
+                        Ok(r) => r,
+                        Err(e) if attempt < MAX_EXTRACT_RETRIES => {
+                            warn!(
+                                attempt = attempt + 1;
+                                "Extraction failed: {e}, will retry"
+                            );
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
 
-        // Detect resume point
-        let resume_offset = self
-            .detect_resume_point(&output_path, format.filesize)
-            .await?;
+                    // Preserve all episode metadata from the original stub
+                    resolved.id = info.id.clone();
+                    resolved.title = info.title.clone();
+                    resolved.thumbnail = info.thumbnail.clone();
+                    resolved.description = info.description.clone();
+                    resolved.playlist = info.playlist.clone();
+                    resolved.playlist_title = info.playlist_title.clone();
+                    resolved.playlist_index = info.playlist_index;
+                    resolved.playlist_count = info.playlist_count;
 
-        // Check if file is already complete
-        if let Some(expected_size) = format.filesize {
-            if resume_offset == expected_size {
-                info!("File already complete, skipping");
-                return Ok(Some(output_path));
+                    // Apply audio type filter to lazily-resolved formats
+                    if let Some(lang) = audio_type_filter {
+                        resolved
+                            .formats
+                            .retain(|f| f.language.as_deref() == Some(lang));
+                    }
+
+                    resolved_info = resolved;
+                    &resolved_info
+                } else {
+                    info
+                };
+
+            // Select format (non-interactive on retry to avoid re-prompting)
+            let Some(mut format) = self
+                .select_format(info_ref, interactive && attempt == 0)
+                .await?
+            else {
+                return Ok(None);
+            };
+
+            // Add alternative CDN server URLs as fallbacks
+            let alt_urls: Vec<String> = info_ref
+                .formats
+                .iter()
+                .filter(|f| f.url != format.url)
+                .map(|f| f.url.clone())
+                .collect();
+            if !alt_urls.is_empty() {
+                format
+                    .fallback_urls
+                    .get_or_insert_with(Vec::new)
+                    .extend(alt_urls);
+            }
+
+            // Compute output path on first attempt only
+            if output_path.is_none() {
+                let file_ext = self.determine_file_extension(&format);
+                let sanitized_title = self.sanitize_filename(&info_ref.title);
+                let filename = format!("{sanitized_title}.{file_ext}");
+                let path = output_dir.join(&filename);
+
+                self.cleanup_leftover_segments(output_dir, &sanitized_title)
+                    .await;
+
+                info!(path:? = path.display(); "Downloading to");
+                output_path = Some(path);
+            }
+
+            let path = output_path.as_ref().unwrap();
+
+            // Detect resume point (recalculate on retry for partial HLS)
+            let resume_offset = self.detect_resume_point(path, format.filesize).await?;
+
+            // Check if file is already complete
+            if let Some(expected_size) = format.filesize {
+                if resume_offset == expected_size {
+                    info!("File already complete, skipping");
+                    return Ok(Some(path.clone()));
+                }
+            }
+
+            // Save info for post-download use (thumbnail, subtitles)
+            last_info_ref = Some(info_ref.clone());
+
+            // Download with CDN fallback
+            match self
+                .download_with_cdn_fallback(&format, path, resume_offset)
+                .await
+            {
+                Ok(Some(outcome)) => {
+                    download_outcome = Some(outcome);
+                    break;
+                }
+                Ok(None) => return Ok(None), // User cancelled
+                Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
+                    warn!("All CDN URLs failed: {e}");
+                    warn!("Will re-extract fresh URLs after delay");
+                    continue;
+                }
+                Err(e) => return Err(e),
             }
         }
 
-        // Execute download with CDN fallback (shared implementation)
-        let Some(outcome) = self
-            .download_with_cdn_fallback(&format, &output_path, resume_offset)
-            .await?
-        else {
-            return Ok(None);
-        };
+        let outcome = download_outcome.ok_or_else(|| {
+            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction(
+                "All extraction retry attempts exhausted".to_string(),
+            ))
+        })?;
+
+        let output_path = output_path.unwrap();
+        let final_info = last_info_ref.as_ref().unwrap_or(info);
 
         // Download thumbnail if needed (before post-processing so embed can find it)
         if self.config.embed_thumbnail || self.config.write_thumbnail {
-            self.download_thumbnail(info, &output_path).await;
+            self.download_thumbnail(final_info, &output_path).await;
         }
 
         // Download subtitles: resolve per-episode URLs from language names
         let episode_subs = if !subtitle_langs.is_empty() {
-            self.resolve_subtitles_for_episode(info, subtitle_langs)
+            self.resolve_subtitles_for_episode(final_info, subtitle_langs)
         } else {
             Vec::new()
         };
-        self.download_subtitles(info, &output_path, &episode_subs)
+        self.download_subtitles(final_info, &output_path, &episode_subs)
             .await?;
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self
-            .run_postprocessing(info, vec![output_path.clone()], outcome.is_hls)
+            .run_postprocessing(final_info, vec![output_path.clone()], outcome.is_hls)
             .await?;
         let final_path = final_files.into_iter().next().unwrap_or(output_path);
 

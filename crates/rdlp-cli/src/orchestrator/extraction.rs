@@ -77,6 +77,41 @@ impl Orchestrator {
         Ok(info)
     }
 
+    /// Lightweight format extraction for lazily-resolved playlist entries.
+    ///
+    /// Uses `extract_lazy()` instead of `extract()` to skip expensive
+    /// operations like re-fetching the watch page. Auto-sets `Referer`
+    /// headers on all resolved formats.
+    pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_core::InfoDict> {
+        let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
+            OrchestratorError::NoExtractor {
+                url: url.to_string(),
+            }
+        })?;
+
+        let mut info = extractor
+            .extract_lazy(url, &self.extraction_context)
+            .await
+            .map_err(OrchestratorError::ExtractionFailed)?;
+
+        info!(formats = info.formats.len(); "Lazily resolved formats");
+
+        // Auto-set Referer header on all formats
+        if !info.webpage_url.is_empty() {
+            let referer = info.webpage_url.clone();
+            for fmt in &mut info.formats {
+                let headers = fmt
+                    .http_headers
+                    .get_or_insert_with(std::collections::HashMap::new);
+                headers
+                    .entry("Referer".to_string())
+                    .or_insert(referer.clone());
+            }
+        }
+
+        Ok(info)
+    }
+
     /// Extract playlist information from URL
     ///
     /// Finds the appropriate extractor and attempts playlist extraction.

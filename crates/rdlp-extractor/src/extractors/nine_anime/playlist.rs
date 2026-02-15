@@ -1,47 +1,46 @@
 //! Season/playlist extraction for 9anime.
 //!
 //! Downloads all episodes of an anime when the URL has no `?ep=` parameter.
-//! Uses parallel extraction with bounded concurrency to resolve each episode's
-//! video sources through the Megacloud/Rapid-Cloud chain.
+//! One episode is fully resolved during extraction (for audio type detection
+//! and subtitle info). If the first episode fails (CDN error, Cloudflare),
+//! up to 3 episodes are tried in order. Remaining episodes are built as
+//! lightweight `InfoDict` stubs with `webpage_url` set, enabling lazy
+//! resolution at download time.
 //!
 //! # Performance
 //!
-//! - Concurrency: 3 parallel episode extractions (lower than PornHub's 4
-//!   due to Megacloud's tighter rate limits)
-//! - Per-episode timeout: 60 seconds (accounts for cipher decryption)
+//! - Playlist prompt appears in ~5 seconds (vs ~68s with eager extraction)
+//! - Each episode resolves formats just before download (~3-5s per episode)
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
-use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result};
 use scraper::Html;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::time::timeout;
 
 use super::{api, build_subtitle_map, metadata, patterns, resolve_episode_formats};
 use crate::base::common::BaseExtractor;
 
-/// Timeout for extracting a single episode (60 seconds).
-const EPISODE_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Number of concurrent episode extractions.
-const CONCURRENT_EXTRACTIONS: usize = 3;
-
 /// Extract all episodes of an anime as a playlist.
+///
+/// One episode is fully resolved (formats + subtitles) for audio type detection.
+/// If the first episode's CDN resolution fails, up to 3 episodes are tried.
+/// Remaining episodes are returned as metadata-only stubs with `webpage_url`
+/// set so the orchestrator can lazily resolve them at download time.
 ///
 /// # Flow
 ///
-/// 1. Parse anime_id from URL
+/// 1. Parse anime_id and slug from URL
 /// 2. Fetch watch page for shared metadata (title, thumbnail, description)
 /// 3. Fetch full episode list via AJAX
-/// 4. Resolve formats for each episode in parallel
-/// 5. Return sorted `Vec<InfoDict>` with playlist fields set
+/// 4. Fully resolve **one episode** via `resolve_episode_formats()` (tries up to 3)
+/// 5. Build remaining episodes as lightweight `InfoDict` with proper `webpage_url`
+/// 6. Return `Vec<InfoDict>` with playlist fields set
 pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
     let anime_id = patterns::extract_anime_id(url).ok_or_else(|| {
         RdlpError::Extraction(format!("Could not extract anime ID from URL: {url}"))
     })?;
+
+    let slug = patterns::extract_slug(url).unwrap_or_default();
 
     info!(anime_id:%; "Extracting 9anime season (all episodes)");
 
@@ -74,115 +73,89 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
         )));
     }
 
-    // Progress counter
-    let completed = Arc::new(AtomicUsize::new(0));
+    // Resolve one episode fully for audio type detection + subtitles.
+    // Try episodes in order until one succeeds — CDN failures on the first
+    // episode shouldn't prevent SUB/DUB and subtitle selection.
+    const MAX_PROBE_EPISODES: usize = 3;
+    let probe_limit = MAX_PROBE_EPISODES.min(total);
+    let mut probe_result = None;
+    let mut probe_index = 0;
 
-    // Build extraction futures for each episode
-    let extraction_futures = episodes.into_iter().enumerate().map(|(index, episode)| {
-        let position = index + 1;
-        let anime_title = anime_title.clone();
-        let thumbnail = anime_metadata.thumbnail.clone();
-        let description = anime_metadata.description.clone();
-        let completed = Arc::clone(&completed);
+    for (i, ep) in episodes.iter().enumerate().take(probe_limit) {
+        let label = format!(
+            "Episode {} ({})",
+            ep.info.number,
+            ep.info.title.as_deref().unwrap_or("untitled")
+        );
+        debug!(episode:% = label; "Resolving episode for type detection");
 
-        async move {
-            let ep_label = format!(
-                "Episode {} ({})",
-                episode.info.number,
-                episode.info.title.as_deref().unwrap_or("untitled")
-            );
-
-            debug!(position, total, episode:% = ep_label; "Extracting episode");
-
-            let result = timeout(
-                EPISODE_EXTRACTION_TIMEOUT,
-                resolve_episode_formats(&episode.data_id, ctx),
-            )
-            .await;
-
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-
-            match result {
-                Ok(Ok((formats, hls_flags, subtitle_tracks))) => {
-                    if formats.is_empty() {
-                        warn!(
-                            done, total, episode:% = ep_label;
-                            "No formats resolved for episode"
-                        );
-                        return None;
-                    }
-
-                    // Build episode title
-                    let title = match &episode.info.title {
-                        Some(ep_title) => format!(
-                            "{anime_title} - Episode {} - {ep_title}",
-                            episode.info.number
-                        ),
-                        None => format!("{anime_title} - Episode {}", episode.info.number),
-                    };
-
-                    let video_id = format!("{}-ep{}", episode.data_id, episode.info.number);
-
-                    let mut info = InfoDict::new(
-                        &video_id,
-                        &title,
-                        "9anime",
-                        format!("https://9animetv.to/watch/episode-{}", episode.data_id),
-                    );
-                    info.formats = formats;
-                    info.thumbnail = thumbnail;
-                    info.description = description;
-                    info.is_live = Some(hls_flags.is_live);
-
-                    // Populate subtitles from Megacloud tracks
-                    if !subtitle_tracks.is_empty() {
-                        info.subtitles = Some(build_subtitle_map(&subtitle_tracks));
-                    }
-
-                    info.propagate_duration();
-
-                    // Set playlist fields
-                    info.playlist = Some(anime_title.clone());
-                    info.playlist_title = Some(anime_title);
-                    info.playlist_index = Some(position);
-                    info.playlist_count = Some(total);
-
-                    debug!(
-                        done, total, episode:% = ep_label;
-                        "Episode extraction succeeded"
-                    );
-
-                    Some((position, info))
-                }
-                Ok(Err(e)) => {
-                    warn!(
-                        done, total, episode:% = ep_label;
-                        "Failed to extract episode: {e}"
-                    );
-                    None
-                }
-                Err(_) => {
-                    warn!(
-                        done, total, episode:% = ep_label;
-                        "Timed out extracting episode"
-                    );
-                    None
-                }
+        match resolve_episode_formats(&ep.data_id, ctx).await {
+            Ok((formats, hls_flags, subtitle_tracks)) if !formats.is_empty() => {
+                info!(
+                    episode:% = label,
+                    formats = formats.len();
+                    "Episode resolved successfully for type detection"
+                );
+                probe_result = Some((formats, hls_flags, subtitle_tracks));
+                probe_index = i;
+                break;
+            }
+            Ok(_) => {
+                warn!(episode:% = label; "No formats resolved, trying next episode");
+            }
+            Err(e) => {
+                warn!(episode:% = label; "Failed to resolve episode: {e}");
             }
         }
-    });
+    }
 
-    // Process extractions concurrently with bounded parallelism
-    let results: Vec<Option<(usize, InfoDict)>> = stream::iter(extraction_futures)
-        .buffer_unordered(CONCURRENT_EXTRACTIONS)
-        .collect()
-        .await;
+    let mut results: Vec<InfoDict> = Vec::with_capacity(total);
 
-    // Collect successful extractions and sort by playlist position
-    let mut extracted: Vec<(usize, InfoDict)> = results.into_iter().flatten().collect();
-    extracted.sort_by_key(|(pos, _)| *pos);
+    // Build InfoDict for each episode
+    for (index, episode) in episodes.iter().enumerate() {
+        let position = index + 1;
 
-    let results: Vec<InfoDict> = extracted.into_iter().map(|(_, info)| info).collect();
+        let title = match &episode.info.title {
+            Some(ep_title) => format!(
+                "{anime_title} - Episode {} - {ep_title}",
+                episode.info.number
+            ),
+            None => format!("{anime_title} - Episode {}", episode.info.number),
+        };
+
+        let video_id = format!("{}-ep{}", episode.data_id, episode.info.number);
+        let webpage_url = format!(
+            "https://9animetv.to/watch/{slug}-{anime_id}?ep={}",
+            episode.data_id
+        );
+
+        let mut info = InfoDict::new(&video_id, &title, "9anime", &webpage_url);
+        info.thumbnail = anime_metadata.thumbnail.clone();
+        info.description = anime_metadata.description.clone();
+
+        // The probed episode gets full formats + subtitles
+        if index == probe_index {
+            if let Some((ref formats, ref hls_flags, ref subtitle_tracks)) = probe_result {
+                info.formats = formats.clone();
+                info.is_live = Some(hls_flags.is_live);
+
+                if !subtitle_tracks.is_empty() {
+                    info.subtitles = Some(build_subtitle_map(subtitle_tracks));
+                }
+
+                info.propagate_duration();
+            }
+        }
+        // All other episodes: empty formats (lazy resolution marker)
+
+        // Set playlist fields
+        info.playlist = Some(anime_title.clone());
+        info.playlist_title = Some(anime_title.clone());
+        info.playlist_index = Some(position);
+        info.playlist_count = Some(total);
+
+        results.push(info);
+    }
 
     if results.is_empty() {
         return Err(RdlpError::Extraction(format!(
@@ -191,8 +164,9 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     }
 
     info!(
-        extracted = results.len(), total;
-        "Successfully extracted episodes"
+        total = results.len(),
+        probed = probe_result.is_some();
+        "Playlist extraction complete (one episode probed, rest deferred)"
     );
 
     Ok(results)
@@ -203,8 +177,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constants() {
-        assert_eq!(CONCURRENT_EXTRACTIONS, 3);
-        assert_eq!(EPISODE_EXTRACTION_TIMEOUT, Duration::from_secs(60));
+    fn test_webpage_url_format() {
+        let slug = "sword-art-online";
+        let anime_id = "2274";
+        let data_id = "26565";
+        let url = format!("https://9animetv.to/watch/{slug}-{anime_id}?ep={data_id}");
+        assert!(patterns::has_episode_param(&url));
+        assert_eq!(patterns::extract_anime_id(&url), Some("2274".to_string()));
+        assert_eq!(
+            patterns::extract_episode_id(&url),
+            Some("26565".to_string())
+        );
     }
 }

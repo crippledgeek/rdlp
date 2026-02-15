@@ -52,8 +52,9 @@ impl Orchestrator {
     #[must_use]
     pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
+        let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
         let http_client =
-            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
+            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar.clone());
         let js_engine = Arc::new(BoaJsEngine::new());
 
         // Wrap config in Arc once and share it
@@ -71,7 +72,9 @@ impl Orchestrator {
 
         Self {
             extractor_registry: Arc::new(ExtractorRegistry::new()),
-            downloader_registry: Arc::new(DownloaderRegistry::with_config(&config)),
+            downloader_registry: Arc::new(DownloaderRegistry::with_config_and_cookies(
+                &config, raw_jar,
+            )),
             postprocessor_registry,
             extraction_context,
             config,

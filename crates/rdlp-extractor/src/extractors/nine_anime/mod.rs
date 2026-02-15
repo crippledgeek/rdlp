@@ -160,25 +160,34 @@ pub(crate) async fn resolve_episode_formats(
                         Some(format!("{} ({})", server.audio_type, server.server_name));
                     format.language = Some(audio_label);
 
+                    // Set Referer to the embed URL so CDN M3U8 fetches aren't
+                    // blocked by Cloudflare during HLS variant detection.
+                    let mut headers = HashMap::new();
+                    headers.insert("Referer".to_string(), source.embed_url.clone());
+                    format.http_headers = Some(headers);
+
                     all_formats.push(format);
                 }
 
-                // Stop trying servers once we have both SUB and DUB (or no
-                // remaining servers offer the missing type).
+                // Stop trying servers once we have both SUB and DUB with
+                // CDN redundancy (≥2 formats per type for fallback).
                 if !mega_sources.sources.is_empty() {
-                    let has_sub = all_formats
+                    let sub_count = all_formats
                         .iter()
-                        .any(|f| f.format_note.as_ref().is_some_and(|n| n.contains("SUB")));
-                    let has_dub = all_formats
+                        .filter(|f| f.format_note.as_ref().is_some_and(|n| n.contains("SUB")))
+                        .count();
+                    let dub_count = all_formats
                         .iter()
-                        .any(|f| f.format_note.as_ref().is_some_and(|n| n.contains("DUB")));
-                    let remaining_has_other_type = servers.iter().any(|s| {
+                        .filter(|f| f.format_note.as_ref().is_some_and(|n| n.contains("DUB")))
+                        .count();
+
+                    let remaining_provides_value = servers.iter().any(|s| {
                         s.data_id != server.data_id
-                            && ((s.audio_type == api::AudioType::Sub && !has_sub)
-                                || (s.audio_type == api::AudioType::Dub && !has_dub))
+                            && ((s.audio_type == api::AudioType::Sub && sub_count < 2)
+                                || (s.audio_type == api::AudioType::Dub && dub_count < 2))
                     });
 
-                    if !remaining_has_other_type {
+                    if !remaining_provides_value {
                         break;
                     }
                 }
@@ -331,6 +340,37 @@ impl InfoExtractor for NineAnimeExtractor {
             // No ?ep= parameter — extract all episodes as a playlist
             playlist::extract_season(url, ctx).await
         }
+    }
+
+    /// Lightweight format resolution for lazily-extracted playlist entries.
+    ///
+    /// Skips the watch page fetch and episode info AJAX call (metadata is
+    /// already available from playlist extraction). Only resolves Megacloud
+    /// video sources and subtitles, avoiding Cloudflare rate-limiting.
+    async fn extract_lazy(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
+        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| {
+            RdlpError::Extraction(format!(
+                "Could not extract episode ID from URL: {url}. \
+                 Use a URL with ?ep= parameter."
+            ))
+        })?;
+
+        info!(episode_id:%; "Lazily resolving 9anime episode formats");
+
+        let (formats, hls_flags, subtitle_tracks) =
+            resolve_episode_formats(&episode_id, ctx).await?;
+
+        let mut info = InfoDict::new("", "", "9anime", url);
+        info.formats = formats;
+        info.is_live = Some(hls_flags.is_live);
+
+        if !subtitle_tracks.is_empty() {
+            info.subtitles = Some(build_subtitle_map(&subtitle_tracks));
+        }
+
+        info.propagate_duration();
+
+        Ok(info)
     }
 }
 
