@@ -82,6 +82,17 @@ pub trait InfoExtractor: Send + Sync {
         Ok(vec![self.extract(url, ctx).await?])
     }
 
+    /// Lightweight format extraction for lazily-resolved playlist entries.
+    ///
+    /// Called by the orchestrator when a playlist entry has empty formats and
+    /// needs resolution at download time. The default implementation delegates
+    /// to `extract()`. Extractors may override this to skip expensive
+    /// operations (e.g., re-fetching the watch page HTML) when only format
+    /// resolution is needed.
+    async fn extract_lazy(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
+        self.extract(url, ctx).await
+    }
+
     /// Check if this extractor can handle the given URL
     ///
     /// The default implementation checks against the valid_url() regex.
