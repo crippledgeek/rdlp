@@ -144,6 +144,8 @@ pub struct HlsSizeDetector {
     http_client: Arc<reqwest::Client>,
     concurrent_requests: usize,
     verbose: bool,
+    /// Optional default headers applied to every M3U8 fetch (e.g., Referer).
+    default_headers: Option<reqwest::header::HeaderMap>,
 }
 
 impl HlsSizeDetector {
@@ -158,6 +160,7 @@ impl HlsSizeDetector {
             http_client,
             concurrent_requests: DEFAULT_CONCURRENCY,
             verbose,
+            default_headers: None,
         }
     }
 
@@ -168,6 +171,15 @@ impl HlsSizeDetector {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_concurrency(mut self, count: usize) -> Self {
         self.concurrent_requests = count.max(1);
+        self
+    }
+
+    /// Set default HTTP headers applied to every M3U8 playlist fetch.
+    ///
+    /// Useful for CDNs that require a `Referer` header to avoid challenges.
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_default_headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
+        self.default_headers = Some(headers);
         self
     }
 
@@ -599,7 +611,11 @@ impl HlsSizeDetector {
 
     /// Fetch M3U8 playlist text from a URL
     async fn fetch_playlist_text(&self, m3u8_url: &str) -> Result<String> {
-        let response = self.http_client.get(m3u8_url).send().await.map_err(|e| {
+        let mut request = self.http_client.get(m3u8_url);
+        if let Some(headers) = &self.default_headers {
+            request = request.headers(headers.clone());
+        }
+        let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
                 RdlpError::Network(format!("Timeout fetching playlist: {m3u8_url}"))
             } else if e.is_connect() {
@@ -1078,7 +1094,25 @@ pub async fn detect_format_sizes(
     use tokio::time::timeout;
 
     let verbose = ctx.config.verbose;
-    let hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+    let mut hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+
+    // Propagate HTTP headers from formats (e.g., Referer) to the HLS detector.
+    // Many CDNs (Megacloud/douvid.xyz) require a Referer to serve M3U8 content.
+    if let Some(headers_map) = formats.iter().find_map(|f| f.http_headers.as_ref()) {
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (key, value) in headers_map {
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                reqwest::header::HeaderValue::from_str(value),
+            ) {
+                header_map.insert(name, val);
+            }
+        }
+        if !header_map.is_empty() {
+            hls_detector = hls_detector.with_default_headers(header_map);
+        }
+    }
+
     let http_client = ctx.http_client.clone();
     let extractor_name = extractor_name.to_string();
 

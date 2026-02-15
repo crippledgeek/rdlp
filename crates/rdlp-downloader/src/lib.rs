@@ -299,9 +299,23 @@ impl DownloaderRegistry {
     /// Create a new registry with custom configuration
     #[must_use]
     pub fn with_config(config: &Config) -> Self {
-        // Create optimized HTTP client using shared factory
         let client = HttpClientFactory::from_rdlp_config(config).build();
+        Self::build_registry(config, client)
+    }
 
+    /// Create a new registry with custom configuration and shared cookie jar
+    ///
+    /// The cookie jar is shared with the extraction HTTP client so that
+    /// cookies obtained during extraction (including Cloudflare clearance
+    /// and session cookies) are automatically sent during downloads.
+    #[must_use]
+    pub fn with_config_and_cookies(config: &Config, cookie_jar: Arc<reqwest::cookie::Jar>) -> Self {
+        let client = HttpClientFactory::from_rdlp_config(config).build_with_cookies(cookie_jar);
+        Self::build_registry(config, client)
+    }
+
+    /// Internal helper to build registry from a pre-configured HTTP client
+    fn build_registry(config: &Config, client: reqwest::Client) -> Self {
         // Create rate limiter if configured
         let rate_limiter = config.rate_limit.map(|bps| Arc::new(RateLimiter::new(bps)));
 
