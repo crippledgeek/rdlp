@@ -9,7 +9,12 @@ use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Maximum age of batch-resolved tokens before proactive re-extraction.
+/// Megacloud/netmagcdn tokens last ~30-60 min; we re-extract at 25 min
+/// to stay well within the window.
+const TOKEN_MAX_AGE: Duration = Duration::from_secs(25 * 60);
 
 impl Orchestrator {
     /// Download all videos from a playlist
@@ -234,8 +239,7 @@ impl Orchestrator {
 
                     // Apply audio type filter
                     if let Some(ref lang) = selected_audio {
-                        formats
-                            .retain(|f| f.language.as_deref() == Some(lang.as_str()));
+                        formats.retain(|f| f.language.as_deref() == Some(lang.as_str()));
                     }
 
                     infos[i].formats = formats;
@@ -263,6 +267,9 @@ impl Orchestrator {
             }
         }
 
+        // Track when batch resolution completed for token freshness guard.
+        // Episodes downloaded >25 min after this point will re-extract fresh URLs.
+        let batch_resolved_at = Instant::now();
         info!("Batch resolution complete ({resolve_count} episodes)");
 
         // Create playlist directory if it doesn't exist
@@ -278,69 +285,113 @@ impl Orchestrator {
             info!(path:? = playlist_dir.display(); "Created folder");
         }
 
-        // Download each video with progress tracking
-        // Use tokio::select! to properly catch Ctrl+C during downloads
+        // Download episodes with bounded parallelism (2 concurrent).
+        // Pre-filter to skip already-downloaded and archived episodes.
+        const DOWNLOAD_CONCURRENCY: usize = 2;
         let mut downloaded: Vec<PathBuf> = existing_files.into_values().collect();
         let mut failed = Vec::new();
         let mut interrupted = false;
 
-        for (index, info) in infos.iter().enumerate() {
-            let position = index + 1;
-
-            // Check if this video is already downloaded
-            let sanitized_title = self.sanitize_filename(&info.title);
-            let already_exists = downloaded.iter().any(|p| {
-                p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|name| name == sanitized_title)
-            });
-
-            if already_exists {
-                info!(position, total, title:? = info.title; "Already downloaded");
-                continue;
-            }
-
-            // Check download archive
-            if let Some(ref archive_set) = archive {
-                if archive::is_in_archive(archive_set, &info.extractor, &info.id) {
-                    info!(position, total, title:? = info.title; "Already in archive, skipping");
-                    continue;
+        // Collect episodes that still need downloading
+        let to_download: Vec<(usize, &rdlp_core::InfoDict)> = infos
+            .iter()
+            .enumerate()
+            .filter(|(_, ep)| {
+                let sanitized = self.sanitize_filename(&ep.title);
+                let exists = downloaded.iter().any(|p| {
+                    p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|name| name == sanitized)
+                });
+                if exists {
+                    return false;
                 }
-            }
-
-            info!("{}", "─".repeat(60));
-            info!(position, total, title:? = info.title; "Downloading");
-            info!("{}", "─".repeat(60));
-
-            // Race download against Ctrl+C signal
-            tokio::select! {
-                // Download single video to playlist folder (non-interactive)
-                result = self.download_from_info_to_dir(info, false, &playlist_dir, &selected_sub_langs, selected_audio.as_deref()) => {
-                    match result {
-                        Ok(Some(path)) => {
-                            info!(position, total, path:? = path.display(); "Saved");
-                            downloaded.push(path);
-                            self.record_in_archive(&info.extractor, &info.id);
-                        }
-                        Ok(None) => {
-                            info!(position, total; "Skipped by user");
-                        }
-                        Err(e) => {
-                            error!(position, total; "Failed: {e}");
-                            failed.push((position, info.title.clone(), e.to_string()));
-                        }
+                if let Some(ref archive_set) = archive {
+                    if archive::is_in_archive(archive_set, &ep.extractor, &ep.id) {
+                        return false;
                     }
                 }
-                // Catch Ctrl+C immediately during download
-                _ = tokio::signal::ctrl_c() => {
+                true
+            })
+            .collect();
+
+        let download_count = to_download.len();
+        if download_count > 0 {
+            info!(
+                count = download_count,
+                concurrency = DOWNLOAD_CONCURRENCY;
+                "Downloading episodes"
+            );
+        }
+
+        // Build concurrent download stream.
+        // Each future clones the data it needs so lifetimes are straightforward.
+        let batch_ts = Some(batch_resolved_at);
+        let futs = to_download.into_iter().map(|(index, info)| {
+            let position = index + 1;
+            let info_owned = info.clone();
+            let dir = playlist_dir.clone();
+            let sub_langs = selected_sub_langs.clone();
+            let audio = selected_audio.clone();
+            async move {
+                info!("{}", "─".repeat(60));
+                info!(position, total, title:? = info_owned.title; "Downloading");
+                let result = self
+                    .download_from_info_to_dir(
+                        &info_owned,
+                        false,
+                        &dir,
+                        &sub_langs,
+                        audio.as_deref(),
+                        batch_ts,
+                    )
+                    .await;
+                (position, info_owned, result)
+            }
+        });
+
+        let mut stream = futures_util::stream::iter(futs).buffer_unordered(DOWNLOAD_CONCURRENCY);
+
+        // Consume download stream with Ctrl+C support
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+
+        loop {
+            tokio::select! {
+                next = stream.next() => {
+                    match next {
+                        Some((position, info_owned, result)) => {
+                            match result {
+                                Ok(Some(path)) => {
+                                    info!(position, total, path:? = path.display(); "Saved");
+                                    downloaded.push(path);
+                                    self.record_in_archive(
+                                        &info_owned.extractor,
+                                        &info_owned.id,
+                                    );
+                                }
+                                Ok(None) => {
+                                    info!(position, total; "Skipped by user");
+                                }
+                                Err(e) => {
+                                    error!(position, total; "Failed: {e}");
+                                    failed.push((
+                                        position,
+                                        info_owned.title,
+                                        e.to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                        None => break, // All downloads complete
+                    }
+                }
+                _ = &mut ctrl_c => {
                     info!("Playlist download interrupted by user");
                     info!("Run the same command again to resume");
                     interrupted = true;
+                    break;
                 }
-            }
-
-            if interrupted {
-                break;
             }
         }
 
@@ -493,8 +544,15 @@ impl Orchestrator {
         info: &rdlp_core::InfoDict,
         interactive: bool,
     ) -> Result<Option<PathBuf>> {
-        self.download_from_info_to_dir(info, interactive, &self.config.output_directory, &[], None)
-            .await
+        self.download_from_info_to_dir(
+            info,
+            interactive,
+            &self.config.output_directory,
+            &[],
+            None,
+            None,
+        )
+        .await
     }
 
     /// Download from pre-extracted InfoDict to a specific directory
@@ -523,6 +581,7 @@ impl Orchestrator {
         output_dir: &std::path::Path,
         subtitle_langs: &[String],
         audio_type_filter: Option<&str>,
+        batch_resolved_at: Option<Instant>,
     ) -> Result<Option<PathBuf>> {
         const MAX_EXTRACT_RETRIES: usize = 3;
         /// Exponential backoff delays: 5s, 15s, 30s — gives Cloudflare time
@@ -547,43 +606,53 @@ impl Orchestrator {
 
             // Lazy resolve: always re-extract on retry, only if empty on first
             let resolved_info;
-            let info_ref =
-                if (attempt > 0 || info.formats.is_empty()) && !info.webpage_url.is_empty() {
-                    info!(title:? = info.title; "Lazily resolving episode formats");
-                    let mut resolved = match self.extract_lazy_formats(&info.webpage_url).await {
-                        Ok(r) => r,
-                        Err(e) if attempt < MAX_EXTRACT_RETRIES => {
-                            warn!(
-                                attempt = attempt + 1;
-                                "Extraction failed: {e}, will retry"
-                            );
-                            continue;
-                        }
-                        Err(e) => return Err(e),
-                    };
-
-                    // Preserve all episode metadata from the original stub
-                    resolved.id = info.id.clone();
-                    resolved.title = info.title.clone();
-                    resolved.thumbnail = info.thumbnail.clone();
-                    resolved.description = info.description.clone();
-                    resolved.playlist = info.playlist.clone();
-                    resolved.playlist_title = info.playlist_title.clone();
-                    resolved.playlist_index = info.playlist_index;
-                    resolved.playlist_count = info.playlist_count;
-
-                    // Apply audio type filter to lazily-resolved formats
-                    if let Some(lang) = audio_type_filter {
-                        resolved
-                            .formats
-                            .retain(|f| f.language.as_deref() == Some(lang));
+            // Re-extract if: retry attempt, no formats, or batch tokens expired
+            let tokens_stale =
+                attempt == 0 && batch_resolved_at.is_some_and(|t| t.elapsed() > TOKEN_MAX_AGE);
+            if tokens_stale {
+                info!(
+                    "Batch-resolved tokens stale (>{} min), forcing re-extraction",
+                    TOKEN_MAX_AGE.as_secs() / 60
+                );
+            }
+            let info_ref = if (attempt > 0 || info.formats.is_empty() || tokens_stale)
+                && !info.webpage_url.is_empty()
+            {
+                info!(title:? = info.title; "Lazily resolving episode formats");
+                let mut resolved = match self.extract_lazy_formats(&info.webpage_url).await {
+                    Ok(r) => r,
+                    Err(e) if attempt < MAX_EXTRACT_RETRIES => {
+                        warn!(
+                            attempt = attempt + 1;
+                            "Extraction failed: {e}, will retry"
+                        );
+                        continue;
                     }
-
-                    resolved_info = resolved;
-                    &resolved_info
-                } else {
-                    info
+                    Err(e) => return Err(e),
                 };
+
+                // Preserve all episode metadata from the original stub
+                resolved.id = info.id.clone();
+                resolved.title = info.title.clone();
+                resolved.thumbnail = info.thumbnail.clone();
+                resolved.description = info.description.clone();
+                resolved.playlist = info.playlist.clone();
+                resolved.playlist_title = info.playlist_title.clone();
+                resolved.playlist_index = info.playlist_index;
+                resolved.playlist_count = info.playlist_count;
+
+                // Apply audio type filter to lazily-resolved formats
+                if let Some(lang) = audio_type_filter {
+                    resolved
+                        .formats
+                        .retain(|f| f.language.as_deref() == Some(lang));
+                }
+
+                resolved_info = resolved;
+                &resolved_info
+            } else {
+                info
+            };
 
             // Select format (non-interactive on retry to avoid re-prompting)
             let Some(mut format) = self
@@ -593,14 +662,18 @@ impl Orchestrator {
                 return Ok(None);
             };
 
-            // Add alternative CDN server URLs as fallbacks
-            let alt_urls: Vec<String> = info_ref
+            // Add alternative CDN server URLs as fallbacks.
+            // Sort by CDN host stickiness: same host as primary URL first,
+            // since a working CDN server is more likely to stay healthy.
+            let mut alt_urls: Vec<String> = info_ref
                 .formats
                 .iter()
                 .filter(|f| f.url != format.url)
                 .map(|f| f.url.clone())
                 .collect();
             if !alt_urls.is_empty() {
+                let primary_host = extract_cdn_host(&format.url);
+                alt_urls.sort_by_key(|url| u8::from(extract_cdn_host(url) != primary_host));
                 format
                     .fallback_urls
                     .get_or_insert_with(Vec::new)
@@ -706,6 +779,17 @@ fn detect_audio_types(infos: &[rdlp_core::InfoDict]) -> Vec<String> {
     result
 }
 
+/// Extract the hostname from a URL for CDN server stickiness.
+///
+/// Returns the host portion (e.g., "s2.netmagcdn.com") so fallback
+/// URLs on the same CDN server can be prioritized.
+fn extract_cdn_host(url: &str) -> Option<&str> {
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    after_scheme.split('/').next()
+}
+
 /// Filter episode formats to only include the selected audio/language type.
 ///
 /// Removes all formats whose `language` field does not match the given value.
@@ -799,5 +883,35 @@ mod tests {
 
         assert_eq!(infos[0].formats.len(), 1);
         assert_eq!(infos[0].formats[0].language.as_deref(), Some("SUB"));
+    }
+
+    #[test]
+    fn test_extract_cdn_host() {
+        assert_eq!(
+            extract_cdn_host("https://s2.netmagcdn.com/hls/master.m3u8"),
+            Some("s2.netmagcdn.com")
+        );
+        assert_eq!(
+            extract_cdn_host("http://cdn.example.com/video.mp4"),
+            Some("cdn.example.com")
+        );
+        assert_eq!(extract_cdn_host("not-a-url"), None);
+    }
+
+    #[test]
+    fn test_extract_cdn_host_stickiness_sort() {
+        let primary = "https://s2.netmagcdn.com/hls/ep1/master.m3u8";
+        let primary_host = extract_cdn_host(primary);
+
+        let mut urls = vec![
+            "https://s1.netmagcdn.com/hls/ep1/alt.m3u8".to_string(),
+            "https://s2.netmagcdn.com/hls/ep1/alt2.m3u8".to_string(),
+            "https://s3.netmagcdn.com/hls/ep1/alt3.m3u8".to_string(),
+        ];
+
+        urls.sort_by_key(|url| u8::from(extract_cdn_host(url) != primary_host));
+
+        // s2 (same host) should sort first
+        assert!(urls[0].contains("s2.netmagcdn.com"));
     }
 }
