@@ -481,4 +481,91 @@ mod tests {
         assert_eq!(outcome.selected[0].language, "English");
         assert!(outcome.warnings.is_empty());
     }
+
+    #[test]
+    fn test_strict_subs_error_message_content() {
+        let result = result_with(vec![track("ja", "srt", false)]);
+        let langs = vec!["en".to_string(), "de".to_string()];
+        let outcome = apply_subtitle_policy(&result, &langs, None, false, true);
+        assert!(outcome.should_fail);
+        let msg = outcome.error_message.unwrap();
+        assert!(msg.contains("2 language(s) unavailable"));
+    }
+
+    #[test]
+    fn test_strict_subs_passes_when_all_found() {
+        let result = result_with(vec![track("en", "srt", false), track("ja", "vtt", false)]);
+        let langs = vec!["en".to_string(), "ja".to_string()];
+        let outcome = apply_subtitle_policy(&result, &langs, None, false, true);
+        assert!(!outcome.should_fail);
+        assert_eq!(outcome.selected.len(), 2);
+        assert!(outcome.warnings.is_empty());
+    }
+
+    // ── URL validation tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_validate_urls_keeps_reachable() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("HEAD", "/en.vtt")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let mut t = track("en", "vtt", false);
+        t.url = server.url() + "/en.vtt";
+        let result = result_with(vec![t]);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let validated = validate_subtitle_urls(result, &client).await;
+
+        assert_eq!(validated.tracks.len(), 1);
+        assert_eq!(validated.status, SubtitleStatus::Available);
+    }
+
+    #[tokio::test]
+    async fn test_validate_urls_filters_unreachable() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("HEAD", "/en.vtt")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let mut t = track("en", "vtt", false);
+        t.url = server.url() + "/en.vtt";
+        let result = result_with(vec![t]);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let validated = validate_subtitle_urls(result, &client).await;
+
+        assert!(validated.tracks.is_empty());
+        assert_eq!(validated.status, SubtitleStatus::ErrorSoft);
+        assert!(
+            validated
+                .reasons
+                .contains(&SubtitleReason::UrlNotReachable(404))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_urls_auth_reason_on_403() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("HEAD", "/en.vtt")
+            .with_status(403)
+            .create_async()
+            .await;
+
+        let mut t = track("en", "vtt", false);
+        t.url = server.url() + "/en.vtt";
+        let result = result_with(vec![t]);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let validated = validate_subtitle_urls(result, &client).await;
+
+        assert!(validated.tracks.is_empty());
+        assert!(validated.reasons.contains(&SubtitleReason::RequiresAuth));
+    }
 }
