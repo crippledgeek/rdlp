@@ -26,6 +26,9 @@ pub mod result;
 #[cfg(feature = "serde")]
 pub mod dto;
 
+/// Internal orchestrator (moved from rdlp-cli).
+pub(crate) mod orchestrator;
+
 // Convenience re-exports
 pub use errors::RdlpApiError;
 pub use events::Event;
