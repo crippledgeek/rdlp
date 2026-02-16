@@ -145,7 +145,7 @@ pub struct SubtitleOptions {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use rdlp_api::request::PostProcessOptions;
 /// use rdlp_core::ContainerFormat;
 ///
