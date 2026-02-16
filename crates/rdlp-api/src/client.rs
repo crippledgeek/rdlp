@@ -166,6 +166,44 @@ impl RdlpClient {
         orchestrator.extract_info(url).await.map_err(Into::into)
     }
 
+    /// Download only subtitles (no video) for the given metadata.
+    ///
+    /// Shows interactive subtitle selection if a callback is configured,
+    /// downloads selected subtitle files, and returns their paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `info` - Pre-extracted video metadata.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(paths))` — Downloaded subtitle file paths.
+    /// - `Ok(None)` — User cancelled the selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if subtitle download fails.
+    pub async fn download_subtitles_only(
+        &self,
+        info: &InfoDict,
+    ) -> Result<Option<Vec<std::path::PathBuf>>, RdlpApiError> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(16);
+        let cancel_token = CancellationToken::new();
+        let config = (*self.config).clone();
+
+        let orchestrator =
+            Orchestrator::new(config, tx, id, cancel_token, self.interactive.clone());
+        orchestrator
+            .load_cookies()
+            .await
+            .map_err(RdlpApiError::from)?;
+        orchestrator
+            .download_subtitles_only(info)
+            .await
+            .map_err(Into::into)
+    }
+
     /// List available extractors.
     #[must_use]
     pub fn list_extractors(&self) -> Vec<String> {

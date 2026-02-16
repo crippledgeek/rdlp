@@ -419,7 +419,6 @@ impl Orchestrator {
     /// # Returns
     /// - `Ok(Some(paths))` - Downloaded subtitle file paths
     /// - `Ok(None)` - User cancelled
-    #[allow(dead_code)]
     pub(super) async fn download_subtitles_standalone(
         &self,
         info: &InfoDict,

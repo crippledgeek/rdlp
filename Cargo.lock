@@ -2285,6 +2285,7 @@ dependencies = [
  "log",
  "mockito",
  "proptest",
+ "rdlp-api",
  "rdlp-cookies",
  "rdlp-core",
  "rdlp-downloader",

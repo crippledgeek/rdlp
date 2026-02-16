@@ -36,5 +36,6 @@ pub use client::RdlpClient;
 pub use errors::RdlpApiError;
 pub use events::Event;
 pub use handle::{DownloadHandle, DownloadId};
+pub use orchestrator::InteractiveCallback;
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

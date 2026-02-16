@@ -306,7 +306,6 @@ impl Orchestrator {
     /// # Returns
     /// - `Ok(Some(paths))` - Downloaded subtitle file paths
     /// - `Ok(None)` - User cancelled
-    #[allow(dead_code)]
     pub async fn download_subtitles_only(
         &self,
         info: &rdlp_core::InfoDict,
