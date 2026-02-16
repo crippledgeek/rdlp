@@ -27,6 +27,11 @@ pub mod result;
 pub mod dto;
 
 /// Internal orchestrator (moved from rdlp-cli).
+///
+/// All items are `pub(crate)` — the `Engine` (future task) will be
+/// the public facade that wires orchestrator methods to the API.
+/// Until then, suppress dead-code warnings.
+#[allow(dead_code, unused_imports)]
 pub(crate) mod orchestrator;
 
 // Convenience re-exports

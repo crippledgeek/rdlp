@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde"]
+serde = []  # Enables dto module; serde crate is always available for session_state
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
@@ -34,14 +34,15 @@ reqwest = { workspace = true }
 futures-util = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 
-# serde_json is always needed (orchestrator session state serialization)
+# Always needed: session_state serialization + EventDto (when `serde` feature enabled)
+serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
-
-# Optional serde support for EventDto
-serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+proptest = "1.4"
+mockito = "1.7"
 
 [lints]
 workspace = true
