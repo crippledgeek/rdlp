@@ -1,12 +1,11 @@
 //! Error types for orchestration operations
 //!
-//! This module provides a consistent error handling strategy for the CLI orchestrator.
+//! This module provides a consistent error handling strategy for the orchestrator.
 //!
 //! # Error Wrapping Strategy
 //!
 //! - Domain errors from `rdlp-core`, `rdlp-extractor`, and `rdlp-downloader` are wrapped
 //!   as `RdlpError` directly to preserve type information.
-//! - External library errors (e.g., indicatif) are wrapped in descriptive variants.
 //! - I/O errors are preserved directly via `#[from]`.
 
 use rdlp_core::RdlpError;
@@ -68,10 +67,6 @@ pub enum OrchestratorError {
     /// Failed to generate output path
     #[error("Failed to generate output path: {0}")]
     PathGenerationFailed(String),
-
-    /// Progress bar template error (external library)
-    #[error("Failed to create progress bar: {0}")]
-    ProgressBarFailed(String),
 
     /// I/O error with custom message
     #[error("{0}")]

@@ -1,158 +1,53 @@
-//! Download execution and progress tracking
+//! Download execution and progress tracking via events
 
 use super::{Orchestrator, errors::*};
-use indicatif::{ProgressBar, ProgressStyle};
+use crate::events::Event;
+use crate::handle::DownloadId;
 use log::info;
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::instrument;
 
-/// Progress callback that updates a progress bar
-struct ProgressBarCallback {
-    progress_bar: ProgressBar,
-    /// Expected total size (used when downloader doesn't report total)
-    expected_size: Option<u64>,
+/// Progress callback that emits [`Event::Progress`] and [`Event::Warning`]
+/// over an `mpsc` channel instead of updating a terminal progress bar.
+struct EventProgressCallback {
+    event_tx: mpsc::Sender<Event>,
+    download_id: DownloadId,
 }
 
-impl ProgressBarCallback {
-    fn new(progress_bar: ProgressBar, expected_size: Option<u64>) -> Self {
+impl EventProgressCallback {
+    fn new(event_tx: mpsc::Sender<Event>, download_id: DownloadId) -> Self {
         Self {
-            progress_bar,
-            expected_size,
+            event_tx,
+            download_id,
         }
     }
 }
 
-impl ProgressCallback for ProgressBarCallback {
+impl ProgressCallback for EventProgressCallback {
     fn on_progress(&self, progress: &DownloadProgress) {
-        // Check if this is segment-based progress (HLS downloads)
-        if progress.is_segmented() {
-            // For HLS: progress bar tracks segments, message shows bytes
-            if let (Some(completed), Some(total)) =
-                (progress.segments_downloaded, progress.total_segments)
-            {
-                self.progress_bar.set_length(total);
-                self.progress_bar.set_position(completed);
-
-                // Update message with byte info
-                let bytes_str = progress.bytes_string();
-                let speed_str = progress.speed_string();
-                let eta_str = progress
-                    .eta
-                    .map(|d| format!("~{}s", d.as_secs()))
-                    .unwrap_or_else(|| "calculating...".to_string());
-
-                self.progress_bar.set_message(format!(
-                    "{completed}/{total} segments ({bytes_str}, {speed_str}, {eta_str})"
-                ));
-            }
-        } else {
-            // For HTTP: progress bar tracks bytes
-            // Use reported total if available, otherwise fall back to expected size
-            let total = progress.total_bytes.or(self.expected_size);
-
-            // If actual bytes exceed expected, update the total to prevent >100% display
-            let effective_total = match total {
-                Some(t) if progress.bytes_downloaded > t => progress.bytes_downloaded,
-                Some(t) => t,
-                None => progress.bytes_downloaded, // Unknown total - show as indeterminate
-            };
-
-            self.progress_bar.set_length(effective_total);
-            self.progress_bar.set_position(progress.bytes_downloaded);
-        }
+        let _ = self.event_tx.try_send(Event::Progress {
+            id: self.download_id,
+            progress: progress.clone(),
+        });
     }
 
     fn on_complete(&self, _stats: &DownloadStats) {
-        // Progress bar will be finished by caller
+        // Completion is reported by the caller via Event::Completed
     }
 
     fn on_error(&self, error: &str) {
-        self.progress_bar
-            .abandon_with_message(format!("Error: {error}"));
+        let _ = self.event_tx.try_send(Event::Warning {
+            id: self.download_id,
+            message: format!("Download error: {error}"),
+        });
     }
 }
 
 impl Orchestrator {
-    /// Create a progress bar for download tracking
-    ///
-    /// Uses steady tick for smooth animation regardless of download speed.
-    /// Progress bar is added to MultiProgress for proper log integration.
-    ///
-    /// # Errors
-    /// Returns an error if progress bar template is invalid
-    pub(super) fn create_progress_bar(
-        &self,
-        filesize: Option<u64>,
-        resume_from: u64,
-    ) -> Result<Option<ProgressBar>> {
-        if !self.config.progress {
-            return Ok(None);
-        }
-
-        // Create progress bar and add to MultiProgress for proper log handling
-        let pb = self
-            .multi_progress
-            .add(ProgressBar::new(filesize.unwrap_or(0)));
-        if let Some(size) = filesize {
-            pb.set_length(size);
-        }
-
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
-                )
-                .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
-                .progress_chars("#>-"),
-        );
-
-        // Enable steady tick for smooth spinner animation (10 fps)
-        pb.enable_steady_tick(Duration::from_millis(100));
-
-        if resume_from > 0 {
-            pb.set_position(resume_from);
-        }
-
-        Ok(Some(pb))
-    }
-
-    /// Create a segment-based progress bar for HLS downloads
-    ///
-    /// Unlike byte-based progress bars, this tracks segment completion.
-    /// The message shows bytes and speed, while the bar shows segment progress.
-    /// Uses steady tick for smooth animation between segment completions.
-    /// Progress bar is added to MultiProgress for proper log integration.
-    ///
-    /// # Errors
-    /// Returns an error if progress bar template is invalid
-    pub(super) fn create_hls_progress_bar(&self) -> Result<Option<ProgressBar>> {
-        if !self.config.progress {
-            return Ok(None);
-        }
-
-        // Create progress bar and add to MultiProgress for proper log handling
-        let pb = self.multi_progress.add(ProgressBar::new(0));
-
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}")
-                .map_err(|e| OrchestratorError::ProgressBarFailed(e.to_string()))?
-                .progress_chars("#>-"),
-        );
-
-        // Enable steady tick for smooth spinner animation (10 fps)
-        // This keeps the spinner moving even when waiting for segments
-        pb.enable_steady_tick(Duration::from_millis(100));
-
-        pb.set_message("Downloading segments...");
-
-        Ok(Some(pb))
-    }
-
-    /// Execute download with Ctrl+C signal handling
+    /// Execute download with cancellation token support
     ///
     /// Returns Ok(Some(stats)) on success, Ok(None) if user cancelled
     ///
@@ -161,27 +56,24 @@ impl Orchestrator {
     /// * `url` - URL to download
     /// * `output_path` - Path to save the file
     /// * `resume_from` - Byte offset to resume from (0 for fresh download)
-    /// * `progress_bar` - Optional progress bar for UI
-    /// * `expected_size` - Expected file size for accurate progress (used when downloader doesn't report total)
+    /// * `expected_size` - Expected file size (for progress percentage)
     ///
     /// # Errors
     /// Returns an error if download fails
-    #[instrument(skip(self, downloader, progress_bar), fields(url = %url, output = %output_path.display()))]
+    #[instrument(skip(self, downloader), fields(url = %url, output = %output_path.display()))]
     pub(super) async fn execute_download(
         &self,
         downloader: &Arc<dyn Downloader>,
         url: &str,
         output_path: &Path,
         resume_from: u64,
-        progress_bar: Option<&ProgressBar>,
-        expected_size: Option<u64>,
+        _expected_size: Option<u64>,
     ) -> Result<Option<DownloadStats>> {
-        let progress_callback: Option<Box<dyn ProgressCallback>> = progress_bar.map(|pb| {
-            Box::new(ProgressBarCallback::new(pb.clone(), expected_size))
-                as Box<dyn ProgressCallback>
-        });
+        let progress_callback: Option<Box<dyn ProgressCallback>> = Some(Box::new(
+            EventProgressCallback::new(self.event_tx.clone(), self.download_id),
+        ));
 
-        info!("Press Ctrl+C to pause and save progress");
+        info!("Starting download (cancel via CancellationToken)");
 
         let download_future = if resume_from > 0 {
             downloader.download_with_resume(url, output_path, resume_from, progress_callback)
@@ -189,25 +81,17 @@ impl Orchestrator {
             downloader.download_to_file(url, output_path, progress_callback)
         };
 
-        // Race between download and Ctrl+C signal
+        // Race between download and cancellation token
         let stats = tokio::select! {
             result = download_future => {
                 result.map_err(OrchestratorError::DownloadFailed)?
             }
-            _ = tokio::signal::ctrl_c() => {
-                if let Some(pb) = progress_bar {
-                    // Clear the progress bar completely to avoid stale rendering
-                    pb.finish_and_clear();
-                }
-                info!("Download interrupted by user");
+            () = self.cancel_token.cancelled() => {
+                info!("Download interrupted by cancellation");
                 info!("Progress saved. Run the same command again to resume.");
                 return Ok(None);
             }
         };
-
-        if let Some(pb) = progress_bar {
-            pb.finish_with_message("Download complete");
-        }
 
         Ok(Some(stats))
     }

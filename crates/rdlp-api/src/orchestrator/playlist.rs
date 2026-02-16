@@ -281,28 +281,20 @@ impl Orchestrator {
             // Audio type selection for playlists with multiple language tracks
             selected_audio = None;
             if interactive && audio_types.len() > 1 && remaining > 0 {
-                use dialoguer::Select;
+                if let Some(ref callback) = self.interactive {
+                    let options: Vec<String> = audio_types.clone();
+                    let type_count = options.len();
 
-                let mut options: Vec<String> = audio_types.clone();
-                options.push("All (keep both)".to_string());
-                let type_count = audio_types.len();
+                    let selection = callback.select_audio_type(&options).await;
 
-                let selection = tokio::task::spawn_blocking(move || {
-                    Select::new()
-                        .with_prompt("Select audio type")
-                        .items(&options)
-                        .default(0)
-                        .interact()
-                        .unwrap_or(options.len() - 1)
-                })
-                .await
-                .unwrap_or(type_count);
-
-                if selection < type_count {
-                    let selected = &audio_types[selection];
-                    info!(audio:% = selected; "Filtering to selected audio type");
-                    selected_audio = Some(selected.clone());
-                    filter_formats_by_language(&mut infos, selected);
+                    if let Some(idx) = selection {
+                        if idx < type_count {
+                            let selected = &audio_types[idx];
+                            info!(audio:% = selected; "Filtering to selected audio type");
+                            selected_audio = Some(selected.clone());
+                            filter_formats_by_language(&mut infos, selected);
+                        }
+                    }
                 }
             }
 
@@ -332,27 +324,17 @@ impl Orchestrator {
 
             // Confirm before downloading (unless non-interactive)
             if interactive && remaining > 0 {
-                use dialoguer::Confirm;
+                if let Some(ref callback) = self.interactive {
+                    let prompt = if already_downloaded > 0 {
+                        format!("Resume downloading {remaining} remaining videos?")
+                    } else {
+                        format!("Download {total} videos to '{playlist_folder_name}'?")
+                    };
 
-                let prompt = if already_downloaded > 0 {
-                    format!("Resume downloading {remaining} remaining videos?")
-                } else {
-                    format!("Download {total} videos to '{playlist_folder_name}'?")
-                };
-
-                let proceed = tokio::task::spawn_blocking(move || {
-                    Confirm::new()
-                        .with_prompt(prompt)
-                        .default(true)
-                        .interact()
-                        .unwrap_or(false)
-                })
-                .await
-                .unwrap_or(false);
-
-                if !proceed {
-                    info!("Cancelled by user");
-                    return Ok(None);
+                    if !callback.confirm(&prompt).await {
+                        info!("Cancelled by user");
+                        return Ok(None);
+                    }
                 }
             }
 
@@ -526,10 +508,7 @@ impl Orchestrator {
 
         let mut stream = futures_util::stream::iter(futs).buffer_unordered(DOWNLOAD_CONCURRENCY);
 
-        // Consume download stream with Ctrl+C support
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
-
+        // Consume download stream with cancellation token support
         loop {
             tokio::select! {
                 next = stream.next() => {
@@ -560,7 +539,7 @@ impl Orchestrator {
                         None => break, // All downloads complete
                     }
                 }
-                _ = &mut ctrl_c => {
+                () = self.cancel_token.cancelled() => {
                     info!("Playlist download interrupted by user");
                     info!("Run the same command again to resume");
                     interrupted = true;
@@ -595,12 +574,12 @@ impl Orchestrator {
                     "Retry wave — waiting before retry"
                 );
 
-                // Sleep with Ctrl+C race so user can abort during wait
+                // Sleep with cancellation race so user can abort during wait
                 let sleep = tokio::time::sleep(Duration::from_secs(delay_secs));
                 tokio::pin!(sleep);
                 tokio::select! {
-                    _ = &mut sleep => {}
-                    _ = &mut ctrl_c => {
+                    () = &mut sleep => {}
+                    () = self.cancel_token.cancelled() => {
                         info!("Retry interrupted by user");
                         interrupted = true;
                         break;
@@ -688,7 +667,7 @@ impl Orchestrator {
                                 None => break,
                             }
                         }
-                        _ = &mut ctrl_c => {
+                        () = self.cancel_token.cancelled() => {
                             info!("Retry wave interrupted by user");
                             interrupted = true;
                             break;
