@@ -207,6 +207,15 @@ pub struct Config {
     /// Show interactive subtitle selection (--list-subs)
     pub list_subs: bool,
 
+    /// Strict subtitle mode: fail download if requested subs are missing
+    pub strict_subs: bool,
+
+    /// Verify subtitle URLs via HEAD request before download
+    pub verify_sub_urls: bool,
+
+    /// Re-attempt subtitle downloads for completed videos missing subtitle files
+    pub retry_subs: bool,
+
     // === Thumbnail ===
     /// Write thumbnail image to disk
     pub write_thumbnail: bool,
@@ -340,6 +349,9 @@ impl Default for Config {
             subtitle_langs: Vec::new(),
             subtitle_format: None,
             list_subs: false,
+            strict_subs: false,
+            verify_sub_urls: false,
+            retry_subs: false,
 
             // Thumbnail
             write_thumbnail: false,

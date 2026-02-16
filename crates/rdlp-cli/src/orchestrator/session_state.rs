@@ -61,6 +61,9 @@ pub(crate) struct PlaylistState {
     pub selected_audio: Option<String>,
     /// Selected subtitle language codes (empty if none)
     pub selected_sub_langs: Vec<String>,
+    /// Whether strict subtitle mode was active
+    #[serde(default)]
+    pub strict_subs: bool,
     /// Episodes that failed in the previous run (empty if none)
     #[serde(default)]
     pub failed_episodes: Vec<FailedEpisode>,
@@ -109,6 +112,7 @@ impl PlaylistState {
         playlist_title: impl Into<String>,
         selected_audio: Option<String>,
         selected_sub_langs: Vec<String>,
+        strict_subs: bool,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -117,6 +121,7 @@ impl PlaylistState {
             playlist_title: playlist_title.into(),
             selected_audio,
             selected_sub_langs,
+            strict_subs,
             failed_episodes: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -307,6 +312,7 @@ mod tests {
             "Season 1",
             Some("SUB".to_string()),
             vec!["en".to_string()],
+            false,
         ));
 
         state.save(&path).await;
