@@ -61,10 +61,24 @@ pub(crate) struct PlaylistState {
     pub selected_audio: Option<String>,
     /// Selected subtitle language codes (empty if none)
     pub selected_sub_langs: Vec<String>,
+    /// Episodes that failed in the previous run (empty if none)
+    #[serde(default)]
+    pub failed_episodes: Vec<FailedEpisode>,
     /// When this state was first created
     pub created_at: DateTime<Utc>,
     /// When this state was last updated
     pub updated_at: DateTime<Utc>,
+}
+
+/// Record of a failed episode for cross-run retry tracking.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FailedEpisode {
+    /// 1-based position in the playlist
+    pub position: usize,
+    /// Episode title at time of failure
+    pub title: String,
+    /// Last error message
+    pub last_error: String,
 }
 
 impl SingleVideoState {
@@ -103,6 +117,7 @@ impl PlaylistState {
             playlist_title: playlist_title.into(),
             selected_audio,
             selected_sub_langs,
+            failed_episodes: Vec::new(),
             created_at: now,
             updated_at: now,
         }

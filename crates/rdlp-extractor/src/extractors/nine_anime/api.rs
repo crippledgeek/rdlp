@@ -4,6 +4,7 @@
 //! - `/ajax/episode/servers?episodeId={id}` — lists SUB/DUB streaming servers
 //! - `/ajax/episode/sources?id={data-id}` — resolves to an embed iframe URL
 
+use crate::utils::decode_html_entities;
 use log::debug;
 use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
@@ -301,7 +302,7 @@ fn parse_episode_info(html: &str, episode_data_id: &str) -> Option<EpisodeInfo> 
 
         let title = EP_TITLE_ATTR
             .captures(block)
-            .map(|c| c[1].to_string())
+            .map(|c| decode_html_entities(&c[1]))
             .filter(|t| !t.is_empty());
 
         return Some(EpisodeInfo { number, title });
@@ -341,7 +342,7 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
 
         let title = EP_TITLE_ATTR
             .captures(block)
-            .map(|c| c[1].to_string())
+            .map(|c| decode_html_entities(&c[1]))
             .filter(|t| !t.is_empty());
 
         entries.push(EpisodeListEntry {
@@ -577,5 +578,32 @@ mod tests {
     fn test_parse_all_episodes_empty() {
         assert!(parse_all_episodes("").is_empty());
         assert!(parse_all_episodes("<div>no episodes</div>").is_empty());
+    }
+
+    #[test]
+    fn test_parse_episode_title_html_entities() {
+        let html = r#"
+            <a href="/watch/sailor-moon-1067?ep=40198"
+               title="Usagi&#39;s Disaster: Beware of the Clock of Confusion"
+               class="item ep-item"
+               data-number="15"
+               data-id="40198">
+              <div class="order">15</div>
+            </a>
+        "#;
+
+        let info = parse_episode_info(html, "40198").unwrap();
+        assert_eq!(info.number, "15");
+        assert_eq!(
+            info.title.as_deref(),
+            Some("Usagi's Disaster: Beware of the Clock of Confusion")
+        );
+
+        let episodes = parse_all_episodes(html);
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(
+            episodes[0].info.title.as_deref(),
+            Some("Usagi's Disaster: Beware of the Clock of Confusion")
+        );
     }
 }
