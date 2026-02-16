@@ -10,6 +10,7 @@ mod playlist;
 mod postprocess;
 mod resume;
 mod selection;
+mod session_state;
 mod state;
 mod subtitle;
 mod template;
@@ -202,12 +203,14 @@ impl Orchestrator {
         // Load archive once at start
         let archive = self.load_archive_if_configured();
 
-        // If multiple videos found, this is a playlist
+        // If multiple videos found, this is a playlist.
+        // Playlist prints its own summary, so return None to suppress
+        // the single-video "Success!" message in main.
         if infos.len() > 1 {
             return self
                 .download_playlist_internal(infos, interactive, archive)
                 .await
-                .map(|opt| opt.and_then(|paths| paths.into_iter().next()));
+                .map(|_| None);
         }
 
         // Single video — check archive before downloading

@@ -1,7 +1,8 @@
 //! State machine types for the download workflow
 
+use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
-use log::info;
+use log::{info, warn};
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
@@ -149,6 +150,42 @@ impl DownloadPhase {
         match self {
             Self::Extracting { url } => {
                 let info = orchestrator.extract_video_info(&url).await?;
+
+                // Try loading saved session state to skip interactive selection
+                let sanitized = orchestrator.sanitize_filename(&info.title);
+                let state_path = session_state::single_video_state_path(
+                    &orchestrator.config.output_directory,
+                    &sanitized,
+                );
+                if let Some(SessionState::SingleVideo(saved)) =
+                    SessionState::load(&state_path, &url).await
+                {
+                    // Try to match the saved format_id against available formats
+                    if let Some(format) = info
+                        .formats
+                        .iter()
+                        .find(|f| f.format_id == saved.format_id)
+                        .cloned()
+                    {
+                        info!(
+                            format_id = saved.format_id.as_str();
+                            "Resuming with saved selections"
+                        );
+                        // Resolve subtitles from saved language codes
+                        let subtitle_selection = orchestrator
+                            .resolve_subtitles_for_episode(&info, &saved.subtitle_langs);
+                        return Ok(Self::Preparing {
+                            info: Box::new(info),
+                            format: Box::new(format),
+                            subtitle_selection,
+                        });
+                    }
+                    warn!(
+                        format_id = saved.format_id.as_str();
+                        "Saved format no longer available, prompting again"
+                    );
+                }
+
                 Ok(Self::SelectingFormat {
                     info: Box::new(info),
                 })
@@ -173,6 +210,24 @@ impl DownloadPhase {
                 else {
                     return Ok(Self::Cancelled);
                 };
+
+                // Save session state so selections survive interruption
+                let sanitized = orchestrator.sanitize_filename(&info.title);
+                let state_path = session_state::single_video_state_path(
+                    &orchestrator.config.output_directory,
+                    &sanitized,
+                );
+                let sub_langs: Vec<String> = subtitle_selection
+                    .iter()
+                    .map(|(lang, _)| lang.clone())
+                    .collect();
+                let state = SessionState::SingleVideo(SingleVideoState::new(
+                    &info.webpage_url,
+                    &info.title,
+                    &format.format_id,
+                    sub_langs,
+                ));
+                state.save(&state_path).await;
 
                 Ok(Self::Preparing {
                     info,
@@ -245,6 +300,14 @@ impl DownloadPhase {
                     .run_postprocessing(&info, vec![output_path.clone()], outcome.is_hls)
                     .await?;
                 let final_path = final_files.into_iter().next().unwrap_or(output_path);
+
+                // Delete session state on successful completion
+                let sanitized = orchestrator.sanitize_filename(&info.title);
+                let state_path = session_state::single_video_state_path(
+                    &orchestrator.config.output_directory,
+                    &sanitized,
+                );
+                SessionState::delete(&state_path).await;
 
                 Ok(Self::Complete { path: final_path })
             }
