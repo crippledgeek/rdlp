@@ -7,21 +7,38 @@ license.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_json"]
+serde = ["dep:serde"]
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
 rdlp-types = { path = "../rdlp-types" }
+rdlp-extractor = { path = "../rdlp-extractor" }
+rdlp-downloader = { path = "../rdlp-downloader" }
+rdlp-postprocess = { path = "../rdlp-postprocess" }
+rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
+rdlp-http = { path = "../rdlp-http" }
+rdlp-cookies = { path = "../rdlp-cookies" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-security = { path = "../rdlp-security" }
+rdlp-ratelimit = { path = "../rdlp-ratelimit" }
+rdlp-plugin = { path = "../rdlp-plugin" }
 
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+# serde_json is always needed (orchestrator session state serialization)
+serde_json = { workspace = true }
 
 # Optional serde support for EventDto
 serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
