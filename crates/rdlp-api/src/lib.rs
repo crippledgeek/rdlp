@@ -5,6 +5,8 @@
 //! handle for managing concurrent downloads from any frontend
 //! (CLI, Tauri, Leptos).
 
+/// Stable error types for the public API.
+pub mod errors;
 /// Download handle and ID types.
 pub mod handle;
 /// Download result types.
