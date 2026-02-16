@@ -1,0 +1,30 @@
+[package]
+name = "rdlp-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+rdlp-core = { path = "../rdlp-core" }
+rdlp-types = { path = "../rdlp-types" }
+
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+# Optional serde support for EventDto
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
