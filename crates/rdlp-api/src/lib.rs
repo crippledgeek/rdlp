@@ -7,7 +7,11 @@
 
 /// Stable error types for the public API.
 pub mod errors;
+/// Download lifecycle events.
+pub mod events;
 /// Download handle and ID types.
 pub mod handle;
+/// Download request types.
+pub mod request;
 /// Download result types.
 pub mod result;
