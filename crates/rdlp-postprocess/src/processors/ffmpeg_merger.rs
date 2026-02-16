@@ -39,13 +39,16 @@ impl FFmpegMerger {
             return format.as_ext();
         }
 
-        // Determine based on file extensions
+        // Infer from codec compatibility
         match (video_ext, audio_ext) {
             // WebM files (VP8/VP9 + Opus/Vorbis) - use MKV for better compatibility
             (Some("webm"), _) | (_, Some("webm")) => "mkv",
 
             // Default to MP4 for most content (h264/h265 + aac)
-            _ => "mp4",
+            _ => {
+                info!("No merge output format configured; defaulting to MP4");
+                "mp4"
+            }
         }
     }
 }
@@ -144,6 +147,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use rdlp_core::ContainerFormat;
     use rdlp_ffmpeg::FFmpegRunner;
 
     #[test]
@@ -151,25 +155,30 @@ mod tests {
         if let Ok(ffmpeg) = FFmpegRunner::new() {
             let merger = FFmpegMerger::new(Arc::new(ffmpeg));
 
-            // Default config has merge_output_format=mp4, so always returns mp4
-            let config = PostProcessConfig::default();
-            assert_eq!(
-                merger.determine_output_format(&config, Some("mp4"), Some("m4a")),
-                "mp4"
-            );
-            assert_eq!(
-                merger.determine_output_format(&config, Some("webm"), Some("opus")),
-                "mp4"
-            );
-
-            // Without explicit format, uses codec-based detection
-            let config_no_format = PostProcessConfig {
-                merge_output_format: None,
+            // Explicit config always wins
+            let config_mp4 = PostProcessConfig {
+                merge_output_format: Some(ContainerFormat::Mp4),
                 ..PostProcessConfig::default()
             };
             assert_eq!(
-                merger.determine_output_format(&config_no_format, Some("webm"), Some("opus")),
+                merger.determine_output_format(&config_mp4, Some("mp4"), Some("m4a")),
+                "mp4"
+            );
+            assert_eq!(
+                merger.determine_output_format(&config_mp4, Some("webm"), Some("opus")),
+                "mp4"
+            );
+
+            // Without explicit format (default is now None), uses codec-based detection
+            let config_none = PostProcessConfig::default();
+            assert_eq!(
+                merger.determine_output_format(&config_none, Some("webm"), Some("opus")),
                 "mkv"
+            );
+            // Non-webm without config falls back to mp4
+            assert_eq!(
+                merger.determine_output_format(&config_none, Some("mp4"), Some("m4a")),
+                "mp4"
             );
         }
     }

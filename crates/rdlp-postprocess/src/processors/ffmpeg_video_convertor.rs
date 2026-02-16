@@ -171,7 +171,13 @@ impl PostProcessor for FFmpegVideoConvertor {
 
         let input_file = &files[0];
 
-        let target_format = config.recode_video.map(|c| c.as_ext()).unwrap_or("mp4");
+        let target_format = match config.recode_video {
+            Some(c) => c.as_ext(),
+            None => {
+                info!("No recode target configured; defaulting to MP4");
+                "mp4"
+            }
+        };
 
         // Validate target format
         if !Self::is_supported_container(target_format) {
