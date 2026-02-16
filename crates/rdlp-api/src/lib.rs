@@ -4,6 +4,10 @@
 //! This crate provides a stable event model, error types, and download
 //! handle for managing concurrent downloads from any frontend
 //! (CLI, Tauri, Leptos).
+//!
+//! # Features
+//!
+//! - `serde` — Enables [`dto::EventDto`] for JSON serialization of events.
 
 /// Optional event fan-out for multi-subscriber scenarios.
 pub mod bus;
@@ -21,3 +25,10 @@ pub mod result;
 /// Serializable event DTOs for UI bridges (Tauri, Leptos SSE).
 #[cfg(feature = "serde")]
 pub mod dto;
+
+// Convenience re-exports
+pub use errors::RdlpApiError;
+pub use events::Event;
+pub use handle::DownloadId;
+pub use request::DownloadRequest;
+pub use result::DownloadResult;
