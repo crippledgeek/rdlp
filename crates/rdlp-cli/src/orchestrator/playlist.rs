@@ -4,6 +4,7 @@
 //! and graceful degradation for failed videos.
 
 use super::errors::is_reextractable_error;
+use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
 use super::{Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
@@ -68,22 +69,39 @@ impl Orchestrator {
         let total = infos.len();
         let playlist_title = infos[0]
             .playlist_title
-            .as_deref()
-            .unwrap_or("Unnamed Playlist");
+            .clone()
+            .unwrap_or_else(|| "Unnamed Playlist".to_string());
 
         // Create playlist folder
-        let playlist_folder_name = self.sanitize_filename(playlist_title);
+        let playlist_folder_name = self.sanitize_filename(&playlist_title);
         let playlist_dir = self.config.output_directory.join(&playlist_folder_name);
-
-        // Check for existing files (resume detection)
-        let (existing_files, partial_count) = self
-            .detect_existing_playlist_files(&playlist_dir, &infos)
-            .await;
-        let already_downloaded = existing_files.len();
-        let remaining = total - already_downloaded;
 
         // Detect available audio/language types across all episodes
         let audio_types = detect_audio_types(&infos);
+
+        // Load saved session state early so resume detection can use subtitle
+        // selections to verify VTT files exist alongside video files.
+        let state_path = session_state::playlist_state_path(&playlist_dir);
+        let source_url = infos
+            .iter()
+            .find_map(|i| i.playlist_id.clone())
+            .unwrap_or_else(|| infos[0].webpage_url.clone());
+        let saved_state = SessionState::load(&state_path, &source_url).await;
+        let resuming = matches!(&saved_state, Some(SessionState::Playlist(_)));
+
+        // Extract subtitle langs from saved state (empty on first run)
+        let saved_sub_langs: Vec<String> = match &saved_state {
+            Some(SessionState::Playlist(s)) => s.selected_sub_langs.clone(),
+            _ => Vec::new(),
+        };
+
+        // Check for existing files (resume detection)
+        // Pass subtitle langs so detection can verify VTT files exist.
+        let (existing_files, partial_count) = self
+            .detect_existing_playlist_files(&playlist_dir, &infos, &saved_sub_langs)
+            .await;
+        let already_downloaded = existing_files.len();
+        let remaining = total - already_downloaded;
 
         info!("{}", "=".repeat(60));
         info!(title:? = playlist_title; "Playlist");
@@ -104,93 +122,138 @@ impl Orchestrator {
             info!(remaining; "Remaining");
         }
 
+        if resuming {
+            info!("Resuming with saved selections");
+            if let Some(SessionState::Playlist(ref saved)) = saved_state {
+                if !saved.failed_episodes.is_empty() {
+                    warn!(
+                        count = saved.failed_episodes.len();
+                        "Previously failed episodes will be retried"
+                    );
+                    for ep in &saved.failed_episodes {
+                        warn!("  [{}] {}: {}", ep.position, ep.title, ep.last_error);
+                    }
+                }
+            }
+        }
+
         info!("{}", "=".repeat(60));
 
         // If all videos are already downloaded, return early
         if remaining == 0 {
             info!("All videos already downloaded");
+            SessionState::delete(&state_path).await;
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
         }
 
-        // Audio type selection for playlists with multiple language tracks
-        let mut selected_audio: Option<String> = None;
-        if interactive && audio_types.len() > 1 && remaining > 0 {
-            use dialoguer::Select;
+        // Restore or prompt for selections
+        let mut selected_audio: Option<String>;
+        let selected_sub_langs: Vec<String>;
 
-            let mut options: Vec<String> = audio_types.clone();
-            options.push("All (keep both)".to_string());
-            let type_count = audio_types.len();
+        if let Some(SessionState::Playlist(ref saved)) = saved_state {
+            // Restore selections from saved state
+            selected_audio = saved.selected_audio.clone();
+            selected_sub_langs = saved.selected_sub_langs.clone();
 
-            let selection = tokio::task::spawn_blocking(move || {
-                Select::new()
-                    .with_prompt("Select audio type")
-                    .items(&options)
-                    .default(0)
-                    .interact()
-                    .unwrap_or(options.len() - 1)
-            })
-            .await
-            .unwrap_or(type_count);
-
-            if selection < type_count {
-                let selected = &audio_types[selection];
-                info!(audio:% = selected; "Filtering to selected audio type");
-                selected_audio = Some(selected.clone());
-                filter_formats_by_language(&mut infos, selected);
+            // Apply audio filter from saved state
+            if let Some(ref lang) = selected_audio {
+                info!(audio:% = lang; "Restoring audio type from saved state");
+                filter_formats_by_language(&mut infos, lang);
             }
-        }
+            if !selected_sub_langs.is_empty() {
+                info!(
+                    subs:% = selected_sub_langs.join(", ");
+                    "Restoring subtitle selection from saved state"
+                );
+            }
+        } else {
+            // Audio type selection for playlists with multiple language tracks
+            selected_audio = None;
+            if interactive && audio_types.len() > 1 && remaining > 0 {
+                use dialoguer::Select;
 
-        // Interactive subtitle selection (once for the whole playlist, before confirm)
-        // We select language names using the first episode that has subtitles, then
-        // resolve actual subtitle URLs per-episode during download.
-        let list_subs = self.config.list_subs;
-        let sub_representative = infos.iter().find(|i| {
-            i.subtitles.as_ref().is_some_and(|s| !s.is_empty())
-                || i.automatic_captions.as_ref().is_some_and(|a| !a.is_empty())
-        });
-        debug!(
-            has_subs = sub_representative.is_some(), interactive, list_subs;
-            "Playlist subtitle selection check"
-        );
+                let mut options: Vec<String> = audio_types.clone();
+                options.push("All (keep both)".to_string());
+                let type_count = audio_types.len();
 
-        let selected_sub_langs: Vec<String> =
-            if let Some(rep) = sub_representative.filter(|_| interactive || list_subs) {
-                match self
-                    .select_subtitles_if_needed(rep, interactive, list_subs)
-                    .await?
-                {
-                    Some(sel) => sel.into_iter().map(|(lang, _)| lang).collect(),
-                    None => return Ok(None),
+                let selection = tokio::task::spawn_blocking(move || {
+                    Select::new()
+                        .with_prompt("Select audio type")
+                        .items(&options)
+                        .default(0)
+                        .interact()
+                        .unwrap_or(options.len() - 1)
+                })
+                .await
+                .unwrap_or(type_count);
+
+                if selection < type_count {
+                    let selected = &audio_types[selection];
+                    info!(audio:% = selected; "Filtering to selected audio type");
+                    selected_audio = Some(selected.clone());
+                    filter_formats_by_language(&mut infos, selected);
                 }
-            } else {
-                Vec::new()
-            };
-
-        // Confirm before downloading (unless non-interactive)
-        if interactive && remaining > 0 {
-            use dialoguer::Confirm;
-
-            let prompt = if already_downloaded > 0 {
-                format!("Resume downloading {remaining} remaining videos?")
-            } else {
-                format!("Download {total} videos to '{playlist_folder_name}'?")
-            };
-
-            let proceed = tokio::task::spawn_blocking(move || {
-                Confirm::new()
-                    .with_prompt(prompt)
-                    .default(true)
-                    .interact()
-                    .unwrap_or(false)
-            })
-            .await
-            .unwrap_or(false);
-
-            if !proceed {
-                info!("Cancelled by user");
-                return Ok(None);
             }
+
+            // Interactive subtitle selection (once for the whole playlist)
+            let list_subs = self.config.list_subs;
+            let sub_representative = infos.iter().find(|i| {
+                i.subtitles.as_ref().is_some_and(|s| !s.is_empty())
+                    || i.automatic_captions.as_ref().is_some_and(|a| !a.is_empty())
+            });
+            debug!(
+                has_subs = sub_representative.is_some(), interactive, list_subs;
+                "Playlist subtitle selection check"
+            );
+
+            selected_sub_langs =
+                if let Some(rep) = sub_representative.filter(|_| interactive || list_subs) {
+                    match self
+                        .select_subtitles_if_needed(rep, interactive, list_subs)
+                        .await?
+                    {
+                        Some(sel) => sel.into_iter().map(|(lang, _)| lang).collect(),
+                        None => return Ok(None),
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            // Confirm before downloading (unless non-interactive)
+            if interactive && remaining > 0 {
+                use dialoguer::Confirm;
+
+                let prompt = if already_downloaded > 0 {
+                    format!("Resume downloading {remaining} remaining videos?")
+                } else {
+                    format!("Download {total} videos to '{playlist_folder_name}'?")
+                };
+
+                let proceed = tokio::task::spawn_blocking(move || {
+                    Confirm::new()
+                        .with_prompt(prompt)
+                        .default(true)
+                        .interact()
+                        .unwrap_or(false)
+                })
+                .await
+                .unwrap_or(false);
+
+                if !proceed {
+                    info!("Cancelled by user");
+                    return Ok(None);
+                }
+            }
+
+            // Save session state after user confirms selections
+            let state = SessionState::Playlist(PlaylistState::new(
+                &source_url,
+                &playlist_title,
+                selected_audio.clone(),
+                selected_sub_langs.clone(),
+            ));
+            state.save(&state_path).await;
         }
 
         // Batch-resolve all episode URLs upfront with bounded parallelism.
@@ -395,6 +458,140 @@ impl Orchestrator {
             }
         }
 
+        // ── Retry waves for failed episodes ──────────────────────────
+        // After the initial pass, retry failed episodes up to 3 more
+        // times with increasing delays. Each wave re-extracts fresh CDN
+        // URLs since old tokens are likely expired.
+        const MAX_RETRY_WAVES: usize = 3;
+        const RETRY_WAVE_DELAYS: [u64; MAX_RETRY_WAVES] = [60, 120, 180];
+        let mut retried_ok = 0usize;
+
+        if !interrupted && !failed.is_empty() {
+            info!("");
+            info!("{} episode(s) failed — starting retry waves", failed.len());
+
+            for (wave, &delay_secs) in RETRY_WAVE_DELAYS.iter().enumerate() {
+                if failed.is_empty() || interrupted {
+                    break;
+                }
+
+                let fail_count = failed.len();
+                info!(
+                    wave = wave + 1,
+                    max_waves = MAX_RETRY_WAVES,
+                    failed = fail_count,
+                    delay_secs;
+                    "Retry wave — waiting before retry"
+                );
+
+                // Sleep with Ctrl+C race so user can abort during wait
+                let sleep = tokio::time::sleep(Duration::from_secs(delay_secs));
+                tokio::pin!(sleep);
+                tokio::select! {
+                    _ = &mut sleep => {}
+                    _ = &mut ctrl_c => {
+                        info!("Retry interrupted by user");
+                        interrupted = true;
+                        break;
+                    }
+                }
+
+                // Take current failures; will re-collect any that fail again
+                let retry_batch: Vec<(usize, String, String)> = std::mem::take(&mut failed);
+
+                let retry_futs = retry_batch.into_iter().map(|(position, title, _err)| {
+                    let dir = playlist_dir.clone();
+                    let sub_langs = selected_sub_langs.clone();
+                    let audio = selected_audio.clone();
+                    let index = position - 1;
+                    // Clone the original info and clear formats to force
+                    // lazy re-extraction of fresh CDN URLs.
+                    let mut info_stub = infos[index].clone();
+                    info_stub.formats.clear();
+                    async move {
+                        info!(
+                            wave = wave + 1,
+                            position,
+                            total,
+                            title:? = title;
+                            "Retrying episode"
+                        );
+                        let result = self
+                            .download_from_info_to_dir(
+                                &info_stub,
+                                false,
+                                &dir,
+                                &sub_langs,
+                                audio.as_deref(),
+                                None,
+                            )
+                            .await;
+                        (position, title, result)
+                    }
+                });
+
+                let mut retry_stream =
+                    futures_util::stream::iter(retry_futs).buffer_unordered(DOWNLOAD_CONCURRENCY);
+
+                loop {
+                    tokio::select! {
+                        next = retry_stream.next() => {
+                            match next {
+                                Some((pos, title, result)) => {
+                                    match result {
+                                        Ok(Some(path)) => {
+                                            info!(
+                                                wave = wave + 1,
+                                                pos, total,
+                                                path:? = path.display();
+                                                "Retry succeeded"
+                                            );
+                                            downloaded.push(path);
+                                            let idx = pos - 1;
+                                            self.record_in_archive(
+                                                &infos[idx].extractor,
+                                                &infos[idx].id,
+                                            );
+                                            retried_ok += 1;
+                                        }
+                                        Ok(None) => {
+                                            info!(
+                                                pos, total;
+                                                "Skipped on retry"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                wave = wave + 1,
+                                                pos, total;
+                                                "Retry failed: {e}"
+                                            );
+                                            failed.push((
+                                                pos,
+                                                title,
+                                                e.to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        _ = &mut ctrl_c => {
+                            info!("Retry wave interrupted by user");
+                            interrupted = true;
+                            break;
+                        }
+                    }
+                }
+
+                if failed.is_empty() {
+                    info!("All previously-failed episodes recovered!");
+                    break;
+                }
+            }
+        }
+
         // Summary report
         let newly_downloaded = downloaded.len() - already_downloaded;
         let dl_count = downloaded.len();
@@ -408,6 +605,10 @@ impl Orchestrator {
 
         if already_downloaded > 0 {
             info!("  (previously: {already_downloaded}, this session: {newly_downloaded})");
+        }
+
+        if retried_ok > 0 {
+            info!("  (recovered {retried_ok} via retry waves)");
         }
 
         if !selected_sub_langs.is_empty() {
@@ -428,6 +629,29 @@ impl Orchestrator {
         }
 
         info!("{}", "=".repeat(60));
+
+        // Delete session state only when fully complete (no failures, no interruption).
+        // Otherwise update with current failed episodes so the next run knows what to retry.
+        if !interrupted && failed.is_empty() && dl_count == total {
+            SessionState::delete(&state_path).await;
+        } else {
+            let failed_eps: Vec<FailedEpisode> = failed
+                .iter()
+                .map(|(pos, title, err)| FailedEpisode {
+                    position: *pos,
+                    title: title.clone(),
+                    last_error: err.clone(),
+                })
+                .collect();
+            let mut state = PlaylistState::new(
+                &source_url,
+                &playlist_title,
+                selected_audio.clone(),
+                selected_sub_langs.clone(),
+            );
+            state.failed_episodes = failed_eps;
+            SessionState::Playlist(state).save(&state_path).await;
+        }
 
         if downloaded.is_empty() {
             Err(OrchestratorError::ExtractionFailed(
@@ -457,6 +681,7 @@ impl Orchestrator {
         &self,
         playlist_dir: &std::path::Path,
         infos: &[rdlp_core::InfoDict],
+        subtitle_langs: &[String],
     ) -> (HashMap<String, PathBuf>, usize) {
         let mut completed = HashMap::new();
         let mut partial_count = 0;
@@ -501,12 +726,20 @@ impl Orchestrator {
                 // Check for completed file
                 if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str()) {
                     if file_stem == sanitized_title {
+                        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
                         // Skip .part files
-                        if file_path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .is_some_and(|e| e.contains("part"))
-                        {
+                        if ext.contains("part") {
+                            found_partial = true;
+                            continue;
+                        }
+
+                        // Reject .ts files — HLS remux didn't complete
+                        if ext.eq_ignore_ascii_case("ts") {
+                            debug!(
+                                file:% = filename;
+                                "Skipping .ts file (remux incomplete)"
+                            );
                             found_partial = true;
                             continue;
                         }
@@ -514,6 +747,27 @@ impl Orchestrator {
                         // Check if file has reasonable size (> 1MB to avoid empty/corrupted files)
                         if let Ok(metadata) = file_path.metadata() {
                             if metadata.len() > 1_000_000 {
+                                // If subtitles were selected, verify subtitle
+                                // files exist. Pattern: {stem}.{lang}.{ext}
+                                if !subtitle_langs.is_empty() {
+                                    let stem = &sanitized_title;
+                                    let dir = file_path.parent().unwrap_or(playlist_dir);
+                                    let any_sub_exists = subtitle_langs.iter().any(|lang| {
+                                        // Check common extensions (vtt, srt, ass)
+                                        ["vtt", "srt", "ass"].iter().any(|ext| {
+                                            dir.join(format!("{stem}.{lang}.{ext}")).exists()
+                                        })
+                                    });
+                                    if !any_sub_exists {
+                                        debug!(
+                                            file:% = filename;
+                                            "Skipping: missing subtitle file"
+                                        );
+                                        found_partial = true;
+                                        continue;
+                                    }
+                                }
+
                                 completed.insert(sanitized_title.clone(), file_path.clone());
                                 found_complete = true;
                                 break;
@@ -743,20 +997,53 @@ impl Orchestrator {
             self.download_thumbnail(final_info, &output_path).await;
         }
 
-        // Download subtitles: resolve per-episode URLs from language names
+        // Download subtitles: resolve per-episode URLs from language names.
+        // If subtitles were selected but none downloaded, fail the episode
+        // so the retry system can re-attempt with fresh URLs.
         let episode_subs = if !subtitle_langs.is_empty() {
             self.resolve_subtitles_for_episode(final_info, subtitle_langs)
         } else {
             Vec::new()
         };
-        self.download_subtitles(final_info, &output_path, &episode_subs)
+        let downloaded_subs = self
+            .download_subtitles(final_info, &output_path, &episode_subs)
             .await?;
+
+        if !subtitle_langs.is_empty() && downloaded_subs.is_empty() {
+            return Err(OrchestratorError::DownloadFailed(
+                rdlp_core::RdlpError::Extraction(format!(
+                    "Subtitle download failed for '{}': \
+                     expected [{}] but none downloaded",
+                    final_info.title,
+                    subtitle_langs.join(", ")
+                )),
+            ));
+        }
 
         // Run post-processing if configured (or automatic for HLS)
         let final_files = self
             .run_postprocessing(final_info, vec![output_path.clone()], outcome.is_hls)
             .await?;
         let final_path = final_files.into_iter().next().unwrap_or(output_path);
+
+        // HLS downloads produce .ts files that should be remuxed to a proper
+        // container. If post-processing left the file as .ts, fail the episode
+        // so the retry system can re-attempt (FFmpeg may have been busy/failed).
+        if outcome.is_hls {
+            let ext = final_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if ext.eq_ignore_ascii_case("ts") {
+                return Err(OrchestratorError::DownloadFailed(
+                    rdlp_core::RdlpError::Extraction(format!(
+                        "Post-processing failed for '{}': \
+                         HLS container still .ts (FFmpeg remux did not complete)",
+                        final_info.title,
+                    )),
+                ));
+            }
+        }
 
         Ok(Some(final_path))
     }

@@ -21,7 +21,9 @@ rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-plugin = { path = "../rdlp-plugin" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
+rdlp-security = { path = "../rdlp-security" }
 
+serde = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 clap = { workspace = true }

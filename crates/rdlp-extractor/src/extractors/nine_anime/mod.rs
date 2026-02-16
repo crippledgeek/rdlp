@@ -102,7 +102,10 @@ pub(crate) async fn resolve_episode_formats(
 
     let mut last_error = None;
     let mut all_formats = Vec::new();
-    let mut subtitle_tracks = Vec::new();
+    // Capture subtitle tracks per audio type so the orchestrator gets
+    // subtitles timed for the correct video version (SUB vs DUB).
+    let mut sub_subtitle_tracks: Vec<megacloud::SubtitleTrack> = Vec::new();
+    let mut dub_subtitle_tracks: Vec<megacloud::SubtitleTrack> = Vec::new();
 
     for server in &servers {
         debug!(
@@ -135,9 +138,17 @@ pub(crate) async fn resolve_episode_formats(
                     "Megacloud extraction succeeded"
                 );
 
-                // Capture subtitle tracks from first successful extraction
-                if subtitle_tracks.is_empty() && !mega_sources.tracks.is_empty() {
-                    subtitle_tracks = mega_sources.tracks.clone();
+                // Capture subtitle tracks per audio type (first of each)
+                if !mega_sources.tracks.is_empty() {
+                    match server.audio_type {
+                        api::AudioType::Sub if sub_subtitle_tracks.is_empty() => {
+                            sub_subtitle_tracks = mega_sources.tracks.clone();
+                        }
+                        api::AudioType::Dub if dub_subtitle_tracks.is_empty() => {
+                            dub_subtitle_tracks = mega_sources.tracks.clone();
+                        }
+                        _ => {}
+                    }
                 }
 
                 // Build formats from the resolved sources
@@ -225,6 +236,14 @@ pub(crate) async fn resolve_episode_formats(
             }
         }
     }
+
+    // Prefer SUB subtitle tracks (correct timing for Japanese audio).
+    // Fall back to DUB tracks if no SUB server provided subtitles.
+    let subtitle_tracks = if !sub_subtitle_tracks.is_empty() {
+        sub_subtitle_tracks
+    } else {
+        dub_subtitle_tracks
+    };
 
     Ok((all_formats, hls_flags, subtitle_tracks))
 }
