@@ -96,6 +96,22 @@ pub struct SubtitleResult {
 
 impl SubtitleResult {
     /// Create a result indicating subtitles are available.
+    ///
+    /// # Arguments
+    ///
+    /// * `tracks` - Extracted subtitle tracks to include in the result
+    ///
+    /// # Returns
+    ///
+    /// A `SubtitleResult` with status [`SubtitleStatus::Available`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rdlp_types::SubtitleResult;
+    /// let result = SubtitleResult::available(vec![]);
+    /// assert_eq!(result.status, rdlp_types::SubtitleStatus::Available);
+    /// ```
     #[must_use]
     pub fn available(tracks: Vec<SubtitleTrack>) -> Self {
         Self {
@@ -107,6 +123,23 @@ impl SubtitleResult {
     }
 
     /// Create a result indicating no subtitles are available.
+    ///
+    /// # Arguments
+    ///
+    /// * `reasons` - Why subtitles are unavailable (e.g., field missing, empty)
+    ///
+    /// # Returns
+    ///
+    /// A `SubtitleResult` with status [`SubtitleStatus::NotAvailable`] and
+    /// no tracks.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rdlp_types::{SubtitleReason, SubtitleResult};
+    /// let result = SubtitleResult::not_available(vec![SubtitleReason::EmptyList]);
+    /// assert!(!result.has_tracks());
+    /// ```
     #[must_use]
     pub fn not_available(reasons: Vec<SubtitleReason>) -> Self {
         Self {
@@ -118,6 +151,27 @@ impl SubtitleResult {
     }
 
     /// Create a result indicating a soft error.
+    ///
+    /// # Arguments
+    ///
+    /// * `reasons` - Why the error occurred
+    /// * `diagnostics` - Key-value pairs for debugging
+    ///
+    /// # Returns
+    ///
+    /// A `SubtitleResult` with status [`SubtitleStatus::ErrorSoft`] and
+    /// no tracks.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rdlp_types::{SubtitleDiagnostic, SubtitleReason, SubtitleResult};
+    /// let result = SubtitleResult::error_soft(
+    ///     vec![SubtitleReason::RequiresAuth],
+    ///     vec![SubtitleDiagnostic { key: "status".into(), value: "401".into() }],
+    /// );
+    /// assert!(!result.has_tracks());
+    /// ```
     #[must_use]
     pub fn error_soft(reasons: Vec<SubtitleReason>, diagnostics: Vec<SubtitleDiagnostic>) -> Self {
         Self {
@@ -129,6 +183,17 @@ impl SubtitleResult {
     }
 
     /// Whether any downloadable tracks exist.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `tracks` is non-empty, `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rdlp_types::SubtitleResult;
+    /// assert!(!SubtitleResult::available(vec![]).has_tracks());
+    /// ```
     #[must_use]
     pub fn has_tracks(&self) -> bool {
         !self.tracks.is_empty()
@@ -139,6 +204,25 @@ impl SubtitleResult {
 ///
 /// Bridges the existing `Subtitle` wire format to the richer pipeline types.
 /// Manual subtitles get `is_auto = false`; automatic captions get `is_auto = true`.
+///
+/// # Arguments
+///
+/// * `subtitles` - Manual subtitle map from `InfoDict.subtitles`
+/// * `automatic_captions` - Auto-generated caption map from
+///   `InfoDict.automatic_captions`
+///
+/// # Returns
+///
+/// A [`SubtitleResult`] with status `Available` (when tracks exist) or
+/// `NotAvailable` (when both maps are `None` or empty).
+///
+/// # Example
+///
+/// ```
+/// use rdlp_types::subtitle_track::normalize_from_info_dict;
+/// let result = normalize_from_info_dict(None, None);
+/// assert!(!result.has_tracks());
+/// ```
 #[must_use]
 pub fn normalize_from_info_dict(
     subtitles: Option<&HashMap<String, Vec<Subtitle>>>,

@@ -149,6 +149,10 @@ struct Args {
     #[arg(long)]
     verify_sub_urls: bool,
 
+    /// Retry subtitle downloads for already-downloaded videos missing subs
+    #[arg(long)]
+    retry_subs: bool,
+
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
@@ -603,6 +607,9 @@ fn merge_config(
     if args.verify_sub_urls {
         config.verify_sub_urls = true;
     }
+    if args.retry_subs {
+        config.retry_subs = true;
+    }
 
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
@@ -813,6 +820,13 @@ async fn async_main() -> Result<()> {
         info!("Rate limit: {rate} bytes/s");
     }
 
+    if config.verify_sub_urls && !config.strict_subs {
+        warn!(
+            "--verify-sub-urls validates URLs but missing subs \
+             won't fail the download without --strict-subs"
+        );
+    }
+
     let interactive = args.interactive;
 
     // Create orchestrator with shared MultiProgress
@@ -962,6 +976,7 @@ mod tests {
             list_subs_only: false,
             strict_subs: false,
             verify_sub_urls: false,
+            retry_subs: false,
             recode_video: None,
             remux: None,
             normalize_audio: false,

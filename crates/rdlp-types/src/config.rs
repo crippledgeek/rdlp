@@ -213,6 +213,9 @@ pub struct Config {
     /// Verify subtitle URLs via HEAD request before download
     pub verify_sub_urls: bool,
 
+    /// Re-attempt subtitle downloads for completed videos missing subtitle files
+    pub retry_subs: bool,
+
     // === Thumbnail ===
     /// Write thumbnail image to disk
     pub write_thumbnail: bool,
@@ -348,6 +351,7 @@ impl Default for Config {
             list_subs: false,
             strict_subs: false,
             verify_sub_urls: false,
+            retry_subs: false,
 
             // Thumbnail
             write_thumbnail: false,

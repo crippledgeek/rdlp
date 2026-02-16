@@ -8,6 +8,7 @@ use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
 use super::{Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
+use rdlp_core::SubtitleFormat;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -16,6 +17,68 @@ use std::time::{Duration, Instant};
 /// Megacloud/netmagcdn tokens last ~30-60 min; we re-extract at 25 min
 /// to stay well within the window.
 const TOKEN_MAX_AGE: Duration = Duration::from_secs(25 * 60);
+
+/// All subtitle formats checked during resume detection.
+const RESUME_SUB_FORMATS: &[SubtitleFormat] = &[
+    SubtitleFormat::Srt,
+    SubtitleFormat::Vtt,
+    SubtitleFormat::Ass,
+    SubtitleFormat::Ssa,
+    SubtitleFormat::Lrc,
+];
+
+/// Resume detection result for a playlist folder.
+pub(super) struct ResumeDetection {
+    /// Completed episodes: sanitized_title -> video file path
+    pub completed: HashMap<String, PathBuf>,
+    /// Count of episodes with leftover segment files
+    pub partial_count: usize,
+    /// Episodes with video complete but subtitle files missing:
+    /// sanitized_title -> video file path
+    pub missing_subs: HashMap<String, PathBuf>,
+}
+
+/// Check if any subtitle file exists for the given language (exact or fuzzy).
+///
+/// Checks `{stem}.{lang}.{ext}` for all subtitle formats. If no exact match,
+/// scans `{stem}.*.{ext}` patterns for fuzzy prefix matches (e.g., `"en"` finds
+/// `title.English.vtt`).
+fn has_subtitle_file(dir: &std::path::Path, stem: &str, lang: &str) -> bool {
+    // Exact match: {stem}.{lang}.{ext}
+    for fmt in RESUME_SUB_FORMATS {
+        if dir.join(format!("{stem}.{lang}.{}", fmt.as_ext())).exists() {
+            return true;
+        }
+    }
+
+    // Fuzzy match: scan for {stem}.*.{ext} and prefix-match the middle segment
+    if lang.len() <= 3 {
+        let lang_lower = lang.to_ascii_lowercase();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                // Must start with "{stem}." and have at least one more dot
+                if let Some(rest) = name_str
+                    .strip_prefix(stem)
+                    .and_then(|r| r.strip_prefix('.'))
+                {
+                    // rest = "English.vtt" → split into ("English", "vtt")
+                    if let Some((mid, ext)) = rest.rsplit_once('.') {
+                        let is_sub_ext = RESUME_SUB_FORMATS
+                            .iter()
+                            .any(|f| f.as_ext().eq_ignore_ascii_case(ext));
+                        if is_sub_ext && mid.to_ascii_lowercase().starts_with(&lang_lower) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
 
 impl Orchestrator {
     /// Download all videos from a playlist
@@ -89,17 +152,37 @@ impl Orchestrator {
         let saved_state = SessionState::load(&state_path, &source_url).await;
         let resuming = matches!(&saved_state, Some(SessionState::Playlist(_)));
 
-        // Extract subtitle langs from saved state (empty on first run)
-        let saved_sub_langs: Vec<String> = match &saved_state {
-            Some(SessionState::Playlist(s)) => s.selected_sub_langs.clone(),
-            _ => Vec::new(),
+        // Extract subtitle langs and strict_subs from saved state.
+        // When no saved state exists (first run or previous run completed cleanly),
+        // fall back to the current CLI config so resume detection can still find
+        // missing subtitle files.
+        let (saved_sub_langs, saved_strict_subs) = match &saved_state {
+            Some(SessionState::Playlist(s)) => (s.selected_sub_langs.clone(), s.strict_subs),
+            _ => (self.config.subtitle_langs.clone(), self.config.strict_subs),
         };
 
+        // Warn if saved strict_subs differs from current CLI flag
+        if resuming && saved_strict_subs != self.config.strict_subs {
+            warn!(
+                saved = saved_strict_subs,
+                current = self.config.strict_subs;
+                "strict_subs changed since last run — using saved value for resume"
+            );
+        }
+
         // Check for existing files (resume detection)
-        // Pass subtitle langs so detection can verify VTT files exist.
-        let (existing_files, partial_count) = self
-            .detect_existing_playlist_files(&playlist_dir, &infos, &saved_sub_langs)
+        // Pass subtitle langs and strict_subs so detection can verify VTT files exist.
+        let resume = self
+            .detect_existing_playlist_files(
+                &playlist_dir,
+                &infos,
+                &saved_sub_langs,
+                saved_strict_subs,
+            )
             .await;
+        let existing_files = resume.completed;
+        let partial_count = resume.partial_count;
+        let missing_subs = resume.missing_subs;
         let already_downloaded = existing_files.len();
         let remaining = total - already_downloaded;
 
@@ -139,9 +222,36 @@ impl Orchestrator {
 
         info!("{}", "=".repeat(60));
 
-        // If all videos are already downloaded, return early
+        // If all videos are already downloaded, handle subtitle retry or return
         if remaining == 0 {
-            info!("All videos already downloaded");
+            let need_sub_retry =
+                self.config.retry_subs && !saved_sub_langs.is_empty() && !missing_subs.is_empty();
+            if !need_sub_retry {
+                if !missing_subs.is_empty() && !saved_sub_langs.is_empty() {
+                    // Report missing subs even when not retrying
+                    warn!("Missing subtitles for {} episode(s)", missing_subs.len());
+                    self.log_missing_subs(&missing_subs, &infos, total);
+                    if !self.config.retry_subs {
+                        info!("Hint: re-run with --retry-subs to attempt subtitle download");
+                    }
+                }
+                info!("All videos already downloaded");
+                SessionState::delete(&state_path).await;
+                let paths: Vec<PathBuf> = existing_files.into_values().collect();
+                return Ok(Some(paths));
+            }
+            // Fall through to subtitle retry pass below
+            info!("All videos already downloaded — retrying missing subtitles");
+            let sub_recovered = self
+                .retry_missing_subtitles(&missing_subs, &infos, &saved_sub_langs)
+                .await;
+            if sub_recovered > 0 {
+                info!("Recovered subtitles for {sub_recovered} episode(s)");
+            }
+            let still_missing = missing_subs.len() - sub_recovered;
+            if still_missing > 0 {
+                warn!("Still missing subtitles for {still_missing} episode(s)");
+            }
             SessionState::delete(&state_path).await;
             let paths: Vec<PathBuf> = existing_files.into_values().collect();
             return Ok(Some(paths));
@@ -593,6 +703,18 @@ impl Orchestrator {
             }
         }
 
+        // ── Subtitle retry for completed episodes missing subs ──
+        let mut sub_retried_ok = 0usize;
+        if !interrupted
+            && self.config.retry_subs
+            && !selected_sub_langs.is_empty()
+            && !missing_subs.is_empty()
+        {
+            sub_retried_ok = self
+                .retry_missing_subtitles(&missing_subs, &infos, &selected_sub_langs)
+                .await;
+        }
+
         // Summary report
         let newly_downloaded = downloaded.len() - already_downloaded;
         let dl_count = downloaded.len();
@@ -620,6 +742,24 @@ impl Orchestrator {
             error!("Failed: {}", failed.len());
             for (pos, title, err) in &failed {
                 error!("  [{pos}/{total}] {title}: {err}");
+            }
+        }
+
+        // Report missing subtitles
+        if !missing_subs.is_empty() && !selected_sub_langs.is_empty() {
+            let still_missing = missing_subs.len() - sub_retried_ok;
+            if sub_retried_ok > 0 {
+                info!(
+                    "Subtitles recovered: {sub_retried_ok}/{}",
+                    missing_subs.len()
+                );
+            }
+            if still_missing > 0 {
+                warn!("Missing subtitles: {still_missing}");
+                self.log_missing_subs(&missing_subs, &infos, total);
+                if !self.config.retry_subs {
+                    info!("Hint: re-run with --retry-subs to attempt subtitle download");
+                }
             }
         }
 
@@ -668,9 +808,10 @@ impl Orchestrator {
 
     /// Detect existing files in playlist folder that match video titles
     ///
-    /// Returns a tuple of:
-    /// - HashMap of sanitized title -> file path for completed downloads
-    /// - Count of videos with leftover segment files (will be cleaned up)
+    /// Returns a [`ResumeDetection`] containing:
+    /// - `completed`: sanitized title -> file path for completed downloads
+    /// - `partial_count`: videos with leftover segment files
+    /// - `missing_subs`: completed videos missing expected subtitle files
     ///
     /// # Note on .part files
     ///
@@ -684,18 +825,30 @@ impl Orchestrator {
         playlist_dir: &std::path::Path,
         infos: &[rdlp_core::InfoDict],
         subtitle_langs: &[String],
-    ) -> (HashMap<String, PathBuf>, usize) {
+        strict_subs: bool,
+    ) -> ResumeDetection {
         let mut completed = HashMap::new();
         let mut partial_count = 0;
+        let mut missing_subs = HashMap::new();
 
         if !playlist_dir.exists() {
-            return (completed, partial_count);
+            return ResumeDetection {
+                completed,
+                partial_count,
+                missing_subs,
+            };
         }
 
         // Get all files in the playlist directory
         let mut dir_entries = match tokio::fs::read_dir(playlist_dir).await {
             Ok(entries) => entries,
-            Err(_) => return (completed, partial_count),
+            Err(_) => {
+                return ResumeDetection {
+                    completed,
+                    partial_count,
+                    missing_subs,
+                };
+            }
         };
 
         let mut files: Vec<PathBuf> = Vec::new();
@@ -749,26 +902,31 @@ impl Orchestrator {
                         // Check if file has reasonable size (> 1MB to avoid empty/corrupted files)
                         if let Ok(metadata) = file_path.metadata() {
                             if metadata.len() > 1_000_000 {
-                                // If subtitles were selected AND strict mode is
-                                // enabled, verify subtitle files exist alongside
-                                // the video. In lenient mode (default), missing
-                                // subs don't invalidate a completed video.
-                                if self.config.strict_subs && !subtitle_langs.is_empty() {
-                                    let stem = &sanitized_title;
+                                // Check subtitle file existence once for both
+                                // strict and lenient paths. Uses fuzzy matching
+                                // so "en" finds "title.English.vtt".
+                                let subs_missing = if !subtitle_langs.is_empty() {
                                     let dir = file_path.parent().unwrap_or(playlist_dir);
-                                    let any_sub_exists = subtitle_langs.iter().any(|lang| {
-                                        ["vtt", "srt", "ass"].iter().any(|ext| {
-                                            dir.join(format!("{stem}.{lang}.{ext}")).exists()
-                                        })
-                                    });
-                                    if !any_sub_exists {
-                                        debug!(
-                                            file:% = filename;
-                                            "Skipping: missing subtitle file (strict mode)"
-                                        );
-                                        found_partial = true;
-                                        continue;
-                                    }
+                                    !subtitle_langs
+                                        .iter()
+                                        .any(|lang| has_subtitle_file(dir, &sanitized_title, lang))
+                                } else {
+                                    false
+                                };
+
+                                // Strict mode: missing subs invalidate the video
+                                if strict_subs && subs_missing {
+                                    debug!(
+                                        file:% = filename;
+                                        "Skipping: missing subtitle file (strict mode)"
+                                    );
+                                    found_partial = true;
+                                    continue;
+                                }
+
+                                // Lenient mode: track for reporting / --retry-subs
+                                if subs_missing {
+                                    missing_subs.insert(sanitized_title.clone(), file_path.clone());
                                 }
 
                                 completed.insert(sanitized_title.clone(), file_path.clone());
@@ -788,7 +946,113 @@ impl Orchestrator {
             }
         }
 
-        (completed, partial_count)
+        ResumeDetection {
+            completed,
+            partial_count,
+            missing_subs,
+        }
+    }
+
+    /// Retry subtitle downloads for completed videos that are missing subs.
+    ///
+    /// Re-extracts fresh metadata for each episode and downloads subtitles
+    /// using the structured pipeline. Returns the count of episodes that
+    /// had subtitles successfully recovered.
+    async fn retry_missing_subtitles(
+        &self,
+        missing_subs: &HashMap<String, PathBuf>,
+        infos: &[rdlp_core::InfoDict],
+        sub_langs: &[String],
+    ) -> usize {
+        let count = missing_subs.len();
+        info!("Retrying subtitle download for {count} episode(s) with missing subs");
+
+        let mut recovered = 0usize;
+        for (sanitized_title, video_path) in missing_subs {
+            // Find the matching InfoDict by sanitized title
+            let Some(ep_info) = infos
+                .iter()
+                .find(|i| self.sanitize_filename(&i.title) == *sanitized_title)
+            else {
+                warn!(
+                    title:% = sanitized_title;
+                    "Could not find episode metadata for subtitle retry"
+                );
+                continue;
+            };
+
+            // Re-extract fresh metadata to get fresh subtitle URLs
+            let fresh_info = match self.extract_lazy_formats(&ep_info.webpage_url).await {
+                Ok(mut resolved) => {
+                    // Preserve episode metadata from original stub
+                    resolved.id = ep_info.id.clone();
+                    resolved.title = ep_info.title.clone();
+                    resolved.playlist = ep_info.playlist.clone();
+                    resolved.playlist_title = ep_info.playlist_title.clone();
+                    resolved.playlist_index = ep_info.playlist_index;
+                    resolved.playlist_count = ep_info.playlist_count;
+                    resolved
+                }
+                Err(e) => {
+                    warn!(
+                        title:? = ep_info.title;
+                        "Failed to re-extract for subtitle retry: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            // Resolve per-episode subtitle URLs from language names
+            let episode_subs = self.resolve_subtitles_for_episode(&fresh_info, sub_langs);
+
+            let downloaded_subs = match self
+                .download_subtitles(&fresh_info, video_path, &episode_subs)
+                .await
+            {
+                Ok(subs) => subs,
+                Err(e) => {
+                    warn!(
+                        title:? = ep_info.title;
+                        "Subtitle retry download failed: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            if !downloaded_subs.is_empty() {
+                info!(
+                    title:? = ep_info.title,
+                    count = downloaded_subs.len();
+                    "Subtitle retry succeeded"
+                );
+                recovered += 1;
+            } else {
+                warn!(
+                    title:? = ep_info.title;
+                    "Subtitle retry: no subtitles downloaded"
+                );
+            }
+        }
+
+        recovered
+    }
+
+    /// Log per-episode missing subtitle details.
+    ///
+    /// Uses `sanitize_filename` to match infos against `missing_subs` keys.
+    fn log_missing_subs(
+        &self,
+        missing_subs: &HashMap<String, PathBuf>,
+        infos: &[rdlp_core::InfoDict],
+        total: usize,
+    ) {
+        for info in infos {
+            let sanitized = self.sanitize_filename(&info.title);
+            if missing_subs.contains_key(&sanitized) {
+                let pos = info.playlist_index.unwrap_or(0);
+                warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);
+            }
+        }
     }
 
     /// Download from pre-extracted InfoDict (internal helper)

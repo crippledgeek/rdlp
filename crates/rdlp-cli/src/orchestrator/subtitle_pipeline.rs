@@ -182,7 +182,7 @@ pub(super) fn apply_subtitle_policy(
             let manual: Vec<&SubtitleTrack> = result
                 .tracks
                 .iter()
-                .filter(|t| !t.is_auto && t.language.eq_ignore_ascii_case(lang))
+                .filter(|t| !t.is_auto && track_matches_lang(t, lang))
                 .collect();
 
             if let Some(track) = pick_best_track(&manual, preferred_format) {
@@ -195,7 +195,7 @@ pub(super) fn apply_subtitle_policy(
                 let auto: Vec<&SubtitleTrack> = result
                     .tracks
                     .iter()
-                    .filter(|t| t.is_auto && t.language.eq_ignore_ascii_case(lang))
+                    .filter(|t| t.is_auto && track_matches_lang(t, lang))
                     .collect();
 
                 if let Some(track) = pick_best_track(&auto, preferred_format) {
@@ -226,6 +226,40 @@ pub(super) fn apply_subtitle_policy(
         should_fail,
         error_message,
     }
+}
+
+/// Check whether a subtitle track matches a requested language.
+///
+/// Supports exact match (`"English"` == `"English"`), ISO code prefix
+/// (`"en"` matches `"English"`), and name field fallback.
+fn track_matches_lang(track: &SubtitleTrack, lang: &str) -> bool {
+    // Exact case-insensitive match on the language key
+    if track.language.eq_ignore_ascii_case(lang) {
+        return true;
+    }
+    // ISO code prefix: "en" starts "English", "ja" starts "Japanese"
+    if lang.len() <= 3
+        && track
+            .language
+            .to_ascii_lowercase()
+            .starts_with(&lang.to_ascii_lowercase())
+    {
+        return true;
+    }
+    // Check the optional name field (e.g., name: Some("English"))
+    if let Some(ref name) = track.name {
+        if name.eq_ignore_ascii_case(lang) {
+            return true;
+        }
+        if lang.len() <= 3
+            && name
+                .to_ascii_lowercase()
+                .starts_with(&lang.to_ascii_lowercase())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Pick the best track from candidates based on format preference.
@@ -401,5 +435,50 @@ mod tests {
         let outcome = apply_subtitle_policy(&result, &langs, None, false, false);
         assert_eq!(outcome.selected.len(), 1);
         assert_eq!(outcome.selected[0].ext, "srt");
+    }
+
+    // ── Language matching tests ─────────────────────────────
+
+    #[test]
+    fn test_track_matches_lang_exact() {
+        let t = track("en", "srt", false);
+        assert!(track_matches_lang(&t, "en"));
+        assert!(track_matches_lang(&t, "EN"));
+    }
+
+    #[test]
+    fn test_track_matches_lang_prefix() {
+        let t = track("English", "vtt", false);
+        assert!(track_matches_lang(&t, "en"));
+        assert!(track_matches_lang(&t, "En"));
+        assert!(!track_matches_lang(&t, "es"));
+    }
+
+    #[test]
+    fn test_track_matches_lang_name_field() {
+        let mut t = track("en", "srt", false);
+        t.name = Some("English".to_string());
+        assert!(track_matches_lang(&t, "English"));
+        assert!(track_matches_lang(&t, "en"));
+    }
+
+    #[test]
+    fn test_track_matches_lang_no_false_positive() {
+        let t = track("Japanese", "vtt", false);
+        assert!(!track_matches_lang(&t, "en"));
+        // "ja" should match "Japanese"
+        assert!(track_matches_lang(&t, "ja"));
+    }
+
+    #[test]
+    fn test_policy_iso_code_matches_label() {
+        // Simulates 9anime: tracks keyed by "English" label,
+        // user passes --sub-langs en
+        let result = result_with(vec![track("English", "vtt", false)]);
+        let langs = vec!["en".to_string()];
+        let outcome = apply_subtitle_policy(&result, &langs, None, false, false);
+        assert_eq!(outcome.selected.len(), 1);
+        assert_eq!(outcome.selected[0].language, "English");
+        assert!(outcome.warnings.is_empty());
     }
 }

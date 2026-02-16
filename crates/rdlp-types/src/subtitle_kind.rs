@@ -25,6 +25,17 @@ pub enum SubtitleKind {
 
 impl SubtitleKind {
     /// String identifier for this kind.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice matching the serde `snake_case` representation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rdlp_types::SubtitleKind;
+    /// assert_eq!(SubtitleKind::HearingImpaired.as_str(), "hearing_impaired");
+    /// ```
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {

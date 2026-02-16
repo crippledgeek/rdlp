@@ -135,9 +135,14 @@ pub(super) fn preselect_indices(items: &[SubtitleMenuItem], config_langs: &[Stri
             if want_all {
                 true
             } else {
-                config_langs
-                    .iter()
-                    .any(|l| l.eq_ignore_ascii_case(&item.lang))
+                config_langs.iter().any(|l| {
+                    item.lang.eq_ignore_ascii_case(l)
+                        || (l.len() <= 3
+                            && item
+                                .lang
+                                .to_ascii_lowercase()
+                                .starts_with(&l.to_ascii_lowercase()))
+                })
             }
         })
         .collect()
@@ -262,7 +267,23 @@ impl Orchestrator {
             info.subtitles.as_ref()
         };
 
-        let entries = source?.get(lang)?;
+        let map = source?;
+
+        // Try exact key first, then fuzzy (ISO prefix) match on keys.
+        // 9anime uses labels ("English") as keys while --sub-langs uses
+        // codes ("en"), so we need prefix matching.
+        let entries = map.get(lang).or_else(|| {
+            map.iter()
+                .find(|(key, _)| {
+                    key.eq_ignore_ascii_case(lang)
+                        || (lang.len() <= 3
+                            && key
+                                .to_ascii_lowercase()
+                                .starts_with(&lang.to_ascii_lowercase()))
+                })
+                .map(|(_, v)| v)
+        })?;
+
         if entries.is_empty() {
             return None;
         }
@@ -370,6 +391,12 @@ impl Orchestrator {
         for (lang, sub) in selected {
             let sub_filename = format!("{stem}.{lang}.{}", sub.ext);
             let sub_path = parent.join(&sub_filename);
+
+            if sub_path.exists() {
+                debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");
+                downloaded.push((lang.clone(), sub_path));
+                continue;
+            }
 
             info!("Downloading subtitle: lang={lang}, url={}", sub.url);
 
@@ -483,6 +510,12 @@ impl Orchestrator {
         for track in &outcome.selected {
             let sub_filename = format!("{stem}.{}.{}", track.language, track.ext);
             let sub_path = parent.join(&sub_filename);
+
+            if sub_path.exists() {
+                debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");
+                downloaded.push((track.language.clone(), sub_path));
+                continue;
+            }
 
             info!(
                 lang:% = track.language,
