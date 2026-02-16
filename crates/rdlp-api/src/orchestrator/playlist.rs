@@ -94,6 +94,7 @@ impl Orchestrator {
     /// - `Ok(Some(paths))` - All or some downloads completed (graceful degradation)
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Fatal error (no videos downloaded)
+    #[allow(dead_code)]
     pub async fn download_playlist(
         &self,
         url: &str,
@@ -373,14 +374,9 @@ impl Orchestrator {
 
         // Resolve with buffer_unordered: starts the next future as soon as
         // any one completes, keeping the pipeline always full at N concurrent.
-        let futs = to_resolve.iter().map(|(i, url, title)| {
-            let i = *i;
-            let url = url.clone();
-            let title = title.clone();
-            async move {
-                info!(position = i + 1, title:? = title; "Resolving episode");
-                (i, self.extract_lazy_formats(&url).await)
-            }
+        let futs = to_resolve.into_iter().map(|(i, url, title)| async move {
+            info!(position = i + 1, title:? = title; "Resolving episode");
+            (i, self.extract_lazy_formats(&url).await)
         });
 
         let results: Vec<_> = futures_util::stream::iter(futs)
@@ -448,8 +444,8 @@ impl Orchestrator {
         let mut failed = Vec::new();
         let mut interrupted = false;
 
-        // Collect episodes that still need downloading
-        let to_download: Vec<(usize, &rdlp_core::InfoDict)> = infos
+        // Collect episodes that still need downloading (owned to avoid HRTB issues)
+        let to_download: Vec<(usize, rdlp_core::InfoDict)> = infos
             .iter()
             .enumerate()
             .filter(|(_, ep)| {
@@ -469,6 +465,7 @@ impl Orchestrator {
                 }
                 true
             })
+            .map(|(i, ep)| (i, ep.clone()))
             .collect();
 
         let download_count = to_download.len();
@@ -483,9 +480,8 @@ impl Orchestrator {
         // Build concurrent download stream.
         // Each future clones the data it needs so lifetimes are straightforward.
         let batch_ts = Some(batch_resolved_at);
-        let futs = to_download.into_iter().map(|(index, info)| {
+        let futs = to_download.into_iter().map(|(index, info_owned)| {
             let position = index + 1;
-            let info_owned = info.clone();
             let dir = playlist_dir.clone();
             let sub_langs = selected_sub_langs.clone();
             let audio = selected_audio.clone();

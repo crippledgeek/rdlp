@@ -24,7 +24,7 @@ mod tests;
 // Public re-exports
 pub use errors::{OrchestratorError, Result};
 pub use interactive::InteractiveCallback;
-pub use state::{DownloadPhase, DownloadState};
+pub use state::DownloadPhase;
 
 use crate::events::Event;
 use crate::handle::DownloadId;
@@ -141,6 +141,7 @@ impl Orchestrator {
     /// It's public to allow integration tests to use it, but should not be used in
     /// production code.
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn with_registries(
         config: Config,
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
@@ -305,6 +306,7 @@ impl Orchestrator {
     /// # Returns
     /// - `Ok(Some(paths))` - Downloaded subtitle file paths
     /// - `Ok(None)` - User cancelled
+    #[allow(dead_code)]
     pub async fn download_subtitles_only(
         &self,
         info: &rdlp_core::InfoDict,

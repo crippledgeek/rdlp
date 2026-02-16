@@ -3,6 +3,7 @@
 //! [`RdlpApiError`] maps internal error types to a stable, frontend-friendly
 //! enum with human-readable messages and retryability information.
 
+use crate::orchestrator::OrchestratorError;
 use rdlp_core::RdlpError;
 use std::borrow::Cow;
 use thiserror::Error;
@@ -179,6 +180,37 @@ impl From<RdlpError> for RdlpApiError {
                 source_url: String::new(),
             },
             RdlpError::Other(msg) => Self::Soft { message: msg },
+        }
+    }
+}
+
+impl From<OrchestratorError> for RdlpApiError {
+    fn from(err: OrchestratorError) -> Self {
+        match err {
+            OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl { url },
+            OrchestratorError::ExtractionFailed(rdlp_err) => Self::from(rdlp_err),
+            OrchestratorError::UserCancelled => Self::UserCancelled,
+            OrchestratorError::NoFormat => Self::InvalidInput {
+                message: "No suitable format found".into(),
+            },
+            OrchestratorError::InvalidFormatSelector(msg) => Self::InvalidInput { message: msg },
+            OrchestratorError::NoDownloader { url } => Self::InvalidInput {
+                message: format!("No downloader for: {url}"),
+            },
+            OrchestratorError::DownloadFailed(rdlp_err) => Self::from(rdlp_err),
+            OrchestratorError::ResumeDetectionFailed(msg) => Self::IoError { message: msg },
+            OrchestratorError::MissingChunk { path } => Self::IoError {
+                message: format!("Missing chunk file: {}", path.display()),
+            },
+            OrchestratorError::ChunkMergeFailed(io_err) => Self::IoError {
+                message: format!("Chunk merge failed: {io_err}"),
+            },
+            OrchestratorError::PathGenerationFailed(msg) => Self::IoError { message: msg },
+            OrchestratorError::IoError(msg) => Self::IoError { message: msg },
+            OrchestratorError::Io(io_err) => Self::IoError {
+                message: io_err.to_string(),
+            },
+            OrchestratorError::Configuration(msg) => Self::BuilderError { message: msg },
         }
     }
 }

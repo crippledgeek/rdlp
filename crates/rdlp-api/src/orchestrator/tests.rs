@@ -1,5 +1,6 @@
 //! Tests for the orchestrator module
 
+use super::state::DownloadState;
 use super::*;
 use crate::events::Event;
 use crate::handle::DownloadId;
