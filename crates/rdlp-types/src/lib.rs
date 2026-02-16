@@ -31,7 +31,9 @@ pub mod format;
 pub mod info_dict;
 pub mod protocol;
 pub mod subtitle_format;
+pub mod subtitle_kind;
 pub mod subtitle_selection;
+pub mod subtitle_track;
 
 // Re-export main types
 pub use audio_format::AudioFormat;
@@ -42,4 +44,9 @@ pub use format::{Format, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use protocol::DownloadProtocol;
 pub use subtitle_format::SubtitleFormat;
+pub use subtitle_kind::SubtitleKind;
 pub use subtitle_selection::{select_subtitles, subtitle_filename};
+pub use subtitle_track::{
+    SubtitleDiagnostic, SubtitleReason, SubtitleResult, SubtitleStatus, SubtitleTrack,
+    normalize_from_info_dict,
+};

@@ -11,7 +11,6 @@
 use super::{Orchestrator, Result};
 use log::{debug, info, warn};
 use rdlp_core::InfoDict;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A single item in the interactive subtitle selection menu.
@@ -336,62 +335,14 @@ impl Orchestrator {
                 .await;
         }
 
-        // Config-based path: check flags and select based on config
+        // Config-based path: delegate to the structured pipeline
         if !self.config.write_subtitles && !self.config.embed_subtitles {
             return Ok(Vec::new());
         }
 
-        let subtitles = info.subtitles.as_ref();
-        let auto_captions = info.automatic_captions.as_ref();
-
-        if subtitles.is_none_or(|s| s.is_empty()) && auto_captions.is_none_or(|a| a.is_empty()) {
-            debug!("No subtitles available");
-            return Ok(Vec::new());
-        }
-
-        let empty = HashMap::new();
-        let subs = subtitles.unwrap_or(&empty);
-        let auto = auto_captions.unwrap_or(&empty);
-
-        // Select which subtitles to download based on config
-        let selected = select_subtitles_for_download(
-            subs,
-            auto,
-            &self.config.subtitle_langs,
-            self.config.subtitle_format,
-            self.config.write_auto_subtitles,
-        );
-
-        if selected.is_empty() {
-            debug!("No matching subtitles for requested languages");
-            return Ok(Vec::new());
-        }
-
-        let stem = output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
-        let parent = output_path.parent().unwrap_or(Path::new("."));
-
-        let mut downloaded = Vec::new();
-
-        for (lang, url, ext) in &selected {
-            let sub_filename = format!("{stem}.{lang}.{ext}");
-            let sub_path = parent.join(&sub_filename);
-
-            info!("Downloading subtitle: lang={lang}, url={url}");
-
-            match self.download_subtitle_file(url, &sub_path).await {
-                Ok(()) => {
-                    info!("Subtitle downloaded: {}", sub_path.display());
-                    downloaded.push((lang.clone(), sub_path));
-                }
-                Err(e) => {
-                    warn!("Failed to download subtitle for {lang}: {e}");
-                }
-            }
-        }
-
+        let (downloaded, _warnings) = self
+            .download_subtitles_with_pipeline(info, output_path)
+            .await?;
         Ok(downloaded)
     }
 
@@ -475,6 +426,88 @@ impl Orchestrator {
         Ok(Some(paths))
     }
 
+    /// Download subtitles using the structured pipeline with status reporting.
+    ///
+    /// Normalizes InfoDict subtitles into [`SubtitleResult`], optionally
+    /// validates URLs, applies policy (language filtering, strict mode),
+    /// and downloads. Returns downloaded paths and any warnings.
+    pub(super) async fn download_subtitles_with_pipeline(
+        &self,
+        info: &InfoDict,
+        output_path: &Path,
+    ) -> Result<(Vec<(String, PathBuf)>, Vec<String>)> {
+        use super::subtitle_pipeline::{
+            apply_subtitle_policy, normalize_subtitles, validate_subtitle_urls,
+        };
+
+        // Stage 3: Normalize
+        let mut result = normalize_subtitles(info);
+
+        // Stage 2: Validate (optional, only if verify_sub_urls is true)
+        if self.config.verify_sub_urls && result.has_tracks() {
+            result = validate_subtitle_urls(result, &self.extraction_context.http_client).await;
+        }
+
+        // Stage 4: Policy
+        let outcome = apply_subtitle_policy(
+            &result,
+            &self.config.subtitle_langs,
+            self.config.subtitle_format,
+            self.config.write_auto_subtitles,
+            self.config.strict_subs,
+        );
+
+        // Log warnings
+        for warning in &outcome.warnings {
+            warn!("{warning}");
+        }
+
+        // Hard error in strict mode
+        if outcome.should_fail {
+            let msg = outcome
+                .error_message
+                .unwrap_or_else(|| "Subtitle policy check failed".to_string());
+            return Err(super::OrchestratorError::DownloadFailed(
+                rdlp_core::RdlpError::Extraction(msg),
+            ));
+        }
+
+        // Download selected tracks
+        let stem = output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("video");
+        let parent = output_path.parent().unwrap_or(Path::new("."));
+        let mut downloaded = Vec::new();
+
+        for track in &outcome.selected {
+            let sub_filename = format!("{stem}.{}.{}", track.language, track.ext);
+            let sub_path = parent.join(&sub_filename);
+
+            info!(
+                lang:% = track.language,
+                ext:% = track.ext;
+                "Downloading subtitle"
+            );
+
+            match self.download_subtitle_file(&track.url, &sub_path).await {
+                Ok(()) => {
+                    info!("Subtitle downloaded: {}", sub_path.display());
+                    downloaded.push((track.language.clone(), sub_path));
+                }
+                Err(e) => {
+                    warn!(
+                        lang:% = track.language;
+                        "Failed to download subtitle: {e}"
+                    );
+                }
+            }
+        }
+
+        let warnings = outcome.warnings;
+        Ok((downloaded, warnings))
+    }
+
     /// Download a single subtitle file via HTTP.
     async fn download_subtitle_file(
         &self,
@@ -504,9 +537,10 @@ impl Orchestrator {
 /// * `requested_langs` - Languages to download (empty = all)
 /// * `preferred_format` - Preferred subtitle format (None = any)
 /// * `include_auto` - Whether to include auto-generated captions
+#[cfg(test)]
 fn select_subtitles_for_download(
-    subtitles: &HashMap<String, Vec<rdlp_core::Subtitle>>,
-    auto_captions: &HashMap<String, Vec<rdlp_core::Subtitle>>,
+    subtitles: &std::collections::HashMap<String, Vec<rdlp_core::Subtitle>>,
+    auto_captions: &std::collections::HashMap<String, Vec<rdlp_core::Subtitle>>,
     requested_langs: &[String],
     preferred_format: Option<rdlp_core::SubtitleFormat>,
     include_auto: bool,

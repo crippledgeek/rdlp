@@ -141,6 +141,14 @@ struct Args {
     #[arg(long, alias = "list-subs-only")]
     list_subs_only: bool,
 
+    /// Strict subtitle mode: fail download if requested subs are missing
+    #[arg(long)]
+    strict_subs: bool,
+
+    /// Pre-validate subtitle URLs with HEAD requests before download
+    #[arg(long)]
+    verify_sub_urls: bool,
+
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
@@ -589,6 +597,12 @@ fn merge_config(
     if config.embed_subtitles && !config.write_subtitles {
         config.write_subtitles = true;
     }
+    if args.strict_subs {
+        config.strict_subs = true;
+    }
+    if args.verify_sub_urls {
+        config.verify_sub_urls = true;
+    }
 
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
@@ -946,6 +960,8 @@ mod tests {
             embed_subtitles: false,
             list_subs: false,
             list_subs_only: false,
+            strict_subs: false,
+            verify_sub_urls: false,
             recode_video: None,
             remux: None,
             normalize_audio: false,

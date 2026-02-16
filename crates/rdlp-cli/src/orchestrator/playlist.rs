@@ -252,6 +252,7 @@ impl Orchestrator {
                 &playlist_title,
                 selected_audio.clone(),
                 selected_sub_langs.clone(),
+                self.config.strict_subs,
             ));
             state.save(&state_path).await;
         }
@@ -648,6 +649,7 @@ impl Orchestrator {
                 &playlist_title,
                 selected_audio.clone(),
                 selected_sub_langs.clone(),
+                self.config.strict_subs,
             );
             state.failed_episodes = failed_eps;
             SessionState::Playlist(state).save(&state_path).await;
@@ -747,13 +749,14 @@ impl Orchestrator {
                         // Check if file has reasonable size (> 1MB to avoid empty/corrupted files)
                         if let Ok(metadata) = file_path.metadata() {
                             if metadata.len() > 1_000_000 {
-                                // If subtitles were selected, verify subtitle
-                                // files exist. Pattern: {stem}.{lang}.{ext}
-                                if !subtitle_langs.is_empty() {
+                                // If subtitles were selected AND strict mode is
+                                // enabled, verify subtitle files exist alongside
+                                // the video. In lenient mode (default), missing
+                                // subs don't invalidate a completed video.
+                                if self.config.strict_subs && !subtitle_langs.is_empty() {
                                     let stem = &sanitized_title;
                                     let dir = file_path.parent().unwrap_or(playlist_dir);
                                     let any_sub_exists = subtitle_langs.iter().any(|lang| {
-                                        // Check common extensions (vtt, srt, ass)
                                         ["vtt", "srt", "ass"].iter().any(|ext| {
                                             dir.join(format!("{stem}.{lang}.{ext}")).exists()
                                         })
@@ -761,7 +764,7 @@ impl Orchestrator {
                                     if !any_sub_exists {
                                         debug!(
                                             file:% = filename;
-                                            "Skipping: missing subtitle file"
+                                            "Skipping: missing subtitle file (strict mode)"
                                         );
                                         found_partial = true;
                                         continue;
@@ -1010,14 +1013,21 @@ impl Orchestrator {
             .await?;
 
         if !subtitle_langs.is_empty() && downloaded_subs.is_empty() {
-            return Err(OrchestratorError::DownloadFailed(
-                rdlp_core::RdlpError::Extraction(format!(
-                    "Subtitle download failed for '{}': \
-                     expected [{}] but none downloaded",
-                    final_info.title,
-                    subtitle_langs.join(", ")
-                )),
-            ));
+            if self.config.strict_subs {
+                return Err(OrchestratorError::DownloadFailed(
+                    rdlp_core::RdlpError::Extraction(format!(
+                        "Strict subtitle mode: no subtitles downloaded for '{}' \
+                         (expected [{}])",
+                        final_info.title,
+                        subtitle_langs.join(", ")
+                    )),
+                ));
+            }
+            warn!(
+                title:? = final_info.title,
+                expected:% = subtitle_langs.join(", ");
+                "Subtitles unavailable for this episode, continuing without"
+            );
         }
 
         // Run post-processing if configured (or automatic for HLS)

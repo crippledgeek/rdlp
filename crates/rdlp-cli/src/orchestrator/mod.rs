@@ -13,6 +13,7 @@ mod selection;
 mod session_state;
 mod state;
 mod subtitle;
+mod subtitle_pipeline;
 mod template;
 mod thumbnail;
 
