@@ -7,7 +7,7 @@
 // TODO: remove once build_config() calls merge_into()
 #![allow(dead_code)]
 
-use crate::request::OutputOptions;
+use crate::request::{FormatOptions, OutputOptions};
 use rdlp_core::Config;
 
 /// Merge explicitly-set request fields into a base [`Config`].
@@ -26,6 +26,14 @@ impl MergeOverrides for OutputOptions {
         }
         if let Some(ref v) = self.template {
             config.output_template = v.clone();
+        }
+    }
+}
+
+impl MergeOverrides for FormatOptions {
+    fn merge_into(&self, config: &mut Config) {
+        if let Some(ref v) = self.selector {
+            config.format = v.clone();
         }
     }
 }
@@ -77,5 +85,28 @@ mod tests {
         };
         opts.merge_into(&mut config);
         assert_eq!(config.output_template, "new.%(ext)s");
+    }
+
+    // ─── FormatOptions ───────────────────────────────────────────────
+
+    #[test]
+    fn test_format_none_preserves_selector() {
+        let mut config = Config::default();
+        config.format = "kept".to_string();
+        let opts = FormatOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(config.format, "kept");
+    }
+
+    #[test]
+    fn test_format_some_overrides_selector() {
+        let mut config = Config::default();
+        config.format = "old".to_string();
+        let opts = FormatOptions {
+            selector: Some("bestaudio".into()),
+            ..FormatOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.format, "bestaudio");
     }
 }
