@@ -7,7 +7,9 @@
 // TODO: remove once build_config() calls merge_into()
 #![allow(dead_code)]
 
-use crate::request::{FormatOptions, OutputOptions, PostProcessOptions, SubtitleOptions};
+use crate::request::{
+    FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions, SubtitleOptions,
+};
 use rdlp_core::Config;
 
 /// Merge explicitly-set request fields into a base [`Config`].
@@ -91,6 +93,29 @@ impl MergeOverrides for PostProcessOptions {
         }
         if let Some(ref v) = self.loudnorm_preset {
             config.loudnorm_preset = Some(v.clone());
+        }
+    }
+}
+
+impl MergeOverrides for NetworkOptions {
+    fn merge_into(&self, config: &mut Config) {
+        if let Some(v) = self.retries {
+            config.retries = v as usize;
+        }
+        if let Some(v) = self.timeout_secs {
+            config.socket_timeout = Some(v);
+        }
+        if let Some(v) = self.concurrent_fragments {
+            config.concurrent_fragments = v as usize;
+        }
+        if let Some(v) = self.rate_limit {
+            config.rate_limit = Some(v);
+        }
+        if let Some(v) = self.cookies_from_browser {
+            config.cookies_from_browser = Some(v);
+        }
+        if let Some(ref v) = self.cookies_file {
+            config.cookies_file = Some(v.clone());
         }
     }
 }
@@ -498,5 +523,142 @@ mod tests {
         };
         opts.merge_into(&mut config);
         assert_eq!(config.loudnorm_preset.as_deref(), Some("streaming"));
+    }
+
+    // ─── NetworkOptions ──────────────────────────────────────────────
+
+    #[test]
+    fn test_network_none_preserves_retries() {
+        let mut config = Config::default();
+        config.retries = 42;
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(config.retries, 42);
+    }
+
+    #[test]
+    fn test_network_some_overrides_retries() {
+        let mut config = Config::default();
+        config.retries = 10;
+        let opts = NetworkOptions {
+            retries: Some(3),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.retries, 3);
+    }
+
+    #[test]
+    fn test_network_none_preserves_timeout_secs() {
+        let mut config = Config::default();
+        config.socket_timeout = Some(99);
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(config.socket_timeout, Some(99));
+    }
+
+    #[test]
+    fn test_network_some_overrides_timeout_secs() {
+        let mut config = Config::default();
+        config.socket_timeout = Some(30);
+        let opts = NetworkOptions {
+            timeout_secs: Some(120),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.socket_timeout, Some(120));
+    }
+
+    #[test]
+    fn test_network_none_preserves_concurrent_fragments() {
+        let mut config = Config::default();
+        config.concurrent_fragments = 16;
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(config.concurrent_fragments, 16);
+    }
+
+    #[test]
+    fn test_network_some_overrides_concurrent_fragments() {
+        let mut config = Config::default();
+        config.concurrent_fragments = 4;
+        let opts = NetworkOptions {
+            concurrent_fragments: Some(8),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.concurrent_fragments, 8);
+    }
+
+    #[test]
+    fn test_network_none_preserves_rate_limit() {
+        let mut config = Config::default();
+        config.rate_limit = Some(1_000_000);
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(config.rate_limit, Some(1_000_000));
+    }
+
+    #[test]
+    fn test_network_some_overrides_rate_limit() {
+        let mut config = Config::default();
+        config.rate_limit = None;
+        let opts = NetworkOptions {
+            rate_limit: Some(500_000),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.rate_limit, Some(500_000));
+    }
+
+    #[test]
+    fn test_network_none_preserves_cookies_from_browser() {
+        let mut config = Config::default();
+        config.cookies_from_browser = Some(rdlp_core::BrowserType::Firefox);
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(
+            config.cookies_from_browser,
+            Some(rdlp_core::BrowserType::Firefox)
+        );
+    }
+
+    #[test]
+    fn test_network_some_overrides_cookies_from_browser() {
+        let mut config = Config::default();
+        config.cookies_from_browser = None;
+        let opts = NetworkOptions {
+            cookies_from_browser: Some(rdlp_core::BrowserType::Chrome),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(
+            config.cookies_from_browser,
+            Some(rdlp_core::BrowserType::Chrome)
+        );
+    }
+
+    #[test]
+    fn test_network_none_preserves_cookies_file() {
+        let mut config = Config::default();
+        config.cookies_file = Some(PathBuf::from("/kept/cookies.txt"));
+        let opts = NetworkOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(
+            config.cookies_file,
+            Some(PathBuf::from("/kept/cookies.txt"))
+        );
+    }
+
+    #[test]
+    fn test_network_some_overrides_cookies_file() {
+        let mut config = Config::default();
+        config.cookies_file = None;
+        let opts = NetworkOptions {
+            cookies_file: Some(PathBuf::from("/new/cookies.txt")),
+            ..NetworkOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(config.cookies_file, Some(PathBuf::from("/new/cookies.txt")));
     }
 }
