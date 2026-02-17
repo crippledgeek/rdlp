@@ -6,6 +6,11 @@ use super::{Orchestrator, errors::*};
 use log::{debug, info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
 
+/// Whether merge download (video + audio muxed via FFmpeg) is supported.
+/// Both `resolve_effective_selector` and `select_format` check this value.
+/// Phase 2 will change this to a runtime check.
+const MERGE_SUPPORTED: bool = false;
+
 impl Orchestrator {
     /// Resolve the effective format selector string based on runtime
     /// capabilities.
@@ -38,14 +43,13 @@ impl Orchestrator {
 
         // 2. Compute dynamic default
         let ffmpeg_available = self.postprocessor_registry.is_some();
-        let merge_supported = false; // Phase 2 will set this to true
         let audio_multistreams = self.config.audio_multistreams;
 
-        let selector = if merge_supported && ffmpeg_available && !audio_multistreams {
+        let selector = if MERGE_SUPPORTED && ffmpeg_available && !audio_multistreams {
             // Phase 2+: full merge with star
             // (video+audio combined included)
             "bv*+ba/b"
-        } else if merge_supported && ffmpeg_available && audio_multistreams {
+        } else if MERGE_SUPPORTED && ffmpeg_available && audio_multistreams {
             // Phase 2+: merge without star
             // (strict video-only + audio-only)
             "bv+ba/b"
@@ -63,7 +67,7 @@ impl Orchestrator {
         debug!(
             selector,
             ffmpeg_available,
-            merge_supported,
+            merge_supported = MERGE_SUPPORTED,
             audio_multistreams,
             reason = "dynamic default";
             "Resolved format selector"
@@ -72,9 +76,15 @@ impl Orchestrator {
         selector.to_string()
     }
 
-    /// Select format from available formats
+    /// Select format from available formats.
     ///
-    /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (interactive mode only)
+    /// Uses [`resolve_effective_selector`] to determine the selector
+    /// string, then applies merge-fallback safety: if the selector
+    /// returns a merge pair but merge is not supported, falls back to
+    /// the best combined format (or video-only as last resort).
+    ///
+    /// Returns `Ok(Some(format))` on success, `Ok(None)` if the user
+    /// cancelled (interactive mode only).
     ///
     /// # Errors
     /// Returns an error if:
@@ -106,8 +116,7 @@ impl Orchestrator {
             // (video+audio merge) but merge download is not yet
             // supported, fall back to best combined format.
             if selected_formats.len() > 1 {
-                let merge_supported = false; // Phase 2 will change this
-                if merge_supported {
+                if MERGE_SUPPORTED {
                     // Phase 2: return the video format
                     // (merge handled downstream)
                     selected_formats[0].clone()
@@ -322,24 +331,20 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_no_ffmpeg_returns_b_bv_plus_ba() {
+    fn test_resolve_default_selector_matches_environment() {
+        // The resolved selector depends on FFmpeg availability,
+        // which varies by environment. Assert the correct value
+        // for whichever environment we're in.
         let config = Config::default();
         let orch = orchestrator_with_config(config);
-        // Without FFmpeg the postprocessor_registry is None
-        if orch.postprocessor_registry.is_none() {
-            let selector = orch.resolve_effective_selector();
-            assert_eq!(selector, "b/bv+ba");
-        }
-    }
-
-    #[test]
-    fn test_resolve_with_ffmpeg_no_merge_returns_b_bvstar_ba() {
-        let config = Config::default();
-        let orch = orchestrator_with_config(config);
-        // When FFmpeg is available the postprocessor_registry is Some
+        let selector = orch.resolve_effective_selector();
         if orch.postprocessor_registry.is_some() {
-            let selector = orch.resolve_effective_selector();
-            assert_eq!(selector, "b/bv*+ba");
+            assert_eq!(
+                selector, "b/bv*+ba",
+                "FFmpeg available + no merge should give b/bv*+ba"
+            );
+        } else {
+            assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
         }
     }
 
@@ -378,7 +383,7 @@ mod tests {
         assert_eq!(selector, "bestvideo*+bestaudio/best");
     }
 
-    /// Verify the Phase 1 selector truth table from the design doc:
+    /// Verify the Phase 1 selector truth table:
     ///
     /// | Condition                              | Default          |
     /// |----------------------------------------|------------------|

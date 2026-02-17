@@ -108,8 +108,8 @@ pub struct FormatOptions {
     pub prefer_free_formats: bool,
     /// Show interactive format selection menu.
     pub interactive: bool,
-    /// Allow only audio-only formats in merge selector. `None` preserves
-    /// base config.
+    /// Require strict video-only + audio-only streams for merge.
+    /// `None` preserves base config.
     pub audio_multistreams: Option<bool>,
 }
 

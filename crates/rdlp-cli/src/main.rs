@@ -50,8 +50,8 @@ struct Args {
     #[arg(short, long)]
     format: Option<String>,
 
-    /// Allow only audio-only formats in merge selector.
-    /// Changes default from bv*+ba/b to bv+ba/b.
+    /// Require strict video-only + audio-only streams for merge.
+    /// Changes default from b/bv*+ba to b/bv+ba.
     #[arg(long)]
     audio_multistreams: bool,
 

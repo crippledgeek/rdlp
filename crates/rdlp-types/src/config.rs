@@ -85,8 +85,8 @@ pub struct Config {
     /// Merge output format when combining video+audio
     pub merge_output_format: Option<ContainerFormat>,
 
-    /// Allow only audio-only formats in merge (disables video+audio combined).
-    /// When true, default selector changes from `bv*+ba/b` to `bv+ba/b`.
+    /// Require strict video-only + audio-only streams for merge selection.
+    /// When true, default selector changes from `b/bv*+ba` to `b/bv+ba`.
     pub audio_multistreams: bool,
 
     // === Download options ===
