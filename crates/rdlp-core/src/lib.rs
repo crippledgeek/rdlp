@@ -40,8 +40,9 @@ pub mod traits;
 // Re-export types from rdlp-types for convenience
 pub use rdlp_types::{
     AudioFormat, BrowserType, Chapter, Config, ContainerFormat, DownloadProtocol, Format,
-    FormatSelector, Fragment, InfoDict, Subtitle, SubtitleDiagnostic, SubtitleFormat, SubtitleKind,
-    SubtitleReason, SubtitleResult, SubtitleStatus, SubtitleTrack, Thumbnail,
+    FormatSelector, Fragment, InfoDict, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
+    SearchQuery, SearchResultPreview, SearchSiteInfo, Subtitle, SubtitleDiagnostic, SubtitleFormat,
+    SubtitleKind, SubtitleReason, SubtitleResult, SubtitleStatus, SubtitleTrack, Thumbnail,
     normalize_from_info_dict,
 };
 
@@ -58,4 +59,5 @@ pub use retry::{ExponentialBuilder, RetryConfig, Retryable, is_retryable_error};
 pub use traits::{
     CookieJar, DownloadProgress, DownloadStats, Downloader, ExtractionContext, InfoExtractor,
     JsEngine, PostProcessConfig, PostProcessResult, PostProcessor, ProgressCallback,
+    SearchExtractor,
 };

@@ -13,5 +13,5 @@ pub mod extractor;
 pub mod postprocessor;
 
 pub use downloader::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
-pub use extractor::{CookieJar, ExtractionContext, InfoExtractor, JsEngine};
+pub use extractor::{CookieJar, ExtractionContext, InfoExtractor, JsEngine, SearchExtractor};
 pub use postprocessor::{PostProcessConfig, PostProcessResult, PostProcessor};

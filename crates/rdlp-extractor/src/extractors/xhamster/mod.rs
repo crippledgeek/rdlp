@@ -20,13 +20,15 @@
 
 mod formats;
 mod patterns;
+mod search;
 mod utils;
 
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use rdlp_core::{
-    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, check_http_response,
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
+    check_http_response,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -104,7 +106,7 @@ impl XHamsterExtractor {
                     &video_id,
                     display_id.as_deref(),
                     &url,
-                    self.name(),
+                    InfoExtractor::name(self),
                     age_limit,
                 )
             } else {
@@ -114,7 +116,7 @@ impl XHamsterExtractor {
                     &video_id,
                     display_id.as_deref(),
                     &url,
-                    self.name(),
+                    InfoExtractor::name(self),
                     age_limit,
                 )
             };
@@ -129,7 +131,7 @@ impl XHamsterExtractor {
                 &video_id,
                 display_id.as_deref(),
                 &url,
-                self.name(),
+                InfoExtractor::name(self),
                 age_limit,
             );
             let formats = formats::extract_from_legacy(&webpage);
@@ -143,7 +145,8 @@ impl XHamsterExtractor {
         }
 
         // Detect file sizes and segment counts for HLS
-        let (formats_with_size, hls_flags) = detect_format_sizes(formats, ctx, self.name()).await;
+        let (formats_with_size, hls_flags) =
+            detect_format_sizes(formats, ctx, InfoExtractor::name(self)).await;
 
         info.formats = formats_with_size;
         info.propagate_duration();
@@ -333,6 +336,71 @@ impl XHamsterExtractor {
 
         Ok(results)
     }
+
+    /// Perform a paginated search, collecting results across all pages.
+    async fn search_all_pages(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+        search::validate_search_filters(&query.filters)?;
+
+        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
+        let mut all_results = Vec::new();
+        let mut page = 1_usize;
+
+        loop {
+            let page_url = if page == 1 {
+                patterns::build_search_url(query)
+            } else {
+                patterns::build_search_url_page(query, page)
+            };
+
+            debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
+
+            let webpage = match BaseExtractor::fetch_webpage(&page_url, ctx).await {
+                Ok(html) => html,
+                Err(e) => {
+                    warn!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
+                    break;
+                }
+            };
+
+            let initials = match search::extract_initials_json(&webpage) {
+                Ok(json) => json,
+                Err(e) => {
+                    warn!(page; "[XHamster] Failed to parse search page JSON, returning partial results: {e}");
+                    break;
+                }
+            };
+
+            let page_results = search::parse_search_results_json(&initials)?;
+            let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
+
+            if page_results.is_empty() {
+                debug!(page; "[XHamster] No results on page, stopping pagination");
+                break;
+            }
+
+            all_results.extend(page_results);
+
+            if all_results.len() >= max_results {
+                all_results.truncate(max_results);
+                break;
+            }
+
+            if page >= max_pages {
+                break;
+            }
+
+            page += 1;
+            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
+        }
+
+        info!(count = all_results.len(), pages = page; "[XHamster] Search complete");
+
+        Ok(all_results)
+    }
 }
 
 impl Default for XHamsterExtractor {
@@ -373,6 +441,25 @@ impl InfoExtractor for XHamsterExtractor {
 
     fn priority(&self) -> i32 {
         0
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for XHamsterExtractor {
+    fn name(&self) -> &str {
+        "XHamster"
+    }
+
+    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+        patterns::search_filter_descriptors()
+    }
+
+    async fn search(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
     }
 }
 
@@ -438,7 +525,7 @@ mod tests {
     #[test]
     fn test_extractor_creation() {
         let extractor = XHamsterExtractor::new();
-        assert_eq!(extractor.name(), "XHamster");
+        assert_eq!(InfoExtractor::name(&extractor), "XHamster");
     }
 
     #[test]
@@ -493,6 +580,18 @@ mod tests {
     fn test_extract_initials_json_not_found() {
         let webpage = "<html><body>No initials here</body></html>";
         assert!(extract_initials_json(webpage).is_none());
+    }
+
+    #[test]
+    fn test_xhamster_implements_search_extractor() {
+        let extractor = XHamsterExtractor::new();
+        let filters =
+            <XHamsterExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
+        assert!(!filters.is_empty());
+        assert_eq!(
+            <XHamsterExtractor as rdlp_core::SearchExtractor>::name(&extractor),
+            "XHamster"
+        );
     }
 
     #[test]
