@@ -20,18 +20,17 @@ pub fn extract_initials_json(html: &str) -> Result<Value> {
         RdlpError::Extraction("Could not find window.initials in search page".to_string())
     })?;
 
-    serde_json::from_str(json_str).map_err(|e| {
-        RdlpError::Extraction(format!("Failed to parse window.initials JSON: {e}"))
-    })
+    serde_json::from_str(json_str)
+        .map_err(|e| RdlpError::Extraction(format!("Failed to parse window.initials JSON: {e}")))
 }
 
 /// Parse search result previews from the `window.initials` JSON.
 pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPreview>> {
     let data = initials
-        .pointer("/searchResult/data")
+        .pointer("/searchResult/videoThumbProps")
         .and_then(|d| d.as_array())
         .ok_or_else(|| {
-            RdlpError::Extraction("Missing searchResult.data array".to_string())
+            RdlpError::Extraction("Missing searchResult.videoThumbProps array".to_string())
         })?;
 
     let mut results = Vec::with_capacity(data.len());
@@ -48,13 +47,17 @@ pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPre
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
             .to_string();
-        let thumbnail_url = item.get("thumbURL").and_then(|v| v.as_str()).map(String::from);
-        let duration = item.get("duration").and_then(|v| v.as_f64());
-        let view_count = item.get("views").and_then(|v| v.as_u64());
-        let upload_date = item
-            .get("created")
+        let thumbnail_url = item
+            .get("thumbURL")
             .and_then(|v| v.as_str())
             .map(String::from);
+        let duration = item.get("duration").and_then(|v| v.as_f64());
+        let view_count = item.get("views").and_then(|v| v.as_u64());
+        // `created` is a Unix timestamp on xHamster
+        let upload_date = item
+            .get("created")
+            .and_then(|v| v.as_u64())
+            .map(|ts| ts.to_string());
 
         results.push(SearchResultPreview {
             video_url,
@@ -71,8 +74,9 @@ pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPre
 
 /// Extract the max page count from the initials JSON.
 pub fn parse_max_pages(initials: &Value) -> Option<usize> {
+    // Primary: top-level pagination object
     initials
-        .pointer("/searchResult/maxPages")
+        .pointer("/pagination/maxPages")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
 }
@@ -107,8 +111,11 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
 
                 let valid = desc.allowed_values.iter().any(|v| v.value == filter.value);
                 if !valid {
-                    let allowed: Vec<&str> =
-                        desc.allowed_values.iter().map(|v| v.value.as_str()).collect();
+                    let allowed: Vec<&str> = desc
+                        .allowed_values
+                        .iter()
+                        .map(|v| v.value.as_str())
+                        .collect();
                     return Err(RdlpError::Extraction(format!(
                         "Invalid value '{}' for filter '{}'. Allowed: {}",
                         filter.value,
@@ -130,7 +137,7 @@ mod tests {
     fn sample_initials_json() -> &'static str {
         r#"{
             "searchResult": {
-                "data": [
+                "videoThumbProps": [
                     {
                         "id": 12345,
                         "title": "Test Video One",
@@ -138,7 +145,7 @@ mod tests {
                         "thumbURL": "https://thumb1.jpg",
                         "duration": 180,
                         "views": 5000,
-                        "created": "2025-01-15"
+                        "created": 1705276800
                     },
                     {
                         "id": 67890,
@@ -147,11 +154,14 @@ mod tests {
                         "thumbURL": "https://thumb2.jpg",
                         "duration": 360,
                         "views": 12000,
-                        "created": "2025-02-01"
+                        "created": 1706745600
                     }
-                ],
-                "maxPages": 5,
-                "currentPage": 1
+                ]
+            },
+            "pagination": {
+                "active": 1,
+                "next": 2,
+                "maxPages": 5
             }
         }"#
     }
@@ -174,7 +184,7 @@ mod tests {
     #[test]
     fn test_parse_search_results_empty() {
         let json: serde_json::Value = serde_json::from_str(
-            r#"{"searchResult": {"data": [], "maxPages": 0, "currentPage": 1}}"#,
+            r#"{"searchResult": {"videoThumbProps": []}, "pagination": {"maxPages": 0}}"#,
         )
         .unwrap();
         let results = parse_search_results_json(&json).unwrap();
@@ -190,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_extract_initials_json_from_html() {
-        let html = r#"<script>window.initials={"searchResult":{"data":[],"maxPages":0,"currentPage":1}};</script>"#;
+        let html = r#"<script>window.initials={"searchResult":{"videoThumbProps":[]},"pagination":{"maxPages":0}};</script>"#;
         let json = extract_initials_json(html).unwrap();
         assert!(json.get("searchResult").is_some());
     }
