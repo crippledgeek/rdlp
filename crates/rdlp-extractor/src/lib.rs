@@ -48,7 +48,7 @@ pub use extractors::{
 pub use base::common::BaseExtractor;
 pub use base::tnaflix_network::TnaFlixNetworkBase;
 
-use rdlp_core::InfoExtractor;
+use rdlp_core::{InfoExtractor, SearchExtractor};
 use std::sync::Arc;
 
 /// Trait for extractor registries to enable mocking in tests
@@ -63,6 +63,7 @@ pub trait ExtractorRegistryTrait: Send + Sync {
 /// Registry for managing extractors
 pub struct ExtractorRegistry {
     extractors: Vec<Arc<dyn InfoExtractor>>,
+    search_extractors: Vec<Arc<dyn SearchExtractor>>,
 }
 
 impl ExtractorRegistry {
@@ -71,6 +72,7 @@ impl ExtractorRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             extractors: Vec::with_capacity(8),
+            search_extractors: Vec::with_capacity(4),
         };
 
         // Register TNAFlix network extractors
@@ -92,6 +94,11 @@ impl ExtractorRegistry {
 
         // Register 9anime extractor
         registry.register(Arc::new(NineAnimeExtractor::new()));
+
+        // Register search extractors
+        registry
+            .search_extractors
+            .push(Arc::new(XHamsterExtractor::new()));
 
         registry
     }
@@ -140,6 +147,30 @@ impl ExtractorRegistry {
     pub fn list_extractors(&self) -> Vec<&str> {
         self.extractors.iter().map(|e| e.name()).collect()
     }
+
+    /// Find a search extractor by site name (case-insensitive).
+    ///
+    /// # Arguments
+    /// * `name` - Site name to look up (e.g., "xhamster", "XHamster")
+    ///
+    /// # Returns
+    /// An `Arc<dyn SearchExtractor>` if found, `None` otherwise
+    #[must_use]
+    pub fn find_search_extractor(&self, name: &str) -> Option<Arc<dyn SearchExtractor>> {
+        self.search_extractors
+            .iter()
+            .find(|e| e.name().eq_ignore_ascii_case(name))
+            .cloned()
+    }
+
+    /// List all registered search extractor names.
+    ///
+    /// # Returns
+    /// A vector of site names that support search
+    #[must_use]
+    pub fn list_search_extractors(&self) -> Vec<&str> {
+        self.search_extractors.iter().map(|e| e.name()).collect()
+    }
 }
 
 impl Default for ExtractorRegistry {
@@ -174,6 +205,38 @@ mod tests {
         assert!(extractors.contains(&"XTits"));
         assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
+    }
+
+    #[test]
+    fn test_find_search_extractor_xhamster() {
+        let registry = ExtractorRegistry::new();
+        let extractor = registry.find_search_extractor("xhamster");
+        assert!(extractor.is_some());
+        assert_eq!(extractor.unwrap().name(), "XHamster");
+    }
+
+    #[test]
+    fn test_find_search_extractor_case_insensitive() {
+        let registry = ExtractorRegistry::new();
+        assert!(registry.find_search_extractor("XHamster").is_some());
+        assert!(registry.find_search_extractor("XHAMSTER").is_some());
+    }
+
+    #[test]
+    fn test_find_search_extractor_unknown() {
+        let registry = ExtractorRegistry::new();
+        assert!(registry.find_search_extractor("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_list_search_extractors() {
+        let registry = ExtractorRegistry::new();
+        let sites = registry.list_search_extractors();
+        assert!(
+            sites
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("xhamster"))
+        );
     }
 
     #[test]
