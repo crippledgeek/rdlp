@@ -1,0 +1,48 @@
+[package]
+name = "rdlp-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+serde = []  # Enables dto module; serde crate is always available for session_state
+
+[dependencies]
+rdlp-core = { path = "../rdlp-core" }
+rdlp-types = { path = "../rdlp-types" }
+rdlp-extractor = { path = "../rdlp-extractor" }
+rdlp-downloader = { path = "../rdlp-downloader" }
+rdlp-postprocess = { path = "../rdlp-postprocess" }
+rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
+rdlp-http = { path = "../rdlp-http" }
+rdlp-cookies = { path = "../rdlp-cookies" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-security = { path = "../rdlp-security" }
+rdlp-ratelimit = { path = "../rdlp-ratelimit" }
+rdlp-plugin = { path = "../rdlp-plugin" }
+
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Always needed: session_state serialization + EventDto (when `serde` feature enabled)
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+proptest = "1.4"
+mockito = "1.7"
+
+[lints]
+workspace = true

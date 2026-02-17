@@ -125,7 +125,13 @@ impl FFmpegRunner {
                 .is_some()
         };
 
-        let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+        let ext = output
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_else(|| {
+                log::info!("No output extension in normalize dispatch; defaulting to mp4");
+                "mp4"
+            });
 
         if has_video {
             let audio_ext = audio_only_extension_for(ext);

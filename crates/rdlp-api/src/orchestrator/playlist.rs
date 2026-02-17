@@ -94,6 +94,7 @@ impl Orchestrator {
     /// - `Ok(Some(paths))` - All or some downloads completed (graceful degradation)
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Fatal error (no videos downloaded)
+    #[allow(dead_code)]
     pub async fn download_playlist(
         &self,
         url: &str,
@@ -281,28 +282,20 @@ impl Orchestrator {
             // Audio type selection for playlists with multiple language tracks
             selected_audio = None;
             if interactive && audio_types.len() > 1 && remaining > 0 {
-                use dialoguer::Select;
+                if let Some(ref callback) = self.interactive {
+                    let options: Vec<String> = audio_types.clone();
+                    let type_count = options.len();
 
-                let mut options: Vec<String> = audio_types.clone();
-                options.push("All (keep both)".to_string());
-                let type_count = audio_types.len();
+                    let selection = callback.select_audio_type(&options).await;
 
-                let selection = tokio::task::spawn_blocking(move || {
-                    Select::new()
-                        .with_prompt("Select audio type")
-                        .items(&options)
-                        .default(0)
-                        .interact()
-                        .unwrap_or(options.len() - 1)
-                })
-                .await
-                .unwrap_or(type_count);
-
-                if selection < type_count {
-                    let selected = &audio_types[selection];
-                    info!(audio:% = selected; "Filtering to selected audio type");
-                    selected_audio = Some(selected.clone());
-                    filter_formats_by_language(&mut infos, selected);
+                    if let Some(idx) = selection {
+                        if idx < type_count {
+                            let selected = &audio_types[idx];
+                            info!(audio:% = selected; "Filtering to selected audio type");
+                            selected_audio = Some(selected.clone());
+                            filter_formats_by_language(&mut infos, selected);
+                        }
+                    }
                 }
             }
 
@@ -332,27 +325,17 @@ impl Orchestrator {
 
             // Confirm before downloading (unless non-interactive)
             if interactive && remaining > 0 {
-                use dialoguer::Confirm;
+                if let Some(ref callback) = self.interactive {
+                    let prompt = if already_downloaded > 0 {
+                        format!("Resume downloading {remaining} remaining videos?")
+                    } else {
+                        format!("Download {total} videos to '{playlist_folder_name}'?")
+                    };
 
-                let prompt = if already_downloaded > 0 {
-                    format!("Resume downloading {remaining} remaining videos?")
-                } else {
-                    format!("Download {total} videos to '{playlist_folder_name}'?")
-                };
-
-                let proceed = tokio::task::spawn_blocking(move || {
-                    Confirm::new()
-                        .with_prompt(prompt)
-                        .default(true)
-                        .interact()
-                        .unwrap_or(false)
-                })
-                .await
-                .unwrap_or(false);
-
-                if !proceed {
-                    info!("Cancelled by user");
-                    return Ok(None);
+                    if !callback.confirm(&prompt).await {
+                        info!("Cancelled by user");
+                        return Ok(None);
+                    }
                 }
             }
 
@@ -391,14 +374,9 @@ impl Orchestrator {
 
         // Resolve with buffer_unordered: starts the next future as soon as
         // any one completes, keeping the pipeline always full at N concurrent.
-        let futs = to_resolve.iter().map(|(i, url, title)| {
-            let i = *i;
-            let url = url.clone();
-            let title = title.clone();
-            async move {
-                info!(position = i + 1, title:? = title; "Resolving episode");
-                (i, self.extract_lazy_formats(&url).await)
-            }
+        let futs = to_resolve.into_iter().map(|(i, url, title)| async move {
+            info!(position = i + 1, title:? = title; "Resolving episode");
+            (i, self.extract_lazy_formats(&url).await)
         });
 
         let results: Vec<_> = futures_util::stream::iter(futs)
@@ -466,8 +444,8 @@ impl Orchestrator {
         let mut failed = Vec::new();
         let mut interrupted = false;
 
-        // Collect episodes that still need downloading
-        let to_download: Vec<(usize, &rdlp_core::InfoDict)> = infos
+        // Collect episodes that still need downloading (owned to avoid HRTB issues)
+        let to_download: Vec<(usize, rdlp_core::InfoDict)> = infos
             .iter()
             .enumerate()
             .filter(|(_, ep)| {
@@ -487,6 +465,7 @@ impl Orchestrator {
                 }
                 true
             })
+            .map(|(i, ep)| (i, ep.clone()))
             .collect();
 
         let download_count = to_download.len();
@@ -501,9 +480,8 @@ impl Orchestrator {
         // Build concurrent download stream.
         // Each future clones the data it needs so lifetimes are straightforward.
         let batch_ts = Some(batch_resolved_at);
-        let futs = to_download.into_iter().map(|(index, info)| {
+        let futs = to_download.into_iter().map(|(index, info_owned)| {
             let position = index + 1;
-            let info_owned = info.clone();
             let dir = playlist_dir.clone();
             let sub_langs = selected_sub_langs.clone();
             let audio = selected_audio.clone();
@@ -526,10 +504,7 @@ impl Orchestrator {
 
         let mut stream = futures_util::stream::iter(futs).buffer_unordered(DOWNLOAD_CONCURRENCY);
 
-        // Consume download stream with Ctrl+C support
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
-
+        // Consume download stream with cancellation token support
         loop {
             tokio::select! {
                 next = stream.next() => {
@@ -560,7 +535,7 @@ impl Orchestrator {
                         None => break, // All downloads complete
                     }
                 }
-                _ = &mut ctrl_c => {
+                () = self.cancel_token.cancelled() => {
                     info!("Playlist download interrupted by user");
                     info!("Run the same command again to resume");
                     interrupted = true;
@@ -595,12 +570,12 @@ impl Orchestrator {
                     "Retry wave — waiting before retry"
                 );
 
-                // Sleep with Ctrl+C race so user can abort during wait
+                // Sleep with cancellation race so user can abort during wait
                 let sleep = tokio::time::sleep(Duration::from_secs(delay_secs));
                 tokio::pin!(sleep);
                 tokio::select! {
-                    _ = &mut sleep => {}
-                    _ = &mut ctrl_c => {
+                    () = &mut sleep => {}
+                    () = self.cancel_token.cancelled() => {
                         info!("Retry interrupted by user");
                         interrupted = true;
                         break;
@@ -688,7 +663,7 @@ impl Orchestrator {
                                 None => break,
                             }
                         }
-                        _ = &mut ctrl_c => {
+                        () = self.cancel_token.cancelled() => {
                             info!("Retry wave interrupted by user");
                             interrupted = true;
                             break;

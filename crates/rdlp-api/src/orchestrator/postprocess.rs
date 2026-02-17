@@ -95,9 +95,13 @@ impl Orchestrator {
         // Build config - for HLS, enable remux even if not explicitly requested
         let mut pp_config = self.to_postprocess_config();
         if is_hls && pp_config.recode_video.is_none() && !pp_config.extract_audio {
-            // Set merge_output_format to trigger FFmpeg remux for container fixup
-            // This ensures proper moov atom placement and timestamp fixing
-            pp_config.merge_output_format = Some(rdlp_core::ContainerFormat::Mp4);
+            // Use the central resolver to determine the container format,
+            // respecting user config and file extension before falling back.
+            let resolved = super::container_resolver::ResolvedContainer::resolve(
+                &self.config,
+                files.first().map(|f| f.as_path()),
+            );
+            pp_config.merge_output_format = Some(resolved.format);
         }
 
         info!("Running post-processing pipeline...");
@@ -157,13 +161,22 @@ impl Orchestrator {
         let mut output_files = Vec::new();
 
         for file in files {
-            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+            let ext = file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_else(|| {
+                    info!(file:? = file.display(); "No file extension detected, defaulting to mp4");
+                    "mp4"
+                });
 
-            // MPEG-TS → MP4: HLS downloads produce .ts files which lack proper
-            // seeking support and thumbnail embedding. Remux to .mp4 for a
-            // proper container with moov atom, faststart, etc.
+            // MPEG-TS needs remux for seeking/thumbnails.
+            // Use the resolver to determine the target container.
             let target_ext = if ext.eq_ignore_ascii_case("ts") {
-                "mp4"
+                let resolved = super::container_resolver::ResolvedContainer::resolve(
+                    &self.config,
+                    Some(file.as_path()),
+                );
+                resolved.format.as_ext()
             } else {
                 ext
             };

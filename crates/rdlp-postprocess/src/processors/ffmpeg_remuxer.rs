@@ -7,11 +7,12 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use rdlp_ffmpeg::RemuxOptions;
 
+#[cfg(test)]
 use rdlp_core::ContainerFormat;
 
 ffmpeg_processor!(
@@ -60,7 +61,14 @@ impl PostProcessor for FFmpegRemuxer {
         }
 
         let input_file = &files[0];
-        let target_container = config.remux_container.unwrap_or(ContainerFormat::Mp4);
+        let target_container = match config.remux_container {
+            Some(c) => c,
+            None => {
+                // should_run() gates on Some — this is unreachable
+                warn!("FFmpegRemuxer invoked without remux_container; skipping");
+                return Ok(PostProcessResult::new(info.clone(), files));
+            }
+        };
 
         let input_ext = input_file
             .extension()

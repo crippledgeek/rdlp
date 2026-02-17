@@ -5,8 +5,9 @@
 //! `rdlp-types` to determine which subtitles to download based on
 //! language preferences and format settings.
 //!
-//! The interactive multi-select menu (via `dialoguer::MultiSelect`)
-//! displays available languages with format info and `[auto]` tags.
+//! The interactive multi-select is delegated to the frontend-provided
+//! [`InteractiveCallback`] and displays available languages with
+//! format info and `[auto]` tags.
 
 use super::{Orchestrator, Result};
 use log::{debug, info, warn};
@@ -16,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// A single item in the interactive subtitle selection menu.
 ///
 /// Built from `InfoDict.subtitles` and `InfoDict.automatic_captions`
-/// for display in the `dialoguer::MultiSelect` widget.
+/// for display in the interactive subtitle selection UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SubtitleMenuItem {
     /// Language code (e.g. "en", "es")
@@ -151,12 +152,12 @@ pub(super) fn preselect_indices(items: &[SubtitleMenuItem], config_langs: &[Stri
 impl Orchestrator {
     /// Show interactive multi-select menu for subtitle languages.
     ///
-    /// Displays all available subtitles (manual + auto) with format info.
+    /// Delegates to [`InteractiveCallback::select_subtitles`] if available.
     /// Pre-checks languages matching `--sub-langs` if set.
     ///
     /// # Returns
     /// - `Ok(Some(vec))` - Selected `(lang, Subtitle)` pairs
-    /// - `Ok(None)` - User cancelled (ESC)
+    /// - `Ok(None)` - User cancelled
     pub(super) async fn select_subtitles_interactive(
         &self,
         info: &InfoDict,
@@ -172,24 +173,17 @@ impl Orchestrator {
 
         info!("Available subtitles:");
 
-        // Run blocking dialoguer on spawn_blocking (same pattern as format selection)
-        let selection = tokio::task::spawn_blocking(move || {
-            use dialoguer::{MultiSelect, theme::ColorfulTheme};
+        // Delegate to the interactive callback
+        let Some(callback) = self.interactive.as_ref() else {
+            // No interactive callback — return empty selection
+            debug!("No interactive callback, skipping subtitle selection");
+            return Ok(Some(Vec::new()));
+        };
 
-            MultiSelect::with_theme(&ColorfulTheme::default())
-                .with_prompt(
-                    "Select subtitle languages (Space to toggle, Enter to confirm, ESC to cancel)",
-                )
-                .items(&display_items)
-                .defaults(&defaults)
-                .interact_opt()
-        })
-        .await
-        .map_err(|e| super::OrchestratorError::Io(std::io::Error::other(e)))?
-        .map_err(|e| super::OrchestratorError::Io(e.into()))?;
+        let selection = callback.select_subtitles(&display_items, &defaults).await;
 
         let Some(selected_indices) = selection else {
-            return Ok(None); // ESC pressed
+            return Ok(None); // User cancelled
         };
 
         if selected_indices.is_empty() {
@@ -380,17 +374,13 @@ impl Orchestrator {
         selected: &[(String, rdlp_core::Subtitle)],
         output_path: &Path,
     ) -> Result<Vec<(String, PathBuf)>> {
-        let stem = output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
-        let parent = output_path.parent().unwrap_or(Path::new("."));
-
         let mut downloaded = Vec::new();
 
         for (lang, sub) in selected {
-            let sub_filename = format!("{stem}.{lang}.{}", sub.ext);
-            let sub_path = parent.join(&sub_filename);
+            let sub_path = super::container_resolver::sidecar_path(
+                output_path,
+                &format!("{lang}.{}", sub.ext),
+            );
 
             if sub_path.exists() {
                 debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");
@@ -438,12 +428,13 @@ impl Orchestrator {
             return Ok(Some(Vec::new()));
         }
 
-        // Generate output path from video title (no format needed)
+        // Generate output path from video title using resolved container
         let sanitized = self.sanitize_filename(&info.title);
-        let output_stub = self
-            .config
-            .output_directory
-            .join(format!("{sanitized}.mp4"));
+        let output_stub = super::container_resolver::output_stub(
+            &self.config,
+            &self.config.output_directory,
+            &sanitized,
+        );
 
         let downloaded = self
             .download_subtitles_from_selection(&selected, &output_stub)
@@ -500,16 +491,13 @@ impl Orchestrator {
         }
 
         // Download selected tracks
-        let stem = output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
-        let parent = output_path.parent().unwrap_or(Path::new("."));
         let mut downloaded = Vec::new();
 
         for track in &outcome.selected {
-            let sub_filename = format!("{stem}.{}.{}", track.language, track.ext);
-            let sub_path = parent.join(&sub_filename);
+            let sub_path = super::container_resolver::sidecar_path(
+                output_path,
+                &format!("{}.{}", track.language, track.ext),
+            );
 
             if sub_path.exists() {
                 debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");

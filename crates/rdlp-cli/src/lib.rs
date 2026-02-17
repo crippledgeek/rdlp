@@ -1,10 +1,13 @@
 //! rdlp-cli library
 //!
-//! This library provides the high-level orchestration layer for rdlp,
-//! coordinating extraction, download, and post-processing workflows.
+//! CLI-specific modules for the rdlp download tool.
+//! The core orchestration logic lives in `rdlp-api`; this crate
+//! provides the terminal UI layer (dialoguer callbacks, indicatif
+//! progress bars).
 
 #![warn(missing_docs)]
 
-pub mod orchestrator;
-
-pub use orchestrator::{Orchestrator, OrchestratorError};
+/// CLI event handler mapping API events to indicatif progress bars.
+pub mod event_handler;
+/// CLI interactive callback using dialoguer.
+pub mod interactive;
