@@ -3,6 +3,7 @@ use regex::Regex;
 use std::sync::Arc;
 
 use crate::{BrowserType, Config, InfoDict, Result};
+use rdlp_types::{SearchFilterDescriptor, SearchQuery, SearchResultPreview};
 
 /// Core trait for all site extractors
 ///
@@ -111,6 +112,39 @@ pub trait InfoExtractor: Send + Sync {
     fn priority(&self) -> i32 {
         0
     }
+}
+
+/// Trait for extractors that support keyword search on a site.
+///
+/// Implementing this trait is optional. Sites that support search expose
+/// filter descriptors (for UI construction) and a search method returning
+/// lightweight preview results.
+#[async_trait]
+pub trait SearchExtractor: Send + Sync {
+    /// Human-readable site name (should match the corresponding `InfoExtractor::name()`).
+    fn name(&self) -> &str;
+
+    /// Describe the available search filters for this site.
+    ///
+    /// # Returns
+    /// A list of filter descriptors that frontends use to build filter UI.
+    fn supported_filters(&self) -> Vec<SearchFilterDescriptor>;
+
+    /// Execute a search and return lightweight result previews.
+    ///
+    /// # Arguments
+    /// * `query` — The search query with filters and optional max results.
+    /// * `ctx` — Shared extraction context (HTTP client, cookies, config).
+    ///
+    /// # Returns
+    /// A vector of `SearchResultPreview`. May be empty if no results found.
+    /// Does NOT return full `InfoDict`; callers that need full metadata
+    /// should call `InfoExtractor::extract()` on each result's `video_url`.
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>>;
 }
 
 /// Context passed to extractors containing shared resources
