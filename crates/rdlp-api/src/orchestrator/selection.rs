@@ -377,4 +377,67 @@ mod tests {
         let selector = orch.resolve_effective_selector();
         assert_eq!(selector, "bestvideo*+bestaudio/best");
     }
+
+    /// Verify the Phase 1 selector truth table from the design doc:
+    ///
+    /// | Condition                              | Default          |
+    /// |----------------------------------------|------------------|
+    /// | FFmpeg available, merge not supported   | `b/bv*+ba`       |
+    /// | FFmpeg unavailable                      | `b/bv+ba`        |
+    /// | audio_multistreams enabled              | `b/bv+ba`        |
+    /// | User explicit `-f`                      | User's value     |
+    #[test]
+    fn test_phase1_selector_truth_table() {
+        // Case 1: FFmpeg available, merge not supported
+        // (depends on environment -- tested via unit logic)
+        let config = Config::default();
+        let orch = orchestrator_with_config(config);
+        let selector = orch.resolve_effective_selector();
+        if orch.postprocessor_registry.is_some() {
+            assert_eq!(
+                selector, "b/bv*+ba",
+                "FFmpeg available + no merge should give b/bv*+ba"
+            );
+        } else {
+            assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
+        }
+
+        // Case 2: audio_multistreams always gives b/bv+ba regardless
+        // of ffmpeg
+        let config = Config {
+            audio_multistreams: true,
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        assert_eq!(
+            orch.resolve_effective_selector(),
+            "b/bv+ba",
+            "audio_multistreams should give b/bv+ba"
+        );
+
+        // Case 3: Explicit format always wins
+        let config = Config {
+            format: Some("worst".to_string()),
+            audio_multistreams: true,
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        assert_eq!(
+            orch.resolve_effective_selector(),
+            "worst",
+            "Explicit format should always win"
+        );
+
+        // Case 4: Another explicit format
+        let config = Config {
+            format: Some("bv[height<=720]+ba".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        assert_eq!(
+            orch.resolve_effective_selector(),
+            "bv[height<=720]+ba",
+            "Explicit complex format should be preserved exactly"
+        );
+    }
 }
