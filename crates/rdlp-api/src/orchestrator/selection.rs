@@ -25,7 +25,6 @@ impl Orchestrator {
     /// | FFmpeg unavailable | `b/bv+ba` |
     /// | audio_multistreams enabled | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
-    #[allow(dead_code)] // Wired in Task 4
     pub(super) fn resolve_effective_selector(&self) -> String {
         // 1. Explicit user format always wins
         if let Some(ref user_format) = self.config.format {
@@ -94,12 +93,8 @@ impl Orchestrator {
             };
             format
         } else {
-            let selector_str = self
-                .config
-                .format
-                .as_deref()
-                .unwrap_or("bestvideo*+bestaudio/best");
-            let format_selector = FormatSelector::parse(selector_str)
+            let selector_str = self.resolve_effective_selector();
+            let format_selector = FormatSelector::parse(&selector_str)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;
 
             let selected_formats = format_selector.select(formats);
@@ -107,17 +102,47 @@ impl Orchestrator {
                 return Err(OrchestratorError::NoFormat);
             }
 
-            // If merge (2 formats), pick the first one for now.
-            // Full merge download (download both + FFmpeg merge) is a future enhancement.
+            // Merge-fallback safety: if selector returned 2 formats
+            // (video+audio merge) but merge download is not yet
+            // supported, fall back to best combined format.
             if selected_formats.len() > 1 {
-                info!(
-                    video = selected_formats[0].format_id.as_str(),
-                    audio = selected_formats[1].format_id.as_str();
-                    "Merge requested — downloading primary format (merge not yet supported)"
-                );
+                let merge_supported = false; // Phase 2 will change this
+                if merge_supported {
+                    // Phase 2: return the video format
+                    // (merge handled downstream)
+                    selected_formats[0].clone()
+                } else {
+                    warn!(
+                        video = selected_formats[0].format_id.as_str(),
+                        audio = selected_formats[1].format_id.as_str();
+                        "Merge requested but not supported \
+                         — falling back to best combined format"
+                    );
+                    // Fall back: re-select with "best" (combined only)
+                    let fallback = FormatSelector::parse("b").expect("'b' is a valid selector");
+                    let combined = fallback.select(formats);
+                    if let Some(best_combined) = combined.first() {
+                        info!(
+                            format_id =
+                                best_combined.format_id.as_str();
+                            "Using best combined format \
+                             (has both video and audio)"
+                        );
+                        (*best_combined).clone()
+                    } else {
+                        // No combined format either — use the first
+                        // selected format (video-only is better
+                        // than nothing)
+                        warn!(
+                            "No combined format available \
+                             — using video-only format"
+                        );
+                        selected_formats[0].clone()
+                    }
+                }
+            } else {
+                selected_formats[0].clone()
             }
-
-            selected_formats[0].clone()
         };
 
         info!(format:?; "Selected format");
@@ -196,7 +221,7 @@ mod tests {
     use crate::events::Event;
     use crate::handle::DownloadId;
     use crate::orchestrator::Orchestrator;
-    use rdlp_core::Config;
+    use rdlp_core::{Config, DownloadProtocol, Format, InfoDict};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
@@ -210,6 +235,90 @@ mod tests {
             CancellationToken::new(),
             None,
         )
+    }
+
+    fn make_combined(id: &str, height: u32, quality: i32) -> Format {
+        let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.height = Some(height);
+        f.quality = Some(quality);
+        f.tbr = Some(height as f64 * 2.0);
+        f
+    }
+
+    fn make_video_only(id: &str, height: u32) -> Format {
+        let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("none".to_string());
+        f.height = Some(height);
+        f.vbr = Some(height as f64 * 1.5);
+        f
+    }
+
+    fn make_audio_only(id: &str, abr: f64) -> Format {
+        let mut f = Format::new(id, format!("url_{id}"), "m4a", DownloadProtocol::Https);
+        f.vcodec = Some("none".to_string());
+        f.acodec = Some("aac".to_string());
+        f.abr = Some(abr);
+        f
+    }
+
+    fn test_info_with_formats(formats: Vec<Format>) -> InfoDict {
+        let mut info = InfoDict::new(
+            "test_id",
+            "Test Video",
+            "TestExtractor",
+            "https://example.com/video",
+        );
+        info.formats = formats;
+        info
+    }
+
+    #[tokio::test]
+    async fn test_merge_selector_falls_back_to_combined() {
+        // When selector returns 2 formats (merge) but merge is not
+        // supported, should fall back to best combined format instead
+        // of silently dropping audio.
+        let config = Config {
+            format: Some("bv+ba/b".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_combined("c1080", 1080, 3),
+            make_video_only("v1440", 1440),
+            make_audio_only("a256", 256.0),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let result = orch.select_format(&info, false).await.unwrap().unwrap();
+        // Should NOT be v1440 (video-only, no audio!)
+        // Should fall back to c1080 (best combined)
+        assert_eq!(result.format_id, "c1080");
+        assert!(
+            result.acodec.as_deref() != Some("none"),
+            "Fallback format must have audio"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_default_selector_used_when_format_is_none() {
+        let config = Config::default(); // format: None
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_combined("c1080", 1080, 3),
+        ];
+        let info = test_info_with_formats(formats);
+
+        // Should succeed using the dynamic default selector
+        let result = orch.select_format(&info, false).await.unwrap().unwrap();
+        // Best combined should be selected (c1080)
+        assert_eq!(result.format_id, "c1080");
     }
 
     #[test]
