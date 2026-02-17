@@ -20,6 +20,7 @@
 
 mod formats;
 mod patterns;
+mod search;
 mod utils;
 
 use async_trait::async_trait;
