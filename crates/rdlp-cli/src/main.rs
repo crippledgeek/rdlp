@@ -546,7 +546,7 @@ fn merge_config(
         config.output_directory = dir.clone();
     }
     if let Some(ref format) = args.format {
-        config.format = format.clone();
+        config.format = Some(format.clone());
     }
     if args.quiet {
         config.quiet = true;

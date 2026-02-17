@@ -28,7 +28,12 @@ impl Orchestrator {
             };
             format
         } else {
-            let format_selector = FormatSelector::parse(&self.config.format)
+            let selector_str = self
+                .config
+                .format
+                .as_deref()
+                .unwrap_or("bestvideo*+bestaudio/best");
+            let format_selector = FormatSelector::parse(selector_str)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;
 
             let selected_formats = format_selector.select(formats);
