@@ -70,6 +70,7 @@ rdlp/
 ├── tests/                   # Integration tests
 ├── Cargo.toml               # Workspace manifest
 ├── README.md                # Project overview
+├── BUILDING.md              # Building from source
 ├── CLAUDE.md                # AI assistant guidance
 ├── CODING_RULES.md          # This file
 └── CONTRIBUTING.md          # Contribution guidelines
@@ -324,7 +325,7 @@ pub async fn extract_info(&self, url: &str, ctx: &ExtractContext) -> Result<Info
 ```
 
 ### Project Documentation
-- **Root**: Only `README.md`, `CLAUDE.md`, `CODING_RULES.md`, `CONTRIBUTING.md`
+- **Root**: Only `README.md`, `BUILDING.md`, `CLAUDE.md`, `CODING_RULES.md`, `CONTRIBUTING.md`
 - **All other docs**: In `docs/` subdirectory
 - **Governance**: See `docs/documentation-standards.md` (not committed to git)
 - **No auto-generated docs**: Keep docs intentional and maintained
