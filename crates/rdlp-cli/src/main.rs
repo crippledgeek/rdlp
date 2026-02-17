@@ -50,6 +50,11 @@ struct Args {
     #[arg(short, long)]
     format: Option<String>,
 
+    /// Allow only audio-only formats in merge selector.
+    /// Changes default from bv*+ba/b to bv+ba/b.
+    #[arg(long)]
+    audio_multistreams: bool,
+
     /// Quiet mode (minimal output)
     #[arg(short, long)]
     quiet: bool,
@@ -548,6 +553,9 @@ fn merge_config(
     if let Some(ref format) = args.format {
         config.format = Some(format.clone());
     }
+    if args.audio_multistreams {
+        config.audio_multistreams = true;
+    }
     if args.quiet {
         config.quiet = true;
     }
@@ -1041,6 +1049,7 @@ mod tests {
             output: None,
             output_dir: None,
             format: None,
+            audio_multistreams: false,
             quiet: false,
             verbose: false,
             list_extractors: false,
@@ -1393,5 +1402,28 @@ mod tests {
         let (key, value) = raw.split_once('=').unwrap();
         assert_eq!(key, "quality");
         assert_eq!(value, "1080p");
+    }
+
+    // === Audio multistreams tests ===
+
+    #[test]
+    fn test_merge_config_audio_multistreams() {
+        let mut args = default_args();
+        args.audio_multistreams = true;
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.audio_multistreams);
+    }
+
+    #[test]
+    fn test_merge_config_audio_multistreams_default_off() {
+        let args = default_args();
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(!config.audio_multistreams);
     }
 }
