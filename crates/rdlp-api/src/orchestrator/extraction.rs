@@ -2,6 +2,7 @@
 
 use super::{Orchestrator, errors::*};
 use log::info;
+use rdlp_core::{SearchFilterDescriptor, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
 impl Orchestrator {
@@ -158,5 +159,64 @@ impl Orchestrator {
         }
 
         Ok(infos)
+    }
+
+    /// Execute a search query using the named search extractor.
+    ///
+    /// # Arguments
+    /// * `extractor_name` - Site name (e.g., "xhamster")
+    /// * `query` - Search query with filters and optional max results
+    ///
+    /// # Errors
+    /// Returns an error if the site name is unknown or the search fails.
+    pub async fn search(
+        &self,
+        extractor_name: &str,
+        query: &SearchQuery,
+    ) -> Result<Vec<SearchResultPreview>> {
+        let extractor = self
+            .extractor_registry
+            .find_search_extractor(extractor_name)
+            .ok_or_else(|| {
+                let available = self.extractor_registry.list_search_extractors();
+                OrchestratorError::Configuration(format!(
+                    "Unknown search site: '{}'. Available: {}",
+                    extractor_name,
+                    available.join(", ")
+                ))
+            })?;
+
+        info!(site = extractor_name, query = query.query.as_str(); "Starting search");
+
+        let results = extractor
+            .search(query, &self.extraction_context)
+            .await
+            .map_err(OrchestratorError::ExtractionFailed)?;
+
+        info!(site = extractor_name, count = results.len(); "Search complete");
+
+        Ok(results)
+    }
+
+    /// List names of all search-capable extractors.
+    pub fn list_search_extractors(&self) -> Vec<&str> {
+        self.extractor_registry.list_search_extractors()
+    }
+
+    /// Get filter descriptors for a search extractor.
+    ///
+    /// # Errors
+    /// Returns an error if the site name is unknown.
+    pub fn search_filters(&self, extractor_name: &str) -> Result<Vec<SearchFilterDescriptor>> {
+        let extractor = self
+            .extractor_registry
+            .find_search_extractor(extractor_name)
+            .ok_or_else(|| {
+                OrchestratorError::Configuration(format!(
+                    "Unknown search site: '{}'",
+                    extractor_name
+                ))
+            })?;
+        Ok(extractor.supported_filters())
     }
 }

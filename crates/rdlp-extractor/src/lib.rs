@@ -58,6 +58,16 @@ pub trait ExtractorRegistryTrait: Send + Sync {
 
     /// Get all registered extractor names
     fn list_extractors(&self) -> Vec<&str>;
+
+    /// Find a search extractor by site name (case-insensitive).
+    fn find_search_extractor(&self, _name: &str) -> Option<Arc<dyn SearchExtractor>> {
+        None
+    }
+
+    /// List all registered search extractor names.
+    fn list_search_extractors(&self) -> Vec<&str> {
+        Vec::new()
+    }
 }
 
 /// Registry for managing extractors
@@ -186,6 +196,14 @@ impl ExtractorRegistryTrait for ExtractorRegistry {
 
     fn list_extractors(&self) -> Vec<&str> {
         self.list_extractors()
+    }
+
+    fn find_search_extractor(&self, name: &str) -> Option<Arc<dyn SearchExtractor>> {
+        self.find_search_extractor(name)
+    }
+
+    fn list_search_extractors(&self) -> Vec<&str> {
+        self.list_search_extractors()
     }
 }
 
