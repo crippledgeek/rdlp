@@ -83,6 +83,10 @@ pub struct Config {
     /// Merge output format when combining video+audio
     pub merge_output_format: Option<ContainerFormat>,
 
+    /// Allow only audio-only formats in merge (disables video+audio combined).
+    /// When true, default selector changes from `bv*+ba/b` to `bv+ba/b`.
+    pub audio_multistreams: bool,
+
     // === Download options ===
     /// Number of concurrent fragments to download
     pub concurrent_fragments: usize,
@@ -299,6 +303,7 @@ impl Default for Config {
             // Format selection
             format: "bestvideo*+bestaudio/best".to_string(),
             merge_output_format: None,
+            audio_multistreams: false,
 
             // Download options
             concurrent_fragments: 4,
@@ -427,6 +432,12 @@ mod tests {
         assert_eq!(config.format, "bestvideo*+bestaudio/best");
         assert!(config.continue_downloads);
         assert_eq!(config.concurrent_fragments, 4);
+    }
+
+    #[test]
+    fn test_default_audio_multistreams_is_false() {
+        let config = Config::default();
+        assert!(!config.audio_multistreams);
     }
 
     #[test]
