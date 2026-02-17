@@ -28,6 +28,8 @@ pub mod result;
 #[cfg(feature = "serde")]
 pub mod dto;
 
+/// Conditional merge of request overrides into Config.
+pub(crate) mod merge;
 /// Internal orchestrator (moved from rdlp-cli).
 pub(crate) mod orchestrator;
 
