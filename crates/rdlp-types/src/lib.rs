@@ -30,6 +30,7 @@ pub mod container;
 pub mod format;
 pub mod info_dict;
 pub mod protocol;
+pub mod search;
 pub mod subtitle_format;
 pub mod subtitle_kind;
 pub mod subtitle_selection;
@@ -43,6 +44,10 @@ pub use container::ContainerFormat;
 pub use format::{Format, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use protocol::DownloadProtocol;
+pub use search::{
+    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchQuery, SearchResultPreview,
+    SearchSiteInfo,
+};
 pub use subtitle_format::SubtitleFormat;
 pub use subtitle_kind::SubtitleKind;
 pub use subtitle_selection::{select_subtitles, subtitle_filename};
