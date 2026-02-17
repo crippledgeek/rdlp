@@ -3,10 +3,76 @@
 use std::collections::BTreeMap;
 
 use super::{Orchestrator, errors::*};
-use log::{info, warn};
+use log::{debug, info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
 
 impl Orchestrator {
+    /// Resolve the effective format selector string based on runtime
+    /// capabilities.
+    ///
+    /// Priority:
+    /// 1. Explicit user format (`config.format = Some(...)`) always wins
+    /// 2. Otherwise, compute default from:
+    ///    - `ffmpeg_available` -- from `postprocessor_registry.is_some()`
+    ///    - `merge_supported` -- false in Phase 1 (no merge download yet)
+    ///    - `audio_multistreams` -- from `config.audio_multistreams`
+    ///
+    /// # Phase 1 defaults
+    ///
+    /// | Condition | Default |
+    /// |-----------|---------|
+    /// | FFmpeg available, merge not supported | `b/bv*+ba` |
+    /// | FFmpeg unavailable | `b/bv+ba` |
+    /// | audio_multistreams enabled | `b/bv+ba` |
+    /// | User explicit `-f` | User's value |
+    #[allow(dead_code)] // Wired in Task 4
+    pub(super) fn resolve_effective_selector(&self) -> String {
+        // 1. Explicit user format always wins
+        if let Some(ref user_format) = self.config.format {
+            debug!(
+                selector = user_format.as_str(),
+                reason = "explicit user format";
+                "Resolved format selector"
+            );
+            return user_format.clone();
+        }
+
+        // 2. Compute dynamic default
+        let ffmpeg_available = self.postprocessor_registry.is_some();
+        let merge_supported = false; // Phase 2 will set this to true
+        let audio_multistreams = self.config.audio_multistreams;
+
+        let selector = if merge_supported && ffmpeg_available && !audio_multistreams {
+            // Phase 2+: full merge with star
+            // (video+audio combined included)
+            "bv*+ba/b"
+        } else if merge_supported && ffmpeg_available && audio_multistreams {
+            // Phase 2+: merge without star
+            // (strict video-only + audio-only)
+            "bv+ba/b"
+        } else if ffmpeg_available && !audio_multistreams {
+            // Phase 1: FFmpeg available but no merge -- prefer combined,
+            // fallback to video-star + audio (star allows combined
+            // formats as video candidate)
+            "b/bv*+ba"
+        } else {
+            // No FFmpeg OR multistreams -- only combined or strict
+            // video+audio
+            "b/bv+ba"
+        };
+
+        debug!(
+            selector,
+            ffmpeg_available,
+            merge_supported,
+            audio_multistreams,
+            reason = "dynamic default";
+            "Resolved format selector"
+        );
+
+        selector.to_string()
+    }
+
     /// Select format from available formats
     ///
     /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (interactive mode only)
@@ -123,4 +189,83 @@ fn pick_better(candidate: &Format, current: &Format) -> bool {
         (candidate.filesize, current.filesize),
         (Some(a), Some(b)) if a > b
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use crate::orchestrator::Orchestrator;
+    use rdlp_core::Config;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    /// Create orchestrator with specific config for testing.
+    fn orchestrator_with_config(config: Config) -> Orchestrator {
+        let (tx, _rx) = mpsc::channel::<Event>(64);
+        Orchestrator::new(
+            config,
+            tx,
+            DownloadId::next(),
+            CancellationToken::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn test_resolve_no_ffmpeg_returns_b_bv_plus_ba() {
+        let config = Config::default();
+        let orch = orchestrator_with_config(config);
+        // Without FFmpeg the postprocessor_registry is None
+        if orch.postprocessor_registry.is_none() {
+            let selector = orch.resolve_effective_selector();
+            assert_eq!(selector, "b/bv+ba");
+        }
+    }
+
+    #[test]
+    fn test_resolve_with_ffmpeg_no_merge_returns_b_bvstar_ba() {
+        let config = Config::default();
+        let orch = orchestrator_with_config(config);
+        // When FFmpeg is available the postprocessor_registry is Some
+        if orch.postprocessor_registry.is_some() {
+            let selector = orch.resolve_effective_selector();
+            assert_eq!(selector, "b/bv*+ba");
+        }
+    }
+
+    #[test]
+    fn test_resolve_explicit_format_always_wins() {
+        let config = Config {
+            format: Some("worst".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        let selector = orch.resolve_effective_selector();
+        assert_eq!(selector, "worst");
+    }
+
+    #[test]
+    fn test_resolve_audio_multistreams_with_ffmpeg() {
+        let config = Config {
+            audio_multistreams: true,
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        let selector = orch.resolve_effective_selector();
+        // With multistreams, always "b/bv+ba" regardless of FFmpeg
+        assert_eq!(selector, "b/bv+ba");
+    }
+
+    #[test]
+    fn test_resolve_explicit_format_ignores_multistreams() {
+        let config = Config {
+            format: Some("bestvideo*+bestaudio/best".to_string()),
+            audio_multistreams: true,
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+        let selector = orch.resolve_effective_selector();
+        assert_eq!(selector, "bestvideo*+bestaudio/best");
+    }
 }
