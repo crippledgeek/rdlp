@@ -27,6 +27,7 @@
 use crate::errors::RdlpApiError;
 use crate::events::Event;
 use crate::handle::{DownloadHandle, DownloadId};
+use crate::merge::MergeOverrides;
 use crate::orchestrator::{InteractiveCallback, Orchestrator};
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
@@ -239,57 +240,11 @@ impl RdlpClient {
     /// Merge request options into a Config, applying overrides from the request.
     fn build_config(&self, request: &DownloadRequest) -> Config {
         let mut config = (*self.config).clone();
-
-        // Output options
-        if let Some(ref dir) = request.output.output_dir {
-            config.output_directory = dir.clone();
-        }
-        if let Some(ref template) = request.output.template {
-            config.output_template = template.clone();
-        }
-
-        // Format options
-        if let Some(ref selector) = request.format.selector {
-            config.format = selector.clone();
-        }
-
-        // Subtitle options
-        config.write_subtitles = request.subtitles.write_subs;
-        config.write_auto_subtitles = request.subtitles.write_auto_subs;
-        if !request.subtitles.sub_langs.is_empty() {
-            config.subtitle_langs = request.subtitles.sub_langs.clone();
-        }
-        config.subtitle_format = request.subtitles.sub_format;
-        config.embed_subtitles = request.subtitles.embed_subs;
-        config.strict_subs = request.subtitles.strict_subs;
-
-        // Post-processing options
-        config.remux_container = request.postprocess.remux;
-        if let Some(audio_fmt) = request.postprocess.extract_audio {
-            config.extract_audio = true;
-            config.audio_format = Some(audio_fmt);
-        }
-        config.embed_metadata = request.postprocess.embed_metadata;
-        config.embed_thumbnail = request.postprocess.embed_thumbnail;
-        config.write_thumbnail = request.postprocess.write_thumbnail;
-        config.normalize_audio = request.postprocess.normalize_audio;
-        config.loudnorm = request.postprocess.loudnorm;
-        if let Some(ref preset) = request.postprocess.loudnorm_preset {
-            config.loudnorm_preset = Some(preset.clone());
-        }
-
-        // Network options
-        config.retries = request.network.retries as usize;
-        if let Some(timeout) = Some(request.network.timeout_secs) {
-            config.socket_timeout = Some(timeout);
-        }
-        config.concurrent_fragments = request.network.concurrent_fragments as usize;
-        config.rate_limit = request.network.rate_limit;
-        config.cookies_from_browser = request.network.cookies_from_browser;
-        if let Some(ref path) = request.network.cookies_file {
-            config.cookies_file = Some(path.clone());
-        }
-
+        request.output.merge_into(&mut config);
+        request.format.merge_into(&mut config);
+        request.subtitles.merge_into(&mut config);
+        request.postprocess.merge_into(&mut config);
+        request.network.merge_into(&mut config);
         config
     }
 }
@@ -412,8 +367,8 @@ mod tests {
                 ..Default::default()
             },
             network: crate::request::NetworkOptions {
-                retries: 7,
-                concurrent_fragments: 8,
+                retries: Some(7),
+                concurrent_fragments: Some(8),
                 ..Default::default()
             },
             ..Default::default()
@@ -442,6 +397,35 @@ mod tests {
 
         assert!(config.verbose);
         assert!(config.overwrite);
+    }
+
+    #[test]
+    fn test_build_config_preserves_remux_from_base_config() {
+        use rdlp_core::ContainerFormat;
+
+        let mut base_config = Config::default();
+        base_config.remux_container = Some(ContainerFormat::Mkv);
+        base_config.embed_metadata = true;
+        base_config.normalize_audio = true;
+
+        let client = RdlpClient::builder().config(base_config).build().unwrap();
+        // Default request has all None — should NOT overwrite config values
+        let request = DownloadRequest::new("http://example.com");
+        let config = client.build_config(&request);
+
+        assert_eq!(
+            config.remux_container,
+            Some(ContainerFormat::Mkv),
+            "remux_container must be preserved from base config"
+        );
+        assert!(
+            config.embed_metadata,
+            "embed_metadata must be preserved from base config"
+        );
+        assert!(
+            config.normalize_audio,
+            "normalize_audio must be preserved from base config"
+        );
     }
 
     #[test]

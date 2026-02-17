@@ -4,9 +4,6 @@
 //! explicitly-set fields, leaving unset (`None`) values untouched in
 //! the base config.
 
-// TODO: remove once build_config() calls merge_into()
-#![allow(dead_code)]
-
 use crate::request::{
     FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions, SubtitleOptions,
 };
