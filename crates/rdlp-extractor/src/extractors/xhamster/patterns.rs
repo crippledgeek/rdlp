@@ -170,6 +170,7 @@ pub static XHAMSTER_SEARCH_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Check if a URL is an xHamster search URL.
+#[allow(dead_code)]
 pub fn is_search_url(url: &str) -> bool {
     XHAMSTER_SEARCH_PATTERN.is_match(url)
 }
@@ -552,9 +553,7 @@ mod tests {
     #[test]
     fn test_non_search_url_rejected() {
         assert!(!is_search_url("https://xhamster.com/videos/test-123"));
-        assert!(!is_search_url(
-            "https://xhamster.com/users/someone/videos"
-        ));
+        assert!(!is_search_url("https://xhamster.com/users/someone/videos"));
         assert!(!is_search_url("https://xhamster.com/"));
     }
 

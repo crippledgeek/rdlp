@@ -212,10 +212,7 @@ impl Orchestrator {
             .extractor_registry
             .find_search_extractor(extractor_name)
             .ok_or_else(|| {
-                OrchestratorError::Configuration(format!(
-                    "Unknown search site: '{}'",
-                    extractor_name
-                ))
+                OrchestratorError::Configuration(format!("Unknown search site: '{extractor_name}'"))
             })?;
         Ok(extractor.supported_filters())
     }
