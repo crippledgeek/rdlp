@@ -119,7 +119,7 @@ pub struct FormatOptions {
 /// use rdlp_core::SubtitleFormat;
 ///
 /// let opts = SubtitleOptions {
-///     write_subs: true,
+///     write_subs: Some(true),
 ///     sub_langs: vec!["en".into(), "ja".into()],
 ///     sub_format: Some(SubtitleFormat::Srt),
 ///     ..SubtitleOptions::default()
@@ -127,18 +127,18 @@ pub struct FormatOptions {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SubtitleOptions {
-    /// Download subtitles.
-    pub write_subs: bool,
-    /// Download auto-generated subtitles.
-    pub write_auto_subs: bool,
+    /// Download subtitles. `None` preserves base config.
+    pub write_subs: Option<bool>,
+    /// Download auto-generated subtitles. `None` preserves base config.
+    pub write_auto_subs: Option<bool>,
     /// Subtitle language codes to download (e.g. `["en", "ja"]`).
     pub sub_langs: Vec<String>,
     /// Preferred subtitle format.
     pub sub_format: Option<SubtitleFormat>,
-    /// Embed subtitles into the output container.
-    pub embed_subs: bool,
-    /// Fail if requested subtitles are not available.
-    pub strict_subs: bool,
+    /// Embed subtitles into the output container. `None` preserves base config.
+    pub embed_subs: Option<bool>,
+    /// Fail if requested subtitles are not available. `None` preserves base config.
+    pub strict_subs: Option<bool>,
 }
 
 /// Post-processing options (remux, audio extraction, metadata, thumbnails).
@@ -151,47 +151,30 @@ pub struct SubtitleOptions {
 ///
 /// let opts = PostProcessOptions {
 ///     remux: Some(ContainerFormat::Mp4),
-///     embed_metadata: true,
+///     embed_metadata: Some(true),
 ///     ..PostProcessOptions::default()
 /// };
-/// assert!(opts.embed_thumbnail);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PostProcessOptions {
     /// Remux to a different container format.
     pub remux: Option<ContainerFormat>,
     /// Extract audio to the specified format.
     pub extract_audio: Option<AudioFormat>,
-    /// Embed metadata (title, uploader, etc.) into the output file.
-    pub embed_metadata: bool,
-    /// Embed thumbnail into the output file.
-    pub embed_thumbnail: bool,
-    /// Disable thumbnail downloading entirely.
-    pub no_thumbnail: bool,
-    /// Keep the downloaded thumbnail as a separate file.
-    pub write_thumbnail: bool,
-    /// Apply peak audio normalization.
-    pub normalize_audio: bool,
-    /// Apply EBU R128 loudness normalization (two-pass).
-    pub loudnorm: bool,
+    /// Embed metadata (title, uploader, etc.) into the output file. `None` preserves base config.
+    pub embed_metadata: Option<bool>,
+    /// Embed thumbnail into the output file. `None` preserves base config.
+    pub embed_thumbnail: Option<bool>,
+    /// Disable thumbnail downloading entirely. `None` preserves base config.
+    pub no_thumbnail: Option<bool>,
+    /// Keep the downloaded thumbnail as a separate file. `None` preserves base config.
+    pub write_thumbnail: Option<bool>,
+    /// Apply peak audio normalization. `None` preserves base config.
+    pub normalize_audio: Option<bool>,
+    /// Apply EBU R128 loudness normalization (two-pass). `None` preserves base config.
+    pub loudnorm: Option<bool>,
     /// Loudness normalization preset name (e.g. `"streaming"`).
     pub loudnorm_preset: Option<String>,
-}
-
-impl Default for PostProcessOptions {
-    fn default() -> Self {
-        Self {
-            remux: None,
-            extract_audio: None,
-            embed_metadata: false,
-            embed_thumbnail: true,
-            no_thumbnail: false,
-            write_thumbnail: false,
-            normalize_audio: false,
-            loudnorm: false,
-            loudnorm_preset: None,
-        }
-    }
 }
 
 /// Network, retry, and cookie options.
@@ -203,39 +186,25 @@ impl Default for PostProcessOptions {
 /// use rdlp_core::BrowserType;
 ///
 /// let opts = NetworkOptions {
-///     retries: 5,
+///     retries: Some(5),
 ///     cookies_from_browser: Some(BrowserType::Chrome),
 ///     ..NetworkOptions::default()
 /// };
-/// assert_eq!(opts.timeout_secs, 60);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NetworkOptions {
-    /// Maximum number of retries for failed requests.
-    pub retries: u32,
-    /// Per-read idle timeout in seconds.
-    pub timeout_secs: u64,
-    /// Number of concurrent download fragments/chunks.
-    pub concurrent_fragments: u32,
+    /// Maximum number of retries for failed requests. `None` preserves base config.
+    pub retries: Option<u32>,
+    /// Per-read idle timeout in seconds. `None` preserves base config.
+    pub timeout_secs: Option<u64>,
+    /// Number of concurrent download fragments/chunks. `None` preserves base config.
+    pub concurrent_fragments: Option<u32>,
     /// Download rate limit in bytes per second.
     pub rate_limit: Option<u64>,
     /// Browser to extract cookies from.
     pub cookies_from_browser: Option<BrowserType>,
     /// Path to a Netscape-format cookies file.
     pub cookies_file: Option<PathBuf>,
-}
-
-impl Default for NetworkOptions {
-    fn default() -> Self {
-        Self {
-            retries: 3,
-            timeout_secs: 60,
-            concurrent_fragments: 4,
-            rate_limit: None,
-            cookies_from_browser: None,
-            cookies_file: None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -261,28 +230,28 @@ mod tests {
         assert!(!req.format.interactive);
 
         // SubtitleOptions defaults
-        assert!(!req.subtitles.write_subs);
-        assert!(!req.subtitles.write_auto_subs);
+        assert!(req.subtitles.write_subs.is_none());
+        assert!(req.subtitles.write_auto_subs.is_none());
         assert!(req.subtitles.sub_langs.is_empty());
         assert!(req.subtitles.sub_format.is_none());
-        assert!(!req.subtitles.embed_subs);
-        assert!(!req.subtitles.strict_subs);
+        assert!(req.subtitles.embed_subs.is_none());
+        assert!(req.subtitles.strict_subs.is_none());
 
         // PostProcessOptions defaults
         assert!(req.postprocess.remux.is_none());
         assert!(req.postprocess.extract_audio.is_none());
-        assert!(!req.postprocess.embed_metadata);
-        assert!(req.postprocess.embed_thumbnail);
-        assert!(!req.postprocess.no_thumbnail);
-        assert!(!req.postprocess.write_thumbnail);
-        assert!(!req.postprocess.normalize_audio);
-        assert!(!req.postprocess.loudnorm);
+        assert!(req.postprocess.embed_metadata.is_none());
+        assert!(req.postprocess.embed_thumbnail.is_none());
+        assert!(req.postprocess.no_thumbnail.is_none());
+        assert!(req.postprocess.write_thumbnail.is_none());
+        assert!(req.postprocess.normalize_audio.is_none());
+        assert!(req.postprocess.loudnorm.is_none());
         assert!(req.postprocess.loudnorm_preset.is_none());
 
         // NetworkOptions defaults
-        assert_eq!(req.network.retries, 3);
-        assert_eq!(req.network.timeout_secs, 60);
-        assert_eq!(req.network.concurrent_fragments, 4);
+        assert!(req.network.retries.is_none());
+        assert!(req.network.timeout_secs.is_none());
+        assert!(req.network.concurrent_fragments.is_none());
         assert!(req.network.rate_limit.is_none());
         assert!(req.network.cookies_from_browser.is_none());
         assert!(req.network.cookies_file.is_none());
@@ -303,22 +272,22 @@ mod tests {
                 ..FormatOptions::default()
             },
             subtitles: SubtitleOptions {
-                write_subs: true,
+                write_subs: Some(true),
                 sub_langs: vec!["en".into(), "ja".into()],
                 sub_format: Some(SubtitleFormat::Srt),
-                embed_subs: true,
+                embed_subs: Some(true),
                 ..SubtitleOptions::default()
             },
             postprocess: PostProcessOptions {
                 remux: Some(ContainerFormat::Mp4),
-                embed_metadata: true,
-                loudnorm: true,
+                embed_metadata: Some(true),
+                loudnorm: Some(true),
                 loudnorm_preset: Some("streaming".into()),
                 ..PostProcessOptions::default()
             },
             network: NetworkOptions {
-                retries: 5,
-                concurrent_fragments: 8,
+                retries: Some(5),
+                concurrent_fragments: Some(8),
                 cookies_from_browser: Some(BrowserType::Chrome),
                 ..NetworkOptions::default()
             },
@@ -342,31 +311,31 @@ mod tests {
         assert!(req.format.interactive);
 
         // Subtitle overrides
-        assert!(req.subtitles.write_subs);
-        assert!(!req.subtitles.write_auto_subs);
+        assert_eq!(req.subtitles.write_subs, Some(true));
+        assert!(req.subtitles.write_auto_subs.is_none());
         assert_eq!(req.subtitles.sub_langs, vec!["en", "ja"]);
         assert_eq!(req.subtitles.sub_format, Some(SubtitleFormat::Srt));
-        assert!(req.subtitles.embed_subs);
-        assert!(!req.subtitles.strict_subs);
+        assert_eq!(req.subtitles.embed_subs, Some(true));
+        assert!(req.subtitles.strict_subs.is_none());
 
-        // PostProcess overrides (embed_thumbnail stays true from default)
+        // PostProcess overrides
         assert_eq!(req.postprocess.remux, Some(ContainerFormat::Mp4));
         assert!(req.postprocess.extract_audio.is_none());
-        assert!(req.postprocess.embed_metadata);
-        assert!(req.postprocess.embed_thumbnail);
-        assert!(!req.postprocess.no_thumbnail);
-        assert!(!req.postprocess.write_thumbnail);
-        assert!(!req.postprocess.normalize_audio);
-        assert!(req.postprocess.loudnorm);
+        assert_eq!(req.postprocess.embed_metadata, Some(true));
+        assert!(req.postprocess.embed_thumbnail.is_none());
+        assert!(req.postprocess.no_thumbnail.is_none());
+        assert!(req.postprocess.write_thumbnail.is_none());
+        assert!(req.postprocess.normalize_audio.is_none());
+        assert_eq!(req.postprocess.loudnorm, Some(true));
         assert_eq!(
             req.postprocess.loudnorm_preset.as_deref(),
             Some("streaming")
         );
 
         // Network overrides
-        assert_eq!(req.network.retries, 5);
-        assert_eq!(req.network.timeout_secs, 60);
-        assert_eq!(req.network.concurrent_fragments, 8);
+        assert_eq!(req.network.retries, Some(5));
+        assert!(req.network.timeout_secs.is_none());
+        assert_eq!(req.network.concurrent_fragments, Some(8));
         assert!(req.network.rate_limit.is_none());
         assert_eq!(req.network.cookies_from_browser, Some(BrowserType::Chrome));
         assert!(req.network.cookies_file.is_none());
@@ -377,8 +346,8 @@ mod tests {
         let req = DownloadRequest::new("https://example.com/video");
         assert_eq!(req.url, "https://example.com/video");
         assert!(!req.plan_only);
-        assert!(req.postprocess.embed_thumbnail);
-        assert_eq!(req.network.retries, 3);
+        assert!(req.postprocess.embed_thumbnail.is_none());
+        assert!(req.network.retries.is_none());
     }
 
     #[test]

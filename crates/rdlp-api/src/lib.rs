@@ -39,5 +39,9 @@ pub use errors::RdlpApiError;
 pub use events::Event;
 pub use handle::{DownloadHandle, DownloadId};
 pub use orchestrator::InteractiveCallback;
+pub use rdlp_core::{
+    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchQuery, SearchResultPreview,
+    SearchSiteInfo,
+};
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

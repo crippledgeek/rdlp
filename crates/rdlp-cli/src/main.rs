@@ -240,6 +240,19 @@ struct Args {
     #[arg(long)]
     download_archive: Option<PathBuf>,
 
+    // === Search options ===
+    /// Perform a keyword search instead of downloading a URL
+    #[arg(long)]
+    search: Option<String>,
+
+    /// Site to search (required with --search, e.g., "xhamster")
+    #[arg(long)]
+    search_site: Option<String>,
+
+    /// Search filter in key=value format (repeatable)
+    #[arg(long = "search-filter")]
+    search_filter: Vec<String>,
+
     // === Config file options ===
     /// Ignore config file (don't load from default location)
     #[arg(long)]
@@ -848,6 +861,71 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
+    // === Search mode ===
+    if let Some(ref query_text) = args.search {
+        let site = args.search_site.as_deref().unwrap_or_else(|| {
+            let sites = client.list_search_sites();
+            if sites.len() == 1 {
+                // Leak is fine for a single CLI run
+                return Box::leak(sites[0].name.clone().into_boxed_str());
+            }
+            eprintln!(
+                "Error: --search-site is required. Available sites: {}",
+                sites
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            std::process::exit(1);
+        });
+
+        // Parse filters from key=value strings
+        let mut filters = Vec::new();
+        for raw in &args.search_filter {
+            let (key, value) = match raw.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => {
+                    eprintln!("Error: Invalid filter format '{raw}'. Expected key=value.");
+                    std::process::exit(1);
+                }
+            };
+            filters.push(rdlp_api::SearchFilter { key, value });
+        }
+
+        let search_query = rdlp_api::SearchQuery {
+            query: query_text.clone(),
+            filters,
+            max_results: None,
+        };
+
+        match client.search(site, &search_query).await {
+            Ok(results) => {
+                if results.is_empty() {
+                    println!("No results found for '{query_text}'.");
+                } else {
+                    println!("Found {} results:\n", results.len());
+                    for (i, r) in results.iter().enumerate() {
+                        println!("{:>3}. {}", i + 1, r.title);
+                        println!("     {}", r.video_url);
+                        if let Some(d) = r.duration {
+                            let mins = d as u32 / 60;
+                            let secs = d as u32 % 60;
+                            print!("     Duration: {mins}:{secs:02}");
+                        }
+                        if let Some(views) = r.view_count {
+                            print!("  Views: {views}");
+                        }
+                        println!();
+                    }
+                }
+            }
+            Err(e) => fail_with(e, verbose),
+        }
+
+        return Ok(());
+    }
+
     // Check if URL is provided
     let url = args
         .url
@@ -1008,6 +1086,9 @@ mod tests {
             cookies_from_browser: None,
             cookies: None,
             download_archive: None,
+            search: None,
+            search_site: None,
+            search_filter: vec![],
             ignore_config: false,
             config_location: None,
         }
@@ -1283,5 +1364,34 @@ mod tests {
             config.normalize_audio,
             "normalize_boost should imply normalize_audio"
         );
+    }
+
+    // === Search CLI tests ===
+
+    #[test]
+    fn test_search_args_parse() {
+        let args = Args::try_parse_from([
+            "rdlp",
+            "--search",
+            "test query",
+            "--search-site",
+            "xhamster",
+            "--search-filter",
+            "quality=1080p",
+            "--search-filter",
+            "sort=newest",
+        ])
+        .unwrap();
+        assert_eq!(args.search.as_deref(), Some("test query"));
+        assert_eq!(args.search_site.as_deref(), Some("xhamster"));
+        assert_eq!(args.search_filter.len(), 2);
+    }
+
+    #[test]
+    fn test_search_filter_parsing() {
+        let raw = "quality=1080p";
+        let (key, value) = raw.split_once('=').unwrap();
+        assert_eq!(key, "quality");
+        assert_eq!(value, "1080p");
     }
 }
