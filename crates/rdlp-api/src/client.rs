@@ -221,6 +221,90 @@ impl RdlpClient {
             .collect()
     }
 
+    /// List sites that support search.
+    ///
+    /// # Returns
+    /// A list of `SearchSiteInfo` with name and display name.
+    #[must_use]
+    pub fn list_search_sites(&self) -> Vec<rdlp_core::SearchSiteInfo> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(1);
+        let cancel_token = CancellationToken::new();
+        let config = (*self.config).clone();
+
+        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        orchestrator
+            .list_search_extractors()
+            .into_iter()
+            .map(|name| rdlp_core::SearchSiteInfo {
+                name: name.to_lowercase(),
+                display_name: name.to_string(),
+            })
+            .collect()
+    }
+
+    /// Get available search filters for a site.
+    ///
+    /// # Arguments
+    /// * `site` - Site name as returned by `list_search_sites()`.
+    ///
+    /// # Errors
+    /// Returns error if the site name is not recognized.
+    pub fn search_filters(
+        &self,
+        site: &str,
+    ) -> Result<Vec<rdlp_core::SearchFilterDescriptor>, RdlpApiError> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(1);
+        let cancel_token = CancellationToken::new();
+        let config = (*self.config).clone();
+
+        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        orchestrator
+            .search_filters(site)
+            .map_err(|e| RdlpApiError::InvalidInput {
+                message: e.to_string(),
+            })
+    }
+
+    /// Execute a keyword search on a site.
+    ///
+    /// # Arguments
+    /// * `site` - Site name (e.g., "xhamster").
+    /// * `query` - Search query with optional filters.
+    ///
+    /// # Returns
+    /// Lightweight result previews. Call `extract_info()` on each
+    /// `SearchResultPreview::video_url` for full metadata.
+    ///
+    /// # Errors
+    /// Returns error if site unknown, filters invalid, or network fails.
+    pub async fn search(
+        &self,
+        site: &str,
+        query: &rdlp_core::SearchQuery,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>, RdlpApiError> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(16);
+        let cancel_token = CancellationToken::new();
+        let config = (*self.config).clone();
+
+        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        orchestrator.search(site, query).await.map_err(Into::into)
+    }
+
+    /// Execute a search and return results as lightweight previews.
+    ///
+    /// Alias for [`search()`](Self::search) — only scrapes search result
+    /// pages, does not fetch individual video pages.
+    pub async fn search_preview(
+        &self,
+        site: &str,
+        query: &rdlp_core::SearchQuery,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>, RdlpApiError> {
+        self.search(site, query).await
+    }
+
     /// List available download protocols.
     #[must_use]
     pub fn list_downloaders(&self) -> Vec<String> {
@@ -440,5 +524,29 @@ mod tests {
         let client = RdlpClient::new(Config::default()).unwrap();
         let downloaders = client.list_downloaders();
         assert!(!downloaders.is_empty());
+    }
+
+    #[test]
+    fn test_list_search_sites() {
+        let client = RdlpClient::new(Config::default()).unwrap();
+        let sites = client.list_search_sites();
+        assert!(!sites.is_empty());
+        assert!(sites.iter().any(|s| s.name == "xhamster"));
+    }
+
+    #[test]
+    fn test_search_filters() {
+        let client = RdlpClient::new(Config::default()).unwrap();
+        let filters = client.search_filters("xhamster").unwrap();
+        assert!(!filters.is_empty());
+        let keys: Vec<&str> = filters.iter().map(|f| f.key.as_str()).collect();
+        assert!(keys.contains(&"quality"));
+        assert!(keys.contains(&"sort"));
+    }
+
+    #[test]
+    fn test_search_filters_unknown_site() {
+        let client = RdlpClient::new(Config::default()).unwrap();
+        assert!(client.search_filters("nonexistent").is_err());
     }
 }
