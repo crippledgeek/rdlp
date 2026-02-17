@@ -261,15 +261,19 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
             display_name: "Upload date".to_string(),
             allowed_values: vec![
                 rdlp_core::SearchFilterValue {
-                    value: "week".to_string(),
+                    value: "latest".to_string(),
+                    label: "Latest".to_string(),
+                },
+                rdlp_core::SearchFilterValue {
+                    value: "weekly".to_string(),
                     label: "Last week".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
-                    value: "month".to_string(),
+                    value: "monthly".to_string(),
                     label: "Last month".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
-                    value: "year".to_string(),
+                    value: "yearly".to_string(),
                     label: "Last year".to_string(),
                 },
             ],
@@ -310,31 +314,49 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
             default: Some("any".to_string()),
         },
         rdlp_core::SearchFilterDescriptor {
-            key: "categories".to_string(),
-            display_name: "Category".to_string(),
+            key: "production".to_string(),
+            display_name: "Production".to_string(),
             allowed_values: vec![
                 rdlp_core::SearchFilterValue {
-                    value: "amateur".to_string(),
-                    label: "Amateur".to_string(),
+                    value: "studios".to_string(),
+                    label: "Producers".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
-                    value: "mature".to_string(),
-                    label: "Mature".to_string(),
-                },
-                rdlp_core::SearchFilterValue {
-                    value: "teen".to_string(),
-                    label: "Teen (18+)".to_string(),
-                },
-                rdlp_core::SearchFilterValue {
-                    value: "anal".to_string(),
-                    label: "Anal".to_string(),
-                },
-                rdlp_core::SearchFilterValue {
-                    value: "lesbian".to_string(),
-                    label: "Lesbian".to_string(),
+                    value: "creators".to_string(),
+                    label: "xHamster Creators".to_string(),
                 },
             ],
             default: None,
+        },
+        rdlp_core::SearchFilterDescriptor {
+            key: "fps".to_string(),
+            display_name: "Frame rate".to_string(),
+            allowed_values: vec![
+                rdlp_core::SearchFilterValue {
+                    value: "30".to_string(),
+                    label: "30 FPS".to_string(),
+                },
+                rdlp_core::SearchFilterValue {
+                    value: "60".to_string(),
+                    label: "60 FPS".to_string(),
+                },
+            ],
+            default: None,
+        },
+        rdlp_core::SearchFilterDescriptor {
+            key: "full-videos".to_string(),
+            display_name: "Full videos only".to_string(),
+            allowed_values: vec![
+                rdlp_core::SearchFilterValue {
+                    value: "true".to_string(),
+                    label: "Yes".to_string(),
+                },
+                rdlp_core::SearchFilterValue {
+                    value: "false".to_string(),
+                    label: "No".to_string(),
+                },
+            ],
+            default: Some("false".to_string()),
         },
         rdlp_core::SearchFilterDescriptor {
             key: "duration-min".to_string(),
@@ -345,6 +367,10 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
                     label: "0".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
+                    value: "2".to_string(),
+                    label: "2".to_string(),
+                },
+                rdlp_core::SearchFilterValue {
                     value: "5".to_string(),
                     label: "5".to_string(),
                 },
@@ -353,8 +379,8 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
                     label: "10".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
-                    value: "20".to_string(),
-                    label: "20".to_string(),
+                    value: "30".to_string(),
+                    label: "30".to_string(),
                 },
             ],
             default: Some("0".to_string()),
@@ -364,6 +390,10 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
             display_name: "Max duration (minutes)".to_string(),
             allowed_values: vec![
                 rdlp_core::SearchFilterValue {
+                    value: "2".to_string(),
+                    label: "2".to_string(),
+                },
+                rdlp_core::SearchFilterValue {
                     value: "5".to_string(),
                     label: "5".to_string(),
                 },
@@ -372,12 +402,12 @@ pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
                     label: "10".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
-                    value: "20".to_string(),
-                    label: "20".to_string(),
+                    value: "30".to_string(),
+                    label: "30".to_string(),
                 },
                 rdlp_core::SearchFilterValue {
                     value: "40".to_string(),
-                    label: "40".to_string(),
+                    label: "40+".to_string(),
                 },
             ],
             default: Some("40".to_string()),
@@ -604,11 +634,14 @@ mod tests {
     #[test]
     fn test_search_filter_descriptors_not_empty() {
         let filters = search_filter_descriptors();
-        assert!(!filters.is_empty());
+        assert_eq!(filters.len(), 10);
         let keys: Vec<&str> = filters.iter().map(|f| f.key.as_str()).collect();
         assert!(keys.contains(&"quality"));
         assert!(keys.contains(&"sort"));
         assert!(keys.contains(&"date"));
+        assert!(keys.contains(&"production"));
+        assert!(keys.contains(&"fps"));
+        assert!(keys.contains(&"full-videos"));
     }
 
     #[test]
