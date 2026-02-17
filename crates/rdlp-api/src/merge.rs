@@ -34,6 +34,9 @@ impl MergeOverrides for FormatOptions {
         if let Some(ref v) = self.selector {
             config.format = Some(v.clone());
         }
+        if let Some(v) = self.audio_multistreams {
+            config.audio_multistreams = v;
+        }
     }
 }
 
@@ -187,6 +190,27 @@ mod tests {
         };
         opts.merge_into(&mut config);
         assert_eq!(config.format, Some("bestaudio".to_string()));
+    }
+
+    #[test]
+    fn test_format_audio_multistreams_none_preserves() {
+        let mut config = Config::default();
+        config.audio_multistreams = true;
+        let opts = FormatOptions::default();
+        opts.merge_into(&mut config);
+        assert!(config.audio_multistreams);
+    }
+
+    #[test]
+    fn test_format_audio_multistreams_some_overrides() {
+        let mut config = Config::default();
+        config.audio_multistreams = false;
+        let opts = FormatOptions {
+            audio_multistreams: Some(true),
+            ..FormatOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert!(config.audio_multistreams);
     }
 
     // ─── SubtitleOptions ─────────────────────────────────────────────
