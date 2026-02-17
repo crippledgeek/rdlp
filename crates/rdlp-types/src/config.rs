@@ -298,7 +298,7 @@ impl Default for Config {
 
             // Format selection
             format: "bestvideo*+bestaudio/best".to_string(),
-            merge_output_format: Some(ContainerFormat::Mp4),
+            merge_output_format: None,
 
             // Download options
             concurrent_fragments: 4,

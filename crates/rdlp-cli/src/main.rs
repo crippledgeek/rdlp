@@ -6,7 +6,9 @@ use anyhow::Result;
 use clap::Parser;
 use dialoguer::{Select, theme::ColorfulTheme};
 use indicatif::MultiProgress;
-use rdlp_cli::{Orchestrator, OrchestratorError};
+use rdlp_api::{RdlpApiError, RdlpClient};
+use rdlp_cli::event_handler::CliEventHandler;
+use rdlp_cli::interactive::DialoguerCallback;
 use rdlp_core::{
     AudioFormat, BrowserType, Config, ContainerFormat, InfoDict, SubtitleFormat, config_io,
 };
@@ -716,7 +718,7 @@ fn merge_config(
     Ok(config)
 }
 
-/// Build Config by: resolve interactive prompts → load file → merge.
+/// Build Config by: resolve interactive prompts -> load file -> merge.
 fn build_config(args: &Args) -> Result<Config> {
     // Step 1: Resolve interactive values (side effects isolated here)
     let interactive_values = resolve_interactive_values(args)?;
@@ -745,36 +747,30 @@ fn build_config(args: &Args) -> Result<Config> {
     merge_config(args, file_config, interactive_values)
 }
 
-/// Map OrchestratorError to a structured process exit code.
+/// Map RdlpApiError to a structured process exit code.
 ///
 /// Exit codes:
 ///   0 — success (handled by Ok paths)
-///   1 — general/unknown error (I/O, progress bar, path generation)
+///   1 — general/unknown error (I/O, processing, platform)
 ///   2 — user cancelled (Ctrl+C, ESC)
-///   3 — extraction failed (no extractor found, extraction error)
-///   4 — download/network failed (no downloader, CDN error, chunk merge)
-///   5 — configuration/format error (invalid config, no matching format)
-fn exit_code_for(e: &OrchestratorError) -> i32 {
+///   3 — extraction failed (unsupported URL, extraction error)
+///   4 — download/network failed (network error)
+///   5 — configuration/format error (invalid input, builder error)
+fn exit_code_for(e: &RdlpApiError) -> i32 {
     match e {
-        OrchestratorError::UserCancelled => 2,
-        OrchestratorError::NoExtractor { .. } | OrchestratorError::ExtractionFailed(_) => 3,
-        OrchestratorError::NoDownloader { .. }
-        | OrchestratorError::DownloadFailed(_)
-        | OrchestratorError::ResumeDetectionFailed(_)
-        | OrchestratorError::MissingChunk { .. }
-        | OrchestratorError::ChunkMergeFailed(_) => 4,
-        OrchestratorError::NoFormat
-        | OrchestratorError::InvalidFormatSelector(_)
-        | OrchestratorError::Configuration(_) => 5,
-        OrchestratorError::PathGenerationFailed(_)
-        | OrchestratorError::ProgressBarFailed(_)
-        | OrchestratorError::IoError(_)
-        | OrchestratorError::Io(_) => 1,
+        RdlpApiError::UserCancelled => 2,
+        RdlpApiError::UnsupportedUrl { .. } | RdlpApiError::ExtractError { .. } => 3,
+        RdlpApiError::NetworkError { .. } => 4,
+        RdlpApiError::InvalidInput { .. } | RdlpApiError::BuilderError { .. } => 5,
+        RdlpApiError::IoError { .. }
+        | RdlpApiError::FfmpegError { .. }
+        | RdlpApiError::UnsupportedPlatform { .. }
+        | RdlpApiError::Soft { .. } => 1,
     }
 }
 
-/// Log an OrchestratorError and exit with the appropriate structured code.
-fn fail_with(e: OrchestratorError, verbose: bool) -> ! {
+/// Log an RdlpApiError and exit with the appropriate structured code.
+fn fail_with(e: RdlpApiError, verbose: bool) -> ! {
     error!("Error: {e}");
     if verbose {
         error!("Debug info: {e:?}");
@@ -792,20 +788,12 @@ async fn async_main() -> Result<()> {
     let multi_progress = Arc::new(MultiProgress::new());
 
     if !config.quiet {
-        // EnvFilter handles both tracing events and log crate events
-        // (tracing-subscriber's tracing-log feature bridges log -> tracing automatically)
-        //
-        // Note: The "standard" pattern of try_from_default_env().unwrap_or_else(EnvFilter::new)
-        // does NOT work reliably - DEBUG logs from hyper_util leak through even when RUST_LOG
-        // is unset. This appears to be a tracing-subscriber bug. Using explicit branching instead.
         let filter = if config.verbose {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
         } else {
             EnvFilter::new("info")
         };
 
-        // Use SuspendingWriter to properly handle logs while progress bars are active
-        // This prevents progress bar duplication caused by log messages
         let writer = SuspendingWriter {
             multi_progress: Arc::clone(&multi_progress),
         };
@@ -828,19 +816,20 @@ async fn async_main() -> Result<()> {
     }
 
     let interactive = args.interactive;
+    let verbose = args.verbose;
+    let quiet = config.quiet;
 
-    // Create orchestrator with shared MultiProgress
-    let orchestrator = Orchestrator::new(config, (*multi_progress).clone());
-
-    // Load cookies from file or browser if configured
-    if let Err(e) = orchestrator.load_cookies().await {
-        fail_with(e, args.verbose);
-    }
+    // Create RdlpClient with interactive callback
+    let client = RdlpClient::builder()
+        .config(config)
+        .interactive(Arc::new(DialoguerCallback))
+        .build()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // List extractors if requested
     if args.list_extractors {
         info!("Available extractors:");
-        for extractor in orchestrator.list_extractors() {
+        for extractor in client.list_extractors() {
             info!("  - {extractor}");
         }
         return Ok(());
@@ -848,7 +837,7 @@ async fn async_main() -> Result<()> {
 
     if args.list_downloaders {
         info!("Available download protocols:");
-        for downloader in orchestrator.list_downloaders() {
+        for downloader in client.list_downloaders() {
             info!("  - {downloader}");
         }
         return Ok(());
@@ -866,14 +855,14 @@ async fn async_main() -> Result<()> {
 
     // --list-subs-only: show subtitle menu, download subs, exit (no video)
     if args.list_subs_only {
-        let infos = match orchestrator.extract_info(&url).await {
+        let infos = match client.extract_info(&url).await {
             Ok(infos) => infos,
-            Err(e) => fail_with(e, args.verbose),
+            Err(e) => fail_with(e, verbose),
         };
 
         // Use the first video's metadata for subtitle selection
         if let Some(info) = infos.first() {
-            match orchestrator.download_subtitles_only(info).await {
+            match client.download_subtitles_only(info).await {
                 Ok(Some(paths)) => {
                     if paths.is_empty() {
                         info!("No subtitles downloaded");
@@ -886,7 +875,7 @@ async fn async_main() -> Result<()> {
                 Ok(None) => {
                     info!("Subtitle selection cancelled");
                 }
-                Err(e) => fail_with(e, args.verbose),
+                Err(e) => fail_with(e, verbose),
             }
         }
 
@@ -895,9 +884,9 @@ async fn async_main() -> Result<()> {
 
     // Metadata-only modes: --dump-json, --print, --simulate
     if args.dump_json || args.print.is_some() || args.simulate {
-        let infos = match orchestrator.extract_info(&url).await {
+        let infos = match client.extract_info(&url).await {
             Ok(infos) => infos,
-            Err(e) => fail_with(e, args.verbose),
+            Err(e) => fail_with(e, verbose),
         };
 
         if args.dump_json {
@@ -928,16 +917,38 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
-    match orchestrator.download(&url, interactive).await {
-        Ok(Some(path)) => {
-            info!("Success! Video saved to: {}", path.display());
+    // Build download request from config
+    let request = rdlp_api::DownloadRequest {
+        url: url.clone(),
+        format: rdlp_api::request::FormatOptions {
+            interactive,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Start the download
+    let mut handle = client.download(request);
+    let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
+
+    // Drain all events (progress, status, etc.)
+    while let Some(event) = handle.events().recv().await {
+        event_handler.handle_event(&event);
+    }
+
+    // Wait for the final result
+    match handle.wait().await {
+        Ok(result) => {
+            if let Some(path) = result.output_files.first() {
+                info!("Success! Video saved to: {}", path.display());
+            }
             Ok(())
         }
-        Ok(None) => {
-            // User cancelled - already printed message in orchestrator
+        Err(RdlpApiError::UserCancelled) => {
+            // User cancelled - already printed message via events
             Ok(())
         }
-        Err(e) => fail_with(e, args.verbose),
+        Err(e) => fail_with(e, verbose),
     }
 }
 

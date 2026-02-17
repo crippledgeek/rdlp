@@ -80,7 +80,7 @@ impl PostProcessResult {
 }
 
 /// Post-processing configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PostProcessConfig {
     /// Extract audio only
     pub extract_audio: bool,
@@ -156,36 +156,4 @@ pub struct PostProcessConfig {
 
     /// Gain in dB for limiter-boost fallback (default 12.0 when None)
     pub normalize_boost_db: Option<f64>,
-}
-
-impl Default for PostProcessConfig {
-    fn default() -> Self {
-        Self {
-            extract_audio: false,
-            audio_format: None,
-            audio_quality: None,
-            recode_video: None,
-            remux_container: None,
-            merge_output_format: Some(ContainerFormat::Mp4),
-            embed_thumbnail: false,
-            write_thumbnail: false,
-            embed_metadata: false,
-            embed_subtitles: false,
-            write_subtitles: false,
-            keep_video: false,
-            ffmpeg_location: None,
-            ffmpeg_args: Vec::new(),
-            normalize_audio: false,
-            loudnorm: false,
-            audio_gain_target: None,
-            loudnorm_preset: None,
-            loudnorm_target_i: None,
-            loudnorm_target_tp: None,
-            loudnorm_target_lra: None,
-            loudnorm_dynamic: false,
-            loudnorm_precompress: false,
-            normalize_boost: false,
-            normalize_boost_db: None,
-        }
-    }
 }

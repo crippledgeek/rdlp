@@ -2,6 +2,7 @@
 members = [
     "crates/rdlp-types",
     "crates/rdlp-core",
+    "crates/rdlp-api",
     "crates/rdlp-http",
     "crates/rdlp-security",
     "crates/rdlp-crypto",
@@ -27,6 +28,7 @@ license = "MIT"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTTP and networking

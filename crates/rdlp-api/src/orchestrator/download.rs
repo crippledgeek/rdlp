@@ -25,13 +25,14 @@ impl Orchestrator {
     ///
     /// # Flow
     /// 1. Check CDN token expiry (if present in URL)
-    /// 2. Create progress bar (byte-based for HTTP, segment-based for HLS)
-    /// 3. Find appropriate downloader
-    /// 4. Try primary URL, then fallback URLs on failure
+    /// 2. Find appropriate downloader
+    /// 3. Try primary URL, then fallback URLs on failure
+    ///
+    /// Progress is reported via [`Event::Progress`] through the event channel.
     ///
     /// # Returns
     /// - `Ok(Some(outcome))` — download succeeded
-    /// - `Ok(None)` — user cancelled (Ctrl+C)
+    /// - `Ok(None)` — user cancelled
     /// - `Err(e)` — all URLs failed or token expired
     pub(super) async fn download_with_cdn_fallback(
         &self,
@@ -48,13 +49,6 @@ impl Orchestrator {
             None // HLS uses segment-based progress, not byte-based
         } else {
             format.filesize.or(format.filesize_approx)
-        };
-
-        // Create appropriate progress bar
-        let progress_bar = if is_hls {
-            self.create_hls_progress_bar()?
-        } else {
-            self.create_progress_bar(estimated_size, effective_resume)?
         };
 
         // Find downloader (with extra HTTP headers if the format specifies them)
@@ -89,7 +83,6 @@ impl Orchestrator {
                     download_url,
                     output_path,
                     effective_resume,
-                    progress_bar.as_ref(),
                     estimated_size,
                 )
                 .await

@@ -53,9 +53,7 @@ impl Orchestrator {
             .unwrap_or_else(|| "jpg".to_string());
 
         // Build output path: {media_stem}.{ext}
-        let stem = media_file.file_stem()?.to_str()?;
-        let parent = media_file.parent()?;
-        let thumbnail_path = parent.join(format!("{stem}.{ext}"));
+        let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
 
         // Build Referer from the thumbnail URL origin (CDNs often require this)
         let referer = reqwest::Url::parse(thumbnail_url)

@@ -2239,6 +2239,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdlp-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-util",
+ "log",
+ "mockito",
+ "proptest",
+ "rdlp-cookies",
+ "rdlp-core",
+ "rdlp-downloader",
+ "rdlp-extractor",
+ "rdlp-ffmpeg",
+ "rdlp-http",
+ "rdlp-jsinterp",
+ "rdlp-plugin",
+ "rdlp-postprocess",
+ "rdlp-ratelimit",
+ "rdlp-security",
+ "rdlp-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "rdlp-cli"
 version = "0.1.0"
 dependencies = [
@@ -2252,6 +2285,7 @@ dependencies = [
  "log",
  "mockito",
  "proptest",
+ "rdlp-api",
  "rdlp-cookies",
  "rdlp-core",
  "rdlp-downloader",
@@ -3171,6 +3205,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

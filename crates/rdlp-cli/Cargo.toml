@@ -10,6 +10,7 @@ name = "rdlp"
 path = "src/main.rs"
 
 [dependencies]
+rdlp-api = { path = "../rdlp-api" }
 rdlp-table = { path = "../rdlp-table" }
 rdlp-core = { path = "../rdlp-core" }
 rdlp-http = { path = "../rdlp-http" }
@@ -22,6 +23,7 @@ rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-plugin = { path = "../rdlp-plugin" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 rdlp-security = { path = "../rdlp-security" }
+async-trait = { workspace = true }
 
 serde = { workspace = true }
 tokio = { workspace = true }

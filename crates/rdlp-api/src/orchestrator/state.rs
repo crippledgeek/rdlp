@@ -2,6 +2,7 @@
 
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
+use crate::events::Event;
 use log::{info, warn};
 use rdlp_core::Format;
 use std::fmt;
@@ -149,7 +150,17 @@ impl DownloadPhase {
     ) -> Result<Self> {
         match self {
             Self::Extracting { url } => {
+                orchestrator.emit(Event::Started {
+                    id: orchestrator.download_id,
+                    url: url.clone(),
+                });
+
                 let info = orchestrator.extract_video_info(&url).await?;
+
+                orchestrator.emit(Event::MetadataReady {
+                    id: orchestrator.download_id,
+                    info: Box::new(info.clone()),
+                });
 
                 // Try loading saved session state to skip interactive selection
                 let sanitized = orchestrator.sanitize_filename(&info.title);
@@ -193,8 +204,20 @@ impl DownloadPhase {
 
             Self::SelectingFormat { info } => {
                 let Some(format) = orchestrator.select_format(&info, interactive).await? else {
+                    orchestrator.emit(Event::Cancelled {
+                        id: orchestrator.download_id,
+                    });
                     return Ok(Self::Cancelled);
                 };
+
+                orchestrator.emit(Event::FormatSelected {
+                    id: orchestrator.download_id,
+                    format_id: format.format_id.clone(),
+                    quality: format
+                        .format_note
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                });
 
                 Ok(Self::SelectingSubtitles {
                     info,
@@ -208,6 +231,9 @@ impl DownloadPhase {
                     .select_subtitles_if_needed(&info, interactive, list_subs)
                     .await?
                 else {
+                    orchestrator.emit(Event::Cancelled {
+                        id: orchestrator.download_id,
+                    });
                     return Ok(Self::Cancelled);
                 };
 
@@ -282,6 +308,9 @@ impl DownloadPhase {
                     .download_with_cdn_fallback(&format, &output_path, state.offset())
                     .await?
                 else {
+                    orchestrator.emit(Event::Cancelled {
+                        id: orchestrator.download_id,
+                    });
                     return Ok(Self::Cancelled);
                 };
 

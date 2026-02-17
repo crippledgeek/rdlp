@@ -1,10 +1,12 @@
 //! Orchestrator module for coordinating extraction, download, and post-processing
 
 mod archive;
+mod container_resolver;
 mod download;
 mod errors;
 mod execution;
 mod extraction;
+mod interactive;
 mod paths;
 mod playlist;
 mod postprocess;
@@ -22,9 +24,11 @@ mod tests;
 
 // Public re-exports
 pub use errors::{OrchestratorError, Result};
-pub use state::{DownloadPhase, DownloadState};
+pub use interactive::InteractiveCallback;
+pub use state::DownloadPhase;
 
-use indicatif::MultiProgress;
+use crate::events::Event;
+use crate::handle::DownloadId;
 use log::{debug, info, warn};
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::{Config, ExtractionContext};
@@ -36,6 +40,8 @@ use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 /// Main orchestrator coordinating extraction, download, and post-processing
@@ -45,14 +51,33 @@ pub struct Orchestrator {
     pub(super) postprocessor_registry: Option<Arc<dyn PostProcessorRegistryTrait>>,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
-    /// MultiProgress for managing progress bars with log output
-    pub(super) multi_progress: MultiProgress,
+    /// Event sender for download lifecycle events
+    pub(super) event_tx: mpsc::Sender<Event>,
+    /// Download identifier for events
+    pub(super) download_id: DownloadId,
+    /// Cancellation token for cooperative shutdown
+    pub(super) cancel_token: CancellationToken,
+    /// Optional interactive callback for user input
+    pub(super) interactive: Option<Arc<dyn InteractiveCallback>>,
 }
 
 impl Orchestrator {
     /// Create a new orchestrator with default registries
+    ///
+    /// # Arguments
+    /// * `config` - Download configuration
+    /// * `event_tx` - Channel sender for lifecycle events
+    /// * `download_id` - Unique identifier for this download
+    /// * `cancel_token` - Token for cooperative cancellation
+    /// * `interactive` - Optional callback for interactive user input
     #[must_use]
-    pub fn new(config: Config, multi_progress: MultiProgress) -> Self {
+    pub fn new(
+        config: Config,
+        event_tx: mpsc::Sender<Event>,
+        download_id: DownloadId,
+        cancel_token: CancellationToken,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
+    ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
         let http_client =
@@ -80,7 +105,10 @@ impl Orchestrator {
             postprocessor_registry,
             extraction_context,
             config,
-            multi_progress,
+            event_tx,
+            download_id,
+            cancel_token,
+            interactive,
         }
     }
 
@@ -114,10 +142,15 @@ impl Orchestrator {
     /// It's public to allow integration tests to use it, but should not be used in
     /// production code.
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn with_registries(
         config: Config,
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
+        event_tx: mpsc::Sender<Event>,
+        download_id: DownloadId,
+        cancel_token: CancellationToken,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
     ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let http_client =
@@ -142,8 +175,18 @@ impl Orchestrator {
             postprocessor_registry,
             extraction_context,
             config,
-            multi_progress: MultiProgress::new(),
+            event_tx,
+            download_id,
+            cancel_token,
+            interactive,
         }
+    }
+
+    /// Emit an event to the event channel, ignoring send failures.
+    ///
+    /// Uses `try_send` to avoid blocking on a full channel.
+    pub(super) fn emit(&self, event: Event) {
+        let _ = self.event_tx.try_send(event);
     }
 
     /// Load cookies from file or browser if configured.
@@ -185,7 +228,7 @@ impl Orchestrator {
     /// 4. `Downloading` - Execute download with progress tracking
     /// 5. `Complete` - Return downloaded file path
     ///
-    /// At any point, user can cancel (Ctrl+C or ESC) → `Cancelled` state
+    /// At any point, user can cancel via `CancellationToken` → `Cancelled` state
     ///
     /// **Note**: This method now auto-detects playlists! If the URL is a playlist,
     /// it will automatically delegate to `download_playlist()` and return the first

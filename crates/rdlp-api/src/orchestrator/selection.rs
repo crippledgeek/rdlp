@@ -3,10 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::{Orchestrator, errors::*};
-use dialoguer::{Select, theme::ColorfulTheme};
 use log::{info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
-use rdlp_table;
 
 impl Orchestrator {
     /// Select format from available formats
@@ -23,7 +21,7 @@ impl Orchestrator {
         interactive: bool,
     ) -> Result<Option<Format>> {
         let formats = &info.formats;
-        let format = if interactive {
+        let format = if interactive && self.interactive.is_some() {
             let Some(format) = self.select_format_interactive(info).await? else {
                 info!("Selection cancelled by user");
                 return Ok(None);
@@ -55,11 +53,12 @@ impl Orchestrator {
         Ok(Some(format))
     }
 
-    /// Interactive format selection menu
+    /// Interactive format selection via [`InteractiveCallback`]
     ///
-    /// Displays a menu of available formats and lets the user select one.
+    /// Groups available formats and delegates the actual UI to the
+    /// frontend-provided callback.
     ///
-    /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled (ESC pressed)
+    /// Returns Ok(Some(format)) if format selected, Ok(None) if user cancelled
     pub(super) async fn select_format_interactive(
         &self,
         info: &InfoDict,
@@ -88,42 +87,13 @@ impl Orchestrator {
 
         let grouped: Vec<&Format> = by_key.values().copied().collect();
 
-        // Compute dynamic size column width from actual content
-        let size_width = grouped
-            .iter()
-            .map(|f| f.size_text().len())
-            .max()
-            .unwrap_or(4)
-            .max(4);
+        // Delegate to the interactive callback
+        let callback = self.interactive.as_ref().unwrap();
+        let grouped_owned: Vec<Format> = grouped.iter().map(|f| (*f).clone()).collect();
 
-        // Build menu items with format details
-        let items: Vec<String> = grouped.iter().map(|f| f.table_row(size_width)).collect();
+        let selection = callback.select_format(&grouped_owned, info).await;
 
-        info!("Available formats:");
-        info!(
-            "{:<qw$} | {:<rw$} | {:<size_width$} | {:<tw$} | Codecs",
-            "Quality",
-            "Resolution",
-            "Size",
-            "Type",
-            qw = rdlp_table::QUALITY_WIDTH,
-            rw = rdlp_table::RESOLUTION_WIDTH,
-            tw = rdlp_table::TYPE_WIDTH,
-        );
-        info!("{}", "-".repeat(rdlp_table::separator_width(size_width)));
-
-        let selection = tokio::task::spawn_blocking(move || {
-            Select::with_theme(&ColorfulTheme::default())
-                .with_prompt("Select a format to download (ESC to cancel)")
-                .items(&items)
-                .default(0)
-                .interact_opt()
-        })
-        .await
-        .map_err(|e| OrchestratorError::Io(std::io::Error::other(e)))?
-        .map_err(|e| OrchestratorError::Io(e.into()))?;
-
-        Ok(selection.map(|index| grouped[index].clone()))
+        Ok(selection.map(|index| grouped_owned[index].clone()))
     }
 }
 

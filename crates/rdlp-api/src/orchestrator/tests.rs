@@ -1,13 +1,21 @@
 //! Tests for the orchestrator module
 
+use super::state::DownloadState;
 use super::*;
+use crate::events::Event;
+use crate::handle::DownloadId;
 use rdlp_core::{Config, Format, InfoDict};
 use std::path::Path;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-/// Helper function to create a test orchestrator
+/// Helper function to create a test orchestrator with event channel
 pub(crate) fn create_test_orchestrator() -> Orchestrator {
     let config = Config::default();
-    Orchestrator::new(config, MultiProgress::new())
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let id = DownloadId::next();
+    let token = CancellationToken::new();
+    Orchestrator::new(config, tx, id, token, None)
 }
 
 /// Helper function to wrap formats in an InfoDict for testing
@@ -260,48 +268,6 @@ async fn test_select_format_empty_formats() {
     // Should fail with empty formats in automatic mode
     let result = orchestrator.select_format(&info, false).await;
     assert!(result.is_err());
-}
-
-#[test]
-fn test_create_progress_bar_disabled() {
-    let config = Config {
-        progress: false,
-        ..Default::default()
-    };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
-
-    let result = orchestrator.create_progress_bar(Some(1000000), 0);
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_none());
-}
-
-#[test]
-fn test_create_progress_bar_enabled() {
-    let config = Config {
-        progress: true,
-        ..Default::default()
-    };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
-
-    let result = orchestrator.create_progress_bar(Some(1000000), 0);
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_some());
-}
-
-#[test]
-fn test_create_progress_bar_with_resume() {
-    let config = Config {
-        progress: true,
-        ..Default::default()
-    };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
-
-    let result = orchestrator.create_progress_bar(Some(1000000), 500000);
-    assert!(result.is_ok());
-    let pb = result.unwrap();
-    assert!(pb.is_some());
-    // Progress bar should be positioned at resume point
-    assert_eq!(pb.unwrap().position(), 500000);
 }
 
 #[tokio::test]
@@ -618,7 +584,6 @@ mod resume_compatibility_tests {
 
     #[tokio::test]
     async fn test_prioritize_new_style_over_old_style() {
-        // Test that new-style chunks are prioritized over old-style when both exist
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -656,7 +621,7 @@ mod resume_compatibility_tests {
         // Verify content came from new-style chunks
         let content = tokio::fs::read(&output_path).await.unwrap();
         assert_eq!(content.len(), 1280);
-        assert_eq!(&content[0..256], &[10u8; 256]); // First new-style chunk
+        assert_eq!(&content[0..256], &[10u8; 256]);
 
         // Verify new-style chunk files were deleted
         for i in 0..5 {
@@ -676,7 +641,6 @@ mod resume_compatibility_tests {
 
     #[tokio::test]
     async fn test_prioritize_higher_download_id() {
-        // Test that higher download IDs are prioritized
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -705,13 +669,13 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
 
-        // Should have merged the download ID 2 chunks (3 × 512 = 1536 bytes)
+        // Should have merged the download ID 2 chunks (3 x 512 = 1536 bytes)
         assert_eq!(resume_offset, 1536);
 
         // Verify content came from download ID 2
         let content = tokio::fs::read(&output_path).await.unwrap();
         assert_eq!(content.len(), 1536);
-        assert_eq!(&content[0..512], &[10u8; 512]); // First chunk from ID 2
+        assert_eq!(&content[0..512], &[10u8; 512]);
 
         // Verify download ID 2 chunks were deleted
         for i in 0..3 {
@@ -724,14 +688,12 @@ mod resume_compatibility_tests {
         }
 
         // Verify download ID 0 chunks still exist (not cleaned up since not used)
-        // Actually, they should exist since we didn't use them
         assert!(temp_dir.path().join("video.mp4.0.part0").exists());
         assert!(temp_dir.path().join("video.mp4.0.part1").exists());
     }
 
     #[tokio::test]
     async fn test_cleanup_orphaned_chunks_when_file_complete() {
-        // Test that orphaned chunks are cleaned up when main file is already complete
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -765,11 +727,10 @@ mod resume_compatibility_tests {
 
     #[tokio::test]
     async fn test_many_new_style_chunks() {
-        // Test handling many small chunks (simulating power-of-two chunking)
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
-        // Create 100 small chunks (simulating 1 MB chunks for a 100 MB file)
+        // Create 100 small chunks
         for i in 0..100 {
             tokio::fs::write(
                 temp_dir.path().join(format!("video.mp4.0.part{i}")),
@@ -785,7 +746,7 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
 
-        // Should have merged all 100 chunks (100 × 128 = 12800 bytes)
+        // Should have merged all 100 chunks (100 x 128 = 12800 bytes)
         assert_eq!(resume_offset, 12800);
         assert!(output_path.exists());
 
@@ -809,7 +770,14 @@ fn test_generate_output_path_custom_template() {
         output_template: "%(id)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -823,7 +791,14 @@ fn test_generate_output_path_subdirectory_template() {
         output_template: "%(extractor)s/%(title)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -851,7 +826,14 @@ fn test_generate_output_path_field_with_default() {
         output_template: "%(uploader|Unknown)s - %(title)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -869,7 +851,14 @@ fn test_generate_output_path_sanitizes_template_field_values() {
         output_template: "%(title)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let mut info = InfoDict::new(
         "test123",
         "Bad/Title\\With:Chars",
@@ -893,7 +882,14 @@ fn test_generate_output_path_with_format_fields() {
         output_template: "%(title)s_%(height)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -910,7 +906,14 @@ fn test_generate_output_path_numeric_padding() {
         output_template: "%(playlist_index)03d - %(title)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let mut info = create_test_info_dict(vec![]);
     info.playlist_index = Some(7);
     let format = create_test_format("720p", "720p", Some(1000000));
@@ -928,7 +931,14 @@ fn test_generate_output_path_missing_field_defaults_to_na() {
         output_template: "%(nonexistent_field)s.%(ext)s".to_string(),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -944,7 +954,14 @@ fn test_generate_output_path_with_output_directory() {
         output_directory: PathBuf::from("/tmp/downloads"),
         ..Default::default()
     };
-    let orchestrator = Orchestrator::new(config, MultiProgress::new());
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orchestrator = Orchestrator::new(
+        config,
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
     let info = create_test_info_dict(vec![]);
     let format = create_test_format("720p", "720p", Some(1000000));
 
