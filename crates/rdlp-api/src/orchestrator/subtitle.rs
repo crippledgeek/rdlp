@@ -374,17 +374,13 @@ impl Orchestrator {
         selected: &[(String, rdlp_core::Subtitle)],
         output_path: &Path,
     ) -> Result<Vec<(String, PathBuf)>> {
-        let stem = output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
-        let parent = output_path.parent().unwrap_or(Path::new("."));
-
         let mut downloaded = Vec::new();
 
         for (lang, sub) in selected {
-            let sub_filename = format!("{stem}.{lang}.{}", sub.ext);
-            let sub_path = parent.join(&sub_filename);
+            let sub_path = super::container_resolver::sidecar_path(
+                output_path,
+                &format!("{lang}.{}", sub.ext),
+            );
 
             if sub_path.exists() {
                 debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");
@@ -432,12 +428,13 @@ impl Orchestrator {
             return Ok(Some(Vec::new()));
         }
 
-        // Generate output path from video title (no format needed)
+        // Generate output path from video title using resolved container
         let sanitized = self.sanitize_filename(&info.title);
-        let output_stub = self
-            .config
-            .output_directory
-            .join(format!("{sanitized}.mp4"));
+        let output_stub = super::container_resolver::output_stub(
+            &self.config,
+            &self.config.output_directory,
+            &sanitized,
+        );
 
         let downloaded = self
             .download_subtitles_from_selection(&selected, &output_stub)
@@ -494,16 +491,13 @@ impl Orchestrator {
         }
 
         // Download selected tracks
-        let stem = output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("video");
-        let parent = output_path.parent().unwrap_or(Path::new("."));
         let mut downloaded = Vec::new();
 
         for track in &outcome.selected {
-            let sub_filename = format!("{stem}.{}.{}", track.language, track.ext);
-            let sub_path = parent.join(&sub_filename);
+            let sub_path = super::container_resolver::sidecar_path(
+                output_path,
+                &format!("{}.{}", track.language, track.ext),
+            );
 
             if sub_path.exists() {
                 debug!(path:? = sub_path.display(); "Subtitle already exists, skipping");

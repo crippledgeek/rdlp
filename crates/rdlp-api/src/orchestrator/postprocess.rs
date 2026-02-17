@@ -161,7 +161,13 @@ impl Orchestrator {
         let mut output_files = Vec::new();
 
         for file in files {
-            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+            let ext = file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_else(|| {
+                    info!(file:? = file.display(); "No file extension detected, defaulting to mp4");
+                    "mp4"
+                });
 
             // MPEG-TS needs remux for seeking/thumbnails.
             // Use the resolver to determine the target container.

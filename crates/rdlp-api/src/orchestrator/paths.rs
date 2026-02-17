@@ -80,7 +80,12 @@ impl Orchestrator {
 
         // Priority 2: Fallback for formats without detected container
         match format.ext.as_str() {
-            "hls" | "m3u8" | "dash" | "mpd" => "mp4".to_string(),
+            "hls" | "m3u8" | "dash" | "mpd" => {
+                super::container_resolver::ResolvedContainer::resolve(&self.config, None)
+                    .format
+                    .as_ext()
+                    .to_string()
+            }
             ext => ext.to_string(),
         }
     }

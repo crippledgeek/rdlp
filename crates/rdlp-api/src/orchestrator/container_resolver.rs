@@ -6,7 +6,7 @@
 
 use log::warn;
 use rdlp_core::ContainerFormat;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How the container format was determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,36 @@ impl ResolvedContainer {
             source: ContainerSource::Fallback,
         }
     }
+}
+
+/// Build a stub output path for subtitle-only downloads.
+///
+/// When downloading subtitles without a video file, we need a path to
+/// derive subtitle filenames from (stem + lang + ext). Uses
+/// [`ResolvedContainer`] to avoid hardcoding a container extension.
+pub fn output_stub(
+    config: &rdlp_core::Config,
+    output_dir: &Path,
+    sanitized_title: &str,
+) -> PathBuf {
+    let resolved = ResolvedContainer::resolve(config, None);
+    output_dir.join(format!("{sanitized_title}.{}", resolved.format.as_ext()))
+}
+
+/// Derive a sidecar file path from an output path.
+///
+/// Extracts the stem and parent directory from `base_path`, then appends
+/// `suffix` to form a sidecar filename. Replaces manual stem+parent+join
+/// patterns for subtitles, thumbnails, and other companion files.
+///
+/// `suffix` can be `"jpg"`, `"en.srt"`, `"rdlp_state.json"`, etc.
+pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
+    let stem = base_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    let parent = base_path.parent().unwrap_or(Path::new("."));
+    parent.join(format!("{stem}.{suffix}"))
 }
 
 #[cfg(test)]
@@ -207,5 +237,54 @@ mod tests {
         let r = ResolvedContainer::resolve(&config, Some(&path));
         assert_eq!(r.format, ContainerFormat::Mov);
         assert_eq!(r.source, ContainerSource::FileExtension);
+    }
+
+    // ── sidecar_path tests ──────────────────────────────────
+
+    #[test]
+    fn test_sidecar_path_subtitle() {
+        let base = PathBuf::from("/tmp/video.mkv");
+        assert_eq!(
+            sidecar_path(&base, "en.srt"),
+            PathBuf::from("/tmp/video.en.srt")
+        );
+    }
+
+    #[test]
+    fn test_sidecar_path_thumbnail() {
+        let base = PathBuf::from("/tmp/video.mp4");
+        assert_eq!(sidecar_path(&base, "jpg"), PathBuf::from("/tmp/video.jpg"));
+    }
+
+    #[test]
+    fn test_sidecar_path_no_extension() {
+        let base = PathBuf::from("/tmp/video");
+        assert_eq!(
+            sidecar_path(&base, "en.srt"),
+            PathBuf::from("/tmp/video.en.srt")
+        );
+    }
+
+    #[test]
+    fn test_sidecar_path_no_parent() {
+        let base = PathBuf::from("video.mp4");
+        assert_eq!(sidecar_path(&base, "jpg"), PathBuf::from("video.jpg"));
+    }
+
+    // ── output_stub tests ───────────────────────────────────
+
+    #[test]
+    fn test_output_stub_uses_resolver() {
+        let mut config = base_config();
+        config.remux_container = Some(ContainerFormat::Mkv);
+        let stub = output_stub(&config, std::path::Path::new("/tmp"), "My Video");
+        assert_eq!(stub, PathBuf::from("/tmp/My Video.mkv"));
+    }
+
+    #[test]
+    fn test_output_stub_default_mp4() {
+        let config = base_config();
+        let stub = output_stub(&config, std::path::Path::new("/tmp"), "My Video");
+        assert_eq!(stub, PathBuf::from("/tmp/My Video.mp4"));
     }
 }

@@ -143,7 +143,13 @@ impl PostProcessor for FFmpegMetadata {
         let extension = input_file
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("mp4");
+            .unwrap_or_else(|| {
+                info!(
+                    file:? = input_file.display();
+                    "No file extension detected, defaulting to mp4"
+                );
+                "mp4"
+            });
 
         info!(file:? = input_file.display(); "Embedding metadata");
 
