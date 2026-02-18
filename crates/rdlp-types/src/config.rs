@@ -54,7 +54,7 @@ impl std::error::Error for ConfigValidationError {}
 ///
 /// For file I/O operations (loading from TOML/YAML), use the extension
 /// functions in `rdlp_core::config_io`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     // === Output options ===
@@ -86,7 +86,7 @@ pub struct Config {
     pub merge_output_format: Option<ContainerFormat>,
 
     /// Require strict video-only + audio-only streams for merge selection.
-    /// When true, default selector changes from `b/bv*+ba` to `b/bv+ba`.
+    /// When true, default selector changes from `bv*+ba/b` to `bv+ba/b`.
     pub audio_multistreams: bool,
 
     // === Download options ===

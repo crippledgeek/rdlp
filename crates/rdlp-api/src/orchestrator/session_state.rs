@@ -20,7 +20,7 @@ const STATE_VERSION: u32 = 1;
 /// which variant to deserialize into.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "state_type")]
-pub(crate) enum SessionState {
+pub(super) enum SessionState {
     /// State for a single video download
     #[serde(rename = "single_video")]
     SingleVideo(SingleVideoState),
@@ -31,7 +31,7 @@ pub(crate) enum SessionState {
 
 /// Persisted selections for a single video download.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct SingleVideoState {
+pub(super) struct SingleVideoState {
     /// Schema version for forward compatibility
     pub version: u32,
     /// URL path (no host/query) for CDN-tolerant matching
@@ -40,6 +40,9 @@ pub(crate) struct SingleVideoState {
     pub title: String,
     /// Selected format identifier (matched against available formats on resume)
     pub format_id: String,
+    /// Audio format ID for merge downloads (None for single-format downloads)
+    #[serde(default)]
+    pub audio_format_id: Option<String>,
     /// Selected subtitle language codes (empty if none)
     pub subtitle_langs: Vec<String>,
     /// When this state was first created
@@ -50,7 +53,7 @@ pub(crate) struct SingleVideoState {
 
 /// Persisted selections for a playlist download.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct PlaylistState {
+pub(super) struct PlaylistState {
     /// Schema version for forward compatibility
     pub version: u32,
     /// URL path (no host/query) for CDN-tolerant matching
@@ -75,7 +78,7 @@ pub(crate) struct PlaylistState {
 
 /// Record of a failed episode for cross-run retry tracking.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct FailedEpisode {
+pub(super) struct FailedEpisode {
     /// 1-based position in the playlist
     pub position: usize,
     /// Episode title at time of failure
@@ -91,6 +94,7 @@ impl SingleVideoState {
         title: impl Into<String>,
         format_id: impl Into<String>,
         subtitle_langs: Vec<String>,
+        audio_format_id: Option<String>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -98,6 +102,7 @@ impl SingleVideoState {
             source_url: extract_url_path(url),
             title: title.into(),
             format_id: format_id.into(),
+            audio_format_id,
             subtitle_langs,
             created_at: now,
             updated_at: now,
@@ -254,14 +259,14 @@ impl SessionState {
 /// Compute the state file path for a single video download.
 ///
 /// Pattern: `{output_dir}/{sanitized_title}.rdlp_state.json`
-pub(crate) fn single_video_state_path(output_dir: &Path, sanitized_title: &str) -> PathBuf {
+pub(super) fn single_video_state_path(output_dir: &Path, sanitized_title: &str) -> PathBuf {
     output_dir.join(format!("{sanitized_title}.rdlp_state.json"))
 }
 
 /// Compute the state file path for a playlist download.
 ///
 /// Pattern: `{playlist_dir}/.rdlp_playlist_state.json`
-pub(crate) fn playlist_state_path(playlist_dir: &Path) -> PathBuf {
+pub(super) fn playlist_state_path(playlist_dir: &Path) -> PathBuf {
     playlist_dir.join(".rdlp_playlist_state.json")
 }
 
@@ -281,6 +286,7 @@ mod tests {
             "Test Video",
             "720p-hls",
             vec!["en".to_string(), "ja".to_string()],
+            None,
         ));
 
         state.save(&path).await;
@@ -339,6 +345,7 @@ mod tests {
             "Test",
             "720p",
             vec![],
+            None,
         ));
         state.save(&path).await;
 
@@ -399,6 +406,7 @@ mod tests {
             "Test",
             "720p",
             vec![],
+            None,
         ));
         state.save(&path).await;
         assert!(path.exists());
@@ -437,6 +445,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_plan_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.rdlp_state.json");
+        let url = "https://cdn1.example.com/watch/video-123?token=abc";
+
+        let state = SessionState::SingleVideo(SingleVideoState::new(
+            url,
+            "Test Video",
+            "v1080",
+            vec!["en".to_string()],
+            Some("a256".to_string()),
+        ));
+
+        state.save(&path).await;
+
+        let loaded =
+            SessionState::load(&path, "https://cdn2.example.com/watch/video-123?token=xyz").await;
+        assert!(loaded.is_some());
+        match loaded.unwrap() {
+            SessionState::SingleVideo(s) => {
+                assert_eq!(s.format_id, "v1080");
+                assert_eq!(s.audio_format_id, Some("a256".to_string()));
+                assert_eq!(s.subtitle_langs, vec!["en"]);
+            }
+            _ => panic!("Expected SingleVideo variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_single_plan_has_no_audio_format_id() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.rdlp_state.json");
+        let url = "https://example.com/watch/video-123";
+
+        let state = SessionState::SingleVideo(SingleVideoState::new(
+            url,
+            "Test Video",
+            "c720",
+            vec![],
+            None,
+        ));
+
+        state.save(&path).await;
+
+        let loaded = SessionState::load(&path, url).await;
+        assert!(loaded.is_some());
+        match loaded.unwrap() {
+            SessionState::SingleVideo(s) => {
+                assert_eq!(s.format_id, "c720");
+                assert!(s.audio_format_id.is_none());
+            }
+            _ => panic!("Expected SingleVideo variant"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_cdn_tolerant_url_matching() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.rdlp_state.json");
@@ -447,6 +511,7 @@ mod tests {
             "Test",
             "720p",
             vec![],
+            None,
         ));
         state.save(&path).await;
 
