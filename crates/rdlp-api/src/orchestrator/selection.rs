@@ -1,5 +1,6 @@
 //! Format selection logic and [`DownloadPlan`] construction
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::{DownloadPlan, Orchestrator, errors::*};
@@ -26,7 +27,7 @@ impl Orchestrator {
     /// | FFmpeg available, multistreams | `bv+ba/b` |
     /// | FFmpeg unavailable | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
-    pub(super) fn resolve_effective_selector(&self) -> String {
+    pub(super) fn resolve_effective_selector(&self) -> Cow<'_, str> {
         // 1. Explicit user format always wins
         if let Some(ref user_format) = self.config.format {
             debug!(
@@ -34,7 +35,7 @@ impl Orchestrator {
                 reason = "explicit user format";
                 "Resolved format selector"
             );
-            return user_format.clone();
+            return Cow::Borrowed(user_format.as_str());
         }
 
         // 2. Compute dynamic default
@@ -60,7 +61,7 @@ impl Orchestrator {
             "Resolved format selector"
         );
 
-        selector.to_string()
+        Cow::Borrowed(selector)
     }
 
     /// Select format from available formats and return a [`DownloadPlan`].
@@ -156,11 +157,9 @@ impl Orchestrator {
             }
         }
 
-        let grouped: Vec<&Format> = by_key.values().copied().collect();
-
         // Delegate to the interactive callback
         let callback = self.interactive.as_ref().unwrap();
-        let grouped_owned: Vec<Format> = grouped.iter().map(|f| (*f).clone()).collect();
+        let grouped_owned: Vec<Format> = by_key.values().map(|f| (*f).clone()).collect();
 
         let selection = callback.select_format(&grouped_owned, info).await;
 
@@ -195,15 +194,15 @@ fn pick_better(candidate: &Format, current: &Format) -> bool {
 mod tests {
     use crate::events::Event;
     use crate::handle::DownloadId;
-    use crate::orchestrator::Orchestrator;
+    use crate::orchestrator::{DownloadPlan, Orchestrator};
     use rdlp_core::{Config, DownloadProtocol, Format, InfoDict};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
     /// Unwrap a `DownloadPlan::Single`, panicking on `Merge`.
-    fn unwrap_single(plan: super::super::DownloadPlan) -> Format {
+    fn unwrap_single(plan: DownloadPlan) -> Format {
         match plan {
-            super::super::DownloadPlan::Single(f) => f,
+            DownloadPlan::Single(f) => f,
             other => panic!("Expected Single, got {other}"),
         }
     }
@@ -277,11 +276,11 @@ mod tests {
         let plan = orch.select_format(&info, false).await.unwrap().unwrap();
         // Should return Merge plan for bv+ba selector
         match plan {
-            super::super::DownloadPlan::Merge { video, audio } => {
+            DownloadPlan::Merge { video, audio } => {
                 assert!(video.has_video(), "Video format should have video");
                 assert!(audio.has_audio(), "Audio format should have audio");
             }
-            super::super::DownloadPlan::Single(f) => {
+            DownloadPlan::Single(f) => {
                 panic!("Expected Merge plan, got Single({})", f.format_id);
             }
         }
@@ -450,11 +449,11 @@ mod tests {
 
         let plan = orch.select_format(&info, false).await.unwrap().unwrap();
         match plan {
-            super::super::DownloadPlan::Merge { video, audio } => {
+            DownloadPlan::Merge { video, audio } => {
                 assert!(video.has_video(), "Merge video format should have video");
                 assert!(audio.has_audio(), "Merge audio format should have audio");
             }
-            super::super::DownloadPlan::Single(f) => {
+            DownloadPlan::Single(f) => {
                 panic!("Expected Merge plan, got Single({})", f.format_id);
             }
         }
@@ -503,7 +502,7 @@ mod tests {
 
         let plan = orch.select_format(&info, false).await.unwrap().unwrap();
         assert!(
-            matches!(plan, super::super::DownloadPlan::Merge { .. }),
+            matches!(plan, DownloadPlan::Merge { .. }),
             "Default selector with FFmpeg should prefer merge when better quality available"
         );
     }

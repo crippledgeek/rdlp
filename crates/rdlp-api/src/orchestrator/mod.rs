@@ -317,11 +317,10 @@ impl Orchestrator {
             phase = phase.advance(self, interactive).await?;
 
             match phase {
-                DownloadPhase::Complete { ref path } => {
-                    let result_path = path.clone();
+                DownloadPhase::Complete { path } => {
                     // Record in archive after successful download
                     self.record_in_archive(&infos[0].extractor, &infos[0].id);
-                    return Ok(Some(result_path));
+                    return Ok(Some(path));
                 }
                 DownloadPhase::Cancelled => return Ok(None),
                 _ => continue, // Keep advancing through phases

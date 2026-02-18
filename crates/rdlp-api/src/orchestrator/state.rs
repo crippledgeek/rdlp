@@ -12,6 +12,7 @@ use tracing::instrument;
 
 /// Download state for resume logic
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DownloadState {
     /// Fresh download with no resume
     Fresh,
@@ -53,6 +54,7 @@ impl fmt::Display for DownloadState {
 /// performance when the enum is moved/copied. This reduces stack usage and
 /// prevents unnecessary copying of large structs.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DownloadPhase {
     /// Extracting video information from URL
     Extracting {

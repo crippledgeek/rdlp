@@ -54,7 +54,7 @@ impl std::error::Error for ConfigValidationError {}
 ///
 /// For file I/O operations (loading from TOML/YAML), use the extension
 /// functions in `rdlp_core::config_io`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     // === Output options ===

@@ -20,7 +20,7 @@ const STATE_VERSION: u32 = 1;
 /// which variant to deserialize into.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "state_type")]
-pub(crate) enum SessionState {
+pub(super) enum SessionState {
     /// State for a single video download
     #[serde(rename = "single_video")]
     SingleVideo(SingleVideoState),
@@ -31,7 +31,7 @@ pub(crate) enum SessionState {
 
 /// Persisted selections for a single video download.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct SingleVideoState {
+pub(super) struct SingleVideoState {
     /// Schema version for forward compatibility
     pub version: u32,
     /// URL path (no host/query) for CDN-tolerant matching
@@ -53,7 +53,7 @@ pub(crate) struct SingleVideoState {
 
 /// Persisted selections for a playlist download.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct PlaylistState {
+pub(super) struct PlaylistState {
     /// Schema version for forward compatibility
     pub version: u32,
     /// URL path (no host/query) for CDN-tolerant matching
@@ -78,7 +78,7 @@ pub(crate) struct PlaylistState {
 
 /// Record of a failed episode for cross-run retry tracking.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct FailedEpisode {
+pub(super) struct FailedEpisode {
     /// 1-based position in the playlist
     pub position: usize,
     /// Episode title at time of failure
@@ -259,14 +259,14 @@ impl SessionState {
 /// Compute the state file path for a single video download.
 ///
 /// Pattern: `{output_dir}/{sanitized_title}.rdlp_state.json`
-pub(crate) fn single_video_state_path(output_dir: &Path, sanitized_title: &str) -> PathBuf {
+pub(super) fn single_video_state_path(output_dir: &Path, sanitized_title: &str) -> PathBuf {
     output_dir.join(format!("{sanitized_title}.rdlp_state.json"))
 }
 
 /// Compute the state file path for a playlist download.
 ///
 /// Pattern: `{playlist_dir}/.rdlp_playlist_state.json`
-pub(crate) fn playlist_state_path(playlist_dir: &Path) -> PathBuf {
+pub(super) fn playlist_state_path(playlist_dir: &Path) -> PathBuf {
     playlist_dir.join(".rdlp_playlist_state.json")
 }
 

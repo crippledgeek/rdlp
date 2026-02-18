@@ -31,6 +31,7 @@ const RESUME_SUB_FORMATS: &[SubtitleFormat] = &[
 ];
 
 /// Resume detection result for a playlist folder.
+#[derive(Debug)]
 pub(super) struct ResumeDetection {
     /// Completed episodes: sanitized_title -> video file path
     pub completed: HashMap<String, PathBuf>,
@@ -451,7 +452,7 @@ impl Orchestrator {
         let to_download: Vec<(usize, rdlp_core::InfoDict)> = infos
             .iter()
             .enumerate()
-            .filter(|(_, ep)| {
+            .filter_map(|(i, ep)| {
                 let sanitized = self.sanitize_filename(&ep.title);
                 let exists = downloaded.iter().any(|p| {
                     p.file_stem()
@@ -459,16 +460,15 @@ impl Orchestrator {
                         .is_some_and(|name| name == sanitized)
                 });
                 if exists {
-                    return false;
+                    return None;
                 }
                 if let Some(ref archive_set) = archive {
                     if archive::is_in_archive(archive_set, &ep.extractor, &ep.id) {
-                        return false;
+                        return None;
                     }
                 }
-                true
+                Some((i, ep.clone()))
             })
-            .map(|(i, ep)| (i, ep.clone()))
             .collect();
 
         let download_count = to_download.len();
@@ -1024,13 +1024,13 @@ impl Orchestrator {
         infos: &[rdlp_core::InfoDict],
         total: usize,
     ) {
-        for info in infos {
-            let sanitized = self.sanitize_filename(&info.title);
-            if missing_subs.contains_key(&sanitized) {
+        infos
+            .iter()
+            .filter(|info| missing_subs.contains_key(&self.sanitize_filename(&info.title)))
+            .for_each(|info| {
                 let pos = info.playlist_index.unwrap_or(0);
                 warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);
-            }
-        }
+            });
     }
 
     /// Download from pre-extracted InfoDict (internal helper)
