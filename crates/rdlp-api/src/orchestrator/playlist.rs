@@ -5,13 +5,16 @@
 
 use super::errors::is_reextractable_error;
 use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
-use super::{Orchestrator, OrchestratorError, Result, archive};
+use super::{DownloadPlan, Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use rdlp_core::SubtitleFormat;
+use rdlp_core::{Format, SubtitleFormat};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+/// Download result: (downloaded file paths, is_hls, merge formats if applicable).
+type DownloadResult = Option<(Vec<PathBuf>, bool, Option<Vec<Format>>)>;
 
 /// Maximum age of batch-resolved tokens before proactive re-extraction.
 /// Megacloud/netmagcdn tokens last ~30-60 min; we re-extract at 25 min
@@ -28,6 +31,7 @@ const RESUME_SUB_FORMATS: &[SubtitleFormat] = &[
 ];
 
 /// Resume detection result for a playlist folder.
+#[derive(Debug)]
 pub(super) struct ResumeDetection {
     /// Completed episodes: sanitized_title -> video file path
     pub completed: HashMap<String, PathBuf>,
@@ -448,7 +452,7 @@ impl Orchestrator {
         let to_download: Vec<(usize, rdlp_core::InfoDict)> = infos
             .iter()
             .enumerate()
-            .filter(|(_, ep)| {
+            .filter_map(|(i, ep)| {
                 let sanitized = self.sanitize_filename(&ep.title);
                 let exists = downloaded.iter().any(|p| {
                     p.file_stem()
@@ -456,16 +460,15 @@ impl Orchestrator {
                         .is_some_and(|name| name == sanitized)
                 });
                 if exists {
-                    return false;
+                    return None;
                 }
                 if let Some(ref archive_set) = archive {
                     if archive::is_in_archive(archive_set, &ep.extractor, &ep.id) {
-                        return false;
+                        return None;
                     }
                 }
-                true
+                Some((i, ep.clone()))
             })
-            .map(|(i, ep)| (i, ep.clone()))
             .collect();
 
         let download_count = to_download.len();
@@ -1021,13 +1024,13 @@ impl Orchestrator {
         infos: &[rdlp_core::InfoDict],
         total: usize,
     ) {
-        for info in infos {
-            let sanitized = self.sanitize_filename(&info.title);
-            if missing_subs.contains_key(&sanitized) {
+        infos
+            .iter()
+            .filter(|info| missing_subs.contains_key(&self.sanitize_filename(&info.title)))
+            .for_each(|info| {
                 let pos = info.playlist_index.unwrap_or(0);
                 warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);
-            }
-        }
+            });
     }
 
     /// Download from pre-extracted InfoDict (internal helper)
@@ -1085,7 +1088,7 @@ impl Orchestrator {
         const RETRY_DELAYS: [u64; MAX_EXTRACT_RETRIES] = [5, 15, 30];
 
         let mut output_path: Option<PathBuf> = None;
-        let mut download_outcome = None;
+        let mut download_result: DownloadResult = None;
         let mut last_info_ref: Option<rdlp_core::InfoDict> = None;
 
         for attempt in 0..=MAX_EXTRACT_RETRIES {
@@ -1151,88 +1154,168 @@ impl Orchestrator {
             };
 
             // Select format (non-interactive on retry to avoid re-prompting)
-            let Some(mut format) = self
+            let Some(plan) = self
                 .select_format(info_ref, interactive && attempt == 0)
                 .await?
             else {
                 return Ok(None);
             };
 
-            // Add alternative CDN server URLs as fallbacks.
-            // Sort by CDN host stickiness: same host as primary URL first,
-            // since a working CDN server is more likely to stay healthy.
-            let mut alt_urls: Vec<String> = info_ref
-                .formats
-                .iter()
-                .filter(|f| f.url != format.url)
-                .map(|f| f.url.clone())
-                .collect();
-            if !alt_urls.is_empty() {
-                let primary_host = extract_cdn_host(&format.url);
-                alt_urls.sort_by_key(|url| u8::from(extract_cdn_host(url) != primary_host));
-                format
-                    .fallback_urls
-                    .get_or_insert_with(Vec::new)
-                    .extend(alt_urls);
-            }
-
-            // Compute output path on first attempt only
-            if output_path.is_none() {
-                let file_ext = self.determine_file_extension(&format);
-                let sanitized_title = self.sanitize_filename(&info_ref.title);
-                let filename = format!("{sanitized_title}.{file_ext}");
-                let path = output_dir.join(&filename);
-
-                self.cleanup_leftover_segments(output_dir, &sanitized_title)
-                    .await;
-
-                info!(path:? = path.display(); "Downloading to");
-                output_path = Some(path);
-            }
-
-            let path = output_path.as_ref().unwrap();
-
-            // Detect resume point (recalculate on retry for partial HLS)
-            let resume_offset = self.detect_resume_point(path, format.filesize).await?;
-
-            // Check if file is already complete
-            if let Some(expected_size) = format.filesize {
-                if resume_offset == expected_size {
-                    info!("File already complete, skipping");
-                    return Ok(Some(path.clone()));
-                }
-            }
-
             // Save info for post-download use (thumbnail, subtitles)
             last_info_ref = Some(info_ref.clone());
 
-            // Download with CDN fallback
-            match self
-                .download_with_cdn_fallback(&format, path, resume_offset)
-                .await
-            {
-                Ok(Some(outcome)) => {
-                    download_outcome = Some(outcome);
-                    break;
+            match plan {
+                DownloadPlan::Single(mut format) => {
+                    // Add alternative CDN server URLs as fallbacks.
+                    // Sort by CDN host stickiness: same host as primary URL
+                    // first, since a working CDN server is more likely to
+                    // stay healthy.
+                    let mut alt_urls: Vec<String> = info_ref
+                        .formats
+                        .iter()
+                        .filter(|f| f.url != format.url)
+                        .map(|f| f.url.clone())
+                        .collect();
+                    if !alt_urls.is_empty() {
+                        let primary_host = extract_cdn_host(&format.url);
+                        alt_urls.sort_by_key(|url| u8::from(extract_cdn_host(url) != primary_host));
+                        format
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .extend(alt_urls);
+                    }
+
+                    // Compute output path on first attempt only
+                    if output_path.is_none() {
+                        let file_ext = self.determine_file_extension(&format);
+                        let sanitized_title = self.sanitize_filename(&info_ref.title);
+                        let filename = format!("{sanitized_title}.{file_ext}");
+                        let path = output_dir.join(&filename);
+
+                        self.cleanup_leftover_segments(output_dir, &sanitized_title)
+                            .await;
+
+                        info!(path:? = path.display(); "Downloading to");
+                        output_path = Some(path);
+                    }
+
+                    let path = output_path.as_ref().unwrap();
+
+                    // Detect resume point (recalculate on retry for partial HLS)
+                    let resume_offset = self.detect_resume_point(path, format.filesize).await?;
+
+                    // Check if file is already complete
+                    if let Some(expected_size) = format.filesize {
+                        if resume_offset == expected_size {
+                            info!("File already complete, skipping");
+                            return Ok(Some(path.clone()));
+                        }
+                    }
+
+                    // Download with CDN fallback
+                    match self
+                        .download_with_cdn_fallback(&format, path, resume_offset)
+                        .await
+                    {
+                        Ok(Some(outcome)) => {
+                            download_result = Some((vec![path.clone()], outcome.is_hls, None));
+                            break;
+                        }
+                        Ok(None) => return Ok(None),
+                        Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
+                            warn!("All CDN URLs failed: {e}");
+                            warn!("Will re-extract fresh URLs after delay");
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
-                Ok(None) => return Ok(None), // User cancelled
-                Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
-                    warn!("All CDN URLs failed: {e}");
-                    warn!("Will re-extract fresh URLs after delay");
-                    continue;
+                DownloadPlan::Merge {
+                    mut video,
+                    mut audio,
+                } => {
+                    // Add CDN fallback URLs for both streams
+                    let video_alts: Vec<String> = info_ref
+                        .formats
+                        .iter()
+                        .filter(|f| f.url != video.url && f.has_video() && !f.has_audio())
+                        .map(|f| f.url.clone())
+                        .collect();
+                    if !video_alts.is_empty() {
+                        let primary_host = extract_cdn_host(&video.url);
+                        let mut sorted = video_alts;
+                        sorted.sort_by_key(|u| u8::from(extract_cdn_host(u) != primary_host));
+                        video
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .extend(sorted);
+                    }
+                    let audio_alts: Vec<String> = info_ref
+                        .formats
+                        .iter()
+                        .filter(|f| f.url != audio.url && f.has_audio() && !f.has_video())
+                        .map(|f| f.url.clone())
+                        .collect();
+                    if !audio_alts.is_empty() {
+                        let primary_host = extract_cdn_host(&audio.url);
+                        let mut sorted = audio_alts;
+                        sorted.sort_by_key(|u| u8::from(extract_cdn_host(u) != primary_host));
+                        audio
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .extend(sorted);
+                    }
+
+                    // Compute output path on first attempt only
+                    if output_path.is_none() {
+                        let file_ext = self.determine_file_extension(&video);
+                        let sanitized_title = self.sanitize_filename(&info_ref.title);
+                        let filename = format!("{sanitized_title}.{file_ext}");
+                        let path = output_dir.join(&filename);
+
+                        self.cleanup_leftover_segments(output_dir, &sanitized_title)
+                            .await;
+
+                        info!(path:? = path.display(); "Downloading merge to");
+                        output_path = Some(path);
+                    }
+
+                    let path = output_path.as_ref().unwrap();
+
+                    // Parallel download of video + audio
+                    match self.download_merge_pair(&video, &audio, path).await {
+                        Ok(Some(merge_outcome)) => {
+                            download_result = Some((
+                                vec![merge_outcome.video_path, merge_outcome.audio_path],
+                                merge_outcome.is_hls,
+                                Some(vec![video, audio]),
+                            ));
+                            break;
+                        }
+                        Ok(None) => return Ok(None),
+                        Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
+                            warn!("Merge download failed: {e}");
+                            warn!("Will re-extract fresh URLs after delay");
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
-                Err(e) => return Err(e),
             }
         }
 
-        let outcome = download_outcome.ok_or_else(|| {
+        let (download_files, is_hls, merge_formats) = download_result.ok_or_else(|| {
             OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction(
                 "All extraction retry attempts exhausted".to_string(),
             ))
         })?;
 
         let output_path = output_path.unwrap();
-        let final_info = last_info_ref.as_ref().unwrap_or(info);
+        let mut final_info_owned = last_info_ref.unwrap_or_else(|| info.clone());
+        if let Some(fmts) = merge_formats {
+            final_info_owned.requested_formats = Some(fmts);
+        }
+        let final_info = &final_info_owned;
 
         // Download thumbnail if needed (before post-processing so embed can find it)
         if self.config.embed_thumbnail || self.config.write_thumbnail {
@@ -1269,16 +1352,18 @@ impl Orchestrator {
             );
         }
 
-        // Run post-processing if configured (or automatic for HLS)
+        // Run post-processing if configured (or automatic for HLS).
+        // For merge downloads, passes both video + audio files so
+        // FFmpegMerger (priority 100) can mux them.
         let final_files = self
-            .run_postprocessing(final_info, vec![output_path.clone()], outcome.is_hls)
+            .run_postprocessing(final_info, download_files, is_hls)
             .await?;
         let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
         // HLS downloads produce .ts files that should be remuxed to a proper
         // container. If post-processing left the file as .ts, fail the episode
         // so the retry system can re-attempt (FFmpeg may have been busy/failed).
-        if outcome.is_hls {
+        if is_hls {
             let ext = final_path
                 .extension()
                 .and_then(|e| e.to_str())

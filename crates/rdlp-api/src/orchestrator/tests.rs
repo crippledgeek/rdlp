@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Helper function to create a test orchestrator with event channel
-pub(crate) fn create_test_orchestrator() -> Orchestrator {
+pub(super) fn create_test_orchestrator() -> Orchestrator {
     let config = Config::default();
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let id = DownloadId::next();
@@ -256,7 +256,11 @@ async fn test_select_format_automatic_mode() {
     let selected = result.unwrap();
     assert!(selected.is_some());
     // Default selector should pick best quality
-    let format = selected.unwrap();
+    let plan = selected.unwrap();
+    let format = match plan {
+        DownloadPlan::Single(f) => f,
+        other => panic!("Expected Single, got {other}"),
+    };
     assert_eq!(format.format_id, "1080p");
 }
 

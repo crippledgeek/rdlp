@@ -1,5 +1,6 @@
 //! State machine types for the download workflow
 
+use super::DownloadPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
 use crate::events::Event;
@@ -11,6 +12,7 @@ use tracing::instrument;
 
 /// Download state for resume logic
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DownloadState {
     /// Fresh download with no resume
     Fresh,
@@ -52,6 +54,7 @@ impl fmt::Display for DownloadState {
 /// performance when the enum is moved/copied. This reduces stack usage and
 /// prevents unnecessary copying of large structs.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DownloadPhase {
     /// Extracting video information from URL
     Extracting {
@@ -67,17 +70,21 @@ pub enum DownloadPhase {
     SelectingSubtitles {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
-        /// Selected format for download
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
+        /// Download plan (single or merge)
+        plan: Box<DownloadPlan>,
     },
     /// Preparing download (checking for resume state)
     Preparing {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
-        /// Selected format for download
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        /// Download plan (single or merge)
+        plan: Box<DownloadPlan>,
     },
     /// Downloading with progress tracking
     Downloading {
@@ -85,12 +92,14 @@ pub enum DownloadPhase {
         info: Box<rdlp_core::InfoDict>,
         /// Path where the file will be saved
         output_path: PathBuf,
-        /// Selected format being downloaded
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Resume state (fresh or resuming from offset)
         state: DownloadState,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        /// Download plan (single or merge)
+        plan: Box<DownloadPlan>,
     },
     /// Download completed successfully
     Complete {
@@ -185,10 +194,38 @@ impl DownloadPhase {
                         // Resolve subtitles from saved language codes
                         let subtitle_selection = orchestrator
                             .resolve_subtitles_for_episode(&info, &saved.subtitle_langs);
+                        // Reconstruct plan: merge if audio format was saved
+                        let plan = if let Some(ref audio_id) = saved.audio_format_id {
+                            if let Some(audio) = info
+                                .formats
+                                .iter()
+                                .find(|f| f.format_id == *audio_id)
+                                .cloned()
+                            {
+                                info!(
+                                    audio_id = audio_id.as_str();
+                                    "Resuming merge plan with saved audio format"
+                                );
+                                DownloadPlan::Merge {
+                                    video: format.clone(),
+                                    audio,
+                                }
+                            } else {
+                                warn!(
+                                    audio_id = audio_id.as_str();
+                                    "Saved audio format no longer available, \
+                                     falling back to single format"
+                                );
+                                DownloadPlan::Single(format.clone())
+                            }
+                        } else {
+                            DownloadPlan::Single(format.clone())
+                        };
                         return Ok(Self::Preparing {
                             info: Box::new(info),
                             format: Box::new(format),
                             subtitle_selection,
+                            plan: Box::new(plan),
                         });
                     }
                     warn!(
@@ -203,17 +240,22 @@ impl DownloadPhase {
             }
 
             Self::SelectingFormat { info } => {
-                let Some(format) = orchestrator.select_format(&info, interactive).await? else {
+                let Some(plan) = orchestrator.select_format(&info, interactive).await? else {
                     orchestrator.emit(Event::Cancelled {
                         id: orchestrator.download_id,
                     });
                     return Ok(Self::Cancelled);
                 };
 
+                let primary_format = match &plan {
+                    DownloadPlan::Single(f) => f.clone(),
+                    DownloadPlan::Merge { video, .. } => video.clone(),
+                };
+
                 orchestrator.emit(Event::FormatSelected {
                     id: orchestrator.download_id,
-                    format_id: format.format_id.clone(),
-                    quality: format
+                    format_id: primary_format.format_id.clone(),
+                    quality: primary_format
                         .format_note
                         .clone()
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -221,11 +263,12 @@ impl DownloadPhase {
 
                 Ok(Self::SelectingSubtitles {
                     info,
-                    format: Box::new(format),
+                    format: Box::new(primary_format),
+                    plan: Box::new(plan),
                 })
             }
 
-            Self::SelectingSubtitles { info, format } => {
+            Self::SelectingSubtitles { info, format, plan } => {
                 let list_subs = orchestrator.config.list_subs;
                 let Some(subtitle_selection) = orchestrator
                     .select_subtitles_if_needed(&info, interactive, list_subs)
@@ -247,11 +290,16 @@ impl DownloadPhase {
                     .iter()
                     .map(|(lang, _)| lang.clone())
                     .collect();
+                let audio_format_id = match &*plan {
+                    DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
+                    DownloadPlan::Single(_) => None,
+                };
                 let state = SessionState::SingleVideo(SingleVideoState::new(
                     &info.webpage_url,
                     &info.title,
                     &format.format_id,
                     sub_langs,
+                    audio_format_id,
                 ));
                 state.save(&state_path).await;
 
@@ -259,6 +307,7 @@ impl DownloadPhase {
                     info,
                     format,
                     subtitle_selection,
+                    plan,
                 })
             }
 
@@ -266,25 +315,34 @@ impl DownloadPhase {
                 info,
                 format,
                 subtitle_selection,
+                plan,
             } => {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
 
-                let resume_offset = orchestrator
-                    .detect_resume_point(&output_path, format.filesize)
-                    .await?;
+                // Resume detection only applies to Single downloads.
+                // Merge downloads create separate stream files (video + audio)
+                // at derived paths and always start fresh.
+                let state = match *plan {
+                    DownloadPlan::Merge { .. } => DownloadState::Fresh,
+                    DownloadPlan::Single(_) => {
+                        let resume_offset = orchestrator
+                            .detect_resume_point(&output_path, format.filesize)
+                            .await?;
 
-                // Check if file is already complete
-                if let Some(expected_size) = format.filesize {
-                    if resume_offset == expected_size {
-                        return Ok(Self::Complete { path: output_path });
+                        // Check if file is already complete
+                        if let Some(expected_size) = format.filesize {
+                            if resume_offset == expected_size {
+                                return Ok(Self::Complete { path: output_path });
+                            }
+                        }
+
+                        if resume_offset > 0 {
+                            DownloadState::Resume(resume_offset)
+                        } else {
+                            DownloadState::Fresh
+                        }
                     }
-                }
-
-                let state = if resume_offset > 0 {
-                    DownloadState::Resume(resume_offset)
-                } else {
-                    DownloadState::Fresh
                 };
 
                 Ok(Self::Downloading {
@@ -293,25 +351,54 @@ impl DownloadPhase {
                     format,
                     state,
                     subtitle_selection,
+                    plan,
                 })
             }
 
             Self::Downloading {
-                info,
+                mut info,
                 output_path,
                 format,
                 state,
                 subtitle_selection,
+                plan,
             } => {
-                // Execute download with CDN fallback (shared implementation)
-                let Some(outcome) = orchestrator
-                    .download_with_cdn_fallback(&format, &output_path, state.offset())
-                    .await?
-                else {
-                    orchestrator.emit(Event::Cancelled {
-                        id: orchestrator.download_id,
-                    });
-                    return Ok(Self::Cancelled);
+                // Branch on download plan
+                let (download_files, is_hls) = match *plan {
+                    DownloadPlan::Single(_) => {
+                        // Single format: existing path
+                        let Some(outcome) = orchestrator
+                            .download_with_cdn_fallback(&format, &output_path, state.offset())
+                            .await?
+                        else {
+                            orchestrator.emit(Event::Cancelled {
+                                id: orchestrator.download_id,
+                            });
+                            return Ok(Self::Cancelled);
+                        };
+                        (vec![output_path.clone()], outcome.is_hls)
+                    }
+                    DownloadPlan::Merge {
+                        ref video,
+                        ref audio,
+                    } => {
+                        // Merge: parallel video + audio download
+                        let Some(outcome) = orchestrator
+                            .download_merge_pair(video, audio, &output_path)
+                            .await?
+                        else {
+                            orchestrator.emit(Event::Cancelled {
+                                id: orchestrator.download_id,
+                            });
+                            return Ok(Self::Cancelled);
+                        };
+
+                        // Set requested_formats so FFmpegMerger::should_run()
+                        // returns true
+                        info.requested_formats = Some(vec![video.clone(), audio.clone()]);
+
+                        (vec![outcome.video_path, outcome.audio_path], outcome.is_hls)
+                    }
                 };
 
                 // Download thumbnail for embedding or standalone use
@@ -324,9 +411,10 @@ impl DownloadPhase {
                     .download_subtitles(&info, &output_path, &subtitle_selection)
                     .await?;
 
-                // Run post-processing (automatic for HLS, optional for others)
+                // Run post-processing (FFmpegMerger at priority 100 will
+                // merge when it detects 2 files with requested_formats set)
                 let final_files = orchestrator
-                    .run_postprocessing(&info, vec![output_path.clone()], outcome.is_hls)
+                    .run_postprocessing(&info, download_files, is_hls)
                     .await?;
                 let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
@@ -368,6 +456,12 @@ mod tests {
                 "mp4",
                 rdlp_core::DownloadProtocol::Https,
             )),
+            plan: Box::new(super::super::DownloadPlan::Single(rdlp_core::Format::new(
+                "f1",
+                "http://example.com/v.mp4",
+                "mp4",
+                rdlp_core::DownloadProtocol::Https,
+            ))),
         };
 
         assert_eq!(format!("{phase}"), "selecting subtitles");

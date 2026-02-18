@@ -1,15 +1,13 @@
-//! Format selection logic
+//! Format selection logic and [`DownloadPlan`] construction
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use super::{Orchestrator, errors::*};
+use super::{DownloadPlan, Orchestrator, errors::*};
 use log::{debug, info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
 
-/// Whether merge download (video + audio muxed via FFmpeg) is supported.
-/// Both `resolve_effective_selector` and `select_format` check this value.
-/// Phase 2 will change this to a runtime check.
-const MERGE_SUPPORTED: bool = false;
+// Merge download (video + audio muxed via FFmpeg) is fully supported.
 
 impl Orchestrator {
     /// Resolve the effective format selector string based on runtime
@@ -19,18 +17,17 @@ impl Orchestrator {
     /// 1. Explicit user format (`config.format = Some(...)`) always wins
     /// 2. Otherwise, compute default from:
     ///    - `ffmpeg_available` -- from `postprocessor_registry.is_some()`
-    ///    - `merge_supported` -- false in Phase 1 (no merge download yet)
     ///    - `audio_multistreams` -- from `config.audio_multistreams`
     ///
-    /// # Phase 1 defaults
+    /// # Defaults
     ///
     /// | Condition | Default |
     /// |-----------|---------|
-    /// | FFmpeg available, merge not supported | `b/bv*+ba` |
+    /// | FFmpeg available, no multistreams | `bv*+ba/b` |
+    /// | FFmpeg available, multistreams | `bv+ba/b` |
     /// | FFmpeg unavailable | `b/bv+ba` |
-    /// | audio_multistreams enabled | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
-    pub(super) fn resolve_effective_selector(&self) -> String {
+    pub(super) fn resolve_effective_selector(&self) -> Cow<'_, str> {
         // 1. Explicit user format always wins
         if let Some(ref user_format) = self.config.format {
             debug!(
@@ -38,52 +35,46 @@ impl Orchestrator {
                 reason = "explicit user format";
                 "Resolved format selector"
             );
-            return user_format.clone();
+            return Cow::Borrowed(user_format.as_str());
         }
 
         // 2. Compute dynamic default
         let ffmpeg_available = self.postprocessor_registry.is_some();
         let audio_multistreams = self.config.audio_multistreams;
 
-        let selector = if MERGE_SUPPORTED && ffmpeg_available && !audio_multistreams {
-            // Phase 2+: full merge with star
-            // (video+audio combined included)
+        let selector = if ffmpeg_available && !audio_multistreams {
+            // FFmpeg + merge: prefer best video (including combined) + best audio
             "bv*+ba/b"
-        } else if MERGE_SUPPORTED && ffmpeg_available && audio_multistreams {
-            // Phase 2+: merge without star
-            // (strict video-only + audio-only)
+        } else if ffmpeg_available && audio_multistreams {
+            // FFmpeg + merge + multistreams: strict video-only + audio-only
             "bv+ba/b"
-        } else if ffmpeg_available && !audio_multistreams {
-            // Phase 1: FFmpeg available but no merge -- prefer combined,
-            // fallback to video-star + audio (star allows combined
-            // formats as video candidate)
-            "b/bv*+ba"
         } else {
-            // No FFmpeg OR multistreams -- only combined or strict
-            // video+audio
+            // No FFmpeg: prefer combined, fallback to video+audio
             "b/bv+ba"
         };
 
         debug!(
             selector,
             ffmpeg_available,
-            merge_supported = MERGE_SUPPORTED,
             audio_multistreams,
             reason = "dynamic default";
             "Resolved format selector"
         );
 
-        selector.to_string()
+        Cow::Borrowed(selector)
     }
 
-    /// Select format from available formats.
+    /// Select format from available formats and return a [`DownloadPlan`].
     ///
     /// Uses [`resolve_effective_selector`] to determine the selector
-    /// string, then applies merge-fallback safety: if the selector
-    /// returns a merge pair but merge is not supported, falls back to
-    /// the best combined format (or video-only as last resort).
+    /// string. When the selector returns a merge pair (video + audio),
+    /// returns [`DownloadPlan::Merge`]. Otherwise returns a single
+    /// format wrapped in [`DownloadPlan::Single`].
     ///
-    /// Returns `Ok(Some(format))` on success, `Ok(None)` if the user
+    /// **Note**: Interactive mode always returns `DownloadPlan::Single`
+    /// because the user selects a single format from the grouped table.
+    ///
+    /// Returns `Ok(Some(plan))` on success, `Ok(None)` if the user
     /// cancelled (interactive mode only).
     ///
     /// # Errors
@@ -94,15 +85,18 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
         interactive: bool,
-    ) -> Result<Option<Format>> {
+    ) -> Result<Option<DownloadPlan>> {
         let formats = &info.formats;
-        let format = if interactive && self.interactive.is_some() {
+        if interactive && self.interactive.is_some() {
             let Some(format) = self.select_format_interactive(info).await? else {
                 info!("Selection cancelled by user");
                 return Ok(None);
             };
-            format
-        } else {
+            info!(format:?; "Selected format");
+            return Ok(Some(DownloadPlan::Single(format)));
+        }
+
+        let format = {
             let selector_str = self.resolve_effective_selector();
             let format_selector = FormatSelector::parse(&selector_str)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;
@@ -112,50 +106,23 @@ impl Orchestrator {
                 return Err(OrchestratorError::NoFormat);
             }
 
-            // Merge-fallback safety: if selector returned 2 formats
-            // (video+audio merge) but merge download is not yet
-            // supported, fall back to best combined format.
+            // Selector returned a merge pair: first = video, second = audio
             if selected_formats.len() > 1 {
-                if MERGE_SUPPORTED {
-                    // Phase 2: return the video format
-                    // (merge handled downstream)
-                    selected_formats[0].clone()
-                } else {
-                    warn!(
-                        video = selected_formats[0].format_id.as_str(),
-                        audio = selected_formats[1].format_id.as_str();
-                        "Merge requested but not supported \
-                         — falling back to best combined format"
-                    );
-                    // Fall back: re-select with "best" (combined only)
-                    let fallback = FormatSelector::parse("b").expect("'b' is a valid selector");
-                    let combined = fallback.select(formats);
-                    if let Some(best_combined) = combined.first() {
-                        info!(
-                            format_id =
-                                best_combined.format_id.as_str();
-                            "Using best combined format \
-                             (has both video and audio)"
-                        );
-                        (*best_combined).clone()
-                    } else {
-                        // No combined format either — use the first
-                        // selected format (video-only is better
-                        // than nothing)
-                        warn!(
-                            "No combined format available \
-                             — using video-only format"
-                        );
-                        selected_formats[0].clone()
-                    }
-                }
+                let video = selected_formats[0].clone();
+                let audio = selected_formats[1].clone();
+                info!(
+                    video = video.format_id.as_str(),
+                    audio = audio.format_id.as_str();
+                    "Selected merge pair"
+                );
+                return Ok(Some(DownloadPlan::Merge { video, audio }));
             } else {
                 selected_formats[0].clone()
             }
         };
 
         info!(format:?; "Selected format");
-        Ok(Some(format))
+        Ok(Some(DownloadPlan::Single(format)))
     }
 
     /// Interactive format selection via [`InteractiveCallback`]
@@ -190,11 +157,9 @@ impl Orchestrator {
             }
         }
 
-        let grouped: Vec<&Format> = by_key.values().copied().collect();
-
         // Delegate to the interactive callback
         let callback = self.interactive.as_ref().unwrap();
-        let grouped_owned: Vec<Format> = grouped.iter().map(|f| (*f).clone()).collect();
+        let grouped_owned: Vec<Format> = by_key.values().map(|f| (*f).clone()).collect();
 
         let selection = callback.select_format(&grouped_owned, info).await;
 
@@ -229,10 +194,18 @@ fn pick_better(candidate: &Format, current: &Format) -> bool {
 mod tests {
     use crate::events::Event;
     use crate::handle::DownloadId;
-    use crate::orchestrator::Orchestrator;
+    use crate::orchestrator::{DownloadPlan, Orchestrator};
     use rdlp_core::{Config, DownloadProtocol, Format, InfoDict};
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+
+    /// Unwrap a `DownloadPlan::Single`, panicking on `Merge`.
+    fn unwrap_single(plan: DownloadPlan) -> Format {
+        match plan {
+            DownloadPlan::Single(f) => f,
+            other => panic!("Expected Single, got {other}"),
+        }
+    }
 
     /// Create orchestrator with specific config for testing.
     fn orchestrator_with_config(config: Config) -> Orchestrator {
@@ -285,12 +258,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_selector_falls_back_to_combined() {
-        // When selector returns 2 formats (merge) but merge is not
-        // supported, should fall back to best combined format instead
-        // of silently dropping audio.
+    async fn test_merge_selector_returns_merge_plan() {
         let config = Config {
-            format: Some("bv+ba/b".to_string()),
+            format: Some("bv+ba".to_string()),
             ..Default::default()
         };
         let orch = orchestrator_with_config(config);
@@ -303,14 +273,17 @@ mod tests {
         ];
         let info = test_info_with_formats(formats);
 
-        let result = orch.select_format(&info, false).await.unwrap().unwrap();
-        // Should NOT be v1440 (video-only, no audio!)
-        // Should fall back to c1080 (best combined)
-        assert_eq!(result.format_id, "c1080");
-        assert!(
-            result.acodec.as_deref() != Some("none"),
-            "Fallback format must have audio"
-        );
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        // Should return Merge plan for bv+ba selector
+        match plan {
+            DownloadPlan::Merge { video, audio } => {
+                assert!(video.has_video(), "Video format should have video");
+                assert!(audio.has_audio(), "Audio format should have audio");
+            }
+            DownloadPlan::Single(f) => {
+                panic!("Expected Merge plan, got Single({})", f.format_id);
+            }
+        }
     }
 
     #[tokio::test]
@@ -325,7 +298,8 @@ mod tests {
         let info = test_info_with_formats(formats);
 
         // Should succeed using the dynamic default selector
-        let result = orch.select_format(&info, false).await.unwrap().unwrap();
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        let result = unwrap_single(plan);
         // Best combined should be selected (c1080)
         assert_eq!(result.format_id, "c1080");
     }
@@ -340,8 +314,8 @@ mod tests {
         let selector = orch.resolve_effective_selector();
         if orch.postprocessor_registry.is_some() {
             assert_eq!(
-                selector, "b/bv*+ba",
-                "FFmpeg available + no merge should give b/bv*+ba"
+                selector, "bv*+ba/b",
+                "FFmpeg available + merge supported should give bv*+ba/b"
             );
         } else {
             assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
@@ -367,8 +341,11 @@ mod tests {
         };
         let orch = orchestrator_with_config(config);
         let selector = orch.resolve_effective_selector();
-        // With multistreams, always "b/bv+ba" regardless of FFmpeg
-        assert_eq!(selector, "b/bv+ba");
+        if orch.postprocessor_registry.is_some() {
+            assert_eq!(selector, "bv+ba/b");
+        } else {
+            assert_eq!(selector, "b/bv+ba");
+        }
     }
 
     #[test]
@@ -383,42 +360,50 @@ mod tests {
         assert_eq!(selector, "bestvideo*+bestaudio/best");
     }
 
-    /// Verify the Phase 1 selector truth table:
+    /// Verify the selector truth table (merge supported):
     ///
     /// | Condition                              | Default          |
     /// |----------------------------------------|------------------|
-    /// | FFmpeg available, merge not supported   | `b/bv*+ba`       |
+    /// | FFmpeg available, no multistreams       | `bv*+ba/b`       |
+    /// | FFmpeg available, multistreams          | `bv+ba/b`        |
     /// | FFmpeg unavailable                      | `b/bv+ba`        |
-    /// | audio_multistreams enabled              | `b/bv+ba`        |
     /// | User explicit `-f`                      | User's value     |
     #[test]
-    fn test_phase1_selector_truth_table() {
-        // Case 1: FFmpeg available, merge not supported
+    fn test_selector_truth_table() {
+        // Case 1: FFmpeg available, merge supported
         // (depends on environment -- tested via unit logic)
         let config = Config::default();
         let orch = orchestrator_with_config(config);
         let selector = orch.resolve_effective_selector();
         if orch.postprocessor_registry.is_some() {
             assert_eq!(
-                selector, "b/bv*+ba",
-                "FFmpeg available + no merge should give b/bv*+ba"
+                selector, "bv*+ba/b",
+                "FFmpeg available + merge supported should give bv*+ba/b"
             );
         } else {
             assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
         }
 
-        // Case 2: audio_multistreams always gives b/bv+ba regardless
-        // of ffmpeg
+        // Case 2: audio_multistreams with FFmpeg gives bv+ba/b,
+        // without FFmpeg gives b/bv+ba
         let config = Config {
             audio_multistreams: true,
             ..Default::default()
         };
         let orch = orchestrator_with_config(config);
-        assert_eq!(
-            orch.resolve_effective_selector(),
-            "b/bv+ba",
-            "audio_multistreams should give b/bv+ba"
-        );
+        if orch.postprocessor_registry.is_some() {
+            assert_eq!(
+                orch.resolve_effective_selector(),
+                "bv+ba/b",
+                "multistreams + FFmpeg should give bv+ba/b"
+            );
+        } else {
+            assert_eq!(
+                orch.resolve_effective_selector(),
+                "b/bv+ba",
+                "multistreams + no FFmpeg should give b/bv+ba"
+            );
+        }
 
         // Case 3: Explicit format always wins
         let config = Config {
@@ -443,6 +428,82 @@ mod tests {
             orch.resolve_effective_selector(),
             "bv[height<=720]+ba",
             "Explicit complex format should be preserved exactly"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_plan_returned_for_explicit_merge_selector() {
+        // Force selector to request merge (bv+ba)
+        let config = Config {
+            format: Some("bv+ba".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_video_only("v1080", 1080),
+            make_audio_only("a256", 256.0),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        match plan {
+            DownloadPlan::Merge { video, audio } => {
+                assert!(video.has_video(), "Merge video format should have video");
+                assert!(audio.has_audio(), "Merge audio format should have audio");
+            }
+            DownloadPlan::Single(f) => {
+                panic!("Expected Merge plan, got Single({})", f.format_id);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_single_format_returns_single_plan() {
+        let config = Config {
+            format: Some("b".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_combined("c1080", 1080, 3),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        let format = unwrap_single(plan);
+        assert_eq!(
+            format.format_id, "c1080",
+            "Best single format should be c1080"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_default_selector_returns_merge_with_ffmpeg() {
+        // Default (no explicit format) with FFmpeg should use bv*+ba/b
+        // which prefers merge when better video-only exists
+        let config = Config::default();
+        let orch = orchestrator_with_config(config);
+
+        if orch.postprocessor_registry.is_none() {
+            // Skip if no FFmpeg
+            return;
+        }
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_video_only("v1080", 1080),
+            make_audio_only("a256", 256.0),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        assert!(
+            matches!(plan, DownloadPlan::Merge { .. }),
+            "Default selector with FFmpeg should prefer merge when better quality available"
         );
     }
 }
