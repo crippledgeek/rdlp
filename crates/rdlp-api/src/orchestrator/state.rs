@@ -1,5 +1,6 @@
 //! State machine types for the download workflow
 
+use super::DownloadPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
 use crate::events::Event;
@@ -69,6 +70,8 @@ pub enum DownloadPhase {
         info: Box<rdlp_core::InfoDict>,
         /// Selected format for download
         format: Box<Format>,
+        /// Download plan (single or merge)
+        plan: Box<DownloadPlan>,
     },
     /// Preparing download (checking for resume state)
     Preparing {
@@ -78,6 +81,8 @@ pub enum DownloadPhase {
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        /// Download plan (single or merge)
+        plan: Box<DownloadPlan>,
     },
     /// Downloading with progress tracking
     Downloading {
@@ -91,6 +96,8 @@ pub enum DownloadPhase {
         state: DownloadState,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        /// Download plan (single or merge — used by Task 4)
+        plan: Box<DownloadPlan>,
     },
     /// Download completed successfully
     Complete {
@@ -185,10 +192,12 @@ impl DownloadPhase {
                         // Resolve subtitles from saved language codes
                         let subtitle_selection = orchestrator
                             .resolve_subtitles_for_episode(&info, &saved.subtitle_langs);
+                        let plan = DownloadPlan::Single(format.clone());
                         return Ok(Self::Preparing {
                             info: Box::new(info),
                             format: Box::new(format),
                             subtitle_selection,
+                            plan: Box::new(plan),
                         });
                     }
                     warn!(
@@ -203,17 +212,22 @@ impl DownloadPhase {
             }
 
             Self::SelectingFormat { info } => {
-                let Some(format) = orchestrator.select_format(&info, interactive).await? else {
+                let Some(plan) = orchestrator.select_format(&info, interactive).await? else {
                     orchestrator.emit(Event::Cancelled {
                         id: orchestrator.download_id,
                     });
                     return Ok(Self::Cancelled);
                 };
 
+                let primary_format = match &plan {
+                    DownloadPlan::Single(f) => f.clone(),
+                    DownloadPlan::Merge { video, .. } => video.clone(),
+                };
+
                 orchestrator.emit(Event::FormatSelected {
                     id: orchestrator.download_id,
-                    format_id: format.format_id.clone(),
-                    quality: format
+                    format_id: primary_format.format_id.clone(),
+                    quality: primary_format
                         .format_note
                         .clone()
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -221,11 +235,12 @@ impl DownloadPhase {
 
                 Ok(Self::SelectingSubtitles {
                     info,
-                    format: Box::new(format),
+                    format: Box::new(primary_format),
+                    plan: Box::new(plan),
                 })
             }
 
-            Self::SelectingSubtitles { info, format } => {
+            Self::SelectingSubtitles { info, format, plan } => {
                 let list_subs = orchestrator.config.list_subs;
                 let Some(subtitle_selection) = orchestrator
                     .select_subtitles_if_needed(&info, interactive, list_subs)
@@ -259,6 +274,7 @@ impl DownloadPhase {
                     info,
                     format,
                     subtitle_selection,
+                    plan,
                 })
             }
 
@@ -266,6 +282,7 @@ impl DownloadPhase {
                 info,
                 format,
                 subtitle_selection,
+                plan,
             } => {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
@@ -293,6 +310,7 @@ impl DownloadPhase {
                     format,
                     state,
                     subtitle_selection,
+                    plan,
                 })
             }
 
@@ -302,6 +320,7 @@ impl DownloadPhase {
                 format,
                 state,
                 subtitle_selection,
+                plan: _plan,
             } => {
                 // Execute download with CDN fallback (shared implementation)
                 let Some(outcome) = orchestrator
@@ -368,6 +387,12 @@ mod tests {
                 "mp4",
                 rdlp_core::DownloadProtocol::Https,
             )),
+            plan: Box::new(super::super::DownloadPlan::Single(rdlp_core::Format::new(
+                "f1",
+                "http://example.com/v.mp4",
+                "mp4",
+                rdlp_core::DownloadProtocol::Https,
+            ))),
         };
 
         assert_eq!(format!("{phase}"), "selecting subtitles");

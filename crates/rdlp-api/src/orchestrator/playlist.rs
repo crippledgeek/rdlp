@@ -5,7 +5,7 @@
 
 use super::errors::is_reextractable_error;
 use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
-use super::{Orchestrator, OrchestratorError, Result, archive};
+use super::{DownloadPlan, Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use rdlp_core::SubtitleFormat;
@@ -1151,11 +1151,18 @@ impl Orchestrator {
             };
 
             // Select format (non-interactive on retry to avoid re-prompting)
-            let Some(mut format) = self
+            let Some(plan) = self
                 .select_format(info_ref, interactive && attempt == 0)
                 .await?
             else {
                 return Ok(None);
+            };
+
+            // Extract the primary format from the plan (merge uses
+            // video track; playlist merge support comes in Task 4).
+            let mut format = match plan {
+                DownloadPlan::Single(f) => f,
+                DownloadPlan::Merge { video, .. } => video,
             };
 
             // Add alternative CDN server URLs as fallbacks.

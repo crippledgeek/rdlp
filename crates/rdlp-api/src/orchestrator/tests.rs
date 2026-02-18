@@ -256,7 +256,11 @@ async fn test_select_format_automatic_mode() {
     let selected = result.unwrap();
     assert!(selected.is_some());
     // Default selector should pick best quality
-    let format = selected.unwrap();
+    let plan = selected.unwrap();
+    let format = match plan {
+        DownloadPlan::Single(f) => f,
+        other => panic!("Expected Single, got {other}"),
+    };
     assert_eq!(format.format_id, "1080p");
 }
 

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Orchestrator, errors::*};
+use super::{DownloadPlan, Orchestrator, errors::*};
 use log::{debug, info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
 
@@ -76,14 +76,15 @@ impl Orchestrator {
         selector.to_string()
     }
 
-    /// Select format from available formats.
+    /// Select format from available formats and return a [`DownloadPlan`].
     ///
     /// Uses [`resolve_effective_selector`] to determine the selector
-    /// string, then applies merge-fallback safety: if the selector
-    /// returns a merge pair but merge is not supported, falls back to
-    /// the best combined format (or video-only as last resort).
+    /// string. When the selector returns a merge pair (video + audio)
+    /// and [`MERGE_SUPPORTED`] is true, returns
+    /// [`DownloadPlan::Merge`]. Otherwise falls back to the best
+    /// combined format wrapped in [`DownloadPlan::Single`].
     ///
-    /// Returns `Ok(Some(format))` on success, `Ok(None)` if the user
+    /// Returns `Ok(Some(plan))` on success, `Ok(None)` if the user
     /// cancelled (interactive mode only).
     ///
     /// # Errors
@@ -94,15 +95,18 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
         interactive: bool,
-    ) -> Result<Option<Format>> {
+    ) -> Result<Option<DownloadPlan>> {
         let formats = &info.formats;
-        let format = if interactive && self.interactive.is_some() {
+        if interactive && self.interactive.is_some() {
             let Some(format) = self.select_format_interactive(info).await? else {
                 info!("Selection cancelled by user");
                 return Ok(None);
             };
-            format
-        } else {
+            info!(format:?; "Selected format");
+            return Ok(Some(DownloadPlan::Single(format)));
+        }
+
+        let format = {
             let selector_str = self.resolve_effective_selector();
             let format_selector = FormatSelector::parse(&selector_str)
                 .map_err(OrchestratorError::InvalidFormatSelector)?;
@@ -117,9 +121,14 @@ impl Orchestrator {
             // supported, fall back to best combined format.
             if selected_formats.len() > 1 {
                 if MERGE_SUPPORTED {
-                    // Phase 2: return the video format
-                    // (merge handled downstream)
-                    selected_formats[0].clone()
+                    let video = selected_formats[0].clone();
+                    let audio = selected_formats[1].clone();
+                    info!(
+                        video = video.format_id.as_str(),
+                        audio = audio.format_id.as_str();
+                        "Selected merge pair"
+                    );
+                    return Ok(Some(DownloadPlan::Merge { video, audio }));
                 } else {
                     warn!(
                         video = selected_formats[0].format_id.as_str(),
@@ -155,7 +164,7 @@ impl Orchestrator {
         };
 
         info!(format:?; "Selected format");
-        Ok(Some(format))
+        Ok(Some(DownloadPlan::Single(format)))
     }
 
     /// Interactive format selection via [`InteractiveCallback`]
@@ -234,6 +243,14 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
+    /// Unwrap a `DownloadPlan::Single`, panicking on `Merge`.
+    fn unwrap_single(plan: super::super::DownloadPlan) -> Format {
+        match plan {
+            super::super::DownloadPlan::Single(f) => f,
+            other => panic!("Expected Single, got {other}"),
+        }
+    }
+
     /// Create orchestrator with specific config for testing.
     fn orchestrator_with_config(config: Config) -> Orchestrator {
         let (tx, _rx) = mpsc::channel::<Event>(64);
@@ -303,7 +320,8 @@ mod tests {
         ];
         let info = test_info_with_formats(formats);
 
-        let result = orch.select_format(&info, false).await.unwrap().unwrap();
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        let result = unwrap_single(plan);
         // Should NOT be v1440 (video-only, no audio!)
         // Should fall back to c1080 (best combined)
         assert_eq!(result.format_id, "c1080");
@@ -325,7 +343,8 @@ mod tests {
         let info = test_info_with_formats(formats);
 
         // Should succeed using the dynamic default selector
-        let result = orch.select_format(&info, false).await.unwrap().unwrap();
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        let result = unwrap_single(plan);
         // Best combined should be selected (c1080)
         assert_eq!(result.format_id, "c1080");
     }
