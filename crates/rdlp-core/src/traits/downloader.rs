@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::fmt;
 use std::path::Path;
 use std::time::Duration;
+use tokio::io::AsyncWrite;
 
 use crate::Result;
 
@@ -91,6 +92,32 @@ pub trait Downloader: Send + Sync {
     ) -> Result<DownloadStats> {
         // Default implementation doesn't support resume, just downloads normally
         self.download_to_file(url, path, progress).await
+    }
+
+    /// Download content to an arbitrary async writer (e.g. stdout)
+    ///
+    /// Used for pipe output (`-o -`). Streams bytes directly to the writer
+    /// without writing to disk.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to download from
+    /// * `writer` - Async writer to stream bytes to
+    /// * `progress` - Optional progress callback
+    ///
+    /// # Returns
+    /// Download statistics
+    ///
+    /// # Default Implementation
+    /// Returns an error -- downloaders that support streaming must override.
+    async fn download_to_writer(
+        &self,
+        _url: &str,
+        _writer: Box<dyn AsyncWrite + Unpin + Send>,
+        _progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        Err(crate::RdlpError::Unsupported(
+            "download_to_writer not supported by this downloader".to_string(),
+        ))
     }
 }
 
@@ -418,5 +445,44 @@ mod tests {
         assert_eq!(progress.percentage, Some(50.0));
         assert!(progress.eta.is_some());
         assert_eq!(progress.eta.unwrap().as_secs(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_download_to_writer_default_returns_unsupported() {
+        use crate::RdlpError;
+
+        struct StubDownloader;
+
+        #[async_trait]
+        impl Downloader for StubDownloader {
+            fn protocol(&self) -> &str {
+                "stub"
+            }
+            async fn download_to_file(
+                &self,
+                _url: &str,
+                _path: &Path,
+                _progress: Option<Box<dyn ProgressCallback>>,
+            ) -> Result<DownloadStats> {
+                unimplemented!()
+            }
+            fn supports(&self, _url: &str) -> bool {
+                false
+            }
+            async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
+                Ok(None)
+            }
+        }
+
+        let d = StubDownloader;
+        let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Vec::<u8>::new());
+        let err = d
+            .download_to_writer("http://example.com", writer, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RdlpError::Unsupported(_)),
+            "expected Unsupported, got: {err:?}"
+        );
     }
 }

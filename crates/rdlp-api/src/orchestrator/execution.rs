@@ -7,6 +7,7 @@ use log::info;
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
+use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tracing::instrument;
 
@@ -89,6 +90,51 @@ impl Orchestrator {
             () = self.cancel_token.cancelled() => {
                 info!("Download interrupted by cancellation");
                 info!("Progress saved. Run the same command again to resume.");
+                return Ok(None);
+            }
+        };
+
+        Ok(Some(stats))
+    }
+
+    /// Execute download to an async writer (stdout) with cancellation support.
+    ///
+    /// Streams bytes directly to `writer` instead of writing to disk.
+    /// Used for `-o -` (stdout) mode.
+    ///
+    /// # Arguments
+    /// * `downloader` - The downloader to use
+    /// * `url` - URL to download
+    /// * `writer` - Async writer to stream bytes to (e.g. `tokio::io::stdout()`)
+    ///
+    /// # Returns
+    /// - `Ok(Some(stats))` on success
+    /// - `Ok(None)` if user cancelled via `CancellationToken`
+    ///
+    /// # Errors
+    /// Returns an error if the download fails or the downloader does not
+    /// support writer-based output.
+    #[instrument(skip(self, downloader, writer), fields(url = %url))]
+    pub(super) async fn execute_download_to_writer(
+        &self,
+        downloader: &Arc<dyn Downloader>,
+        url: &str,
+        writer: Box<dyn AsyncWrite + Unpin + Send>,
+    ) -> Result<Option<DownloadStats>> {
+        let progress_callback: Option<Box<dyn ProgressCallback>> = Some(Box::new(
+            EventProgressCallback::new(self.event_tx.clone(), self.download_id),
+        ));
+
+        info!("Starting stdout download (cancel via CancellationToken)");
+
+        let download_future = downloader.download_to_writer(url, writer, progress_callback);
+
+        let stats = tokio::select! {
+            result = download_future => {
+                result.map_err(OrchestratorError::DownloadFailed)?
+            }
+            () = self.cancel_token.cancelled() => {
+                info!("Download to stdout interrupted by cancellation");
                 return Ok(None);
             }
         };

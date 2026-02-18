@@ -72,9 +72,16 @@ impl DownloadRequest {
 /// use rdlp_api::request::OutputOptions;
 /// use std::path::PathBuf;
 ///
+/// // File output with template
 /// let opts = OutputOptions {
 ///     output_dir: Some(PathBuf::from("/tmp/downloads")),
 ///     template: Some("%(title)s.%(ext)s".into()),
+///     ..OutputOptions::default()
+/// };
+///
+/// // Stdout streaming (-o -)
+/// let stdout_opts = OutputOptions {
+///     stdout: Some(true),
 ///     ..OutputOptions::default()
 /// };
 /// ```
@@ -86,6 +93,8 @@ pub struct OutputOptions {
     pub template: Option<String>,
     /// Prefix prepended to all output paths.
     pub paths_prefix: Option<PathBuf>,
+    /// Stream output to stdout (`-o -`). `None` preserves base config.
+    pub stdout: Option<bool>,
 }
 
 /// Format selection options.
@@ -226,6 +235,7 @@ mod tests {
         assert!(req.output.output_dir.is_none());
         assert!(req.output.template.is_none());
         assert!(req.output.paths_prefix.is_none());
+        assert!(req.output.stdout.is_none());
 
         // FormatOptions defaults
         assert!(req.format.selector.is_none());

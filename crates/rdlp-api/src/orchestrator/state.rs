@@ -101,9 +101,12 @@ pub enum DownloadPhase {
         /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
     },
-    /// Download completed successfully
+    /// Download completed successfully.
+    ///
+    /// For file downloads, `path` is the real output path.
+    /// For stdout mode (`-o -`), `path` is the sentinel `"-"`.
     Complete {
-        /// Path to the downloaded file
+        /// Path to the downloaded file, or `"-"` for stdout output.
         path: PathBuf,
     },
     /// User cancelled the operation
@@ -148,6 +151,15 @@ impl DownloadPhase {
     /// - `Downloading` → `Complete` (after successful download) OR `Cancelled` (Ctrl+C)
     /// - `Complete` / `Cancelled` → Self (terminal states)
     ///
+    /// **Stdout fast-path (`-o -`):** When `config.output_to_stdout` is true:
+    /// - `Extracting` skips loading saved session state (no file to resume).
+    /// - `SelectingSubtitles` skips persisting session state.
+    /// - `Preparing` skips path generation (uses `"-"` sentinel), rejects merge
+    ///   plans, and always starts fresh (no resume).
+    /// - `Downloading` streams directly to stdout via `download_to_stdout()`,
+    ///   then transitions straight to `Complete`, skipping subtitles,
+    ///   thumbnails, and all post-processing.
+    ///
     /// # Errors
     ///
     /// Returns an error if any phase transition fails (extraction error, download error, etc.)
@@ -171,14 +183,17 @@ impl DownloadPhase {
                     info: Box::new(info.clone()),
                 });
 
-                // Try loading saved session state to skip interactive selection
+                // Try loading saved session state to skip interactive selection.
+                // Skip in stdout mode — session state is irrelevant for pipe output
+                // and a stale merge state could produce a confusing error.
                 let sanitized = orchestrator.sanitize_filename(&info.title);
                 let state_path = session_state::single_video_state_path(
                     &orchestrator.config.output_directory,
                     &sanitized,
                 );
-                if let Some(SessionState::SingleVideo(saved)) =
-                    SessionState::load(&state_path, &url).await
+                if !orchestrator.config.output_to_stdout
+                    && let Some(SessionState::SingleVideo(saved)) =
+                        SessionState::load(&state_path, &url).await
                 {
                     // Try to match the saved format_id against available formats
                     if let Some(format) = info
@@ -280,28 +295,32 @@ impl DownloadPhase {
                     return Ok(Self::Cancelled);
                 };
 
-                // Save session state so selections survive interruption
-                let sanitized = orchestrator.sanitize_filename(&info.title);
-                let state_path = session_state::single_video_state_path(
-                    &orchestrator.config.output_directory,
-                    &sanitized,
-                );
-                let sub_langs: Vec<String> = subtitle_selection
-                    .iter()
-                    .map(|(lang, _)| lang.clone())
-                    .collect();
-                let audio_format_id = match &*plan {
-                    DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
-                    DownloadPlan::Single(_) => None,
-                };
-                let state = SessionState::SingleVideo(SingleVideoState::new(
-                    &info.webpage_url,
-                    &info.title,
-                    &format.format_id,
-                    sub_langs,
-                    audio_format_id,
-                ));
-                state.save(&state_path).await;
+                // Save session state so selections survive interruption.
+                // Skip for stdout mode — no file to resume, and the state
+                // would just be deleted on completion anyway.
+                if !orchestrator.config.output_to_stdout {
+                    let sanitized = orchestrator.sanitize_filename(&info.title);
+                    let state_path = session_state::single_video_state_path(
+                        &orchestrator.config.output_directory,
+                        &sanitized,
+                    );
+                    let sub_langs: Vec<String> = subtitle_selection
+                        .iter()
+                        .map(|(lang, _)| lang.clone())
+                        .collect();
+                    let audio_format_id = match &*plan {
+                        DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
+                        DownloadPlan::Single(_) => None,
+                    };
+                    let state = SessionState::SingleVideo(SingleVideoState::new(
+                        &info.webpage_url,
+                        &info.title,
+                        &format.format_id,
+                        sub_langs,
+                        audio_format_id,
+                    ));
+                    state.save(&state_path).await;
+                }
 
                 Ok(Self::Preparing {
                     info,
@@ -317,6 +336,28 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                // Stdout mode: skip path generation and resume detection.
+                // Reject merge plans early — the Downloading phase would
+                // also reject, but failing here gives a clearer context.
+                if orchestrator.config.output_to_stdout {
+                    if matches!(*plan, DownloadPlan::Merge { .. }) {
+                        return Err(OrchestratorError::Configuration(
+                            "Merge downloads (video+audio) are not supported \
+                             with -o - (stdout output)"
+                                .to_string(),
+                        ));
+                    }
+                    info!("Downloading to stdout");
+                    return Ok(Self::Downloading {
+                        info,
+                        output_path: PathBuf::from("-"),
+                        format,
+                        state: DownloadState::Fresh,
+                        subtitle_selection,
+                        plan,
+                    });
+                }
+
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
 
@@ -363,6 +404,28 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                // Stdout mode: stream directly, skip post-processing
+                if orchestrator.config.output_to_stdout {
+                    if matches!(*plan, DownloadPlan::Merge { .. }) {
+                        return Err(OrchestratorError::Configuration(
+                            "Merge downloads (video+audio) are not supported \
+                             with -o - (stdout output)"
+                                .to_string(),
+                        ));
+                    }
+
+                    let Some(_) = orchestrator.download_to_stdout(&format).await? else {
+                        orchestrator.emit(Event::Cancelled {
+                            id: orchestrator.download_id,
+                        });
+                        return Ok(Self::Cancelled);
+                    };
+
+                    return Ok(Self::Complete {
+                        path: PathBuf::from("-"),
+                    });
+                }
+
                 // Branch on download plan
                 let (download_files, is_hls) = match *plan {
                     DownloadPlan::Single(_) => {

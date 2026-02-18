@@ -289,6 +289,13 @@ impl Orchestrator {
         // Playlist prints its own summary, so return None to suppress
         // the single-video "Success!" message in main.
         if infos.len() > 1 {
+            if self.config.output_to_stdout {
+                return Err(OrchestratorError::Configuration(
+                    "Playlists are not supported with -o - (stdout output); \
+                     provide a single video URL instead"
+                        .to_string(),
+                ));
+            }
             return self
                 .download_playlist_internal(infos, interactive, archive)
                 .await

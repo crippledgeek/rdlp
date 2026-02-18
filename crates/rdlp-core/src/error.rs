@@ -76,6 +76,10 @@ pub enum RdlpError {
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
 
+    /// Operation not supported by this component
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
+
     /// Generic errors
     #[error("{0}")]
     Other(String),

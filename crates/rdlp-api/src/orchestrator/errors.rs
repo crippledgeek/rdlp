@@ -76,7 +76,12 @@ pub enum OrchestratorError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Configuration error (invalid options, missing files, etc.)
+    /// Configuration or runtime capability error.
+    ///
+    /// Covers both static misconfiguration (invalid options, missing files)
+    /// and runtime rejections that depend on the selected format (e.g.
+    /// "HLS not yet supported with stdout", "Merge downloads not supported
+    /// with stdout").
     #[error("{0}")]
     Configuration(String),
 }
