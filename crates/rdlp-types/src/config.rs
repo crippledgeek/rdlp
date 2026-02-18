@@ -25,9 +25,13 @@ pub enum ConfigValidationError {
         /// Configured end
         end: usize,
     },
-    /// A post-processing option is incompatible with stdout output (`-o -`)
+    /// A post-processing option is incompatible with stdout output (`-o -`).
+    ///
+    /// Uses `String` rather than a typed enum because these are CLI flag names
+    /// (`--extract-audio`, `--remux`, etc.) used only for error display. The set
+    /// grows as new post-processing flags are added.
     StdoutIncompatible {
-        /// The incompatible option name
+        /// The incompatible CLI option name (e.g. `"extract-audio"`)
         option: String,
     },
 }
@@ -445,6 +449,7 @@ impl Config {
                 ("loudnorm", self.loudnorm),
                 ("write-subtitles", self.write_subtitles),
                 ("write-thumbnail", self.write_thumbnail),
+                ("normalize-boost", self.normalize_boost),
             ];
             for &(option, active) in incompatible {
                 if active {
@@ -595,6 +600,21 @@ mod tests {
             err,
             ConfigValidationError::StdoutIncompatible {
                 option: "normalize-audio".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_normalize_boost() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.normalize_boost = true;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "normalize-boost".to_string()
             }
         );
     }

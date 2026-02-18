@@ -97,9 +97,23 @@ impl Orchestrator {
         Ok(Some(stats))
     }
 
-    /// Execute download to an async writer (stdout) with cancellation support
+    /// Execute download to an async writer (stdout) with cancellation support.
     ///
-    /// Returns Ok(Some(stats)) on success, Ok(None) if user cancelled
+    /// Streams bytes directly to `writer` instead of writing to disk.
+    /// Used for `-o -` (stdout) mode.
+    ///
+    /// # Arguments
+    /// * `downloader` - The downloader to use
+    /// * `url` - URL to download
+    /// * `writer` - Async writer to stream bytes to (e.g. `tokio::io::stdout()`)
+    ///
+    /// # Returns
+    /// - `Ok(Some(stats))` on success
+    /// - `Ok(None)` if user cancelled via `CancellationToken`
+    ///
+    /// # Errors
+    /// Returns an error if the download fails or the downloader does not
+    /// support writer-based output.
     #[instrument(skip(self, downloader, writer), fields(url = %url))]
     pub(super) async fn execute_download_to_writer(
         &self,

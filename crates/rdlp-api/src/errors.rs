@@ -179,6 +179,7 @@ impl From<RdlpError> for RdlpApiError {
                 message: format!("Regex error: {err}"),
                 source_url: String::new(),
             },
+            RdlpError::Unsupported(msg) => Self::InvalidInput { message: msg },
             RdlpError::Other(msg) => Self::Soft { message: msg },
         }
     }

@@ -171,14 +171,17 @@ impl DownloadPhase {
                     info: Box::new(info.clone()),
                 });
 
-                // Try loading saved session state to skip interactive selection
+                // Try loading saved session state to skip interactive selection.
+                // Skip in stdout mode — session state is irrelevant for pipe output
+                // and a stale merge state could produce a confusing error.
                 let sanitized = orchestrator.sanitize_filename(&info.title);
                 let state_path = session_state::single_video_state_path(
                     &orchestrator.config.output_directory,
                     &sanitized,
                 );
-                if let Some(SessionState::SingleVideo(saved)) =
-                    SessionState::load(&state_path, &url).await
+                if !orchestrator.config.output_to_stdout
+                    && let Some(SessionState::SingleVideo(saved)) =
+                        SessionState::load(&state_path, &url).await
                 {
                     // Try to match the saved format_id against available formats
                     if let Some(format) = info
@@ -386,7 +389,7 @@ impl DownloadPhase {
                         ));
                     }
 
-                    let Some(_stats) = orchestrator
+                    let Some(_) = orchestrator
                         .download_to_stdout_with_cdn_fallback(&format)
                         .await?
                     else {
@@ -395,6 +398,14 @@ impl DownloadPhase {
                         });
                         return Ok(Self::Cancelled);
                     };
+
+                    // Delete session state on successful stdout completion
+                    let sanitized = orchestrator.sanitize_filename(&info.title);
+                    let state_path = session_state::single_video_state_path(
+                        &orchestrator.config.output_directory,
+                        &sanitized,
+                    );
+                    SessionState::delete(&state_path).await;
 
                     return Ok(Self::Complete {
                         path: PathBuf::from("-"),

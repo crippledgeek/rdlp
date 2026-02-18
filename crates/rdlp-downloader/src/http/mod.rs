@@ -547,6 +547,9 @@ impl Downloader for HttpDownloader {
                 }
             }
 
+            // Note: on BrokenPipe, `downloaded` may overcount by up to
+            // `buffer_size` bytes that were counted but not flushed to the pipe.
+            // This is inherent to BufWriter and acceptable for stats purposes.
             match buf_writer.flush().await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {

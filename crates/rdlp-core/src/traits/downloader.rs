@@ -115,7 +115,7 @@ pub trait Downloader: Send + Sync {
         _writer: Box<dyn AsyncWrite + Unpin + Send>,
         _progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
-        Err(crate::RdlpError::Download(
+        Err(crate::RdlpError::Unsupported(
             "download_to_writer not supported by this downloader".to_string(),
         ))
     }

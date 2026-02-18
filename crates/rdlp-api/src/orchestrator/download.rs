@@ -113,15 +113,24 @@ impl Orchestrator {
         Ok(Some(DownloadOutcome { stats, is_hls }))
     }
 
-    /// Execute a download to stdout with CDN fallback retry and token validation.
+    /// Execute a download to stdout with token validation (no CDN fallback).
     ///
-    /// Like `download_with_cdn_fallback` but streams to stdout instead of a file.
+    /// Unlike `download_with_cdn_fallback`, this does **not** try fallback URLs.
+    /// Once bytes have been written to a pipe, retrying with a different CDN URL
+    /// would corrupt the stream (the consumer would see partial data from URL 1
+    /// followed by a full stream from URL 2).
+    ///
     /// HLS formats are rejected (not yet supported for stdout streaming).
+    /// Merge downloads are rejected at the state machine level.
+    ///
+    /// **Note on stdout validation split:** HLS and Merge checks happen here at
+    /// runtime rather than in `Config::validate()` because they depend on the
+    /// selected format, which is only known after extraction.
     ///
     /// # Returns
     /// - `Ok(Some(stats))` — download succeeded
     /// - `Ok(None)` — user cancelled
-    /// - `Err(e)` — all URLs failed, token expired, or unsupported format
+    /// - `Err(e)` — download failed, token expired, or unsupported format
     pub(super) async fn download_to_stdout_with_cdn_fallback(
         &self,
         format: &Format,
@@ -143,42 +152,19 @@ impl Orchestrator {
 
         self.check_cdn_token_expiry(&format.url)?;
 
-        let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
-            .chain(format.fallback_urls.iter().flatten().map(String::as_str))
-            .collect();
+        let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::stdout());
 
-        let mut last_err = None;
-        for (i, download_url) in download_urls.iter().enumerate() {
-            if i > 0 {
-                warn!(
-                    fallback = i,
-                    url:? = download_url;
-                    "Primary CDN failed, trying fallback (stdout)"
-                );
+        match self
+            .execute_download_to_writer(&downloader, &format.url, writer)
+            .await
+        {
+            Ok(Some(stats)) => {
+                info!("Stdout download completed: {stats:?}");
+                Ok(Some(stats))
             }
-
-            let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> =
-                Box::new(tokio::io::stdout());
-
-            match self
-                .execute_download_to_writer(&downloader, download_url, writer)
-                .await
-            {
-                Ok(Some(stats)) => {
-                    info!("Stdout download completed: {stats:?}");
-                    return Ok(Some(stats));
-                }
-                Ok(None) => return Ok(None),
-                Err(e) => {
-                    if i < download_urls.len() - 1 {
-                        warn!("Stdout download failed: {e}, will try fallback CDN");
-                    }
-                    last_err = Some(e);
-                }
-            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
         }
-
-        Err(last_err.unwrap())
     }
 
     /// Check if the CDN token in a URL has expired.
