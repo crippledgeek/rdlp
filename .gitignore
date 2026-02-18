@@ -36,4 +36,26 @@ CLAUDE.md
 debug_tnaflix.rs
 .claude/
 
+# Downloaded media files (never commit)
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.flv
+*.ts
+*.webm
+*.ogg
+*.m4a
+*.mp3
+*.flac
+*.wav
 
+# Downloaded subtitle files
+*.vtt
+*.srt
+*.ass
+*.ssa
+*.lrc
+
+# Windows null device redirect artifact
+nul
