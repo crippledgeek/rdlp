@@ -447,15 +447,42 @@ mod tests {
         assert_eq!(progress.eta.unwrap().as_secs(), 5);
     }
 
-    #[test]
-    fn test_downloader_trait_has_download_to_writer() {
-        // Verify the trait method signature exists at compile time.
-        // We test this indirectly by ensuring a mock struct implementing
-        // Downloader can call the default download_to_writer and get an error.
+    #[tokio::test]
+    async fn test_download_to_writer_default_returns_unsupported() {
+        use crate::RdlpError;
 
-        // Type-check only: the default impl should return an error
-        fn _assert_method_exists<D: Downloader>(_d: &D) {
-            // This function only needs to compile, not run
+        struct StubDownloader;
+
+        #[async_trait]
+        impl Downloader for StubDownloader {
+            fn protocol(&self) -> &str {
+                "stub"
+            }
+            async fn download_to_file(
+                &self,
+                _url: &str,
+                _path: &Path,
+                _progress: Option<Box<dyn ProgressCallback>>,
+            ) -> Result<DownloadStats> {
+                unimplemented!()
+            }
+            fn supports(&self, _url: &str) -> bool {
+                false
+            }
+            async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
+                Ok(None)
+            }
         }
+
+        let d = StubDownloader;
+        let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Vec::<u8>::new());
+        let err = d
+            .download_to_writer("http://example.com", writer, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RdlpError::Unsupported(_)),
+            "expected Unsupported, got: {err:?}"
+        );
     }
 }

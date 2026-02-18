@@ -546,12 +546,17 @@ fn merge_config(
     if args.output.as_deref() == Some("-") {
         config.output_to_stdout = true;
         // Force quiet mode — progress/log output would corrupt the byte stream.
-        // config.progress is derived from config.quiet below, so no need to set it here.
         config.quiet = true;
+        // Explicitly suppress progress as well: config.progress is derived from
+        // config.quiet further below, but setting it here guards against future
+        // refactors that might add an early return between here and the derivation.
+        config.progress = false;
         // Disable embed_thumbnail before validation: the default is `true`, and
-        // Config::validate() would reject stdout + embed-thumbnail. This is a
-        // pre-validation fixup, not a silent override of a user flag.
-        config.embed_thumbnail = false;
+        // Config::validate() would reject stdout + embed-thumbnail.
+        if config.embed_thumbnail {
+            warn!("Disabling --embed-thumbnail (incompatible with -o -)");
+            config.embed_thumbnail = false;
+        }
     } else if let Some(ref output) = args.output {
         config.output_template = output.clone();
     }

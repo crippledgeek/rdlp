@@ -101,9 +101,12 @@ pub enum DownloadPhase {
         /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
     },
-    /// Download completed successfully
+    /// Download completed successfully.
+    ///
+    /// For file downloads, `path` is the real output path.
+    /// For stdout mode (`-o -`), `path` is the sentinel `"-"`.
     Complete {
-        /// Path to the downloaded file
+        /// Path to the downloaded file, or `"-"` for stdout output.
         path: PathBuf,
     },
     /// User cancelled the operation
@@ -147,6 +150,10 @@ impl DownloadPhase {
     /// - `Preparing` → `Downloading` (after determining resume state)
     /// - `Downloading` → `Complete` (after successful download) OR `Cancelled` (Ctrl+C)
     /// - `Complete` / `Cancelled` → Self (terminal states)
+    ///
+    /// **Stdout fast-path:** When `config.output_to_stdout` is true, the
+    /// `Downloading` phase streams directly to stdout and transitions straight
+    /// to `Complete`, skipping subtitles, thumbnails, and all post-processing.
     ///
     /// # Errors
     ///
@@ -283,28 +290,32 @@ impl DownloadPhase {
                     return Ok(Self::Cancelled);
                 };
 
-                // Save session state so selections survive interruption
-                let sanitized = orchestrator.sanitize_filename(&info.title);
-                let state_path = session_state::single_video_state_path(
-                    &orchestrator.config.output_directory,
-                    &sanitized,
-                );
-                let sub_langs: Vec<String> = subtitle_selection
-                    .iter()
-                    .map(|(lang, _)| lang.clone())
-                    .collect();
-                let audio_format_id = match &*plan {
-                    DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
-                    DownloadPlan::Single(_) => None,
-                };
-                let state = SessionState::SingleVideo(SingleVideoState::new(
-                    &info.webpage_url,
-                    &info.title,
-                    &format.format_id,
-                    sub_langs,
-                    audio_format_id,
-                ));
-                state.save(&state_path).await;
+                // Save session state so selections survive interruption.
+                // Skip for stdout mode — no file to resume, and the state
+                // would just be deleted on completion anyway.
+                if !orchestrator.config.output_to_stdout {
+                    let sanitized = orchestrator.sanitize_filename(&info.title);
+                    let state_path = session_state::single_video_state_path(
+                        &orchestrator.config.output_directory,
+                        &sanitized,
+                    );
+                    let sub_langs: Vec<String> = subtitle_selection
+                        .iter()
+                        .map(|(lang, _)| lang.clone())
+                        .collect();
+                    let audio_format_id = match &*plan {
+                        DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
+                        DownloadPlan::Single(_) => None,
+                    };
+                    let state = SessionState::SingleVideo(SingleVideoState::new(
+                        &info.webpage_url,
+                        &info.title,
+                        &format.format_id,
+                        sub_langs,
+                        audio_format_id,
+                    ));
+                    state.save(&state_path).await;
+                }
 
                 Ok(Self::Preparing {
                     info,
@@ -389,23 +400,12 @@ impl DownloadPhase {
                         ));
                     }
 
-                    let Some(_) = orchestrator
-                        .download_to_stdout_with_cdn_fallback(&format)
-                        .await?
-                    else {
+                    let Some(_) = orchestrator.download_to_stdout(&format).await? else {
                         orchestrator.emit(Event::Cancelled {
                             id: orchestrator.download_id,
                         });
                         return Ok(Self::Cancelled);
                     };
-
-                    // Delete session state on successful stdout completion
-                    let sanitized = orchestrator.sanitize_filename(&info.title);
-                    let state_path = session_state::single_video_state_path(
-                        &orchestrator.config.output_directory,
-                        &sanitized,
-                    );
-                    SessionState::delete(&state_path).await;
 
                     return Ok(Self::Complete {
                         path: PathBuf::from("-"),

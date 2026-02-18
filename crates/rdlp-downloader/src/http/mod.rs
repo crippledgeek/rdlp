@@ -547,8 +547,10 @@ impl Downloader for HttpDownloader {
                 }
             }
 
-            // Note: on BrokenPipe, `downloaded` may overcount by up to
-            // `buffer_size` bytes that were counted but not flushed to the pipe.
+            // Note: on BrokenPipe the current chunk is NOT counted (break
+            // fires before `downloaded +=`), but prior chunks written to the
+            // BufWriter may not have been flushed, so `downloaded` can exceed
+            // the bytes actually delivered to the pipe by up to `buffer_size`.
             // This is inherent to BufWriter and acceptable for stats purposes.
             match buf_writer.flush().await {
                 Ok(()) => {}

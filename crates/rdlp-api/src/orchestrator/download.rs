@@ -131,7 +131,7 @@ impl Orchestrator {
     /// - `Ok(Some(stats))` — download succeeded
     /// - `Ok(None)` — user cancelled
     /// - `Err(e)` — download failed, token expired, or unsupported format
-    pub(super) async fn download_to_stdout_with_cdn_fallback(
+    pub(super) async fn download_to_stdout(
         &self,
         format: &Format,
     ) -> Result<Option<DownloadStats>> {
