@@ -96,7 +96,7 @@ pub enum DownloadPhase {
         state: DownloadState,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
-        /// Download plan (single or merge — used by Task 4)
+        /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
     },
     /// Download completed successfully
@@ -192,7 +192,33 @@ impl DownloadPhase {
                         // Resolve subtitles from saved language codes
                         let subtitle_selection = orchestrator
                             .resolve_subtitles_for_episode(&info, &saved.subtitle_langs);
-                        let plan = DownloadPlan::Single(format.clone());
+                        // Reconstruct plan: merge if audio format was saved
+                        let plan = if let Some(ref audio_id) = saved.audio_format_id {
+                            if let Some(audio) = info
+                                .formats
+                                .iter()
+                                .find(|f| f.format_id == *audio_id)
+                                .cloned()
+                            {
+                                info!(
+                                    audio_id = audio_id.as_str();
+                                    "Resuming merge plan with saved audio format"
+                                );
+                                DownloadPlan::Merge {
+                                    video: format.clone(),
+                                    audio,
+                                }
+                            } else {
+                                warn!(
+                                    audio_id = audio_id.as_str();
+                                    "Saved audio format no longer available, \
+                                     falling back to single format"
+                                );
+                                DownloadPlan::Single(format.clone())
+                            }
+                        } else {
+                            DownloadPlan::Single(format.clone())
+                        };
                         return Ok(Self::Preparing {
                             info: Box::new(info),
                             format: Box::new(format),
@@ -262,11 +288,16 @@ impl DownloadPhase {
                     .iter()
                     .map(|(lang, _)| lang.clone())
                     .collect();
+                let audio_format_id = match &*plan {
+                    DownloadPlan::Merge { audio, .. } => Some(audio.format_id.clone()),
+                    DownloadPlan::Single(_) => None,
+                };
                 let state = SessionState::SingleVideo(SingleVideoState::new(
                     &info.webpage_url,
                     &info.title,
                     &format.format_id,
                     sub_langs,
+                    audio_format_id,
                 ));
                 state.save(&state_path).await;
 
