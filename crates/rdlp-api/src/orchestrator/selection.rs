@@ -474,4 +474,80 @@ mod tests {
             "Explicit complex format should be preserved exactly"
         );
     }
+
+    #[tokio::test]
+    async fn test_merge_plan_returned_for_explicit_merge_selector() {
+        // Force selector to request merge (bv+ba)
+        let config = Config {
+            format: Some("bv+ba".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_video_only("v1080", 1080),
+            make_audio_only("a256", 256.0),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        match plan {
+            super::super::DownloadPlan::Merge { video, audio } => {
+                assert!(video.has_video(), "Merge video format should have video");
+                assert!(audio.has_audio(), "Merge audio format should have audio");
+            }
+            super::super::DownloadPlan::Single(f) => {
+                panic!("Expected Merge plan, got Single({})", f.format_id);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_single_format_returns_single_plan() {
+        let config = Config {
+            format: Some("b".to_string()),
+            ..Default::default()
+        };
+        let orch = orchestrator_with_config(config);
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_combined("c1080", 1080, 3),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        let format = unwrap_single(plan);
+        assert_eq!(
+            format.format_id, "c1080",
+            "Best single format should be c1080"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_default_selector_returns_merge_with_ffmpeg() {
+        // Default (no explicit format) with FFmpeg should use bv*+ba/b
+        // which prefers merge when better video-only exists
+        let config = Config::default();
+        let orch = orchestrator_with_config(config);
+
+        if orch.postprocessor_registry.is_none() {
+            // Skip if no FFmpeg
+            return;
+        }
+
+        let formats = vec![
+            make_combined("c720", 720, 2),
+            make_video_only("v1080", 1080),
+            make_audio_only("a256", 256.0),
+        ];
+        let info = test_info_with_formats(formats);
+
+        let plan = orch.select_format(&info, false).await.unwrap().unwrap();
+        assert!(
+            matches!(plan, super::super::DownloadPlan::Merge { .. }),
+            "Default selector with FFmpeg should prefer merge when better quality available"
+        );
+    }
 }
