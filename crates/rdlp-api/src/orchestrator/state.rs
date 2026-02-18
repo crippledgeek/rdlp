@@ -315,22 +315,49 @@ impl DownloadPhase {
             }
 
             Self::Downloading {
-                info,
+                mut info,
                 output_path,
                 format,
                 state,
                 subtitle_selection,
-                plan: _plan,
+                plan,
             } => {
-                // Execute download with CDN fallback (shared implementation)
-                let Some(outcome) = orchestrator
-                    .download_with_cdn_fallback(&format, &output_path, state.offset())
-                    .await?
-                else {
-                    orchestrator.emit(Event::Cancelled {
-                        id: orchestrator.download_id,
-                    });
-                    return Ok(Self::Cancelled);
+                // Branch on download plan
+                let (download_files, is_hls) = match *plan {
+                    DownloadPlan::Single(_) => {
+                        // Single format: existing path
+                        let Some(outcome) = orchestrator
+                            .download_with_cdn_fallback(&format, &output_path, state.offset())
+                            .await?
+                        else {
+                            orchestrator.emit(Event::Cancelled {
+                                id: orchestrator.download_id,
+                            });
+                            return Ok(Self::Cancelled);
+                        };
+                        (vec![output_path.clone()], outcome.is_hls)
+                    }
+                    DownloadPlan::Merge {
+                        ref video,
+                        ref audio,
+                    } => {
+                        // Merge: parallel video + audio download
+                        let Some(outcome) = orchestrator
+                            .download_merge_pair(video, audio, &output_path)
+                            .await?
+                        else {
+                            orchestrator.emit(Event::Cancelled {
+                                id: orchestrator.download_id,
+                            });
+                            return Ok(Self::Cancelled);
+                        };
+
+                        // Set requested_formats so FFmpegMerger::should_run()
+                        // returns true
+                        info.requested_formats = Some(vec![video.clone(), audio.clone()]);
+
+                        (vec![outcome.video_path, outcome.audio_path], outcome.is_hls)
+                    }
                 };
 
                 // Download thumbnail for embedding or standalone use
@@ -343,9 +370,10 @@ impl DownloadPhase {
                     .download_subtitles(&info, &output_path, &subtitle_selection)
                     .await?;
 
-                // Run post-processing (automatic for HLS, optional for others)
+                // Run post-processing (FFmpegMerger at priority 100 will
+                // merge when it detects 2 files with requested_formats set)
                 let final_files = orchestrator
-                    .run_postprocessing(&info, vec![output_path.clone()], outcome.is_hls)
+                    .run_postprocessing(&info, download_files, is_hls)
                     .await?;
                 let final_path = final_files.into_iter().next().unwrap_or(output_path);
 

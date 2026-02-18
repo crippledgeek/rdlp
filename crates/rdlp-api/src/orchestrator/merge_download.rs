@@ -11,7 +11,6 @@ use rdlp_core::Format;
 use std::path::{Path, PathBuf};
 
 /// Result of a successful merge download
-#[allow(dead_code)]
 pub(super) struct MergeDownloadOutcome {
     /// Path to the downloaded video file
     pub video_path: PathBuf,
@@ -21,7 +20,6 @@ pub(super) struct MergeDownloadOutcome {
     pub is_hls: bool,
 }
 
-#[allow(dead_code)]
 impl Orchestrator {
     /// Download video and audio streams in parallel for merge.
     ///

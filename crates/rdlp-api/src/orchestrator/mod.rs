@@ -51,7 +51,7 @@ use tracing::instrument;
 /// `Merge` downloads video-only and audio-only in parallel, then
 /// delegates muxing to the `FFmpegMerger` postprocessor.
 #[derive(Debug, Clone)]
-#[allow(dead_code, clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum DownloadPlan {
     /// Download a single combined format
     Single(Format),
