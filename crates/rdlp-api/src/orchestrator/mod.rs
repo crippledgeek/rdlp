@@ -7,6 +7,7 @@ mod errors;
 mod execution;
 mod extraction;
 mod interactive;
+mod merge_download;
 mod paths;
 mod playlist;
 mod postprocess;
