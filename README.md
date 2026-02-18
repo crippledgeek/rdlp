@@ -40,6 +40,7 @@ rdlp URL                              # download best quality
 rdlp -i URL                           # interactive format selection
 rdlp --remux=mp4 URL                  # remux to MP4
 rdlp -f "bv[height<=720]+ba" URL      # format selection
+rdlp --audio-multistreams URL         # use bv+ba/b instead of bv*+ba/b
 rdlp -x --audio-format=flac URL       # extract audio
 rdlp --cookies-from-browser chrome URL # use browser cookies
 rdlp --dump-json URL                  # metadata as JSON

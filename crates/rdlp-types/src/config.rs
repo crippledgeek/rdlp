@@ -77,11 +77,17 @@ pub struct Config {
     pub no_part: bool,
 
     // === Format selection ===
-    /// Format selection expression (default: "bestvideo*+bestaudio/best")
-    pub format: String,
+    /// Format selection expression.
+    /// `None` means "use dynamic default based on runtime capabilities".
+    /// `Some(...)` means the user (or config file) explicitly set this.
+    pub format: Option<String>,
 
     /// Merge output format when combining video+audio
     pub merge_output_format: Option<ContainerFormat>,
+
+    /// Require strict video-only + audio-only streams for merge selection.
+    /// When true, default selector changes from `b/bv*+ba` to `b/bv+ba`.
+    pub audio_multistreams: bool,
 
     // === Download options ===
     /// Number of concurrent fragments to download
@@ -297,8 +303,9 @@ impl Default for Config {
             no_part: false,
 
             // Format selection
-            format: "bestvideo*+bestaudio/best".to_string(),
+            format: None,
             merge_output_format: None,
+            audio_multistreams: false,
 
             // Download options
             concurrent_fragments: 4,
@@ -424,9 +431,24 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.output_template, "%(title)s.%(ext)s");
-        assert_eq!(config.format, "bestvideo*+bestaudio/best");
+        assert!(config.format.is_none());
         assert!(config.continue_downloads);
         assert_eq!(config.concurrent_fragments, 4);
+    }
+
+    #[test]
+    fn test_default_format_is_none() {
+        let config = Config::default();
+        assert!(
+            config.format.is_none(),
+            "Default format should be None (dynamic default)"
+        );
+    }
+
+    #[test]
+    fn test_default_audio_multistreams_is_false() {
+        let config = Config::default();
+        assert!(!config.audio_multistreams);
     }
 
     #[test]

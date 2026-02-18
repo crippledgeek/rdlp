@@ -82,7 +82,7 @@ mod tests {
 
         let config = from_toml_file(file.path()).unwrap();
         assert!(config.verbose);
-        assert_eq!(config.format, "worst");
+        assert_eq!(config.format, Some("worst".to_string()));
         // Defaults should fill in the rest
         assert_eq!(config.concurrent_fragments, 4);
         assert!(!config.quiet);
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_save_and_reload() {
         let mut config = Config::default();
-        config.format = "worst".to_string();
+        config.format = Some("worst".to_string());
         config.verbose = true;
         config.rate_limit = Some(1_048_576);
 
@@ -182,7 +182,7 @@ mod tests {
         to_toml_file(&config, file.path()).unwrap();
 
         let loaded = from_toml_file(file.path()).unwrap();
-        assert_eq!(loaded.format, "worst");
+        assert_eq!(loaded.format, Some("worst".to_string()));
         assert!(loaded.verbose);
         assert_eq!(loaded.rate_limit, Some(1_048_576));
     }

@@ -464,7 +464,7 @@ mod tests {
             std::path::PathBuf::from("/tmp/test")
         );
         assert_eq!(config.output_template, "%(title)s.%(ext)s");
-        assert_eq!(config.format, "best");
+        assert_eq!(config.format, Some("best".to_string()));
         assert_eq!(config.retries, 7);
         assert_eq!(config.concurrent_fragments, 8);
     }

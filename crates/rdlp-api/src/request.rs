@@ -108,6 +108,9 @@ pub struct FormatOptions {
     pub prefer_free_formats: bool,
     /// Show interactive format selection menu.
     pub interactive: bool,
+    /// Require strict video-only + audio-only streams for merge.
+    /// `None` preserves base config.
+    pub audio_multistreams: Option<bool>,
 }
 
 /// Subtitle download and embedding options.
@@ -228,6 +231,7 @@ mod tests {
         assert!(req.format.selector.is_none());
         assert!(!req.format.prefer_free_formats);
         assert!(!req.format.interactive);
+        assert!(req.format.audio_multistreams.is_none());
 
         // SubtitleOptions defaults
         assert!(req.subtitles.write_subs.is_none());

@@ -102,12 +102,12 @@ fn test_client_with_custom_config() {
     let config = Config {
         output_directory: temp_dir.path().to_path_buf(),
         progress: false,
-        format: "best".to_string(),
+        format: Some("best".to_string()),
         concurrent_fragments: 8,
         ..Default::default()
     };
 
-    assert_eq!(config.format, "best");
+    assert_eq!(config.format, Some("best".to_string()));
     assert_eq!(config.concurrent_fragments, 8);
 
     let client = RdlpClient::builder()
