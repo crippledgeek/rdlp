@@ -8,8 +8,8 @@ use rdlp_core::{Format, FormatSelector, InfoDict};
 
 /// Whether merge download (video + audio muxed via FFmpeg) is supported.
 /// Both `resolve_effective_selector` and `select_format` check this value.
-/// Phase 2 will change this to a runtime check.
-const MERGE_SUPPORTED: bool = false;
+/// Enabled in Phase 2 — merge download fully supported.
+const MERGE_SUPPORTED: bool = true;
 
 impl Orchestrator {
     /// Resolve the effective format selector string based on runtime
@@ -19,16 +19,16 @@ impl Orchestrator {
     /// 1. Explicit user format (`config.format = Some(...)`) always wins
     /// 2. Otherwise, compute default from:
     ///    - `ffmpeg_available` -- from `postprocessor_registry.is_some()`
-    ///    - `merge_supported` -- false in Phase 1 (no merge download yet)
+    ///    - `merge_supported` -- true (merge download fully supported)
     ///    - `audio_multistreams` -- from `config.audio_multistreams`
     ///
-    /// # Phase 1 defaults
+    /// # Defaults (merge supported)
     ///
     /// | Condition | Default |
     /// |-----------|---------|
-    /// | FFmpeg available, merge not supported | `b/bv*+ba` |
+    /// | FFmpeg available, no multistreams | `bv*+ba/b` |
+    /// | FFmpeg available, multistreams | `bv+ba/b` |
     /// | FFmpeg unavailable | `b/bv+ba` |
-    /// | audio_multistreams enabled | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
     pub(super) fn resolve_effective_selector(&self) -> String {
         // 1. Explicit user format always wins
@@ -302,12 +302,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_selector_falls_back_to_combined() {
-        // When selector returns 2 formats (merge) but merge is not
-        // supported, should fall back to best combined format instead
-        // of silently dropping audio.
+    async fn test_merge_selector_returns_merge_plan() {
         let config = Config {
-            format: Some("bv+ba/b".to_string()),
+            format: Some("bv+ba".to_string()),
             ..Default::default()
         };
         let orch = orchestrator_with_config(config);
@@ -321,14 +318,16 @@ mod tests {
         let info = test_info_with_formats(formats);
 
         let plan = orch.select_format(&info, false).await.unwrap().unwrap();
-        let result = unwrap_single(plan);
-        // Should NOT be v1440 (video-only, no audio!)
-        // Should fall back to c1080 (best combined)
-        assert_eq!(result.format_id, "c1080");
-        assert!(
-            result.acodec.as_deref() != Some("none"),
-            "Fallback format must have audio"
-        );
+        // With MERGE_SUPPORTED = true, should return Merge plan
+        match plan {
+            super::super::DownloadPlan::Merge { video, audio } => {
+                assert!(video.has_video(), "Video format should have video");
+                assert!(audio.has_audio(), "Audio format should have audio");
+            }
+            super::super::DownloadPlan::Single(f) => {
+                panic!("Expected Merge plan, got Single({})", f.format_id);
+            }
+        }
     }
 
     #[tokio::test]
@@ -359,8 +358,8 @@ mod tests {
         let selector = orch.resolve_effective_selector();
         if orch.postprocessor_registry.is_some() {
             assert_eq!(
-                selector, "b/bv*+ba",
-                "FFmpeg available + no merge should give b/bv*+ba"
+                selector, "bv*+ba/b",
+                "FFmpeg available + merge supported should give bv*+ba/b"
             );
         } else {
             assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
@@ -386,8 +385,11 @@ mod tests {
         };
         let orch = orchestrator_with_config(config);
         let selector = orch.resolve_effective_selector();
-        // With multistreams, always "b/bv+ba" regardless of FFmpeg
-        assert_eq!(selector, "b/bv+ba");
+        if orch.postprocessor_registry.is_some() {
+            assert_eq!(selector, "bv+ba/b");
+        } else {
+            assert_eq!(selector, "b/bv+ba");
+        }
     }
 
     #[test]
@@ -402,42 +404,50 @@ mod tests {
         assert_eq!(selector, "bestvideo*+bestaudio/best");
     }
 
-    /// Verify the Phase 1 selector truth table:
+    /// Verify the selector truth table (merge supported):
     ///
     /// | Condition                              | Default          |
     /// |----------------------------------------|------------------|
-    /// | FFmpeg available, merge not supported   | `b/bv*+ba`       |
+    /// | FFmpeg available, no multistreams       | `bv*+ba/b`       |
+    /// | FFmpeg available, multistreams          | `bv+ba/b`        |
     /// | FFmpeg unavailable                      | `b/bv+ba`        |
-    /// | audio_multistreams enabled              | `b/bv+ba`        |
     /// | User explicit `-f`                      | User's value     |
     #[test]
-    fn test_phase1_selector_truth_table() {
-        // Case 1: FFmpeg available, merge not supported
+    fn test_selector_truth_table() {
+        // Case 1: FFmpeg available, merge supported
         // (depends on environment -- tested via unit logic)
         let config = Config::default();
         let orch = orchestrator_with_config(config);
         let selector = orch.resolve_effective_selector();
         if orch.postprocessor_registry.is_some() {
             assert_eq!(
-                selector, "b/bv*+ba",
-                "FFmpeg available + no merge should give b/bv*+ba"
+                selector, "bv*+ba/b",
+                "FFmpeg available + merge supported should give bv*+ba/b"
             );
         } else {
             assert_eq!(selector, "b/bv+ba", "No FFmpeg should give b/bv+ba");
         }
 
-        // Case 2: audio_multistreams always gives b/bv+ba regardless
-        // of ffmpeg
+        // Case 2: audio_multistreams with FFmpeg gives bv+ba/b,
+        // without FFmpeg gives b/bv+ba
         let config = Config {
             audio_multistreams: true,
             ..Default::default()
         };
         let orch = orchestrator_with_config(config);
-        assert_eq!(
-            orch.resolve_effective_selector(),
-            "b/bv+ba",
-            "audio_multistreams should give b/bv+ba"
-        );
+        if orch.postprocessor_registry.is_some() {
+            assert_eq!(
+                orch.resolve_effective_selector(),
+                "bv+ba/b",
+                "multistreams + FFmpeg should give bv+ba/b"
+            );
+        } else {
+            assert_eq!(
+                orch.resolve_effective_selector(),
+                "b/bv+ba",
+                "multistreams + no FFmpeg should give b/bv+ba"
+            );
+        }
 
         // Case 3: Explicit format always wins
         let config = Config {
