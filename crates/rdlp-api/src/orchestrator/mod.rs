@@ -51,6 +51,8 @@ use tracing::instrument;
 /// `Merge` downloads video-only and audio-only in parallel, then
 /// delegates muxing to the `FFmpegMerger` postprocessor.
 #[derive(Debug, Clone)]
+// Format is large but DownloadPlan is always stored as Box<DownloadPlan>
+// in DownloadPhase, so the enum's stack size doesn't affect the state machine.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum DownloadPlan {
     /// Download a single combined format

@@ -105,7 +105,7 @@ impl Orchestrator {
                 return Err(OrchestratorError::NoFormat);
             }
 
-            // Selector returned 2+ formats: merge video + audio
+            // Selector returned a merge pair: first = video, second = audio
             if selected_formats.len() > 1 {
                 let video = selected_formats[0].clone();
                 let audio = selected_formats[1].clone();

@@ -68,7 +68,7 @@ pub enum DownloadPhase {
     SelectingSubtitles {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
-        /// Selected format for download
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
@@ -77,7 +77,7 @@ pub enum DownloadPhase {
     Preparing {
         /// Extracted video metadata
         info: Box<rdlp_core::InfoDict>,
-        /// Selected format for download
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
@@ -90,7 +90,7 @@ pub enum DownloadPhase {
         info: Box<rdlp_core::InfoDict>,
         /// Path where the file will be saved
         output_path: PathBuf,
-        /// Selected format being downloaded
+        /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Resume state (fresh or resuming from offset)
         state: DownloadState,
@@ -318,21 +318,29 @@ impl DownloadPhase {
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
 
-                let resume_offset = orchestrator
-                    .detect_resume_point(&output_path, format.filesize)
-                    .await?;
+                // Resume detection only applies to Single downloads.
+                // Merge downloads create separate stream files (video + audio)
+                // at derived paths and always start fresh.
+                let state = match *plan {
+                    DownloadPlan::Merge { .. } => DownloadState::Fresh,
+                    DownloadPlan::Single(_) => {
+                        let resume_offset = orchestrator
+                            .detect_resume_point(&output_path, format.filesize)
+                            .await?;
 
-                // Check if file is already complete
-                if let Some(expected_size) = format.filesize {
-                    if resume_offset == expected_size {
-                        return Ok(Self::Complete { path: output_path });
+                        // Check if file is already complete
+                        if let Some(expected_size) = format.filesize {
+                            if resume_offset == expected_size {
+                                return Ok(Self::Complete { path: output_path });
+                            }
+                        }
+
+                        if resume_offset > 0 {
+                            DownloadState::Resume(resume_offset)
+                        } else {
+                            DownloadState::Fresh
+                        }
                     }
-                }
-
-                let state = if resume_offset > 0 {
-                    DownloadState::Resume(resume_offset)
-                } else {
-                    DownloadState::Fresh
                 };
 
                 Ok(Self::Downloading {

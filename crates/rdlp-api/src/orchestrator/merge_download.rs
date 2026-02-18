@@ -92,6 +92,7 @@ impl Orchestrator {
             }
             Ok(None) => {
                 self.cleanup_merge_file(&video_path).await;
+                self.cleanup_merge_file(&audio_path).await;
                 Ok(None)
             }
             Err(e) => {
