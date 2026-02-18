@@ -113,6 +113,71 @@ impl Orchestrator {
         Ok(Some(DownloadOutcome { stats, is_hls }))
     }
 
+    /// Execute a download to stdout with token validation (no CDN fallback).
+    ///
+    /// Unlike `download_with_cdn_fallback`, this does **not** try fallback URLs.
+    /// Once bytes have been written to a pipe, retrying with a different CDN URL
+    /// would corrupt the stream (the consumer would see partial data from URL 1
+    /// followed by a full stream from URL 2).
+    ///
+    /// HLS formats are rejected (not yet supported for stdout streaming).
+    /// Merge downloads are rejected at the state machine level.
+    ///
+    /// **Note on stdout validation split:** HLS and Merge checks happen here at
+    /// runtime rather than in `Config::validate()` because they depend on the
+    /// selected format, which is only known after extraction.
+    ///
+    /// # Returns
+    /// - `Ok(Some(stats))` — download succeeded
+    /// - `Ok(None)` — user cancelled
+    /// - `Err(e)` — download failed, token expired, or unsupported format
+    pub(super) async fn download_to_stdout(
+        &self,
+        format: &Format,
+    ) -> Result<Option<DownloadStats>> {
+        if format.is_hls() {
+            return Err(OrchestratorError::Configuration(
+                "HLS is not yet supported with -o - (stdout output); \
+                 select an HTTP format instead"
+                    .to_string(),
+            ));
+        }
+
+        // Log when fallback URLs exist but can't be used for pipe output
+        if let Some(ref fallbacks) = format.fallback_urls {
+            if !fallbacks.is_empty() {
+                info!(
+                    count = fallbacks.len();
+                    "Format has fallback CDN URLs but they cannot be used \
+                     with stdout (partial pipe writes are irreversible)"
+                );
+            }
+        }
+
+        let downloader = self
+            .downloader_registry
+            .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
+            .ok_or_else(|| OrchestratorError::NoDownloader {
+                url: format.url.clone(),
+            })?;
+
+        self.check_cdn_token_expiry(&format.url)?;
+
+        let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::stdout());
+
+        match self
+            .execute_download_to_writer(&downloader, &format.url, writer)
+            .await
+        {
+            Ok(Some(stats)) => {
+                info!("Stdout download completed: {stats:?}");
+                Ok(Some(stats))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Check if the CDN token in a URL has expired.
     ///
     /// Supports two URL token formats:

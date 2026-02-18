@@ -179,6 +179,7 @@ impl From<RdlpError> for RdlpApiError {
                 message: format!("Regex error: {err}"),
                 source_url: String::new(),
             },
+            RdlpError::Unsupported(msg) => Self::UnsupportedPlatform { feature: msg },
             RdlpError::Other(msg) => Self::Soft { message: msg },
         }
     }
@@ -210,7 +211,7 @@ impl From<OrchestratorError> for RdlpApiError {
             OrchestratorError::Io(io_err) => Self::IoError {
                 message: io_err.to_string(),
             },
-            OrchestratorError::Configuration(msg) => Self::BuilderError { message: msg },
+            OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
         }
     }
 }

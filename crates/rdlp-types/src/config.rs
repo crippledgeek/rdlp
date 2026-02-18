@@ -25,6 +25,15 @@ pub enum ConfigValidationError {
         /// Configured end
         end: usize,
     },
+    /// A post-processing option is incompatible with stdout output (`-o -`).
+    ///
+    /// Uses `String` rather than a typed enum because these are CLI flag names
+    /// (`--extract-audio`, `--remux`, etc.) used only for error display. The set
+    /// grows as new post-processing flags are added.
+    StdoutIncompatible {
+        /// The incompatible CLI option name (e.g. `"extract-audio"`)
+        option: String,
+    },
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -40,6 +49,9 @@ impl fmt::Display for ConfigValidationError {
                     f,
                     "playlist_end ({end}) must be >= playlist_start ({start})"
                 )
+            }
+            Self::StdoutIncompatible { option } => {
+                write!(f, "--{option} is not compatible with -o - (stdout output)")
             }
         }
     }
@@ -58,6 +70,9 @@ impl std::error::Error for ConfigValidationError {}
 #[serde(default)]
 pub struct Config {
     // === Output options ===
+    /// Stream output to stdout instead of a file (`-o -`)
+    pub output_to_stdout: bool,
+
     /// Output filename template (e.g., "%(title)s.%(ext)s")
     pub output_template: String,
 
@@ -295,6 +310,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             // Output options
+            output_to_stdout: false,
             output_template: "%(title)s.%(ext)s".to_string(),
             output_directory: PathBuf::from("."),
             restrict_filenames: false,
@@ -419,6 +435,31 @@ impl Config {
                 });
             }
         }
+
+        // Stdout mode rejects post-processing options that require file I/O
+        if self.output_to_stdout {
+            let incompatible: &[(&str, bool)] = &[
+                ("extract-audio", self.extract_audio),
+                ("remux", self.remux_container.is_some()),
+                ("recode-video", self.recode_video.is_some()),
+                ("embed-metadata", self.embed_metadata),
+                ("embed-thumbnail", self.embed_thumbnail),
+                ("embed-subtitles", self.embed_subtitles),
+                ("normalize-audio", self.normalize_audio),
+                ("loudnorm", self.loudnorm),
+                ("write-subtitles", self.write_subtitles),
+                ("write-thumbnail", self.write_thumbnail),
+                ("normalize-boost", self.normalize_boost),
+            ];
+            for &(option, active) in incompatible {
+                if active {
+                    return Err(ConfigValidationError::StdoutIncompatible {
+                        option: option.to_string(),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -472,5 +513,120 @@ mod tests {
         config.playlist_start = 10;
         config.playlist_end = Some(5);
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_default_output_to_stdout_is_false() {
+        let config = Config::default();
+        assert!(!config.output_to_stdout);
+    }
+
+    #[test]
+    fn test_stdout_valid_when_no_postprocessing() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_stdout_rejects_extract_audio() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.extract_audio = true;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "extract-audio".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_remux() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.remux_container = Some(ContainerFormat::Mp4);
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "remux".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_embed_thumbnail() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        // embed_thumbnail defaults to true, which should fail
+        assert!(config.embed_thumbnail);
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "embed-thumbnail".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_embed_metadata() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.embed_metadata = true;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "embed-metadata".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_normalize_audio() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.normalize_audio = true;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "normalize-audio".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_rejects_normalize_boost() {
+        let mut config = Config::default();
+        config.output_to_stdout = true;
+        config.embed_thumbnail = false;
+        config.normalize_boost = true;
+        let err = config.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ConfigValidationError::StdoutIncompatible {
+                option: "normalize-boost".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_stdout_incompatible_error_display() {
+        let err = ConfigValidationError::StdoutIncompatible {
+            option: "remux".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "--remux is not compatible with -o - (stdout output)"
+        );
     }
 }
