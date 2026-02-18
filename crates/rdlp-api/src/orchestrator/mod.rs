@@ -259,9 +259,10 @@ impl Orchestrator {
     /// This method implements an explicit state machine for the download workflow:
     /// 1. `Extracting` - Find extractor and extract video metadata
     /// 2. `SelectingFormat` - Choose format (interactive or automatic)
-    /// 3. `Preparing` - Detect resume point and prepare for download
-    /// 4. `Downloading` - Execute download with progress tracking
-    /// 5. `Complete` - Return downloaded file path
+    /// 3. `SelectingSubtitles` - Choose subtitles (interactive or config-based)
+    /// 4. `Preparing` - Detect resume point and prepare for download
+    /// 5. `Downloading` - Execute download with progress tracking
+    /// 6. `Complete` - Return downloaded file path
     ///
     /// At any point, user can cancel via `CancellationToken` → `Cancelled` state
     ///

@@ -13,6 +13,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Download result: (downloaded file paths, is_hls, merge formats if applicable).
+type DownloadResult = Option<(Vec<PathBuf>, bool, Option<Vec<Format>>)>;
+
 /// Maximum age of batch-resolved tokens before proactive re-extraction.
 /// Megacloud/netmagcdn tokens last ~30-60 min; we re-extract at 25 min
 /// to stay well within the window.
@@ -1085,8 +1088,7 @@ impl Orchestrator {
         const RETRY_DELAYS: [u64; MAX_EXTRACT_RETRIES] = [5, 15, 30];
 
         let mut output_path: Option<PathBuf> = None;
-        #[allow(clippy::type_complexity)]
-        let mut download_result: Option<(Vec<PathBuf>, bool, Option<Vec<Format>>)> = None;
+        let mut download_result: DownloadResult = None;
         let mut last_info_ref: Option<rdlp_core::InfoDict> = None;
 
         for attempt in 0..=MAX_EXTRACT_RETRIES {
@@ -1228,7 +1230,42 @@ impl Orchestrator {
                         Err(e) => return Err(e),
                     }
                 }
-                DownloadPlan::Merge { video, audio } => {
+                DownloadPlan::Merge {
+                    mut video,
+                    mut audio,
+                } => {
+                    // Add CDN fallback URLs for both streams
+                    let video_alts: Vec<String> = info_ref
+                        .formats
+                        .iter()
+                        .filter(|f| f.url != video.url && f.has_video() && !f.has_audio())
+                        .map(|f| f.url.clone())
+                        .collect();
+                    if !video_alts.is_empty() {
+                        let primary_host = extract_cdn_host(&video.url);
+                        let mut sorted = video_alts;
+                        sorted.sort_by_key(|u| u8::from(extract_cdn_host(u) != primary_host));
+                        video
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .extend(sorted);
+                    }
+                    let audio_alts: Vec<String> = info_ref
+                        .formats
+                        .iter()
+                        .filter(|f| f.url != audio.url && f.has_audio() && !f.has_video())
+                        .map(|f| f.url.clone())
+                        .collect();
+                    if !audio_alts.is_empty() {
+                        let primary_host = extract_cdn_host(&audio.url);
+                        let mut sorted = audio_alts;
+                        sorted.sort_by_key(|u| u8::from(extract_cdn_host(u) != primary_host));
+                        audio
+                            .fallback_urls
+                            .get_or_insert_with(Vec::new)
+                            .extend(sorted);
+                    }
+
                     // Compute output path on first attempt only
                     if output_path.is_none() {
                         let file_ext = self.determine_file_extension(&video);

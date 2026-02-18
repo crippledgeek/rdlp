@@ -1,4 +1,4 @@
-//! Format selection logic
+//! Format selection logic and [`DownloadPlan`] construction
 
 use std::collections::BTreeMap;
 
@@ -6,10 +6,7 @@ use super::{DownloadPlan, Orchestrator, errors::*};
 use log::{debug, info, warn};
 use rdlp_core::{Format, FormatSelector, InfoDict};
 
-/// Whether merge download (video + audio muxed via FFmpeg) is supported.
-/// Both `resolve_effective_selector` and `select_format` check this value.
-/// Enabled in Phase 2 — merge download fully supported.
-const MERGE_SUPPORTED: bool = true;
+// Merge download (video + audio muxed via FFmpeg) is fully supported.
 
 impl Orchestrator {
     /// Resolve the effective format selector string based on runtime
@@ -19,10 +16,9 @@ impl Orchestrator {
     /// 1. Explicit user format (`config.format = Some(...)`) always wins
     /// 2. Otherwise, compute default from:
     ///    - `ffmpeg_available` -- from `postprocessor_registry.is_some()`
-    ///    - `merge_supported` -- true (merge download fully supported)
     ///    - `audio_multistreams` -- from `config.audio_multistreams`
     ///
-    /// # Defaults (merge supported)
+    /// # Defaults
     ///
     /// | Condition | Default |
     /// |-----------|---------|
@@ -45,29 +41,20 @@ impl Orchestrator {
         let ffmpeg_available = self.postprocessor_registry.is_some();
         let audio_multistreams = self.config.audio_multistreams;
 
-        let selector = if MERGE_SUPPORTED && ffmpeg_available && !audio_multistreams {
-            // Phase 2+: full merge with star
-            // (video+audio combined included)
+        let selector = if ffmpeg_available && !audio_multistreams {
+            // FFmpeg + merge: prefer best video (including combined) + best audio
             "bv*+ba/b"
-        } else if MERGE_SUPPORTED && ffmpeg_available && audio_multistreams {
-            // Phase 2+: merge without star
-            // (strict video-only + audio-only)
+        } else if ffmpeg_available && audio_multistreams {
+            // FFmpeg + merge + multistreams: strict video-only + audio-only
             "bv+ba/b"
-        } else if ffmpeg_available && !audio_multistreams {
-            // Phase 1: FFmpeg available but no merge -- prefer combined,
-            // fallback to video-star + audio (star allows combined
-            // formats as video candidate)
-            "b/bv*+ba"
         } else {
-            // No FFmpeg OR multistreams -- only combined or strict
-            // video+audio
+            // No FFmpeg: prefer combined, fallback to video+audio
             "b/bv+ba"
         };
 
         debug!(
             selector,
             ffmpeg_available,
-            merge_supported = MERGE_SUPPORTED,
             audio_multistreams,
             reason = "dynamic default";
             "Resolved format selector"
@@ -79,10 +66,12 @@ impl Orchestrator {
     /// Select format from available formats and return a [`DownloadPlan`].
     ///
     /// Uses [`resolve_effective_selector`] to determine the selector
-    /// string. When the selector returns a merge pair (video + audio)
-    /// and [`MERGE_SUPPORTED`] is true, returns
-    /// [`DownloadPlan::Merge`]. Otherwise falls back to the best
-    /// combined format wrapped in [`DownloadPlan::Single`].
+    /// string. When the selector returns a merge pair (video + audio),
+    /// returns [`DownloadPlan::Merge`]. Otherwise returns a single
+    /// format wrapped in [`DownloadPlan::Single`].
+    ///
+    /// **Note**: Interactive mode always returns `DownloadPlan::Single`
+    /// because the user selects a single format from the grouped table.
     ///
     /// Returns `Ok(Some(plan))` on success, `Ok(None)` if the user
     /// cancelled (interactive mode only).
@@ -116,48 +105,16 @@ impl Orchestrator {
                 return Err(OrchestratorError::NoFormat);
             }
 
-            // Merge-fallback safety: if selector returned 2 formats
-            // (video+audio merge) but merge download is not yet
-            // supported, fall back to best combined format.
+            // Selector returned 2+ formats: merge video + audio
             if selected_formats.len() > 1 {
-                if MERGE_SUPPORTED {
-                    let video = selected_formats[0].clone();
-                    let audio = selected_formats[1].clone();
-                    info!(
-                        video = video.format_id.as_str(),
-                        audio = audio.format_id.as_str();
-                        "Selected merge pair"
-                    );
-                    return Ok(Some(DownloadPlan::Merge { video, audio }));
-                } else {
-                    warn!(
-                        video = selected_formats[0].format_id.as_str(),
-                        audio = selected_formats[1].format_id.as_str();
-                        "Merge requested but not supported \
-                         — falling back to best combined format"
-                    );
-                    // Fall back: re-select with "best" (combined only)
-                    let fallback = FormatSelector::parse("b").expect("'b' is a valid selector");
-                    let combined = fallback.select(formats);
-                    if let Some(best_combined) = combined.first() {
-                        info!(
-                            format_id =
-                                best_combined.format_id.as_str();
-                            "Using best combined format \
-                             (has both video and audio)"
-                        );
-                        (*best_combined).clone()
-                    } else {
-                        // No combined format either — use the first
-                        // selected format (video-only is better
-                        // than nothing)
-                        warn!(
-                            "No combined format available \
-                             — using video-only format"
-                        );
-                        selected_formats[0].clone()
-                    }
-                }
+                let video = selected_formats[0].clone();
+                let audio = selected_formats[1].clone();
+                info!(
+                    video = video.format_id.as_str(),
+                    audio = audio.format_id.as_str();
+                    "Selected merge pair"
+                );
+                return Ok(Some(DownloadPlan::Merge { video, audio }));
             } else {
                 selected_formats[0].clone()
             }
@@ -318,7 +275,7 @@ mod tests {
         let info = test_info_with_formats(formats);
 
         let plan = orch.select_format(&info, false).await.unwrap().unwrap();
-        // With MERGE_SUPPORTED = true, should return Merge plan
+        // Should return Merge plan for bv+ba selector
         match plan {
             super::super::DownloadPlan::Merge { video, audio } => {
                 assert!(video.has_video(), "Video format should have video");

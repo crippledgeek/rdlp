@@ -11,6 +11,7 @@ use rdlp_core::Format;
 use std::path::{Path, PathBuf};
 
 /// Result of a successful merge download
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct MergeDownloadOutcome {
     /// Path to the downloaded video file
     pub video_path: PathBuf,
@@ -63,6 +64,7 @@ impl Orchestrator {
         let video_outcome = match video_result {
             Ok(Some(outcome)) => outcome,
             Ok(None) => {
+                self.cleanup_merge_file(&video_path).await;
                 self.cleanup_merge_file(&audio_path).await;
                 return Ok(None);
             }
