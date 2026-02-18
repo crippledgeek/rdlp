@@ -466,6 +466,110 @@ impl Downloader for HttpDownloader {
         })?
     }
 
+    async fn download_to_writer(
+        &self,
+        url: &str,
+        writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        let timeout = self.config.download_timeout;
+        tokio::time::timeout(timeout, async {
+            let start_time = Instant::now();
+            let client = self.client.clone();
+            let url_string = url.to_string();
+            let hdrs = self.headers();
+
+            let response =
+                with_retry(&self.config.retry_config, "HTTP GET (stdout)", || {
+                    let client = client.clone();
+                    let url = url_string.clone();
+                    let hdrs = hdrs.clone();
+                    async move {
+                        let response =
+                            client.get(&url).headers(hdrs).send().await.map_err(|e| {
+                                RdlpError::Network(format!("GET request failed: {e}"))
+                            })?;
+
+                        check_http_response(&response)?;
+                        Ok(response)
+                    }
+                })
+                .await?;
+
+            let total_size = response.content_length();
+            let mut buf_writer = BufWriter::with_capacity(self.config.buffer_size, writer);
+
+            let mut stream = response.bytes_stream();
+            let mut downloaded: u64 = 0;
+            let mut last_update = Instant::now();
+            let update_interval = PROGRESS_UPDATE_INTERVAL;
+            let read_timeout = self.config.read_timeout;
+
+            while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
+                .await
+                .map_err(|_| {
+                RdlpError::Network(format!(
+                    "Read timed out (no data for {}s)",
+                    read_timeout.as_secs()
+                ))
+            })? {
+                let chunk = chunk_result
+                    .map_err(|e| RdlpError::Network(format!("Failed to read chunk: {e}")))?;
+
+                match buf_writer.write_all(&chunk).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                        debug!("Broken pipe on stdout, stopping gracefully");
+                        break;
+                    }
+                    Err(e) => return Err(RdlpError::Io(e)),
+                }
+                downloaded += chunk.len() as u64;
+
+                if let Some(ref callback) = progress {
+                    let now = Instant::now();
+                    if now.duration_since(last_update) >= update_interval {
+                        let elapsed = now.duration_since(start_time).as_secs_f64();
+                        let speed = if elapsed > 0.0 {
+                            downloaded as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+
+                        let progress_info = DownloadProgress::new(downloaded, total_size, speed);
+                        callback.on_progress(&progress_info);
+                        last_update = now;
+                    }
+                }
+
+                if let Some(ref limiter) = self.rate_limiter {
+                    limiter.acquire(chunk.len()).await;
+                }
+            }
+
+            match buf_writer.flush().await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    debug!("Broken pipe on flush, ignoring");
+                }
+                Err(e) => return Err(RdlpError::Io(e)),
+            }
+
+            let duration = start_time.elapsed();
+            let stats = DownloadStats::new(downloaded, duration, 0);
+
+            if let Some(callback) = progress {
+                callback.on_complete(&stats);
+            }
+
+            Ok(stats)
+        })
+        .await
+        .map_err(|_| {
+            RdlpError::Download(format!("Download timed out after {}s", timeout.as_secs()))
+        })?
+    }
+
     fn supports(&self, url: &str) -> bool {
         url.starts_with("http://") || url.starts_with("https://")
     }

@@ -27,7 +27,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "signal"] }
+tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 

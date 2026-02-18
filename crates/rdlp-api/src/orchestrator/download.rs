@@ -113,6 +113,74 @@ impl Orchestrator {
         Ok(Some(DownloadOutcome { stats, is_hls }))
     }
 
+    /// Execute a download to stdout with CDN fallback retry and token validation.
+    ///
+    /// Like `download_with_cdn_fallback` but streams to stdout instead of a file.
+    /// HLS formats are rejected (not yet supported for stdout streaming).
+    ///
+    /// # Returns
+    /// - `Ok(Some(stats))` — download succeeded
+    /// - `Ok(None)` — user cancelled
+    /// - `Err(e)` — all URLs failed, token expired, or unsupported format
+    pub(super) async fn download_to_stdout_with_cdn_fallback(
+        &self,
+        format: &Format,
+    ) -> Result<Option<DownloadStats>> {
+        if format.is_hls() {
+            return Err(OrchestratorError::Configuration(
+                "HLS is not yet supported with -o - (stdout output); \
+                 select an HTTP format instead"
+                    .to_string(),
+            ));
+        }
+
+        let downloader = self
+            .downloader_registry
+            .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
+            .ok_or_else(|| OrchestratorError::NoDownloader {
+                url: format.url.clone(),
+            })?;
+
+        self.check_cdn_token_expiry(&format.url)?;
+
+        let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
+            .chain(format.fallback_urls.iter().flatten().map(String::as_str))
+            .collect();
+
+        let mut last_err = None;
+        for (i, download_url) in download_urls.iter().enumerate() {
+            if i > 0 {
+                warn!(
+                    fallback = i,
+                    url:? = download_url;
+                    "Primary CDN failed, trying fallback (stdout)"
+                );
+            }
+
+            let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> =
+                Box::new(tokio::io::stdout());
+
+            match self
+                .execute_download_to_writer(&downloader, download_url, writer)
+                .await
+            {
+                Ok(Some(stats)) => {
+                    info!("Stdout download completed: {stats:?}");
+                    return Ok(Some(stats));
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    if i < download_urls.len() - 1 {
+                        warn!("Stdout download failed: {e}, will try fallback CDN");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap())
+    }
+
     /// Check if the CDN token in a URL has expired.
     ///
     /// Supports two URL token formats:

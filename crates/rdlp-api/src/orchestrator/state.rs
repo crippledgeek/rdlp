@@ -317,6 +317,19 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                // Stdout mode: skip path generation and resume detection
+                if orchestrator.config.output_to_stdout {
+                    info!("Downloading to stdout");
+                    return Ok(Self::Downloading {
+                        info,
+                        output_path: PathBuf::from("-"),
+                        format,
+                        state: DownloadState::Fresh,
+                        subtitle_selection,
+                        plan,
+                    });
+                }
+
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
                 info!(path:? = output_path.display(); "Downloading to");
 
@@ -363,6 +376,31 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                // Stdout mode: stream directly, skip post-processing
+                if orchestrator.config.output_to_stdout {
+                    if matches!(*plan, DownloadPlan::Merge { .. }) {
+                        return Err(OrchestratorError::Configuration(
+                            "Merge downloads (video+audio) are not supported \
+                             with -o - (stdout output)"
+                                .to_string(),
+                        ));
+                    }
+
+                    let Some(_stats) = orchestrator
+                        .download_to_stdout_with_cdn_fallback(&format)
+                        .await?
+                    else {
+                        orchestrator.emit(Event::Cancelled {
+                            id: orchestrator.download_id,
+                        });
+                        return Ok(Self::Cancelled);
+                    };
+
+                    return Ok(Self::Complete {
+                        path: PathBuf::from("-"),
+                    });
+                }
+
                 // Branch on download plan
                 let (download_files, is_hls) = match *plan {
                     DownloadPlan::Single(_) => {

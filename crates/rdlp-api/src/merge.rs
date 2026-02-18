@@ -26,6 +26,9 @@ impl MergeOverrides for OutputOptions {
         if let Some(ref v) = self.template {
             config.output_template = v.clone();
         }
+        if let Some(v) = self.stdout {
+            config.output_to_stdout = v;
+        }
     }
 }
 

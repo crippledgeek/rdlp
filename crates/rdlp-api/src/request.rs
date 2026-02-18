@@ -86,6 +86,8 @@ pub struct OutputOptions {
     pub template: Option<String>,
     /// Prefix prepended to all output paths.
     pub paths_prefix: Option<PathBuf>,
+    /// Stream output to stdout (`-o -`). `None` preserves base config.
+    pub stdout: Option<bool>,
 }
 
 /// Format selection options.

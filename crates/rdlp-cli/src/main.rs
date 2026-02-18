@@ -542,9 +542,13 @@ fn merge_config(
 ) -> Result<Config> {
     let mut config = file_config;
 
-    // Output: -o always sets output_template (the template engine handles
-    // both template fields like "%(title)s" and plain filenames like "video.mp4")
-    if let Some(ref output) = args.output {
+    // Output: -o - means stdout streaming
+    if args.output.as_deref() == Some("-") {
+        config.output_to_stdout = true;
+        config.quiet = true;
+        config.progress = false;
+        config.embed_thumbnail = false;
+    } else if let Some(ref output) = args.output {
         config.output_template = output.clone();
     }
     if let Some(ref dir) = args.output_dir {
@@ -1425,5 +1429,86 @@ mod tests {
             merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
         assert!(!config.audio_multistreams);
+    }
+
+    // === Stdout streaming tests ===
+
+    #[test]
+    fn test_merge_config_stdout_sets_flags() {
+        let mut args = default_args();
+        args.output = Some("-".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(config.output_to_stdout);
+        assert!(config.quiet);
+        assert!(!config.progress);
+        assert!(!config.embed_thumbnail);
+    }
+
+    #[test]
+    fn test_merge_config_stdout_does_not_set_output_template() {
+        let mut args = default_args();
+        args.output = Some("-".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        // output_template should remain the default, not "-"
+        assert_eq!(config.output_template, "%(title)s.%(ext)s");
+    }
+
+    #[test]
+    fn test_merge_config_stdout_with_remux_fails() {
+        let mut args = default_args();
+        args.output = Some("-".to_string());
+        args.remux = Some("mp4".to_string());
+
+        let result = merge_config(&args, Config::default(), no_interactive());
+        assert!(result.is_err(), "-o - with --remux should fail validation");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("remux"),
+            "Error should mention remux: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_merge_config_stdout_with_extract_audio_fails() {
+        let mut args = default_args();
+        args.output = Some("-".to_string());
+        args.extract_audio = true;
+
+        let result = merge_config(&args, Config::default(), no_interactive());
+        assert!(
+            result.is_err(),
+            "-o - with --extract-audio should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_merge_config_stdout_with_embed_metadata_fails() {
+        let mut args = default_args();
+        args.output = Some("-".to_string());
+        args.embed_metadata = true;
+
+        let result = merge_config(&args, Config::default(), no_interactive());
+        assert!(
+            result.is_err(),
+            "-o - with --embed-metadata should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_merge_config_normal_output_not_stdout() {
+        let mut args = default_args();
+        args.output = Some("%(title)s.%(ext)s".to_string());
+
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+        assert!(!config.output_to_stdout);
+        assert_eq!(config.output_template, "%(title)s.%(ext)s");
     }
 }
