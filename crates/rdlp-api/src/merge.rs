@@ -32,7 +32,10 @@ impl MergeOverrides for OutputOptions {
 impl MergeOverrides for FormatOptions {
     fn merge_into(&self, config: &mut Config) {
         if let Some(ref v) = self.selector {
-            config.format = v.clone();
+            config.format = Some(v.clone());
+        }
+        if let Some(v) = self.audio_multistreams {
+            config.audio_multistreams = v;
         }
     }
 }
@@ -171,22 +174,43 @@ mod tests {
     #[test]
     fn test_format_none_preserves_selector() {
         let mut config = Config::default();
-        config.format = "kept".to_string();
+        config.format = Some("kept".to_string());
         let opts = FormatOptions::default();
         opts.merge_into(&mut config);
-        assert_eq!(config.format, "kept");
+        assert_eq!(config.format, Some("kept".to_string()));
     }
 
     #[test]
     fn test_format_some_overrides_selector() {
         let mut config = Config::default();
-        config.format = "old".to_string();
+        config.format = Some("old".to_string());
         let opts = FormatOptions {
             selector: Some("bestaudio".into()),
             ..FormatOptions::default()
         };
         opts.merge_into(&mut config);
-        assert_eq!(config.format, "bestaudio");
+        assert_eq!(config.format, Some("bestaudio".to_string()));
+    }
+
+    #[test]
+    fn test_format_audio_multistreams_none_preserves() {
+        let mut config = Config::default();
+        config.audio_multistreams = true;
+        let opts = FormatOptions::default();
+        opts.merge_into(&mut config);
+        assert!(config.audio_multistreams);
+    }
+
+    #[test]
+    fn test_format_audio_multistreams_some_overrides() {
+        let mut config = Config::default();
+        config.audio_multistreams = false;
+        let opts = FormatOptions {
+            audio_multistreams: Some(true),
+            ..FormatOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert!(config.audio_multistreams);
     }
 
     // ─── SubtitleOptions ─────────────────────────────────────────────
