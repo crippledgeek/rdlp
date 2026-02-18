@@ -466,6 +466,11 @@ impl Downloader for HttpDownloader {
         })?
     }
 
+    /// Stream an HTTP download into an arbitrary async writer (e.g. stdout).
+    ///
+    /// Unlike `download_to_file`, this always uses sequential I/O (no parallel
+    /// chunks) because the destination is not seekable. On `BrokenPipe` the
+    /// download stops gracefully and returns the bytes written so far.
     async fn download_to_writer(
         &self,
         url: &str,
@@ -547,11 +552,14 @@ impl Downloader for HttpDownloader {
                 }
             }
 
-            // Note: on BrokenPipe the current chunk is NOT counted (break
-            // fires before `downloaded +=`), but prior chunks written to the
-            // BufWriter may not have been flushed, so `downloaded` can exceed
-            // the bytes actually delivered to the pipe by up to `buffer_size`.
-            // This is inherent to BufWriter and acceptable for stats purposes.
+            // BrokenPipe accounting: when `write_all` hits BrokenPipe, we
+            // break before `downloaded +=`, so the failing chunk is excluded.
+            // However, earlier chunks that were written to the BufWriter's
+            // internal buffer may not have reached the pipe yet (up to
+            // `buffer_size` bytes). This means `downloaded` can *overstate*
+            // the bytes actually delivered to the consumer by up to one
+            // buffer's worth. This is inherent to buffered I/O and
+            // acceptable for stats/logging purposes.
             match buf_writer.flush().await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {

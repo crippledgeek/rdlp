@@ -211,7 +211,7 @@ impl From<OrchestratorError> for RdlpApiError {
             OrchestratorError::Io(io_err) => Self::IoError {
                 message: io_err.to_string(),
             },
-            OrchestratorError::Configuration(msg) => Self::BuilderError { message: msg },
+            OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
         }
     }
 }

@@ -143,6 +143,17 @@ impl Orchestrator {
             ));
         }
 
+        // Log when fallback URLs exist but can't be used for pipe output
+        if let Some(ref fallbacks) = format.fallback_urls {
+            if !fallbacks.is_empty() {
+                info!(
+                    count = fallbacks.len();
+                    "Format has fallback CDN URLs but they cannot be used \
+                     with stdout (partial pipe writes are irreversible)"
+                );
+            }
+        }
+
         let downloader = self
             .downloader_registry
             .find_downloader_with_headers(&format.url, format.http_headers.as_ref())

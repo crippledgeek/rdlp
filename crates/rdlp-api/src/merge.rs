@@ -28,6 +28,13 @@ impl MergeOverrides for OutputOptions {
         }
         if let Some(v) = self.stdout {
             config.output_to_stdout = v;
+            if v {
+                // Mirror CLI behaviour: silence output and disable incompatible
+                // defaults so Config::validate() won't reject the combination.
+                config.quiet = true;
+                config.progress = false;
+                config.embed_thumbnail = false;
+            }
         }
     }
 }
@@ -158,6 +165,21 @@ mod tests {
         let opts = OutputOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.output_template, "kept.%(ext)s");
+    }
+
+    #[test]
+    fn test_output_stdout_disables_incompatible_defaults() {
+        let mut config = Config::default();
+        config.embed_thumbnail = true;
+        let opts = OutputOptions {
+            stdout: Some(true),
+            ..OutputOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert!(config.output_to_stdout);
+        assert!(config.quiet);
+        assert!(!config.progress);
+        assert!(!config.embed_thumbnail);
     }
 
     #[test]

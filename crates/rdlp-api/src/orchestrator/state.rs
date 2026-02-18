@@ -151,9 +151,14 @@ impl DownloadPhase {
     /// - `Downloading` → `Complete` (after successful download) OR `Cancelled` (Ctrl+C)
     /// - `Complete` / `Cancelled` → Self (terminal states)
     ///
-    /// **Stdout fast-path:** When `config.output_to_stdout` is true, the
-    /// `Downloading` phase streams directly to stdout and transitions straight
-    /// to `Complete`, skipping subtitles, thumbnails, and all post-processing.
+    /// **Stdout fast-path (`-o -`):** When `config.output_to_stdout` is true:
+    /// - `Extracting` skips loading saved session state (no file to resume).
+    /// - `SelectingSubtitles` skips persisting session state.
+    /// - `Preparing` skips path generation (uses `"-"` sentinel), rejects merge
+    ///   plans, and always starts fresh (no resume).
+    /// - `Downloading` streams directly to stdout via `download_to_stdout()`,
+    ///   then transitions straight to `Complete`, skipping subtitles,
+    ///   thumbnails, and all post-processing.
     ///
     /// # Errors
     ///
@@ -331,8 +336,17 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
-                // Stdout mode: skip path generation and resume detection
+                // Stdout mode: skip path generation and resume detection.
+                // Reject merge plans early — the Downloading phase would
+                // also reject, but failing here gives a clearer context.
                 if orchestrator.config.output_to_stdout {
+                    if matches!(*plan, DownloadPlan::Merge { .. }) {
+                        return Err(OrchestratorError::Configuration(
+                            "Merge downloads (video+audio) are not supported \
+                             with -o - (stdout output)"
+                                .to_string(),
+                        ));
+                    }
                     info!("Downloading to stdout");
                     return Ok(Self::Downloading {
                         info,

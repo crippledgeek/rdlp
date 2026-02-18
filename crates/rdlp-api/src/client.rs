@@ -110,9 +110,16 @@ impl RdlpClient {
 
             match orchestrator.download(&url, interactive_flag).await {
                 Ok(Some(path)) => {
+                    // Stdout mode returns "-" sentinel — don't expose it
+                    // as a real file path to API consumers.
+                    let output_files = if path.as_os_str() == "-" {
+                        vec![]
+                    } else {
+                        vec![path]
+                    };
                     let result = DownloadResult {
                         id,
-                        output_files: vec![path],
+                        output_files,
                         info: InfoDict::new("", "", "", &url),
                         stats: DownloadStats::new(0, Duration::ZERO, 0),
                     };

@@ -210,6 +210,49 @@ async fn test_parallel_download_error_propagation() {
 }
 
 #[tokio::test]
+async fn test_download_to_writer_streams_bytes() {
+    use mockito::Server;
+    use tokio::io::AsyncWrite;
+
+    let mut server = Server::new_async().await;
+    let body = b"hello stdout stream";
+
+    let _mock = server
+        .mock("GET", "/pipe.mp4")
+        .with_status(200)
+        .with_header("content-type", "video/mp4")
+        .with_body(body.as_slice())
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+
+    // Use DuplexStream as writer: one end writes, we read from the other
+    let (client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+
+    // Spawn reader to drain the duplex
+    let reader_handle = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut server_stream, &mut collected)
+            .await
+            .unwrap();
+        collected
+    });
+
+    let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(client_stream);
+    let result = downloader
+        .download_to_writer(&format!("{}/pipe.mp4", server.url()), writer, None)
+        .await;
+
+    assert!(result.is_ok(), "download_to_writer should succeed");
+    let stats = result.unwrap();
+    assert_eq!(stats.bytes_downloaded, body.len() as u64);
+
+    let received = reader_handle.await.unwrap();
+    assert_eq!(received, body.as_slice());
+}
+
+#[tokio::test]
 async fn test_parallel_resume() {
     use mockito::Server;
     use tempfile::TempDir;

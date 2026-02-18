@@ -554,7 +554,9 @@ fn merge_config(
         // Disable embed_thumbnail before validation: the default is `true`, and
         // Config::validate() would reject stdout + embed-thumbnail.
         if config.embed_thumbnail {
-            warn!("Disabling --embed-thumbnail (incompatible with -o -)");
+            // Use eprintln, not warn!(): the tracing subscriber is not
+            // initialised yet (it happens after build_config returns).
+            eprintln!("Warning: disabling --embed-thumbnail (incompatible with -o -)");
             config.embed_thumbnail = false;
         }
     } else if let Some(ref output) = args.output {
