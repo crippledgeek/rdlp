@@ -86,7 +86,7 @@ pub struct Config {
     pub merge_output_format: Option<ContainerFormat>,
 
     /// Require strict video-only + audio-only streams for merge selection.
-    /// When true, default selector changes from `b/bv*+ba` to `b/bv+ba`.
+    /// When true, default selector changes from `bv*+ba/b` to `bv+ba/b`.
     pub audio_multistreams: bool,
 
     // === Download options ===
