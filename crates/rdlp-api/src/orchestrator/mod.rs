@@ -31,7 +31,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, info, warn};
 use rdlp_cookies::SimpleCookieJar;
-use rdlp_core::{Config, ExtractionContext};
+use rdlp_core::{Config, ExtractionContext, Format};
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
@@ -43,6 +43,40 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
+
+/// Plan for how to download the selected format(s).
+///
+/// `Single` downloads one combined format.
+/// `Merge` downloads video-only and audio-only in parallel, then
+/// delegates muxing to the `FFmpegMerger` postprocessor.
+#[derive(Debug, Clone)]
+#[allow(dead_code, clippy::large_enum_variant)]
+pub(crate) enum DownloadPlan {
+    /// Download a single combined format
+    Single(Format),
+    /// Download video and audio separately, then merge
+    Merge {
+        /// Video-only format
+        video: Format,
+        /// Audio-only format
+        audio: Format,
+    },
+}
+
+impl std::fmt::Display for DownloadPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Single(format) => write!(f, "single format {}", format.format_id),
+            Self::Merge { video, audio } => {
+                write!(
+                    f,
+                    "merge video {} + audio {}",
+                    video.format_id, audio.format_id
+                )
+            }
+        }
+    }
+}
 
 /// Main orchestrator coordinating extraction, download, and post-processing
 pub struct Orchestrator {
@@ -341,5 +375,54 @@ impl Orchestrator {
                 warn!("Failed to write to download archive: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod download_plan_tests {
+    use super::*;
+    use rdlp_core::{DownloadProtocol, Format};
+
+    fn make_format(id: &str) -> Format {
+        Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https)
+    }
+
+    #[test]
+    fn test_download_plan_single() {
+        let fmt = make_format("f1");
+        let plan = DownloadPlan::Single(fmt);
+        assert!(matches!(plan, DownloadPlan::Single(f) if f.format_id == "f1"));
+    }
+
+    #[test]
+    fn test_download_plan_merge() {
+        let video = make_format("v1");
+        let audio = make_format("a1");
+        let plan = DownloadPlan::Merge { video, audio };
+        match plan {
+            DownloadPlan::Merge { video: v, audio: a } => {
+                assert_eq!(v.format_id, "v1");
+                assert_eq!(a.format_id, "a1");
+            }
+            _ => panic!("Expected Merge variant"),
+        }
+    }
+
+    #[test]
+    fn test_download_plan_display_single() {
+        let fmt = make_format("f1");
+        let plan = DownloadPlan::Single(fmt);
+        let s = format!("{plan}");
+        assert!(s.contains("f1"));
+    }
+
+    #[test]
+    fn test_download_plan_display_merge() {
+        let video = make_format("v1");
+        let audio = make_format("a1");
+        let plan = DownloadPlan::Merge { video, audio };
+        let s = format!("{plan}");
+        assert!(s.contains("v1"));
+        assert!(s.contains("a1"));
     }
 }
