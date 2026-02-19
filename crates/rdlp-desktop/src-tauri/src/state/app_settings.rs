@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use log::{info, warn};
 use rdlp_types::{AudioFormat, ContainerFormat, SubtitleFormat};
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,79 @@ pub struct AppSettings {
     pub verbose: bool,
     /// Default search provider site name (e.g. `"xhamster"`).
     pub default_search_provider: Option<String>,
+}
+
+impl AppSettings {
+    /// Return the path to the settings file on disk.
+    ///
+    /// Uses the platform config directory (`dirs::config_dir()`) under
+    /// an `rdlp` subdirectory, with `settings.json` as the filename.
+    /// Falls back to `./settings.json` if the config directory cannot
+    /// be determined.
+    ///
+    /// # Returns
+    ///
+    /// The [`PathBuf`] to the settings file.
+    #[must_use]
+    pub fn settings_path() -> PathBuf {
+        dirs::config_dir()
+            .map(|p| p.join("rdlp").join("settings.json"))
+            .unwrap_or_else(|| PathBuf::from("settings.json"))
+    }
+
+    /// Load settings from disk, falling back to defaults.
+    ///
+    /// Reads the settings file at [`Self::settings_path()`]. If the
+    /// file is missing or contains invalid JSON, returns
+    /// [`Default::default()`] instead.
+    ///
+    /// # Returns
+    ///
+    /// The loaded [`AppSettings`], or defaults if loading fails.
+    #[must_use]
+    pub fn load() -> Self {
+        let path = Self::settings_path();
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(settings) => {
+                    info!("Loaded settings from {}", path.display());
+                    settings
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to parse settings at {}: {e}, using defaults",
+                        path.display()
+                    );
+                    Self::default()
+                }
+            },
+            Err(_) => {
+                info!(
+                    "No settings file at {}, using defaults",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Persist the current settings to disk as JSON.
+    ///
+    /// Creates parent directories if they do not exist. Writes the
+    /// settings to [`Self::settings_path()`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if directory creation or file writing fails.
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::settings_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, json)?;
+        Ok(())
+    }
 }
 
 impl Default for AppSettings {
@@ -84,6 +158,31 @@ mod tests {
         assert!(settings.default_subtitle_format.is_none());
         assert!(settings.default_subtitle_langs.is_empty());
         assert!(settings.default_search_provider.is_none());
+    }
+
+    #[test]
+    fn test_settings_path_is_not_empty() {
+        let path = AppSettings::settings_path();
+        assert!(
+            !path.as_os_str().is_empty(),
+            "settings_path should not be empty"
+        );
+        assert!(
+            path.ends_with("settings.json"),
+            "settings_path should end with settings.json"
+        );
+    }
+
+    #[test]
+    fn test_load_returns_defaults_when_no_file() {
+        // `load()` should not panic and should return defaults when
+        // the file does not exist (which it won't in a test env using
+        // the global path).
+        let settings = AppSettings::load();
+        assert!(
+            !settings.output_dir.as_os_str().is_empty(),
+            "loaded settings should have a non-empty output_dir"
+        );
     }
 
     #[test]

@@ -63,6 +63,7 @@ nul
 # Node.js / Frontend
 node_modules/
 package-lock.json
+crates/rdlp-desktop/dist/
 
 # Un-ignore TypeScript files in desktop frontend (*.ts above targets MPEG-TS video)
 !crates/rdlp-desktop/**/*.ts

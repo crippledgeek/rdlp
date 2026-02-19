@@ -66,9 +66,9 @@ export function SearchPage() {
 
             {status === "results" && (
                 <div className="results-grid">
-                    {results.map((result) => (
+                    {results.map((result, idx) => (
                         <ResultCard
-                            key={result.video_url}
+                            key={`${idx}-${result.video_url}`}
                             result={result}
                             onDownload={handleDownload}
                         />

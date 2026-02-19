@@ -51,7 +51,8 @@ pub struct FormatInfo {
 pub struct SubtitleInfo {
     /// Language code (e.g. "en", "ja").
     pub lang: String,
-    /// Available subtitle file extensions (e.g. \["srt", "vtt"\]).
+    /// Subtitle format extensions (kept as strings because extractors
+    /// may return unknown formats that do not map to `SubtitleFormat`).
     pub formats: Vec<String>,
 }
 

@@ -33,29 +33,29 @@ pub enum JobStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadJob {
     /// Unique identifier (UUID v4).
-    pub id: String,
+    pub(crate) id: String,
     /// Source URL being downloaded.
-    pub url: String,
+    pub(crate) url: String,
     /// Human-readable title extracted from metadata.
-    pub title: Option<String>,
+    pub(crate) title: Option<String>,
     /// Current lifecycle status.
-    pub status: JobStatus,
+    pub(crate) status: JobStatus,
     /// Download progress as a fraction in `[0.0, 1.0]`.
-    pub progress: Option<f64>,
+    pub(crate) progress: Option<f64>,
     /// Human-readable download speed (e.g. `"5.2 MB/s"`).
-    pub speed: Option<String>,
+    pub(crate) speed: Option<String>,
     /// Estimated time remaining (e.g. `"00:42"`).
-    pub eta: Option<String>,
+    pub(crate) eta: Option<String>,
     /// Error message if the job failed.
-    pub error: Option<String>,
+    pub(crate) error: Option<String>,
     /// Whether a failed job can be retried.
-    pub retryable: bool,
+    pub(crate) retryable: bool,
     /// Unix timestamp (seconds) when the download started.
-    pub started_at: Option<i64>,
+    pub(crate) started_at: Option<i64>,
     /// Unix timestamp (seconds) when the download completed/failed.
-    pub completed_at: Option<i64>,
+    pub(crate) completed_at: Option<i64>,
     /// Final output file path on disk.
-    pub output_path: Option<String>,
+    pub(crate) output_path: Option<String>,
 }
 
 /// In-memory download queue holding all download entries.

@@ -7,6 +7,7 @@ import {
     onDownloadProgress,
     onDownloadComplete,
     onDownloadError,
+    onDownloadLog,
 } from "./lib/tauri";
 
 type Tab = "search" | "queue" | "settings";
@@ -20,6 +21,7 @@ function App() {
     ).length;
 
     useEffect(() => {
+        let mounted = true;
         const unlisteners: Array<() => void> = [];
 
         const setup = async () => {
@@ -33,6 +35,7 @@ function App() {
                         payload.eta,
                     );
             });
+            if (!mounted) { unProgress(); return; }
             unlisteners.push(unProgress);
 
             const unComplete = await onDownloadComplete((payload) => {
@@ -40,6 +43,7 @@ function App() {
                     .getState()
                     .markJobCompleted(payload.jobId, payload.filepath);
             });
+            if (!mounted) { unComplete(); return; }
             unlisteners.push(unComplete);
 
             const unError = await onDownloadError((payload) => {
@@ -51,12 +55,22 @@ function App() {
                         payload.retryable,
                     );
             });
+            if (!mounted) { unError(); return; }
             unlisteners.push(unError);
+
+            const unLog = await onDownloadLog((payload) => {
+                useQueueStore
+                    .getState()
+                    .updateJobStatus(payload.jobId, payload.message);
+            });
+            if (!mounted) { unLog(); return; }
+            unlisteners.push(unLog);
         };
 
         void setup();
 
         return () => {
+            mounted = false;
             for (const unlisten of unlisteners) {
                 unlisten();
             }

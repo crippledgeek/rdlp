@@ -17,12 +17,13 @@ use rdlp_api::Event;
 use rdlp_api::request::{
     DownloadRequest, FormatOptions, OutputOptions, PostProcessOptions, SubtitleOptions,
 };
+use rdlp_types::{AudioFormat, ContainerFormat};
 
 /// Frontend-supplied download options.
 ///
-/// Deserialized from JSON sent by the React frontend. String-typed
-/// fields (e.g. `remux`, `extract_audio`) are parsed into typed enums
-/// at the boundary.
+/// Deserialized from JSON sent by the React frontend. Typed enums
+/// (`ContainerFormat`, `AudioFormat`) deserialize from lowercase
+/// JSON strings via serde.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadOptions {
@@ -34,10 +35,10 @@ pub struct DownloadOptions {
     pub subtitles: bool,
     /// Subtitle language codes (e.g. `["en", "sv"]`).
     pub subtitle_langs: Vec<String>,
-    /// Container format to remux into (e.g. `"mp4"`, `"mkv"`).
-    pub remux: Option<String>,
-    /// Audio format to extract (e.g. `"mp3"`, `"opus"`).
-    pub extract_audio: Option<String>,
+    /// Container format to remux into (e.g. `Mp4`, `Mkv`).
+    pub remux: Option<ContainerFormat>,
+    /// Audio format to extract (e.g. `Mp3`, `Opus`).
+    pub extract_audio: Option<AudioFormat>,
     /// Whether to embed a thumbnail in the output file.
     pub embed_thumbnail: bool,
 }
@@ -83,14 +84,8 @@ pub async fn start_download(
     let settings = state
         .settings
         .lock()
-        .expect("settings lock poisoned")
+        .unwrap_or_else(|e| e.into_inner())
         .clone();
-
-    // Add job to queue as Pending
-    {
-        let mut queue = state.queue.lock().expect("queue lock poisoned");
-        queue.add_job(&job_id, &url);
-    }
 
     // Build the download request from options + settings
     let output_dir = options
@@ -98,21 +93,14 @@ pub async fn start_download(
         .map(PathBuf::from)
         .unwrap_or_else(|| settings.output_dir.clone());
 
-    let remux = match options.remux {
-        Some(ref s) => Some(s.parse().map_err(|_| AppError::InvalidInput {
-            field: "remux".to_owned(),
-            message: format!("Unknown container format: {s}"),
-        })?),
-        None => settings.default_remux,
-    };
+    let remux = options.remux.or(settings.default_remux);
+    let extract_audio = options.extract_audio.or(settings.default_extract_audio);
 
-    let extract_audio = match options.extract_audio {
-        Some(ref s) => Some(s.parse().map_err(|_| AppError::InvalidInput {
-            field: "extractAudio".to_owned(),
-            message: format!("Unknown audio format: {s}"),
-        })?),
-        None => settings.default_extract_audio,
-    };
+    // Add job to queue as Pending
+    {
+        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+        queue.add_job(&job_id, &url);
+    }
 
     let request = DownloadRequest {
         url: url.clone(),
@@ -146,7 +134,7 @@ pub async fn start_download(
     // Extract cancel token BEFORE moving handle into the spawned task
     let cancel_token = handle.cancel_token();
     {
-        let mut queue = state.queue.lock().expect("queue lock poisoned");
+        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.set_cancel(
             &job_id,
             Box::new(move || cancel_token.cancel()),
@@ -156,7 +144,7 @@ pub async fn start_download(
     // Mark job as running and set started_at
     let now = chrono::Utc::now().timestamp();
     {
-        let mut queue = state.queue.lock().expect("queue lock poisoned");
+        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = queue.get_job_mut(&job_id) {
             job.status = JobStatus::Running;
             job.started_at = Some(now);
@@ -173,7 +161,7 @@ pub async fn start_download(
             events::emit_event(&app, &id, &event);
 
             // Update queue state based on event
-            let mut q = queue.lock().expect("queue lock poisoned");
+            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(job) = q.get_job_mut(&id) {
                 match &event {
                     Event::Progress { progress, .. } => {
@@ -212,8 +200,9 @@ pub async fn start_download(
 
 /// Cancel an in-progress download by its job ID.
 ///
-/// Takes the download handle from the queue and calls `cancel()` on it.
-/// The job is immediately marked as [`JobStatus::Cancelled`].
+/// Takes the cancel closure from the queue and invokes it. The
+/// background event loop handles the resulting `Event::Cancelled` and
+/// updates the job status.
 ///
 /// # Arguments
 ///
@@ -223,25 +212,24 @@ pub async fn start_download(
 /// # Errors
 ///
 /// Returns [`AppError::DownloadFailed`] if the job is not found or
-/// has no active handle.
+/// has no active cancel function.
 #[tauri::command]
 pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let mut queue = state.queue.lock().expect("queue lock poisoned");
+    let cancel_fn = {
+        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+        queue
+            .take_cancel(&job_id)
+            .ok_or_else(|| AppError::DownloadFailed {
+                job_id: job_id.clone(),
+                message: "No active cancel function for this job".to_owned(),
+                retryable: false,
+            })?
+    };
 
-    let cancel_fn = queue
-        .take_cancel(&job_id)
-        .ok_or_else(|| AppError::DownloadFailed {
-            job_id: job_id.clone(),
-            message: "No active download handle found".to_owned(),
-            retryable: false,
-        })?;
-
+    // Only invoke the cancel token. The background event loop handles
+    // the Event::Cancelled and sets status/completed_at as the single
+    // source of truth — no direct mutation here.
     cancel_fn();
-
-    if let Some(job) = queue.get_job_mut(&job_id) {
-        job.status = JobStatus::Cancelled;
-        job.completed_at = Some(chrono::Utc::now().timestamp());
-    }
 
     Ok(())
 }
@@ -260,7 +248,7 @@ pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Resu
 /// A vector of all [`DownloadJob`]s, cloned from the queue.
 #[tauri::command]
 pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, AppError> {
-    let queue = state.queue.lock().expect("queue lock poisoned");
+    let queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
     Ok(queue.all_jobs().into_iter().cloned().collect())
 }
 
@@ -280,7 +268,7 @@ pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, A
 /// (not found or still active).
 #[tauri::command]
 pub async fn remove_job(job_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let mut queue = state.queue.lock().expect("queue lock poisoned");
+    let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
 
     if !queue.remove_job(&job_id) {
         return Err(AppError::DownloadFailed {

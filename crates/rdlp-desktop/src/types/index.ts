@@ -107,6 +107,8 @@ export interface DownloadJob {
     started_at: number | null;
     completed_at: number | null;
     output_path: string | null;
+    /** Latest log message from the download-log event (frontend-only, not from Rust). */
+    statusMessage: string | null;
 }
 
 /**
@@ -152,7 +154,7 @@ export interface DownloadErrorPayload {
 /** Log message payload emitted as "download-log". */
 export interface DownloadLogPayload {
     jobId: string;
-    level: "debug" | "info" | "warn" | "error";
+    level: "info" | "warn";
     message: string;
 }
 

@@ -63,6 +63,7 @@ pub async fn update_settings(
     })?;
 
     *current = settings;
+    current.save().ok();
 
     Ok(())
 }
@@ -88,7 +89,16 @@ pub async fn update_settings(
 /// converted to a UTF-8 string.
 #[tauri::command]
 pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> {
-    let folder = app.dialog().file().blocking_pick_folder();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    app.dialog().file().pick_folder(move |folder| {
+        // Ignore send error — receiver dropped means command was cancelled.
+        let _ = tx.send(folder);
+    });
+
+    let folder = rx.await.map_err(|_| AppError::Internal {
+        message: "Folder picker channel closed unexpectedly".to_owned(),
+    })?;
 
     match folder {
         Some(file_path) => {

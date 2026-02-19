@@ -22,11 +22,11 @@ use rdlp_core::Config;
 /// Access in Tauri commands via `State<'_, AppState>`.
 pub struct AppState {
     /// The rdlp download engine client (thread-safe, cloneable).
-    pub client: Arc<RdlpClient>,
+    pub(crate) client: Arc<RdlpClient>,
     /// Active and completed downloads.
-    pub queue: Arc<Mutex<DownloadQueue>>,
+    pub(crate) queue: Arc<Mutex<DownloadQueue>>,
     /// Persistent application settings.
-    pub settings: Arc<Mutex<AppSettings>>,
+    pub(crate) settings: Arc<Mutex<AppSettings>>,
 }
 
 impl AppState {
@@ -45,7 +45,7 @@ impl AppState {
         Self {
             client: Arc::new(client),
             queue: Arc::new(Mutex::new(DownloadQueue::new())),
-            settings: Arc::new(Mutex::new(AppSettings::default())),
+            settings: Arc::new(Mutex::new(AppSettings::load())),
         }
     }
 }

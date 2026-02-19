@@ -17,17 +17,17 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgressPayload {
     /// The UUID of the download job.
-    pub job_id: String,
+    pub(crate) job_id: String,
     /// Download progress as a fraction in `[0.0, 1.0]`.
-    pub progress: f64,
+    pub(crate) progress: f64,
     /// Human-readable speed string (e.g. `"5.2 MB/s"`), if available.
-    pub speed: Option<String>,
+    pub(crate) speed: Option<String>,
     /// Formatted ETA string (e.g. `"02:30"`), if available.
-    pub eta: Option<String>,
+    pub(crate) eta: Option<String>,
     /// Total bytes downloaded so far.
-    pub downloaded_bytes: u64,
+    pub(crate) downloaded_bytes: u64,
     /// Total expected bytes, if known.
-    pub total_bytes: Option<u64>,
+    pub(crate) total_bytes: Option<u64>,
 }
 
 /// Download completion payload emitted as `"download-complete"`.
@@ -35,9 +35,9 @@ pub struct DownloadProgressPayload {
 #[serde(rename_all = "camelCase")]
 pub struct DownloadCompletePayload {
     /// The UUID of the download job.
-    pub job_id: String,
+    pub(crate) job_id: String,
     /// Path to the primary output file on disk.
-    pub filepath: String,
+    pub(crate) filepath: String,
 }
 
 /// Download error payload emitted as `"download-error"`.
@@ -45,11 +45,21 @@ pub struct DownloadCompletePayload {
 #[serde(rename_all = "camelCase")]
 pub struct DownloadErrorPayload {
     /// The UUID of the download job.
-    pub job_id: String,
+    pub(crate) job_id: String,
     /// Human-readable error message.
-    pub error: String,
+    pub(crate) error: String,
     /// Whether the frontend should offer a retry button.
-    pub retryable: bool,
+    pub(crate) retryable: bool,
+}
+
+/// Log severity level for download events.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LogLevel {
+    /// Informational messages (metadata ready, post-processing stages).
+    Info,
+    /// Warning messages (retries, quality fallbacks).
+    Warn,
 }
 
 /// Log message payload emitted as `"download-log"`.
@@ -61,11 +71,11 @@ pub struct DownloadErrorPayload {
 #[serde(rename_all = "camelCase")]
 pub struct DownloadLogPayload {
     /// The UUID of the download job.
-    pub job_id: String,
-    /// Log level: `"info"` or `"warn"`.
-    pub level: String,
+    pub(crate) job_id: String,
+    /// Log severity level.
+    pub(crate) level: LogLevel,
     /// Human-readable log message.
-    pub message: String,
+    pub(crate) message: String,
 }
 
 /// Format a [`std::time::Duration`] as `"MM:SS"` or `"HH:MM:SS"`.
@@ -142,7 +152,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         Event::MetadataReady { info, .. } => {
             let payload = DownloadLogPayload {
                 job_id: job_id.to_owned(),
-                level: "info".to_owned(),
+                level: LogLevel::Info,
                 message: format!("Metadata ready: {}", info.title),
             };
 
@@ -152,7 +162,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         Event::PostProcessing { stage, .. } => {
             let payload = DownloadLogPayload {
                 job_id: job_id.to_owned(),
-                level: "info".to_owned(),
+                level: LogLevel::Info,
                 message: format!("Post-processing: {stage}"),
             };
 
@@ -162,7 +172,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         Event::Warning { message, .. } => {
             let payload = DownloadLogPayload {
                 job_id: job_id.to_owned(),
-                level: "warn".to_owned(),
+                level: LogLevel::Warn,
                 message: message.clone(),
             };
 
@@ -177,7 +187,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         } => {
             let payload = DownloadLogPayload {
                 job_id: job_id.to_owned(),
-                level: "warn".to_owned(),
+                level: LogLevel::Warn,
                 message: format!("Retrying ({attempt}/{max_attempts}): {reason}"),
             };
 
@@ -258,7 +268,7 @@ mod tests {
     fn test_log_payload_serializes() {
         let payload = DownloadLogPayload {
             job_id: "abc-123".to_owned(),
-            level: "warn".to_owned(),
+            level: LogLevel::Warn,
             message: "low quality fallback".to_owned(),
         };
         let json = serde_json::to_value(&payload).expect("serialization should succeed");

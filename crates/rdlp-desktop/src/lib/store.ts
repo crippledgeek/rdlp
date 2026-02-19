@@ -147,6 +147,7 @@ interface QueueState {
         speed: string | null,
         eta: string | null,
     ) => void;
+    updateJobStatus: (jobId: string, message: string) => void;
     markJobCompleted: (jobId: string, filepath: string) => void;
     markJobFailed: (jobId: string, error: string, retryable: boolean) => void;
     loadFormats: (url: string) => Promise<FormatListResponse>;
@@ -182,6 +183,15 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
         set((state) => ({
             jobs: state.jobs.map((job) =>
                 job.id === jobId ? { ...job, progress, speed, eta } : job,
+            ),
+        })),
+
+    updateJobStatus: (jobId, message) =>
+        set((state) => ({
+            jobs: state.jobs.map((job) =>
+                job.id === jobId
+                    ? { ...job, statusMessage: message }
+                    : job,
             ),
         })),
 
