@@ -27,8 +27,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
-            commands::search::search_url,
-            commands::search::search_site,
+            commands::search::search_content,
+            commands::search::get_search_providers,
             commands::search::get_search_filters,
             commands::download::start_download,
             commands::download::cancel_download,
