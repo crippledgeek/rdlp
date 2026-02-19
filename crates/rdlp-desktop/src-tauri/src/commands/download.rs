@@ -143,6 +143,16 @@ pub async fn start_download(
     // Start the download via rdlp-api
     let mut handle = state.client.download(request);
 
+    // Extract cancel token BEFORE moving handle into the spawned task
+    let cancel_token = handle.cancel_token();
+    {
+        let mut queue = state.queue.lock().expect("queue lock poisoned");
+        queue.set_cancel(
+            &job_id,
+            Box::new(move || cancel_token.cancel()),
+        );
+    }
+
     // Mark job as running and set started_at
     let now = chrono::Utc::now().timestamp();
     {
@@ -153,9 +163,6 @@ pub async fn start_download(
         }
     }
 
-    // Store the handle for cancellation
-    // We need to take the events receiver before storing, so we
-    // extract it via a split: store cancel token, spawn event loop.
     let queue = state.queue.clone();
     let id = job_id.clone();
 
@@ -172,17 +179,7 @@ pub async fn start_download(
                     Event::Progress { progress, .. } => {
                         job.progress = progress.percentage.map(|p| (p / 100.0).clamp(0.0, 1.0));
                         job.speed = Some(progress.speed_string());
-                        job.eta = progress.eta.as_ref().map(|d| {
-                            let secs = d.as_secs();
-                            let m = (secs % 3600) / 60;
-                            let s = secs % 60;
-                            let h = secs / 3600;
-                            if h > 0 {
-                                format!("{h:02}:{m:02}:{s:02}")
-                            } else {
-                                format!("{m:02}:{s:02}")
-                            }
-                        });
+                        job.eta = progress.eta.as_ref().map(crate::events::format_eta);
                     }
                     Event::MetadataReady { info, .. } => {
                         job.title = Some(info.title.clone());
@@ -231,15 +228,15 @@ pub async fn start_download(
 pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
     let mut queue = state.queue.lock().expect("queue lock poisoned");
 
-    let handle = queue
-        .take_handle(&job_id)
+    let cancel_fn = queue
+        .take_cancel(&job_id)
         .ok_or_else(|| AppError::DownloadFailed {
             job_id: job_id.clone(),
             message: "No active download handle found".to_owned(),
             retryable: false,
         })?;
 
-    handle.cancel();
+    cancel_fn();
 
     if let Some(job) = queue.get_job_mut(&job_id) {
         job.status = JobStatus::Cancelled;

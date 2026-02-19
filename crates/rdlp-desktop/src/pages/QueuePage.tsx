@@ -39,7 +39,7 @@ export function QueuePage() {
     if (jobs.length === 0) {
         return (
             <div className="queue-page">
-                <p className="queue-empty">No downloads yet.</p>
+                <p className="status-message">No downloads yet.</p>
             </div>
         );
     }

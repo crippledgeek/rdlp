@@ -28,7 +28,7 @@ export function SearchBar() {
     return (
         <form className="search-bar" onSubmit={handleSubmit}>
             <select
-                className="search-site-select"
+                className="site-selector"
                 value={site}
                 onChange={(e) => setSite(e.target.value)}
                 disabled={status === "loading"}
@@ -53,7 +53,6 @@ export function SearchBar() {
             />
 
             <button
-                className="search-button"
                 type="submit"
                 disabled={isDisabled}
             >

@@ -20,18 +20,17 @@ export function SearchPage() {
             <SearchBar />
 
             {status === "loading" && (
-                <div className="search-status">
+                <div className="status-message">
                     <p>Searching...</p>
                 </div>
             )}
 
             {status === "error" && (
-                <div className="search-error-banner">
-                    <p className="search-error-message">
+                <div className="error-banner">
+                    <p>
                         {error ?? "An unknown error occurred."}
                     </p>
                     <button
-                        className="search-retry-button"
                         onClick={() => void search()}
                     >
                         Retry
@@ -40,7 +39,7 @@ export function SearchPage() {
             )}
 
             {status === "empty" && (
-                <div className="search-status">
+                <div className="status-message">
                     <p>No results found.</p>
                 </div>
             )}

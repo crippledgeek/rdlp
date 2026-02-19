@@ -192,9 +192,9 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
                     ? {
                           ...job,
                           status: "completed" as const,
-                          progress: 100,
+                          progress: 1.0,
                           output_path: filepath,
-                          completed_at: Date.now(),
+                          completed_at: Math.floor(Date.now() / 1000),
                       }
                     : job,
             ),

@@ -69,7 +69,7 @@ pub struct DownloadLogPayload {
 }
 
 /// Format a [`std::time::Duration`] as `"MM:SS"` or `"HH:MM:SS"`.
-fn format_eta(eta: &std::time::Duration) -> String {
+pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
     let total_secs = eta.as_secs();
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;

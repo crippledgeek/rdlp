@@ -1,13 +1,12 @@
 //! Download queue state.
 //!
 //! Tracks all queued, active, and completed downloads for the desktop
-//! application. [`DownloadQueue`] holds both serializable job metadata
-//! and non-serializable [`DownloadHandle`]s for active downloads.
+//! application. [`DownloadQueue`] holds serializable job metadata and
+//! cancel closures for active downloads.
 
 use std::collections::HashMap;
 use std::fmt;
 
-use rdlp_api::DownloadHandle;
 use serde::Serialize;
 
 /// Lifecycle status of a download job.
@@ -61,16 +60,16 @@ pub struct DownloadJob {
 
 /// In-memory download queue holding all download entries.
 ///
-/// This struct is **not** `Serialize` because it holds live
-/// [`DownloadHandle`]s. Individual [`DownloadJob`]s are serializable
-/// and sent to the frontend via IPC.
+/// This struct is **not** `Serialize` because it holds live cancel
+/// closures. Individual [`DownloadJob`]s are serializable and sent to
+/// the frontend via IPC.
 pub struct DownloadQueue {
     /// Job metadata keyed by job ID.
     jobs: HashMap<String, DownloadJob>,
     /// Insertion order of job IDs.
     order: Vec<String>,
-    /// Active download handles keyed by job ID.
-    handles: HashMap<String, DownloadHandle>,
+    /// Cancel functions for active downloads, keyed by job ID.
+    cancel_fns: HashMap<String, Box<dyn Fn() + Send + Sync>>,
 }
 
 impl DownloadQueue {
@@ -80,7 +79,7 @@ impl DownloadQueue {
         Self {
             jobs: HashMap::new(),
             order: Vec::new(),
-            handles: HashMap::new(),
+            cancel_fns: HashMap::new(),
         }
     }
 
@@ -135,21 +134,21 @@ impl DownloadQueue {
             .collect()
     }
 
-    /// Store a [`DownloadHandle`] for an active download.
+    /// Store a cancel function for an active download.
     ///
     /// # Arguments
     ///
-    /// * `id` - The job ID to associate the handle with.
-    /// * `handle` - The active download handle.
-    pub fn set_handle(&mut self, id: impl Into<String>, handle: DownloadHandle) {
-        self.handles.insert(id.into(), handle);
+    /// * `id` - The job ID to associate the cancel function with.
+    /// * `cancel_fn` - A function that cancels the download when called.
+    pub fn set_cancel(&mut self, id: impl Into<String>, cancel_fn: Box<dyn Fn() + Send + Sync>) {
+        self.cancel_fns.insert(id.into(), cancel_fn);
     }
 
-    /// Take (remove) the [`DownloadHandle`] for a job.
+    /// Take (remove) the cancel function for a job.
     ///
-    /// Returns `None` if no handle is stored for the given ID.
-    pub fn take_handle(&mut self, id: &str) -> Option<DownloadHandle> {
-        self.handles.remove(id)
+    /// Returns `None` if no cancel function is stored for the given ID.
+    pub fn take_cancel(&mut self, id: &str) -> Option<Box<dyn Fn() + Send + Sync>> {
+        self.cancel_fns.remove(id)
     }
 
     /// Remove a job from the queue.
@@ -167,7 +166,7 @@ impl DownloadQueue {
         }
         self.jobs.remove(id);
         self.order.retain(|oid| oid != id);
-        self.handles.remove(id);
+        self.cancel_fns.remove(id);
         true
     }
 }
@@ -183,7 +182,7 @@ impl fmt::Debug for DownloadQueue {
         f.debug_struct("DownloadQueue")
             .field("jobs", &self.jobs)
             .field("order", &self.order)
-            .field("handles", &format_args!("{} active", self.handles.len()))
+            .field("cancel_fns", &format_args!("{} active", self.cancel_fns.len()))
             .finish()
     }
 }

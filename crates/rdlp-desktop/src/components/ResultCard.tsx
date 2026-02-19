@@ -28,21 +28,20 @@ export function ResultCard({ result, onDownload }: ResultCardProps) {
 
     return (
         <div className="result-card">
-            <div className="result-thumbnail-wrapper">
+            <div className="result-thumbnail">
                 {result.thumbnail_url ? (
                     <img
-                        className="result-thumbnail"
                         src={result.thumbnail_url}
                         alt={result.title}
                         loading="lazy"
                     />
                 ) : (
-                    <div className="result-thumbnail-placeholder">
+                    <div className="no-thumbnail">
                         No thumbnail
                     </div>
                 )}
                 {duration && (
-                    <span className="result-duration-badge">{duration}</span>
+                    <span className="duration-badge">{duration}</span>
                 )}
             </div>
 
@@ -60,7 +59,7 @@ export function ResultCard({ result, onDownload }: ResultCardProps) {
                     )}
                 </div>
                 <button
-                    className="result-download-button"
+                    className="download-btn"
                     onClick={() => onDownload(result.video_url)}
                 >
                     Download

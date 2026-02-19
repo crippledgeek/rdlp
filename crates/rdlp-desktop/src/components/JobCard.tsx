@@ -7,18 +7,17 @@ interface JobCardProps {
     onRetry: (url: string) => void;
 }
 
-/** Format a progress fraction (0..1 or 0..100) as a percentage string. */
+/** Format a progress fraction in [0.0, 1.0] as a percentage string. */
 function formatPercent(progress: number | null): string {
     if (progress === null) return "0%";
-    // Normalise: values > 1 are already percentages, values <= 1 are fractions.
-    const pct = progress > 1 ? progress : progress * 100;
+    const pct = progress * 100;
     return `${pct.toFixed(1)}%`;
 }
 
 /** Compute the CSS width for the progress bar fill. */
 function progressWidth(progress: number | null): string {
     if (progress === null) return "0%";
-    const pct = progress > 1 ? progress : progress * 100;
+    const pct = progress * 100;
     return `${Math.min(pct, 100)}%`;
 }
 
@@ -45,13 +44,13 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
 
             {isRunning && (
                 <div className="job-progress-section">
-                    <div className="job-progress-bar">
+                    <div className="progress-bar">
                         <div
-                            className="job-progress-fill"
+                            className="progress-fill"
                             style={{ width: progressWidth(job.progress) }}
                         />
                     </div>
-                    <div className="job-progress-details">
+                    <div className="progress-details">
                         <span className="job-percent">
                             {formatPercent(job.progress)}
                         </span>
