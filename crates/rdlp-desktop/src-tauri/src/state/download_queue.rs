@@ -182,7 +182,10 @@ impl fmt::Debug for DownloadQueue {
         f.debug_struct("DownloadQueue")
             .field("jobs", &self.jobs)
             .field("order", &self.order)
-            .field("cancel_fns", &format_args!("{} active", self.cancel_fns.len()))
+            .field(
+                "cancel_fns",
+                &format_args!("{} active", self.cancel_fns.len()),
+            )
             .finish()
     }
 }

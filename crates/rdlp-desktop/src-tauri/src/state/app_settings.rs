@@ -85,10 +85,7 @@ impl AppSettings {
                 }
             },
             Err(_) => {
-                info!(
-                    "No settings file at {}, using defaults",
-                    path.display()
-                );
+                info!("No settings file at {}, using defaults", path.display());
                 Self::default()
             }
         }

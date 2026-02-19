@@ -135,10 +135,7 @@ pub async fn start_download(
     let cancel_token = handle.cancel_token();
     {
         let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-        queue.set_cancel(
-            &job_id,
-            Box::new(move || cancel_token.cancel()),
-        );
+        queue.set_cancel(&job_id, Box::new(move || cancel_token.cancel()));
     }
 
     // Mark job as running and set started_at
