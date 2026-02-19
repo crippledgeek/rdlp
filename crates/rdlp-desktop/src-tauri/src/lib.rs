@@ -8,6 +8,8 @@
 
 /// Tauri IPC command handlers.
 pub mod commands;
+/// Frontend-facing error types for IPC responses.
+pub mod error;
 /// Tauri event types for frontend notifications.
 pub mod events;
 /// Application state managed by Tauri.
