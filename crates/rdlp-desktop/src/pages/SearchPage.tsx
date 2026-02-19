@@ -21,6 +21,11 @@ export function SearchPage() {
 
             {status === "loading" && (
                 <div className="status-message">
+                    <div className="loading-dots">
+                        <span />
+                        <span />
+                        <span />
+                    </div>
                     <p>Searching...</p>
                 </div>
             )}
@@ -40,7 +45,22 @@ export function SearchPage() {
 
             {status === "empty" && (
                 <div className="status-message">
+                    <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="M21 21l-4.3-4.3" />
+                        <line x1="8" y1="11" x2="14" y2="11" />
+                    </svg>
                     <p>No results found.</p>
+                </div>
+            )}
+
+            {status === "idle" && (
+                <div className="status-message">
+                    <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="M21 21l-4.3-4.3" />
+                    </svg>
+                    <p>Search for videos to get started.</p>
                 </div>
             )}
 

@@ -43,14 +43,20 @@ export function SearchBar() {
                 ))}
             </select>
 
-            <input
-                className="search-input"
-                type="text"
-                placeholder="Search videos..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                disabled={status === "loading"}
-            />
+            <div className="search-input-wrapper">
+                <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="M21 21l-4.3-4.3" />
+                </svg>
+                <input
+                    className="search-input"
+                    type="text"
+                    placeholder="Search videos..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    disabled={status === "loading"}
+                />
+            </div>
 
             <button
                 type="submit"
