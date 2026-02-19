@@ -27,6 +27,7 @@ interface SearchState {
     query: string;
     site: string;
     filters: SearchFilter[];
+    hasUserFilters: boolean;
     results: SearchResultPreview[];
     providers: SearchSiteInfo[];
     filterDescriptors: SearchFilterDescriptor[];
@@ -35,6 +36,7 @@ interface SearchState {
     setQuery: (query: string) => void;
     setSite: (site: string) => void;
     setFilters: (filters: SearchFilter[]) => void;
+    resetFiltersToDefaults: () => void;
     loadProviders: () => Promise<void>;
     loadFilters: (site: string) => Promise<void>;
     search: () => Promise<void>;
@@ -46,6 +48,7 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
     query: "",
     site: "",
     filters: [],
+    hasUserFilters: false,
     results: [],
     providers: [],
     filterDescriptors: [],
@@ -55,7 +58,18 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
 
     setSite: (site) => set({ site }),
 
-    setFilters: (filters) => set({ filters }),
+    setFilters: (filters) => set({ filters, hasUserFilters: true }),
+
+    resetFiltersToDefaults: () => {
+        const descs = get().filterDescriptors;
+        const defaults: SearchFilter[] = [];
+        for (const desc of descs) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
+        }
+        set({ filters: defaults, hasUserFilters: false });
+    },
 
     loadProviders: async () => {
         try {
@@ -77,6 +91,8 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
     loadFilters: async (site) => {
         try {
             const filterDescriptors = await api.getSearchFilters(site);
+            // Discard stale response if site changed during the async call
+            if (get().site !== site) return;
             // Initialize filters to descriptor defaults
             const filters: SearchFilter[] = [];
             for (const desc of filterDescriptors) {
@@ -84,11 +100,14 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
                     filters.push({ key: desc.key, value: desc.default });
                 }
             }
-            set({ filterDescriptors, filters });
-        } catch {
+            set({ filterDescriptors, filters, hasUserFilters: false });
+        } catch (err) {
+            // Discard stale error if site changed during the async call
+            if (get().site !== site) return;
+            console.warn("Failed to load filters:", err);
             // Silently clear descriptors — do not set status: "error"
             // to avoid conflating filter-load failures with search errors.
-            set({ filterDescriptors: [], filters: [] });
+            set({ filterDescriptors: [], filters: [], hasUserFilters: false });
         }
     },
 
@@ -122,6 +141,7 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
             status: "idle",
             query: "",
             filters: [],
+            hasUserFilters: false,
             results: [],
             error: null,
         }),

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useSearchStore } from "../lib/store";
 import type { SearchFilter } from "../types";
 
+const DEFAULT_FILTER_KEYS = new Set(["sort", "quality", "duration-min", "duration-max"]);
+
 /** Search form with site selector, query input, filters, and submit button. */
 export function SearchBar() {
     const query = useSearchStore((s) => s.query);
@@ -41,6 +43,7 @@ export function SearchBar() {
 
     const handleSiteChange = (newSite: string) => {
         setSite(newSite);
+        setShowAdvanced(false);
         // loadFilters will fire via the useEffect above, resetting filters to defaults
     };
 
@@ -59,9 +62,8 @@ export function SearchBar() {
     };
 
     // Split descriptors into default (sort, quality, duration) and advanced
-    const defaultKeys = new Set(["sort", "quality", "duration-min", "duration-max"]);
-    const defaultFilters = filterDescriptors.filter((d) => defaultKeys.has(d.key));
-    const advancedFilters = filterDescriptors.filter((d) => !defaultKeys.has(d.key));
+    const defaultFilters = filterDescriptors.filter((d) => DEFAULT_FILTER_KEYS.has(d.key));
+    const advancedFilters = filterDescriptors.filter((d) => !DEFAULT_FILTER_KEYS.has(d.key));
     const activeAdvancedCount = advancedFilters.filter(
         (d) => {
             const val = getFilterValue(d.key);
@@ -140,7 +142,7 @@ export function SearchBar() {
                             className={`filter-toggle ${showAdvanced ? "active" : ""}`}
                             onClick={() => setShowAdvanced(!showAdvanced)}
                             aria-expanded={showAdvanced}
-                            aria-label={`${activeAdvancedCount} active filters`}
+                            aria-label="Advanced filters"
                         >
                             Filters
                             {activeAdvancedCount > 0 && (

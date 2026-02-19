@@ -112,6 +112,22 @@ export interface DownloadJob {
 }
 
 /**
+ * Container formats matching Rust `ContainerFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type ContainerFormat =
+    | "mp4" | "mkv" | "webm" | "mov" | "ts" | "flv" | "avi"
+    | "threegp" | "mpg" | "f4v" | "asf" | "mxf" | "vob" | "dv"
+    | "nut" | "ivf" | "ogg" | "m4a" | "mp3" | "wav" | "flac"
+    | "opus" | "aac" | "aiff" | "mka" | "wv" | "caf" | "ac3";
+
+/**
+ * Audio formats matching Rust `AudioFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type AudioFormat =
+    | "mp3" | "aac" | "m4a" | "opus" | "vorbis" | "flac" | "alac"
+    | "wav" | "ac3" | "eac3" | "dts" | "mp2" | "wavpack" | "tta";
+
+/**
  * Frontend-supplied download options.
  *
  * Uses camelCase because the Rust struct has #[serde(rename_all = "camelCase")].
@@ -121,8 +137,8 @@ export interface DownloadOptions {
     outputDir: string | null;
     subtitles: boolean;
     subtitleLangs: string[];
-    remux: string | null;
-    extractAudio: string | null;
+    remux: ContainerFormat | null;
+    extractAudio: AudioFormat | null;
     embedThumbnail: boolean;
 }
 

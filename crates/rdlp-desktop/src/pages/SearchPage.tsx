@@ -8,8 +8,8 @@ export function SearchPage() {
     const results = useSearchStore((s) => s.results);
     const error = useSearchStore((s) => s.error);
     const search = useSearchStore((s) => s.search);
-    const filters = useSearchStore((s) => s.filters);
-    const setFilters = useSearchStore((s) => s.setFilters);
+    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
+    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
     const startDownload = useQueueStore((s) => s.startDownload);
 
     const handleDownload = (url: string) => {
@@ -52,11 +52,11 @@ export function SearchPage() {
                         <line x1="8" y1="11" x2="14" y2="11" />
                     </svg>
                     <p>No results found.</p>
-                    {filters.length > 0 && (
+                    {hasUserFilters && (
                         <button
                             className="clear-filters-btn"
                             onClick={() => {
-                                setFilters([]);
+                                resetFiltersToDefaults();
                                 void search();
                             }}
                         >
