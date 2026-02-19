@@ -1,0 +1,40 @@
+[package]
+name = "rdlp-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+default-run = "rdlp-desktop"
+
+[[bin]]
+name = "rdlp-desktop"
+path = "src/main.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+rdlp-api = { path = "../../rdlp-api", features = ["serde"] }
+rdlp-types = { path = "../../rdlp-types" }
+rdlp-core = { path = "../../rdlp-core" }
+rdlp-security = { path = "../../rdlp-security" }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

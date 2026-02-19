@@ -16,6 +16,7 @@ members = [
     "crates/rdlp-table",
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
+    "crates/rdlp-desktop/src-tauri",
 ]
 resolver = "2"
 
