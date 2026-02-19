@@ -77,12 +77,18 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
     loadFilters: async (site) => {
         try {
             const filterDescriptors = await api.getSearchFilters(site);
-            set({ filterDescriptors });
-        } catch (err) {
-            set({
-                error: err instanceof Error ? err.message : String(err),
-                status: "error",
-            });
+            // Initialize filters to descriptor defaults
+            const filters: SearchFilter[] = [];
+            for (const desc of filterDescriptors) {
+                if (desc.default !== null) {
+                    filters.push({ key: desc.key, value: desc.default });
+                }
+            }
+            set({ filterDescriptors, filters });
+        } catch {
+            // Silently clear descriptors — do not set status: "error"
+            // to avoid conflating filter-load failures with search errors.
+            set({ filterDescriptors: [], filters: [] });
         }
     },
 

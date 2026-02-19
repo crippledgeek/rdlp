@@ -1,7 +1,6 @@
 import { SearchBar } from "../components/SearchBar";
 import { ResultCard } from "../components/ResultCard";
-import { useSearchStore } from "../lib/store";
-import { useQueueStore } from "../lib/store";
+import { useSearchStore, useQueueStore } from "../lib/store";
 
 /** Search page composing the search bar and results grid. */
 export function SearchPage() {
@@ -9,6 +8,8 @@ export function SearchPage() {
     const results = useSearchStore((s) => s.results);
     const error = useSearchStore((s) => s.error);
     const search = useSearchStore((s) => s.search);
+    const filters = useSearchStore((s) => s.filters);
+    const setFilters = useSearchStore((s) => s.setFilters);
     const startDownload = useQueueStore((s) => s.startDownload);
 
     const handleDownload = (url: string) => {
@@ -51,6 +52,17 @@ export function SearchPage() {
                         <line x1="8" y1="11" x2="14" y2="11" />
                     </svg>
                     <p>No results found.</p>
+                    {filters.length > 0 && (
+                        <button
+                            className="clear-filters-btn"
+                            onClick={() => {
+                                setFilters([]);
+                                void search();
+                            }}
+                        >
+                            Clear filters and retry
+                        </button>
+                    )}
                 </div>
             )}
 
