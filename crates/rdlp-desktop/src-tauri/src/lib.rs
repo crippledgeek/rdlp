@@ -33,7 +33,7 @@ pub fn run() {
             commands::download::start_download,
             commands::download::cancel_download,
             commands::download::get_queue,
-            commands::download::remove_from_queue,
+            commands::download::remove_job,
             commands::formats::get_formats,
             commands::settings::get_settings,
             commands::settings::update_settings,
