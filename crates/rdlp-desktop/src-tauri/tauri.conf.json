@@ -4,14 +4,17 @@
   "version": "0.1.0",
   "identifier": "com.rdlp.desktop",
   "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "rdlp",
-        "width": 1024,
-        "height": 768,
+        "title": "rdlp Desktop",
+        "width": 1200,
+        "height": 800,
         "resizable": true
       }
     ],
