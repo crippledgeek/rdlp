@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn test_load_empty_toml() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "").unwrap();
+        writeln!(file).unwrap();
 
         let config = from_toml_file(file.path()).unwrap();
         let defaults = Config::default();
@@ -173,10 +173,12 @@ mod tests {
 
     #[test]
     fn test_save_and_reload() {
-        let mut config = Config::default();
-        config.format = Some("worst".to_string());
-        config.verbose = true;
-        config.rate_limit = Some(1_048_576);
+        let config = Config {
+            format: Some("worst".to_string()),
+            verbose: true,
+            rate_limit: Some(1_048_576),
+            ..Default::default()
+        };
 
         let file = NamedTempFile::new().unwrap();
         to_toml_file(&config, file.path()).unwrap();

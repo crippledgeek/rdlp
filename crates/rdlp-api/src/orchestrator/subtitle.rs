@@ -888,7 +888,7 @@ mod tests {
         let items = build_subtitle_menu_items(&info);
 
         // Simulate selecting indices 0 and 2 (en and fr, sorted alphabetically)
-        let selected_indices = vec![0, 2];
+        let selected_indices = [0, 2];
 
         let selected_langs: Vec<&str> = selected_indices
             .iter()
