@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
+import { WifiOff, AlertCircle } from "lucide-react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
 import { ResultsList } from "../components/ResultsList";
@@ -8,6 +9,8 @@ import { ResultCard } from "../components/ResultCard";
 import { SearchIdleState } from "../components/SearchIdleState";
 import { BatchActionBar } from "../components/BatchActionBar";
 import { FormatDialog } from "../components/FormatDialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
     searchParamsAtom,
     setSearchParam,
@@ -198,34 +201,39 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     }, [refetch]);
 
     return (
-        <div className="search-page">
-            <div className="search-command-center">
+        <div className="flex flex-col h-full">
+            <div className="shrink-0 pb-2.5 border-b border-border mb-1.5">
                 <CommandBar inputRef={inputRef} activeTab={activeTab} />
                 <FilterBar />
             </div>
 
             {/* Loading bar */}
             {status === "loading" && (
-                <div className="search-loading-bar">
-                    <div className="search-loading-bar-fill" />
+                <div className="h-0.5 bg-muted overflow-hidden shrink-0">
+                    <div className="h-full w-2/5 bg-primary rounded-sm animate-[loading-sweep_1.5s_ease-in-out_infinite]" />
                 </div>
             )}
 
             {/* Offline banner */}
             {!isOnline && (
-                <div className="search-banner search-banner-offline">
-                    <span className="search-banner-dot" />
-                    No internet connection
-                    <button onClick={() => void refetch()}>Retry</button>
-                </div>
+                <Alert className="mb-1.5 bg-gray-500/[0.08] border-gray-500/15 text-muted-foreground">
+                    <WifiOff className="h-4 w-4" />
+                    <AlertDescription className="flex items-center gap-2.5">
+                        No internet connection
+                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                    </AlertDescription>
+                </Alert>
             )}
 
             {/* Error banner */}
             {status === "error" && (
-                <div className="search-banner search-banner-error">
-                    {error ?? "An unknown error occurred."}
-                    <button onClick={() => void refetch()}>Retry</button>
-                </div>
+                <Alert variant="destructive" className="mb-1.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="flex items-center gap-2.5">
+                        {error ?? "An unknown error occurred."}
+                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                    </AlertDescription>
+                </Alert>
             )}
 
             {/* Idle state */}
@@ -239,25 +247,25 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
             {/* No results */}
             {status === "empty" && (
-                <div className="search-no-results">
-                    <p>
+                <div className="p-6 text-muted-foreground text-[13px]">
+                    <p className="text-muted-foreground mb-2.5">
                         No results for &ldquo;{query}&rdquo;
                         {site && ` on ${providers.find((p) => p.name === site)?.display_name ?? site}`}
                     </p>
-                    <ul>
-                        <li>Try different keywords</li>
+                    <ul className="list-disc pl-4">
+                        <li className="mb-1">Try different keywords</li>
                         {hasUserFilters && (
-                            <li>
+                            <li className="mb-1">
                                 Remove active filters{" "}
                                 <button
-                                    className="search-link-btn"
+                                    className="text-primary hover:text-primary/80 underline cursor-pointer bg-transparent border-none font-inherit text-inherit p-0"
                                     onClick={handleResetFiltersAndSearch}
                                 >
                                     Clear filters
                                 </button>
                             </li>
                         )}
-                        <li>Search on a different site</li>
+                        <li className="mb-1">Search on a different site</li>
                     </ul>
                 </div>
             )}
@@ -276,7 +284,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             )}
 
             {status === "results" && viewMode === "grid" && (
-                <div className="results-grid results-grid-dense">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                     {results.map((result, idx) => (
                         <ResultCard
                             key={`${idx}-${result.video_url}`}

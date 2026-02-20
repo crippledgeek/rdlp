@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDistanceToNow, fromUnixTime } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
+import { Download, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel } from "./FormatOptionsPanel";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type {
     AudioFormat,
     ContainerFormat,
@@ -102,54 +105,56 @@ export function ResultCard({
     }, [showOptions]);
 
     return (
-        <div className="result-card">
-            <div className="result-thumbnail">
+        <div className={cn(
+            "group bg-card border border-border rounded-lg overflow-hidden transition-all duration-250",
+            "hover:border-white/[0.08] hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(0,0,0,0.3)]",
+        )}>
+            <div className="relative aspect-video bg-background overflow-hidden">
                 {result.thumbnail_url ? (
                     <img
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
                         src={result.thumbnail_url}
                         alt={result.title}
                         loading="lazy"
                     />
                 ) : (
-                    <div className="no-thumbnail">
+                    <div className="flex items-center justify-center h-full text-muted-foreground text-xs uppercase tracking-wider">
                         No thumbnail
                     </div>
                 )}
                 {duration && (
-                    <span className="duration-badge">{duration}</span>
+                    <span className="absolute bottom-1.5 left-1.5 px-[7px] py-0.5 bg-black/85 text-white rounded-sm font-mono text-[11px] font-bold tracking-wide backdrop-blur-sm">
+                        {duration}
+                    </span>
                 )}
-                <div className="thumbnail-overlay">
-                    <div className="download-actions">
-                        <div className="download-btn-group">
-                            <button
-                                className="download-btn"
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent flex items-end justify-end p-2.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="flex flex-col items-end gap-1.5">
+                        <div className="flex gap-0.5">
+                            <Button
+                                size="sm"
+                                className="bg-primary/10 text-primary hover:bg-primary hover:text-background"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     onDownload(result.video_url);
                                 }}
                             >
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
+                                <Download className="h-3.5 w-3.5" />
                                 Download
-                            </button>
-                            <button
-                                className="download-btn download-btn-options"
+                            </Button>
+                            <Button
+                                size="icon"
+                                className="h-8 w-6 bg-primary/10 text-primary hover:bg-primary hover:text-background"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     setShowOptions((v) => !v);
                                 }}
                                 aria-label="Download options"
                             >
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M6 9l6 6 6-6" />
-                                </svg>
-                            </button>
+                                <ChevronDown className="h-3.5 w-3.5" />
+                            </Button>
                         </div>
                         <button
-                            className="choose-format-btn"
+                            className="text-[11px] text-white/55 hover:text-foreground cursor-pointer underline-offset-2 hover:underline bg-transparent border-none font-inherit p-0"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 onOpenFormatDialog(result.video_url);
@@ -161,7 +166,7 @@ export function ResultCard({
 
                     {showOptions && (
                         <div
-                            className="options-popover"
+                            className="absolute bottom-full right-0 mb-1.5 w-[280px] bg-muted border border-white/[0.08] rounded-lg shadow-[0_16px_48px_rgba(0,0,0,0.5)] p-2.5 z-50 animate-in fade-in-0 zoom-in-95"
                             ref={popoverRef}
                             onClick={(e) => e.stopPropagation()}
                         >
@@ -169,8 +174,8 @@ export function ResultCard({
                                 value={panelOptions}
                                 onChange={setPanelOptions}
                             />
-                            <button
-                                className="options-popover-confirm"
+                            <Button
+                                className="w-full mt-2.5 bg-primary text-primary-foreground hover:bg-primary/90"
                                 onClick={() => {
                                     onDownloadWithOptions(
                                         result.video_url,
@@ -180,23 +185,21 @@ export function ResultCard({
                                 }}
                             >
                                 Download with Options
-                            </button>
+                            </Button>
                         </div>
                     )}
                 </div>
             </div>
 
-            <div className="result-info">
-                <h3 className="result-title">{result.title}</h3>
-                <div className="result-meta">
-                    {views && <span className="result-views">{views}</span>}
+            <div className="px-3 py-2.5">
+                <h3 className="mb-1.5 text-[13px] font-semibold leading-snug text-foreground line-clamp-2">{result.title}</h3>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2.5">
+                    {views && <span>{views}</span>}
                     {views && uploadDate && (
-                        <span className="result-separator">&middot;</span>
+                        <span className="text-[8px] opacity-40">&middot;</span>
                     )}
                     {uploadDate && (
-                        <span className="result-date">
-                            {uploadDate}
-                        </span>
+                        <span>{uploadDate}</span>
                     )}
                 </div>
             </div>
