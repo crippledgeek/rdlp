@@ -4,8 +4,8 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
-import { Search, ArrowRight, Loader2 } from "lucide-react";
-import { searchParamsAtom, setSearchParam } from "../stores/searchParamsStore";
+import { Search, ArrowRight, Loader2, X } from "lucide-react";
+import { searchParamsAtom, setSearchParam, resetSearchParams } from "../stores/searchParamsStore";
 import { providersQueryOptions, searchQueryOptions } from "../api/search";
 import { Button } from "@/components/ui/button";
 
@@ -46,6 +46,13 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
         window.addEventListener("rdlp-focus-search", handler);
         return () => window.removeEventListener("rdlp-focus-search", handler);
     }, [inputRef]);
+
+    const clearSearch = () => {
+        const currentSite = site;
+        resetSearchParams();
+        setSearchParam("site", currentSite);
+        inputRef.current?.focus();
+    };
 
     const isDisabled = isFetching || query.trim() === "";
 
@@ -93,8 +100,24 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                     placeholder="Search videos..."
                     value={query}
                     onChange={(e) => setSearchParam("query", e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === "Escape" && query.length > 0) {
+                            e.preventDefault();
+                            clearSearch();
+                        }
+                    }}
                     disabled={isFetching}
                 />
+                {query.length > 0 && !isFetching && (
+                    <button
+                        type="button"
+                        className="absolute right-14 p-0.5 rounded-sm text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={clearSearch}
+                        aria-label="Clear search"
+                    >
+                        <X className="h-3.5 w-3.5" />
+                    </button>
+                )}
                 <kbd className="absolute right-2 px-1.5 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06] text-muted-foreground font-mono text-[10px] pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
             </div>
 
