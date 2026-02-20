@@ -18,6 +18,7 @@ export function SettingsPage() {
     const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
     const { data: providers = [] } = useQuery(providersQueryOptions());
     const [draft, setDraft] = useState<AppSettings | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -28,8 +29,6 @@ export function SettingsPage() {
     if (settingsLoading || !draft) {
         return <div className="flex items-center justify-center py-16 text-muted-foreground">Loading settings...</div>;
     }
-
-    const [saveError, setSaveError] = useState<string | null>(null);
 
     const handleSave = async () => {
         try {
