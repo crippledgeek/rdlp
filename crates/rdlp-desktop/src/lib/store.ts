@@ -27,6 +27,7 @@ interface SearchState {
     query: string;
     site: string;
     filters: SearchFilter[];
+    hasUserFilters: boolean;
     results: SearchResultPreview[];
     providers: SearchSiteInfo[];
     filterDescriptors: SearchFilterDescriptor[];
@@ -35,6 +36,7 @@ interface SearchState {
     setQuery: (query: string) => void;
     setSite: (site: string) => void;
     setFilters: (filters: SearchFilter[]) => void;
+    resetFiltersToDefaults: () => void;
     loadProviders: () => Promise<void>;
     loadFilters: (site: string) => Promise<void>;
     search: () => Promise<void>;
@@ -46,6 +48,7 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
     query: "",
     site: "",
     filters: [],
+    hasUserFilters: false,
     results: [],
     providers: [],
     filterDescriptors: [],
@@ -55,7 +58,18 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
 
     setSite: (site) => set({ site }),
 
-    setFilters: (filters) => set({ filters }),
+    setFilters: (filters) => set({ filters, hasUserFilters: true }),
+
+    resetFiltersToDefaults: () => {
+        const descs = get().filterDescriptors;
+        const defaults: SearchFilter[] = [];
+        for (const desc of descs) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
+        }
+        set({ filters: defaults, hasUserFilters: false });
+    },
 
     loadProviders: async () => {
         try {
@@ -77,12 +91,23 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
     loadFilters: async (site) => {
         try {
             const filterDescriptors = await api.getSearchFilters(site);
-            set({ filterDescriptors });
+            // Discard stale response if site changed during the async call
+            if (get().site !== site) return;
+            // Initialize filters to descriptor defaults
+            const filters: SearchFilter[] = [];
+            for (const desc of filterDescriptors) {
+                if (desc.default !== null) {
+                    filters.push({ key: desc.key, value: desc.default });
+                }
+            }
+            set({ filterDescriptors, filters, hasUserFilters: false });
         } catch (err) {
-            set({
-                error: err instanceof Error ? err.message : String(err),
-                status: "error",
-            });
+            // Discard stale error if site changed during the async call
+            if (get().site !== site) return;
+            console.warn("Failed to load filters:", err);
+            // Silently clear descriptors — do not set status: "error"
+            // to avoid conflating filter-load failures with search errors.
+            set({ filterDescriptors: [], filters: [], hasUserFilters: false });
         }
     },
 
@@ -116,6 +141,7 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
             status: "idle",
             query: "",
             filters: [],
+            hasUserFilters: false,
             results: [],
             error: null,
         }),
@@ -123,22 +149,28 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
 
 // ========== Queue Store ==========
 
-const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
-    format: null,
-    outputDir: null,
-    subtitles: false,
-    subtitleLangs: [],
-    remux: null,
-    extractAudio: null,
-    embedThumbnail: true,
-};
+/** Build default DownloadOptions from AppSettings. */
+function buildDefaultOptions(settings: AppSettings | null): DownloadOptions {
+    return {
+        format: null,
+        outputDir: null,
+        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
+        subtitleLangs: settings?.default_subtitle_langs ?? [],
+        remux: settings?.default_remux ?? null,
+        extractAudio: settings?.default_extract_audio ?? null,
+        embedThumbnail: settings?.embed_thumbnail ?? true,
+        audioMultistreams: false,
+        recodeVideo: null,
+    };
+}
 
 interface QueueState {
     jobs: DownloadJob[];
     selectedFormat: FormatListResponse | null;
+    formatDialogLoading: boolean;
 
     refreshQueue: () => Promise<void>;
-    startDownload: (url: string) => Promise<string>;
+    startDownload: (url: string, options?: Partial<DownloadOptions>) => Promise<string>;
     cancelDownload: (jobId: string) => Promise<void>;
     removeJob: (jobId: string) => Promise<void>;
     updateJobFromProgress: (
@@ -157,14 +189,18 @@ interface QueueState {
 export const useQueueStore = create<QueueState>()((set, get) => ({
     jobs: [],
     selectedFormat: null,
+    formatDialogLoading: false,
 
     refreshQueue: async () => {
         const jobs = await api.getQueue();
         set({ jobs });
     },
 
-    startDownload: async (url) => {
-        const jobId = await api.startDownload(url, DEFAULT_DOWNLOAD_OPTIONS);
+    startDownload: async (url, options) => {
+        const settings = useSettingsStore.getState().settings;
+        const defaults = buildDefaultOptions(settings);
+        const merged: DownloadOptions = { ...defaults, ...options };
+        const jobId = await api.startDownload(url, merged);
         await get().refreshQueue();
         return jobId;
     },
@@ -225,12 +261,18 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
         })),
 
     loadFormats: async (url) => {
-        const formats = await api.getFormats(url);
-        set({ selectedFormat: formats });
-        return formats;
+        set({ formatDialogLoading: true });
+        try {
+            const formats = await api.getFormats(url);
+            set({ selectedFormat: formats, formatDialogLoading: false });
+            return formats;
+        } catch (err) {
+            set({ formatDialogLoading: false });
+            throw err;
+        }
     },
 
-    clearFormats: () => set({ selectedFormat: null }),
+    clearFormats: () => set({ selectedFormat: null, formatDialogLoading: false }),
 }));
 
 // ========== Settings Store ==========

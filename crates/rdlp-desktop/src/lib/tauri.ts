@@ -14,6 +14,7 @@ import type {
     DownloadOptions,
     DownloadProgressPayload,
     FormatListResponse,
+    FormatSelectedPayload,
     SearchFilter,
     SearchFilterDescriptor,
     SearchResponse,
@@ -128,4 +129,46 @@ export function onDownloadLog(
     return listen<DownloadLogPayload>("download-log", (event) =>
         callback(event.payload),
     );
+}
+
+/** Subscribe to format-selected events. Returns an unlisten function. */
+export function onFormatSelected(
+    callback: (payload: FormatSelectedPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<FormatSelectedPayload>("format-selected", (event) =>
+        callback(event.payload),
+    );
+}
+
+/** Validate a format expression and return matching format IDs. */
+export async function validateFormatExpression(
+    expression: string,
+    formats: FormatData[],
+): Promise<string[]> {
+    return invoke<string[]>("validate_format_expression", {
+        expression,
+        formats,
+    });
+}
+
+/**
+ * Format metadata for expression validation.
+ *
+ * Mirrors the Rust `FormatData` struct. Sent to the backend so
+ * format filter predicates (e.g. `[height<=1080]`) can match.
+ */
+export interface FormatData {
+    format_id: string;
+    ext: string;
+    width: number | null;
+    height: number | null;
+    fps: number | null;
+    tbr: number | null;
+    vcodec: string | null;
+    acodec: string | null;
+    filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
 }

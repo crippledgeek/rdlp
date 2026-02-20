@@ -104,6 +104,9 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(ref v) = self.loudnorm_preset {
             config.loudnorm_preset = Some(v.clone());
         }
+        if let Some(v) = self.recode_video {
+            config.recode_video = Some(v);
+        }
     }
 }
 
@@ -569,6 +572,33 @@ mod tests {
         };
         opts.merge_into(&mut config);
         assert_eq!(config.loudnorm_preset.as_deref(), Some("streaming"));
+    }
+
+    #[test]
+    fn test_postprocess_none_preserves_recode_video() {
+        let mut config = Config::default();
+        config.recode_video = Some(rdlp_core::ContainerFormat::Mkv);
+        let opts = PostProcessOptions::default();
+        opts.merge_into(&mut config);
+        assert_eq!(
+            config.recode_video,
+            Some(rdlp_core::ContainerFormat::Mkv)
+        );
+    }
+
+    #[test]
+    fn test_postprocess_some_overrides_recode_video() {
+        let mut config = Config::default();
+        config.recode_video = None;
+        let opts = PostProcessOptions {
+            recode_video: Some(rdlp_core::ContainerFormat::Mp4),
+            ..PostProcessOptions::default()
+        };
+        opts.merge_into(&mut config);
+        assert_eq!(
+            config.recode_video,
+            Some(rdlp_core::ContainerFormat::Mp4)
+        );
     }
 
     // ─── NetworkOptions ──────────────────────────────────────────────

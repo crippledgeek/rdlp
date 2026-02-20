@@ -1,18 +1,39 @@
+import { useState } from "react";
 import { SearchBar } from "../components/SearchBar";
 import { ResultCard } from "../components/ResultCard";
-import { useSearchStore } from "../lib/store";
-import { useQueueStore } from "../lib/store";
+import { FormatDialog } from "../components/FormatDialog";
+import { useSearchStore, useQueueStore } from "../lib/store";
+import type { DownloadOptions } from "../types";
 
-/** Search page composing the search bar and results grid. */
+/** Search page composing the search bar, results grid, and format dialog. */
 export function SearchPage() {
     const status = useSearchStore((s) => s.status);
     const results = useSearchStore((s) => s.results);
     const error = useSearchStore((s) => s.error);
     const search = useSearchStore((s) => s.search);
+    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
+    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
     const startDownload = useQueueStore((s) => s.startDownload);
+
+    const [formatDialogUrl, setFormatDialogUrl] = useState<string | null>(null);
 
     const handleDownload = (url: string) => {
         void startDownload(url);
+    };
+
+    const handleDownloadWithOptions = (url: string, options: Partial<DownloadOptions>) => {
+        void startDownload(url, options);
+    };
+
+    const handleOpenFormatDialog = (url: string) => {
+        setFormatDialogUrl(url);
+    };
+
+    const handleFormatDialogConfirm = (options: DownloadOptions) => {
+        if (formatDialogUrl) {
+            void startDownload(formatDialogUrl, options);
+        }
+        setFormatDialogUrl(null);
     };
 
     return (
@@ -51,6 +72,17 @@ export function SearchPage() {
                         <line x1="8" y1="11" x2="14" y2="11" />
                     </svg>
                     <p>No results found.</p>
+                    {hasUserFilters && (
+                        <button
+                            className="clear-filters-btn"
+                            onClick={() => {
+                                resetFiltersToDefaults();
+                                void search();
+                            }}
+                        >
+                            Clear filters and retry
+                        </button>
+                    )}
                 </div>
             )}
 
@@ -71,9 +103,19 @@ export function SearchPage() {
                             key={`${idx}-${result.video_url}`}
                             result={result}
                             onDownload={handleDownload}
+                            onDownloadWithOptions={handleDownloadWithOptions}
+                            onOpenFormatDialog={handleOpenFormatDialog}
                         />
                     ))}
                 </div>
+            )}
+
+            {formatDialogUrl && (
+                <FormatDialog
+                    url={formatDialogUrl}
+                    onConfirm={handleFormatDialogConfirm}
+                    onClose={() => setFormatDialogUrl(null)}
+                />
             )}
         </div>
     );

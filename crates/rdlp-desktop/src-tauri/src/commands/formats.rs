@@ -7,7 +7,7 @@
 //! serialisable [`FormatListResponse`] containing format details,
 //! subtitles, thumbnail URL, and duration.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::AppError;
@@ -16,8 +16,7 @@ use crate::state::AppState;
 /// Frontend-facing format information.
 ///
 /// A simplified projection of [`rdlp_types::Format`] that exposes
-/// only the fields the UI needs, without internal download URLs or
-/// protocol details.
+/// only the fields the UI needs, without internal download URLs.
 #[derive(Debug, Serialize)]
 pub struct FormatInfo {
     /// Unique format identifier (e.g. "137", "hls-720").
@@ -40,6 +39,14 @@ pub struct FormatInfo {
     pub acodec: Option<String>,
     /// File size in bytes (exact or approximate).
     pub filesize: Option<u64>,
+    /// Video bitrate in kbps.
+    pub vbr: Option<f64>,
+    /// Audio bitrate in kbps.
+    pub abr: Option<f64>,
+    /// Audio sampling rate in Hz.
+    pub asr: Option<u32>,
+    /// Download protocol (e.g. "https", "m3u8_native").
+    pub protocol: String,
     /// Whether this format contains a video stream.
     pub has_video: bool,
     /// Whether this format contains an audio stream.
@@ -135,6 +142,10 @@ pub async fn get_formats(
             vcodec: f.vcodec.clone(),
             acodec: f.acodec.clone(),
             filesize: f.get_filesize(),
+            vbr: f.vbr,
+            abr: f.abr,
+            asr: f.asr,
+            protocol: f.protocol.to_string(),
             has_video: f.has_video(),
             has_audio: f.has_audio(),
         })
@@ -164,6 +175,114 @@ pub async fn get_formats(
     })
 }
 
+/// Format metadata sent from the frontend for expression validation.
+///
+/// Mirrors the fields from [`FormatInfo`] that the format selector
+/// uses for filtering and ranking, allowing expressions like
+/// `bv[height<=1080]+ba` to match correctly.
+#[derive(Debug, Deserialize)]
+pub struct FormatData {
+    /// Unique format identifier.
+    pub(crate) format_id: String,
+    /// File extension (e.g. "mp4", "webm").
+    pub(crate) ext: String,
+    /// Video width in pixels.
+    pub(crate) width: Option<u32>,
+    /// Video height in pixels.
+    pub(crate) height: Option<u32>,
+    /// Frames per second.
+    pub(crate) fps: Option<f64>,
+    /// Total bitrate in kbps.
+    pub(crate) tbr: Option<f64>,
+    /// Video codec name.
+    pub(crate) vcodec: Option<String>,
+    /// Audio codec name.
+    pub(crate) acodec: Option<String>,
+    /// File size in bytes.
+    pub(crate) filesize: Option<u64>,
+    /// Video bitrate in kbps.
+    pub(crate) vbr: Option<f64>,
+    /// Audio bitrate in kbps.
+    pub(crate) abr: Option<f64>,
+    /// Audio sampling rate in Hz.
+    pub(crate) asr: Option<u32>,
+    /// Download protocol string (e.g. "https", "m3u8_native").
+    pub(crate) protocol: String,
+}
+
+/// Validate a yt-dlp format expression and return the matching format IDs.
+///
+/// Parses the expression using [`rdlp_types::FormatSelector`] and, when
+/// `formats` is non-empty, builds [`rdlp_types::Format`] values with
+/// full metadata so filter predicates (e.g. `[height<=1080]`) can
+/// match correctly.
+///
+/// # Arguments
+///
+/// * `expression` - A yt-dlp format selector expression (e.g. `bv[height<=1080]+ba`).
+/// * `formats` - Format metadata from the frontend for matching.
+///
+/// # Returns
+///
+/// A list of matching format IDs on success, or an [`AppError`] on
+/// parse failure.
+#[tauri::command]
+pub async fn validate_format_expression(
+    expression: String,
+    formats: Vec<FormatData>,
+) -> Result<Vec<String>, AppError> {
+    tokio::task::spawn_blocking(move || {
+        use rdlp_types::FormatSelector;
+
+        let selector =
+            FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
+                field: "expression".to_owned(),
+                message: e,
+            })?;
+
+        if formats.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        use rdlp_types::protocol::DownloadProtocol;
+        use rdlp_types::Format;
+
+        let format_list: Vec<Format> = formats
+            .iter()
+            .map(|fd| {
+                let protocol = fd.protocol.parse::<DownloadProtocol>()
+                    .unwrap_or(DownloadProtocol::Https);
+                let mut f = Format::new(
+                    &fd.format_id,
+                    format!("stub://{}", fd.format_id),
+                    &fd.ext,
+                    protocol,
+                );
+                f.width = fd.width;
+                f.height = fd.height;
+                f.fps = fd.fps;
+                f.tbr = fd.tbr;
+                f.vbr = fd.vbr;
+                f.abr = fd.abr;
+                f.asr = fd.asr;
+                f.filesize = fd.filesize;
+                f.vcodec = fd.vcodec.clone();
+                f.acodec = fd.acodec.clone();
+                f
+            })
+            .collect();
+
+        let selected = selector.select(&format_list);
+        let matched: Vec<String> =
+            selected.iter().map(|f| f.format_id.clone()).collect();
+        Ok(matched)
+    })
+    .await
+    .map_err(|e| AppError::Internal {
+        message: format!("Format validation task failed: {e}"),
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +300,10 @@ mod tests {
             vcodec: Some("h264".to_owned()),
             acodec: Some("aac".to_owned()),
             filesize: Some(524_288_000),
+            vbr: Some(4000.0),
+            abr: Some(128.0),
+            asr: Some(44100),
+            protocol: "https".to_owned(),
             has_video: true,
             has_audio: true,
         };
@@ -193,6 +316,10 @@ mod tests {
         assert_eq!(json["has_video"], true);
         assert_eq!(json["has_audio"], true);
         assert_eq!(json["filesize"], 524_288_000u64);
+        assert_eq!(json["vbr"], 4000.0);
+        assert_eq!(json["abr"], 128.0);
+        assert_eq!(json["asr"], 44100);
+        assert_eq!(json["protocol"], "https");
     }
 
     #[test]
@@ -208,6 +335,10 @@ mod tests {
             vcodec: None,
             acodec: None,
             filesize: None,
+            vbr: None,
+            abr: None,
+            asr: None,
+            protocol: "m3u8_native".to_owned(),
             has_video: false,
             has_audio: true,
         };
@@ -216,6 +347,10 @@ mod tests {
         assert!(json["format_note"].is_null());
         assert!(json["width"].is_null());
         assert!(json["filesize"].is_null());
+        assert!(json["vbr"].is_null());
+        assert!(json["abr"].is_null());
+        assert!(json["asr"].is_null());
+        assert_eq!(json["protocol"], "m3u8_native");
         assert!(!json["has_video"].as_bool().unwrap());
         assert!(json["has_audio"].as_bool().unwrap());
     }
@@ -250,6 +385,10 @@ mod tests {
                 vcodec: Some("h264".to_owned()),
                 acodec: Some("aac".to_owned()),
                 filesize: Some(100_000_000),
+                vbr: Some(2000.0),
+                abr: Some(128.0),
+                asr: Some(44100),
+                protocol: "https".to_owned(),
                 has_video: true,
                 has_audio: true,
             }],
@@ -285,5 +424,113 @@ mod tests {
         assert!(json["subtitles"].as_array().unwrap().is_empty());
         assert!(json["thumbnail_url"].is_null());
         assert!(json["duration"].is_null());
+    }
+
+    fn make_format_data(
+        format_id: &str,
+        ext: &str,
+        vcodec: Option<&str>,
+        acodec: Option<&str>,
+        height: Option<u32>,
+    ) -> FormatData {
+        FormatData {
+            format_id: format_id.to_owned(),
+            ext: ext.to_owned(),
+            width: height.map(|h| h * 16 / 9),
+            height,
+            fps: None,
+            tbr: None,
+            vcodec: vcodec.map(|s| s.to_owned()),
+            acodec: acodec.map(|s| s.to_owned()),
+            filesize: None,
+            vbr: None,
+            abr: None,
+            asr: None,
+            protocol: "https".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_valid() {
+        let formats = vec![
+            make_format_data("137", "mp4", Some("h264"), Some("aac"), Some(1080)),
+            make_format_data("140", "m4a", Some("none"), Some("aac"), None),
+        ];
+        let result = super::validate_format_expression(
+            "best".to_owned(),
+            formats,
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_invalid() {
+        let result = super::validate_format_expression(
+            "".to_owned(),
+            vec![],
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_empty_formats() {
+        let result = super::validate_format_expression(
+            "bv+ba".to_owned(),
+            vec![],
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_format_id_match() {
+        let formats = vec![
+            make_format_data("137", "mp4", Some("h264"), Some("aac"), Some(1080)),
+            make_format_data("140", "m4a", Some("none"), Some("aac"), None),
+        ];
+        let result = super::validate_format_expression(
+            "137".to_owned(),
+            formats,
+        )
+        .await;
+        assert!(result.is_ok());
+        let matches = result.unwrap();
+        assert_eq!(matches, vec!["137"]);
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_height_filter() {
+        let formats = vec![
+            make_format_data("v720", "mp4", Some("h264"), Some("none"), Some(720)),
+            make_format_data("v1080", "mp4", Some("h264"), Some("none"), Some(1080)),
+            make_format_data("a128", "m4a", Some("none"), Some("aac"), None),
+        ];
+        let result = super::validate_format_expression(
+            "bv[height<=720]+ba".to_owned(),
+            formats,
+        )
+        .await;
+        assert!(result.is_ok());
+        let matches = result.unwrap();
+        assert_eq!(matches, vec!["v720", "a128"]);
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_ext_filter() {
+        let formats = vec![
+            make_format_data("v1", "mp4", Some("h264"), Some("none"), Some(720)),
+            make_format_data("v2", "webm", Some("vp9"), Some("none"), Some(720)),
+        ];
+        let result = super::validate_format_expression(
+            "bv[ext=webm]".to_owned(),
+            formats,
+        )
+        .await;
+        assert!(result.is_ok());
+        let matches = result.unwrap();
+        assert_eq!(matches, vec!["v2"]);
     }
 }

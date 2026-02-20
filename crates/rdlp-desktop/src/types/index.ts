@@ -64,6 +64,10 @@ export interface FormatInfo {
     vcodec: string | null;
     acodec: string | null;
     filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
     has_video: boolean;
     has_audio: boolean;
 }
@@ -112,6 +116,27 @@ export interface DownloadJob {
 }
 
 /**
+ * Container formats matching Rust `ContainerFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type ContainerFormat =
+    | "mp4" | "mkv" | "webm" | "mov" | "ts" | "flv" | "avi"
+    | "threegp" | "mpg" | "f4v" | "asf" | "mxf" | "vob" | "dv"
+    | "nut" | "ivf" | "ogg" | "m4a" | "mp3" | "wav" | "flac"
+    | "opus" | "aac" | "aiff" | "mka" | "wv" | "caf" | "ac3";
+
+/**
+ * Audio formats matching Rust `AudioFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type AudioFormat =
+    | "mp3" | "aac" | "m4a" | "opus" | "vorbis" | "flac" | "alac"
+    | "wav" | "ac3" | "eac3" | "dts" | "mp2" | "wavpack" | "tta";
+
+/**
+ * Subtitle formats matching Rust `SubtitleFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type SubtitleFormat = "srt" | "vtt" | "ass" | "ssa" | "lrc";
+
+/**
  * Frontend-supplied download options.
  *
  * Uses camelCase because the Rust struct has #[serde(rename_all = "camelCase")].
@@ -121,9 +146,11 @@ export interface DownloadOptions {
     outputDir: string | null;
     subtitles: boolean;
     subtitleLangs: string[];
-    remux: string | null;
-    extractAudio: string | null;
+    remux: ContainerFormat | null;
+    extractAudio: AudioFormat | null;
     embedThumbnail: boolean;
+    audioMultistreams: boolean;
+    recodeVideo: ContainerFormat | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
@@ -151,6 +178,13 @@ export interface DownloadErrorPayload {
     retryable: boolean;
 }
 
+/** Format-selected payload emitted as "format-selected". */
+export interface FormatSelectedPayload {
+    jobId: string;
+    formatId: string;
+    quality: string;
+}
+
 /** Log message payload emitted as "download-log". */
 export interface DownloadLogPayload {
     jobId: string;
@@ -167,9 +201,9 @@ export interface DownloadLogPayload {
  */
 export interface AppSettings {
     output_dir: string;
-    default_remux: string | null;
-    default_extract_audio: string | null;
-    default_subtitle_format: string | null;
+    default_remux: ContainerFormat | null;
+    default_extract_audio: AudioFormat | null;
+    default_subtitle_format: SubtitleFormat | null;
     default_subtitle_langs: string[];
     embed_thumbnail: boolean;
     embed_metadata: boolean;
