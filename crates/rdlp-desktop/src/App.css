@@ -2054,3 +2054,135 @@ body {
 .sidebar-clear-all:hover {
   color: var(--text-1);
 }
+
+/* ========== Command Bar ========== */
+
+.command-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+
+.command-bar-site {
+  padding: 7px 10px;
+  padding-right: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--duration-fast);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8d93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.command-bar-site:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.command-bar-input-wrapper {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.command-bar-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-2);
+  pointer-events: none;
+  transition: color var(--duration-fast);
+}
+
+.command-bar-input-wrapper:focus-within .command-bar-search-icon {
+  color: var(--accent);
+}
+
+.command-bar-input {
+  width: 100%;
+  padding: 7px 70px 7px 32px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 13px;
+  transition:
+    border-color var(--duration-fast),
+    box-shadow var(--duration-fast);
+}
+
+.command-bar-input::placeholder {
+  color: var(--text-2);
+}
+
+.command-bar-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.command-bar-shortcut {
+  position: absolute;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  font-family: "Space Mono", "SF Mono", monospace;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.command-bar-input:focus ~ .command-bar-shortcut {
+  opacity: 0;
+}
+
+.command-bar-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--surface-0);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--duration-fast),
+    transform var(--duration-fast) var(--ease-spring);
+}
+
+.command-bar-submit:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.command-bar-submit:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.command-bar-submit:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.command-bar-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid transparent;
+  border-top-color: var(--surface-0);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
