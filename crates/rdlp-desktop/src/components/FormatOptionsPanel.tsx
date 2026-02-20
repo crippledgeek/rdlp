@@ -1,5 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import type { AudioFormat, ContainerFormat, DownloadOptions } from "../types";
 
 /** A format preset with a human-readable label and yt-dlp selector string. */
@@ -31,6 +33,17 @@ const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "opus", label: "Opus" },
     { value: "flac", label: "FLAC" },
 ];
+
+/**
+ * Tailwind classes for native `<select>` elements with a custom chevron icon.
+ * Uses a data URI SVG background image to avoid inline style attributes.
+ */
+const selectClasses = cn(
+    "h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground",
+    "cursor-pointer appearance-none transition-colors",
+    "bg-[url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2210%22%20height%3D%2210%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%2F%3E%3C%2Fsvg%3E')] bg-no-repeat bg-[position:right_8px_center]",
+    "focus:outline-none focus:ring-1 focus:ring-ring",
+);
 
 interface FormatOptionsPanelProps {
     value: DownloadOptions;
@@ -90,7 +103,9 @@ export function FormatOptionsPanel({
         <div className="flex flex-col gap-1.5">
             {!hidePresets && (
                 <div className="flex flex-col gap-1">
-                    <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Quality Preset</div>
+                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        Quality Preset
+                    </Label>
                     <div className="flex flex-wrap gap-1">
                         {PRESETS.map((p) => (
                             <label
@@ -119,16 +134,17 @@ export function FormatOptionsPanel({
             )}
 
             <div className="flex flex-col gap-1">
-                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Remux</div>
+                <Label
+                    htmlFor="remux-select"
+                    className="text-[11px] font-semibold text-muted-foreground tracking-wide"
+                >
+                    Remux
+                </Label>
                 <select
-                    className="h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
+                    id="remux-select"
+                    className={selectClasses}
                     value={value.remux ?? ""}
                     onChange={(e) => handleRemux(e.target.value)}
-                    style={{
-                        backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                        backgroundRepeat: "no-repeat",
-                        backgroundPosition: "right 8px center",
-                    }}
                 >
                     <option value="">None</option>
                     {REMUX_OPTIONS.map((o) => (
@@ -140,16 +156,17 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Extract Audio</div>
+                <Label
+                    htmlFor="audio-select"
+                    className="text-[11px] font-semibold text-muted-foreground tracking-wide"
+                >
+                    Extract Audio
+                </Label>
                 <select
-                    className="h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
+                    id="audio-select"
+                    className={selectClasses}
                     value={value.extractAudio ?? ""}
                     onChange={(e) => handleAudio(e.target.value)}
-                    style={{
-                        backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                        backgroundRepeat: "no-repeat",
-                        backgroundPosition: "right 8px center",
-                    }}
                 >
                     <option value="">None</option>
                     {AUDIO_OPTIONS.map((o) => (
@@ -161,18 +178,27 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer">
+                <div className="flex items-center gap-2">
                     <Checkbox
                         checked={value.subtitles}
                         onCheckedChange={(checked) => handleSubtitles(checked === true)}
+                        id="subtitles"
                     />
-                    Download Subtitles
-                </label>
+                    <Label
+                        htmlFor="subtitles"
+                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                    >
+                        Download Subtitles
+                    </Label>
+                </div>
                 {value.subtitles && (
                     <div className="mt-1.5">
                         {availableSubtitleLangs.length > 0 ? (
                             <select
-                                className="h-auto min-h-[60px] w-full rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
+                                className={cn(
+                                    "h-auto min-h-[60px] w-full rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground",
+                                    "cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-ring",
+                                )}
                                 multiple
                                 value={value.subtitleLangs}
                                 onChange={(e) => {
@@ -190,8 +216,8 @@ export function FormatOptionsPanel({
                                 ))}
                             </select>
                         ) : (
-                            <input
-                                className="w-full py-[7px] px-2.5 border border-input rounded-md bg-muted text-foreground font-mono text-xs transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                            <Input
+                                className="font-mono text-xs"
                                 type="text"
                                 placeholder="en,sv,ja"
                                 value={value.subtitleLangs.join(",")}
@@ -203,15 +229,21 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer">
+                <div className="flex items-center gap-2">
                     <Checkbox
                         checked={value.embedThumbnail}
                         onCheckedChange={(checked) =>
                             onChange({ ...value, embedThumbnail: checked === true })
                         }
+                        id="embed-thumbnail"
                     />
-                    Embed Thumbnail
-                </label>
+                    <Label
+                        htmlFor="embed-thumbnail"
+                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                    >
+                        Embed Thumbnail
+                    </Label>
+                </div>
             </div>
         </div>
     );
