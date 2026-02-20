@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import { useSearchStore } from "../lib/store";
 import type { SearchFilter } from "../types";
 
-const DEFAULT_FILTER_KEYS = new Set(["sort", "quality", "duration-min", "duration-max"]);
+const DEFAULT_FILTER_KEYS = new Set([
+    "sort", "quality", "orientations", "date", "min-duration", "max-duration",
+]);
+
+/** Check if a filter value differs from its descriptor default. */
+function isFilterActive(value: string, defaultValue: string | null): boolean {
+    if (value === "") return false;
+    return value !== (defaultValue ?? "");
+}
 
 /** Search form with site selector, query input, filters, and submit button. */
 export function SearchBar() {
@@ -16,10 +24,12 @@ export function SearchBar() {
     const setFilters = useSearchStore((s) => s.setFilters);
     const filterDescriptors = useSearchStore((s) => s.filterDescriptors);
     const loadFilters = useSearchStore((s) => s.loadFilters);
+    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
     const search = useSearchStore((s) => s.search);
     const status = useSearchStore((s) => s.status);
 
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
 
     useEffect(() => {
         void loadProviders();
@@ -31,6 +41,14 @@ export function SearchBar() {
             void loadFilters(site);
         }
     }, [site, loadFilters]);
+
+    // Auto-search when user changes filters (only if results are showing)
+    useEffect(() => {
+        if (!hasUserFilters) return;
+        if (status !== "results" && status !== "empty") return;
+        if (query.trim() === "" || site === "") return;
+        void search();
+    }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const isDisabled = status === "loading" || query.trim() === "";
 
@@ -65,11 +83,11 @@ export function SearchBar() {
     const defaultFilters = filterDescriptors.filter((d) => DEFAULT_FILTER_KEYS.has(d.key));
     const advancedFilters = filterDescriptors.filter((d) => !DEFAULT_FILTER_KEYS.has(d.key));
     const activeAdvancedCount = advancedFilters.filter(
-        (d) => {
-            const val = getFilterValue(d.key);
-            return val !== "" && val !== (d.default ?? "");
-        },
+        (d) => isFilterActive(getFilterValue(d.key), d.default),
     ).length;
+    const hasAnyActiveFilter = [...defaultFilters, ...advancedFilters].some(
+        (d) => isFilterActive(getFilterValue(d.key), d.default),
+    );
 
     return (
         <div className="search-bar-container">
@@ -116,25 +134,29 @@ export function SearchBar() {
 
             {filterDescriptors.length > 0 && (
                 <div className="filter-row">
-                    {defaultFilters.map((desc) => (
-                        <select
-                            key={desc.key}
-                            className="filter-select"
-                            value={getFilterValue(desc.key)}
-                            onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                            disabled={status === "loading"}
-                            aria-label={desc.display_name}
-                        >
-                            <option value="">
-                                {desc.display_name}: Any
-                            </option>
-                            {desc.allowed_values.map((v) => (
-                                <option key={v.value} value={v.value}>
-                                    {v.label}
+                    {defaultFilters.map((desc) => {
+                        const value = getFilterValue(desc.key);
+                        const active = isFilterActive(value, desc.default);
+                        return (
+                            <select
+                                key={desc.key}
+                                className={`filter-select${active ? " filter-active" : ""}`}
+                                value={value}
+                                onChange={(e) => handleFilterChange(desc.key, e.target.value)}
+                                disabled={status === "loading"}
+                                aria-label={desc.display_name}
+                            >
+                                <option value="">
+                                    {desc.display_name}: Any
                                 </option>
-                            ))}
-                        </select>
-                    ))}
+                                {desc.allowed_values.map((v) => (
+                                    <option key={v.value} value={v.value}>
+                                        {v.label}
+                                    </option>
+                                ))}
+                            </select>
+                        );
+                    })}
 
                     {advancedFilters.length > 0 && (
                         <button
@@ -144,6 +166,17 @@ export function SearchBar() {
                             aria-expanded={showAdvanced}
                             aria-label="Advanced filters"
                         >
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="4" y1="21" x2="4" y2="14" />
+                                <line x1="4" y1="10" x2="4" y2="3" />
+                                <line x1="12" y1="21" x2="12" y2="12" />
+                                <line x1="12" y1="8" x2="12" y2="3" />
+                                <line x1="20" y1="21" x2="20" y2="16" />
+                                <line x1="20" y1="12" x2="20" y2="3" />
+                                <line x1="1" y1="14" x2="7" y2="14" />
+                                <line x1="9" y1="8" x2="15" y2="8" />
+                                <line x1="17" y1="16" x2="23" y2="16" />
+                            </svg>
                             Filters
                             {activeAdvancedCount > 0 && (
                                 <span className="filter-badge">
@@ -152,32 +185,51 @@ export function SearchBar() {
                             )}
                         </button>
                     )}
+
+                    {hasAnyActiveFilter && (
+                        <button
+                            type="button"
+                            className="filter-reset"
+                            onClick={resetFiltersToDefaults}
+                            aria-label="Reset all filters"
+                        >
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 6L6 18" />
+                                <path d="M6 6l12 12" />
+                            </svg>
+                            Reset
+                        </button>
+                    )}
                 </div>
             )}
 
             {showAdvanced && advancedFilters.length > 0 && (
                 <div className="filter-advanced">
-                    {advancedFilters.map((desc) => (
-                        <div key={desc.key} className="filter-advanced-item">
-                            <label className="filter-label">
-                                {desc.display_name}
-                            </label>
-                            <select
-                                className="filter-select"
-                                value={getFilterValue(desc.key)}
-                                onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                                disabled={status === "loading"}
-                                aria-label={desc.display_name}
-                            >
-                                <option value="">Any</option>
-                                {desc.allowed_values.map((v) => (
-                                    <option key={v.value} value={v.value}>
-                                        {v.label}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                    ))}
+                    {advancedFilters.map((desc) => {
+                        const value = getFilterValue(desc.key);
+                        const active = isFilterActive(value, desc.default);
+                        return (
+                            <div key={desc.key} className="filter-advanced-item">
+                                <label className="filter-label">
+                                    {desc.display_name}
+                                </label>
+                                <select
+                                    className={`filter-select${active ? " filter-active" : ""}`}
+                                    value={value}
+                                    onChange={(e) => handleFilterChange(desc.key, e.target.value)}
+                                    disabled={status === "loading"}
+                                    aria-label={desc.display_name}
+                                >
+                                    <option value="">Any</option>
+                                    {desc.allowed_values.map((v) => (
+                                        <option key={v.value} value={v.value}>
+                                            {v.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

@@ -35,6 +35,7 @@ pub fn run() {
             commands::download::get_queue,
             commands::download::remove_job,
             commands::formats::get_formats,
+            commands::formats::validate_format_expression,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::pick_directory,

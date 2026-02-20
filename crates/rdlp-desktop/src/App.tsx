@@ -8,6 +8,7 @@ import {
     onDownloadComplete,
     onDownloadError,
     onDownloadLog,
+    onFormatSelected,
 } from "./lib/tauri";
 
 type Tab = "search" | "queue" | "settings";
@@ -65,6 +66,17 @@ function App() {
             });
             if (!mounted) { unLog(); return; }
             unlisteners.push(unLog);
+
+            const unFormatSelected = await onFormatSelected((payload) => {
+                useQueueStore
+                    .getState()
+                    .updateJobStatus(
+                        payload.jobId,
+                        `Format: ${payload.quality}`,
+                    );
+            });
+            if (!mounted) { unFormatSelected(); return; }
+            unlisteners.push(unFormatSelected);
         };
 
         void setup();

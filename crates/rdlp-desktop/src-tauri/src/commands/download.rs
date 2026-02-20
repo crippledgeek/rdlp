@@ -41,6 +41,10 @@ pub struct DownloadOptions {
     pub extract_audio: Option<AudioFormat>,
     /// Whether to embed a thumbnail in the output file.
     pub embed_thumbnail: bool,
+    /// Allow downloading multiple audio streams for merge.
+    pub audio_multistreams: bool,
+    /// Container format to recode video into (transcodes, not just remux).
+    pub recode_video: Option<ContainerFormat>,
 }
 
 /// Start a new download for the given URL.
@@ -110,6 +114,11 @@ pub async fn start_download(
         },
         format: FormatOptions {
             selector: options.format,
+            audio_multistreams: if options.audio_multistreams {
+                Some(true)
+            } else {
+                None
+            },
             ..FormatOptions::default()
         },
         subtitles: SubtitleOptions {

@@ -64,6 +64,10 @@ export interface FormatInfo {
     vcodec: string | null;
     acodec: string | null;
     filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
     has_video: boolean;
     has_audio: boolean;
 }
@@ -128,6 +132,11 @@ export type AudioFormat =
     | "wav" | "ac3" | "eac3" | "dts" | "mp2" | "wavpack" | "tta";
 
 /**
+ * Subtitle formats matching Rust `SubtitleFormat` (#[serde(rename_all = "lowercase")]).
+ */
+export type SubtitleFormat = "srt" | "vtt" | "ass" | "ssa" | "lrc";
+
+/**
  * Frontend-supplied download options.
  *
  * Uses camelCase because the Rust struct has #[serde(rename_all = "camelCase")].
@@ -140,6 +149,8 @@ export interface DownloadOptions {
     remux: ContainerFormat | null;
     extractAudio: AudioFormat | null;
     embedThumbnail: boolean;
+    audioMultistreams: boolean;
+    recodeVideo: ContainerFormat | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
@@ -167,6 +178,13 @@ export interface DownloadErrorPayload {
     retryable: boolean;
 }
 
+/** Format-selected payload emitted as "format-selected". */
+export interface FormatSelectedPayload {
+    jobId: string;
+    formatId: string;
+    quality: string;
+}
+
 /** Log message payload emitted as "download-log". */
 export interface DownloadLogPayload {
     jobId: string;
@@ -183,9 +201,9 @@ export interface DownloadLogPayload {
  */
 export interface AppSettings {
     output_dir: string;
-    default_remux: string | null;
-    default_extract_audio: string | null;
-    default_subtitle_format: string | null;
+    default_remux: ContainerFormat | null;
+    default_extract_audio: AudioFormat | null;
+    default_subtitle_format: SubtitleFormat | null;
     default_subtitle_langs: string[];
     embed_thumbnail: boolean;
     embed_metadata: boolean;

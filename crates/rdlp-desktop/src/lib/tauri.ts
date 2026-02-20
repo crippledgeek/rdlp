@@ -14,6 +14,7 @@ import type {
     DownloadOptions,
     DownloadProgressPayload,
     FormatListResponse,
+    FormatSelectedPayload,
     SearchFilter,
     SearchFilterDescriptor,
     SearchResponse,
@@ -128,4 +129,24 @@ export function onDownloadLog(
     return listen<DownloadLogPayload>("download-log", (event) =>
         callback(event.payload),
     );
+}
+
+/** Subscribe to format-selected events. Returns an unlisten function. */
+export function onFormatSelected(
+    callback: (payload: FormatSelectedPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<FormatSelectedPayload>("format-selected", (event) =>
+        callback(event.payload),
+    );
+}
+
+/** Validate a format expression and return matching format IDs. */
+export async function validateFormatExpression(
+    expression: string,
+    formatIds: string[],
+): Promise<string[]> {
+    return invoke<string[]>("validate_format_expression", {
+        expression,
+        formatIds,
+    });
 }

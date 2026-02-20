@@ -40,6 +40,14 @@ pub struct FormatInfo {
     pub acodec: Option<String>,
     /// File size in bytes (exact or approximate).
     pub filesize: Option<u64>,
+    /// Video bitrate in kbps.
+    pub vbr: Option<f64>,
+    /// Audio bitrate in kbps.
+    pub abr: Option<f64>,
+    /// Audio sampling rate in Hz.
+    pub asr: Option<u32>,
+    /// Download protocol (e.g. "https", "m3u8_native").
+    pub protocol: String,
     /// Whether this format contains a video stream.
     pub has_video: bool,
     /// Whether this format contains an audio stream.
@@ -135,6 +143,10 @@ pub async fn get_formats(
             vcodec: f.vcodec.clone(),
             acodec: f.acodec.clone(),
             filesize: f.get_filesize(),
+            vbr: f.vbr,
+            abr: f.abr,
+            asr: f.asr,
+            protocol: f.protocol.to_string(),
             has_video: f.has_video(),
             has_audio: f.has_audio(),
         })
@@ -164,6 +176,61 @@ pub async fn get_formats(
     })
 }
 
+/// Validate a yt-dlp format expression and return the matching format IDs.
+///
+/// Parses the expression using [`rdlp_types::FormatSelector`] and, when
+/// `format_ids` is non-empty, builds minimal [`rdlp_types::Format`]
+/// stubs to determine which IDs the expression would select.
+///
+/// # Arguments
+///
+/// * `expression` - A yt-dlp format selector expression (e.g. `bv[height<=1080]+ba`).
+/// * `format_ids` - The list of format IDs available for matching.
+///
+/// # Returns
+///
+/// A list of matching format IDs on success, or an [`AppError`] on
+/// parse failure.
+#[tauri::command]
+pub async fn validate_format_expression(
+    expression: String,
+    format_ids: Vec<String>,
+) -> Result<Vec<String>, AppError> {
+    tokio::task::spawn_blocking(move || {
+        use rdlp_types::FormatSelector;
+
+        let selector =
+            FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
+                field: "expression".to_owned(),
+                message: e,
+            })?;
+
+        if format_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build minimal Format stubs so the selector can match by format_id.
+        use rdlp_types::protocol::DownloadProtocol;
+        use rdlp_types::Format;
+
+        let formats: Vec<Format> = format_ids
+            .iter()
+            .map(|id| {
+                Format::new(id, format!("stub://{id}"), "mp4", DownloadProtocol::Https)
+            })
+            .collect();
+
+        let selected = selector.select(&formats);
+        let matched: Vec<String> =
+            selected.iter().map(|f| f.format_id.clone()).collect();
+        Ok(matched)
+    })
+    .await
+    .map_err(|e| AppError::Internal {
+        message: format!("Format validation task failed: {e}"),
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +248,10 @@ mod tests {
             vcodec: Some("h264".to_owned()),
             acodec: Some("aac".to_owned()),
             filesize: Some(524_288_000),
+            vbr: Some(4000.0),
+            abr: Some(128.0),
+            asr: Some(44100),
+            protocol: "https".to_owned(),
             has_video: true,
             has_audio: true,
         };
@@ -193,6 +264,10 @@ mod tests {
         assert_eq!(json["has_video"], true);
         assert_eq!(json["has_audio"], true);
         assert_eq!(json["filesize"], 524_288_000u64);
+        assert_eq!(json["vbr"], 4000.0);
+        assert_eq!(json["abr"], 128.0);
+        assert_eq!(json["asr"], 44100);
+        assert_eq!(json["protocol"], "https");
     }
 
     #[test]
@@ -208,6 +283,10 @@ mod tests {
             vcodec: None,
             acodec: None,
             filesize: None,
+            vbr: None,
+            abr: None,
+            asr: None,
+            protocol: "m3u8_native".to_owned(),
             has_video: false,
             has_audio: true,
         };
@@ -216,6 +295,10 @@ mod tests {
         assert!(json["format_note"].is_null());
         assert!(json["width"].is_null());
         assert!(json["filesize"].is_null());
+        assert!(json["vbr"].is_null());
+        assert!(json["abr"].is_null());
+        assert!(json["asr"].is_null());
+        assert_eq!(json["protocol"], "m3u8_native");
         assert!(!json["has_video"].as_bool().unwrap());
         assert!(json["has_audio"].as_bool().unwrap());
     }
@@ -250,6 +333,10 @@ mod tests {
                 vcodec: Some("h264".to_owned()),
                 acodec: Some("aac".to_owned()),
                 filesize: Some(100_000_000),
+                vbr: Some(2000.0),
+                abr: Some(128.0),
+                asr: Some(44100),
+                protocol: "https".to_owned(),
                 has_video: true,
                 has_audio: true,
             }],
@@ -285,5 +372,48 @@ mod tests {
         assert!(json["subtitles"].as_array().unwrap().is_empty());
         assert!(json["thumbnail_url"].is_null());
         assert!(json["duration"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_valid() {
+        let result = super::validate_format_expression(
+            "best".to_owned(),
+            vec!["137".to_owned(), "140".to_owned()],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_invalid() {
+        let result = super::validate_format_expression(
+            "".to_owned(),
+            vec![],
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_empty_ids() {
+        let result = super::validate_format_expression(
+            "bv+ba".to_owned(),
+            vec![],
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_validate_format_expression_format_id_match() {
+        let result = super::validate_format_expression(
+            "137".to_owned(),
+            vec!["137".to_owned(), "140".to_owned()],
+        )
+        .await;
+        assert!(result.is_ok());
+        let matches = result.unwrap();
+        assert_eq!(matches, vec!["137"]);
     }
 }

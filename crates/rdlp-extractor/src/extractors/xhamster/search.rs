@@ -99,7 +99,7 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             }
             Some(desc) => {
                 // Duration min/max are numeric, allow any reasonable value
-                if filter.key == "duration-min" || filter.key == "duration-max" {
+                if filter.key == "min-duration" || filter.key == "max-duration" {
                     if filter.value.parse::<u32>().is_err() {
                         return Err(RdlpError::Extraction(format!(
                             "Invalid value '{}' for filter '{}'. Must be a number.",

@@ -149,22 +149,28 @@ export const useSearchStore = create<SearchState>()((set, get) => ({
 
 // ========== Queue Store ==========
 
-const DEFAULT_DOWNLOAD_OPTIONS: DownloadOptions = {
-    format: null,
-    outputDir: null,
-    subtitles: false,
-    subtitleLangs: [],
-    remux: null,
-    extractAudio: null,
-    embedThumbnail: true,
-};
+/** Build default DownloadOptions from AppSettings. */
+function buildDefaultOptions(settings: AppSettings | null): DownloadOptions {
+    return {
+        format: null,
+        outputDir: null,
+        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
+        subtitleLangs: settings?.default_subtitle_langs ?? [],
+        remux: settings?.default_remux ?? null,
+        extractAudio: settings?.default_extract_audio ?? null,
+        embedThumbnail: settings?.embed_thumbnail ?? true,
+        audioMultistreams: false,
+        recodeVideo: null,
+    };
+}
 
 interface QueueState {
     jobs: DownloadJob[];
     selectedFormat: FormatListResponse | null;
+    formatDialogLoading: boolean;
 
     refreshQueue: () => Promise<void>;
-    startDownload: (url: string) => Promise<string>;
+    startDownload: (url: string, options?: Partial<DownloadOptions>) => Promise<string>;
     cancelDownload: (jobId: string) => Promise<void>;
     removeJob: (jobId: string) => Promise<void>;
     updateJobFromProgress: (
@@ -183,14 +189,18 @@ interface QueueState {
 export const useQueueStore = create<QueueState>()((set, get) => ({
     jobs: [],
     selectedFormat: null,
+    formatDialogLoading: false,
 
     refreshQueue: async () => {
         const jobs = await api.getQueue();
         set({ jobs });
     },
 
-    startDownload: async (url) => {
-        const jobId = await api.startDownload(url, DEFAULT_DOWNLOAD_OPTIONS);
+    startDownload: async (url, options) => {
+        const settings = useSettingsStore.getState().settings;
+        const defaults = buildDefaultOptions(settings);
+        const merged: DownloadOptions = { ...defaults, ...options };
+        const jobId = await api.startDownload(url, merged);
         await get().refreshQueue();
         return jobId;
     },
@@ -251,12 +261,18 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
         })),
 
     loadFormats: async (url) => {
-        const formats = await api.getFormats(url);
-        set({ selectedFormat: formats });
-        return formats;
+        set({ formatDialogLoading: true });
+        try {
+            const formats = await api.getFormats(url);
+            set({ selectedFormat: formats, formatDialogLoading: false });
+            return formats;
+        } catch (err) {
+            set({ formatDialogLoading: false });
+            throw err;
+        }
     },
 
-    clearFormats: () => set({ selectedFormat: null }),
+    clearFormats: () => set({ selectedFormat: null, formatDialogLoading: false }),
 }));
 
 // ========== Settings Store ==========
