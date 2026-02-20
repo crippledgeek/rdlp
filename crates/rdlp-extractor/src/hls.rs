@@ -395,7 +395,7 @@ impl HlsSizeDetector {
                     .filter(|v| !v.is_i_frame)
                     .max_by_key(|v| v.bandwidth)
                     .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
-                    .unwrap(); // safe: checked non-empty above
+                    .expect("master playlist has at least one variant");
 
                 // Extract variant metadata
                 let resolution = variant.resolution.as_ref().map(|r| (r.width, r.height));
@@ -582,7 +582,7 @@ impl HlsSizeDetector {
             .iter()
             .filter(|v| !v.is_i_frame)
             .max_by_key(|v| v.bandwidth)
-            .unwrap();
+            .expect("master playlist has at least one non-I-frame variant");
         let best_media_url = base_url
             .join(&best_variant.uri)
             .map_err(|e| RdlpError::Extraction(format!("Failed to join media URL: {e}")))?
@@ -772,7 +772,7 @@ impl HlsSizeDetector {
                     .filter(|v| !v.is_i_frame)
                     .max_by_key(|v| v.bandwidth)
                     .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
-                    .unwrap(); // safe: checked non-empty above
+                    .expect("master playlist has at least one variant");
                 let media_playlist_uri = &variant.uri;
 
                 if self.verbose {

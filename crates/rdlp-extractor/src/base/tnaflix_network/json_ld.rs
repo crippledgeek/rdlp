@@ -6,10 +6,10 @@
 use scraper::{Html, Selector};
 use serde::Deserialize;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Selector for JSON-LD script tags: <script type="application/ld+json">
-pub(crate) static JSONLD_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub(crate) static JSONLD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"script[type="application/ld+json"]"#).expect("Valid JSON-LD selector")
 });
 

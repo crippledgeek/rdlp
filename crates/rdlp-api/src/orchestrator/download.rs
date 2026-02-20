@@ -104,7 +104,7 @@ impl Orchestrator {
         if let Some(e) = last_err {
             return Err(e);
         }
-        let stats = stats.unwrap();
+        let stats = stats.expect("stats is Some when no error occurred");
 
         info!("Downloaded successfully!");
         info!("   File: {}", output_path.display());

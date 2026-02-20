@@ -986,7 +986,9 @@ fn split_last_unescaped(s: &str, sep: char) -> (&str, Option<String>) {
         let before = &s[..pos];
         if before.contains('>') {
             // Check if the separator is inside a strftime format
-            let gt_pos = before.rfind('>').unwrap();
+            let gt_pos = before
+                .rfind('>')
+                .expect("'>' was confirmed present by contains check");
             if pos > gt_pos {
                 // The separator is after `>`, could be part of strftime — but yt-dlp
                 // considers `|` and `&` as higher-level separators. Use the split.

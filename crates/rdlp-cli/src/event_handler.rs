@@ -109,7 +109,9 @@ impl CliEventHandler {
         } else {
             let pb = self.create_progress_bar(progress);
             self.progress_bar = Some(pb);
-            self.progress_bar.as_ref().unwrap()
+            self.progress_bar
+                .as_ref()
+                .expect("progress bar was just assigned")
         };
 
         if progress.total_bytes.is_some() {
@@ -139,7 +141,7 @@ impl CliEventHandler {
                     "{wide_bar:.cyan/blue} {bytes}/{total_bytes} \
                      ({bytes_per_sec}) [{elapsed_precise}]",
                 )
-                .unwrap(),
+                .expect("valid progress template"),
             );
             pb
         } else if let Some(total) = progress.total_segments {
@@ -150,7 +152,7 @@ impl CliEventHandler {
                     "{wide_bar:.green/blue} {pos}/{len} segs | \
                      {msg} [{elapsed_precise}]",
                 )
-                .unwrap(),
+                .expect("valid progress template"),
             );
             pb
         } else {
@@ -160,7 +162,7 @@ impl CliEventHandler {
                 ProgressStyle::with_template(
                     "{spinner} {bytes} ({bytes_per_sec}) [{elapsed_precise}]",
                 )
-                .unwrap(),
+                .expect("valid progress template"),
             );
             pb.enable_steady_tick(Duration::from_millis(100));
             pb

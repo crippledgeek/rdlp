@@ -189,16 +189,16 @@ impl InfoExtractor for TNAFlixExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     /// Shared test fixtures (compiled once, reused across all tests)
     ///
     /// Performance: Prevents unnecessary regex compilation in tests:
     /// - Without lazy: ~50μs × 5 test instances = 250μs wasted
     /// - With lazy: ~0.01μs access after first initialization
-    static TEST_TNAFLIX: Lazy<TNAFlixExtractor> = Lazy::new(TNAFlixExtractor::tnaflix);
-    static TEST_EMPFLIX: Lazy<TNAFlixExtractor> = Lazy::new(TNAFlixExtractor::empflix);
-    static TEST_MOVIEFAP: Lazy<TNAFlixExtractor> = Lazy::new(TNAFlixExtractor::moviefap);
+    static TEST_TNAFLIX: LazyLock<TNAFlixExtractor> = LazyLock::new(TNAFlixExtractor::tnaflix);
+    static TEST_EMPFLIX: LazyLock<TNAFlixExtractor> = LazyLock::new(TNAFlixExtractor::empflix);
+    static TEST_MOVIEFAP: LazyLock<TNAFlixExtractor> = LazyLock::new(TNAFlixExtractor::moviefap);
 
     #[test]
     fn test_tnaflix_url_suitable() {

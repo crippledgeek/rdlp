@@ -144,36 +144,67 @@ impl FromStr for ContainerFormat {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "mp4" => Ok(Self::Mp4),
-            "mkv" | "matroska" => Ok(Self::Mkv),
-            "webm" => Ok(Self::WebM),
-            "mov" | "quicktime" => Ok(Self::Mov),
-            "ts" | "mpegts" => Ok(Self::Ts),
-            "flv" => Ok(Self::Flv),
-            "avi" => Ok(Self::Avi),
-            "3gp" | "3gpp" => Ok(Self::ThreeGp),
-            "mpg" | "mpeg" => Ok(Self::Mpg),
-            "f4v" => Ok(Self::F4v),
-            "asf" | "wmv" | "wma" => Ok(Self::Asf),
-            "mxf" => Ok(Self::Mxf),
-            "vob" => Ok(Self::Vob),
-            "dv" => Ok(Self::Dv),
-            "nut" => Ok(Self::Nut),
-            "ivf" => Ok(Self::Ivf),
-            "ogg" => Ok(Self::Ogg),
-            "m4a" => Ok(Self::M4a),
-            "mp3" => Ok(Self::Mp3),
-            "wav" | "wave" => Ok(Self::Wav),
-            "flac" => Ok(Self::Flac),
-            "opus" => Ok(Self::Opus),
-            "aac" | "adts" => Ok(Self::Aac),
-            "aiff" | "aif" => Ok(Self::Aiff),
-            "mka" => Ok(Self::Mka),
-            "wv" | "wavpack" => Ok(Self::Wv),
-            "caf" => Ok(Self::Caf),
-            "ac3" => Ok(Self::Ac3),
-            _ => Err(format!("unsupported container format: {s}")),
+        if s.eq_ignore_ascii_case("mp4") {
+            Ok(Self::Mp4)
+        } else if s.eq_ignore_ascii_case("mkv") || s.eq_ignore_ascii_case("matroska") {
+            Ok(Self::Mkv)
+        } else if s.eq_ignore_ascii_case("webm") {
+            Ok(Self::WebM)
+        } else if s.eq_ignore_ascii_case("mov") || s.eq_ignore_ascii_case("quicktime") {
+            Ok(Self::Mov)
+        } else if s.eq_ignore_ascii_case("ts") || s.eq_ignore_ascii_case("mpegts") {
+            Ok(Self::Ts)
+        } else if s.eq_ignore_ascii_case("flv") {
+            Ok(Self::Flv)
+        } else if s.eq_ignore_ascii_case("avi") {
+            Ok(Self::Avi)
+        } else if s.eq_ignore_ascii_case("3gp") || s.eq_ignore_ascii_case("3gpp") {
+            Ok(Self::ThreeGp)
+        } else if s.eq_ignore_ascii_case("mpg") || s.eq_ignore_ascii_case("mpeg") {
+            Ok(Self::Mpg)
+        } else if s.eq_ignore_ascii_case("f4v") {
+            Ok(Self::F4v)
+        } else if s.eq_ignore_ascii_case("asf")
+            || s.eq_ignore_ascii_case("wmv")
+            || s.eq_ignore_ascii_case("wma")
+        {
+            Ok(Self::Asf)
+        } else if s.eq_ignore_ascii_case("mxf") {
+            Ok(Self::Mxf)
+        } else if s.eq_ignore_ascii_case("vob") {
+            Ok(Self::Vob)
+        } else if s.eq_ignore_ascii_case("dv") {
+            Ok(Self::Dv)
+        } else if s.eq_ignore_ascii_case("nut") {
+            Ok(Self::Nut)
+        } else if s.eq_ignore_ascii_case("ivf") {
+            Ok(Self::Ivf)
+        } else if s.eq_ignore_ascii_case("ogg") {
+            Ok(Self::Ogg)
+        } else if s.eq_ignore_ascii_case("m4a") {
+            Ok(Self::M4a)
+        } else if s.eq_ignore_ascii_case("mp3") {
+            Ok(Self::Mp3)
+        } else if s.eq_ignore_ascii_case("wav") || s.eq_ignore_ascii_case("wave") {
+            Ok(Self::Wav)
+        } else if s.eq_ignore_ascii_case("flac") {
+            Ok(Self::Flac)
+        } else if s.eq_ignore_ascii_case("opus") {
+            Ok(Self::Opus)
+        } else if s.eq_ignore_ascii_case("aac") || s.eq_ignore_ascii_case("adts") {
+            Ok(Self::Aac)
+        } else if s.eq_ignore_ascii_case("aiff") || s.eq_ignore_ascii_case("aif") {
+            Ok(Self::Aiff)
+        } else if s.eq_ignore_ascii_case("mka") {
+            Ok(Self::Mka)
+        } else if s.eq_ignore_ascii_case("wv") || s.eq_ignore_ascii_case("wavpack") {
+            Ok(Self::Wv)
+        } else if s.eq_ignore_ascii_case("caf") {
+            Ok(Self::Caf)
+        } else if s.eq_ignore_ascii_case("ac3") {
+            Ok(Self::Ac3)
+        } else {
+            Err(format!("unsupported container format: {s}"))
         }
     }
 }

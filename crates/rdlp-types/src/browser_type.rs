@@ -35,12 +35,17 @@ impl FromStr for BrowserType {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "chrome" | "chromium" | "google-chrome" => Ok(Self::Chrome),
-            "firefox" | "mozilla" => Ok(Self::Firefox),
-            _ => Err(format!(
+        if s.eq_ignore_ascii_case("chrome")
+            || s.eq_ignore_ascii_case("chromium")
+            || s.eq_ignore_ascii_case("google-chrome")
+        {
+            Ok(Self::Chrome)
+        } else if s.eq_ignore_ascii_case("firefox") || s.eq_ignore_ascii_case("mozilla") {
+            Ok(Self::Firefox)
+        } else {
+            Err(format!(
                 "unsupported browser: {s}. Supported: chrome, firefox"
-            )),
+            ))
         }
     }
 }

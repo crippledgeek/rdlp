@@ -16,20 +16,20 @@
 //! - **Format Helpers**: `format_filesize`, `format_duration`
 
 use log::trace;
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 // ============================================================================
 // Static Patterns for Utility Functions
 // ============================================================================
 
 /// Pattern for HTML entity references (e.g., &amp; &#39; &#x27;)
-static HTML_ENTITY_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"&(#?[a-zA-Z0-9]+);").expect("Valid HTML entity pattern"));
+static HTML_ENTITY_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&(#?[a-zA-Z0-9]+);").expect("Valid HTML entity pattern"));
 
 /// Pattern for whitespace normalization
-static WHITESPACE_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\s+").expect("Valid whitespace pattern"));
+static WHITESPACE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+").expect("Valid whitespace pattern"));
 
 // ============================================================================
 // Debug Output Functions

@@ -208,17 +208,31 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 
 /// Select the appropriate audio encoder for a container extension.
 pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
-    match ext.to_ascii_lowercase().as_str() {
-        "mp4" | "m4a" | "mov" | "f4v" | "3gp" => "aac",
-        "webm" | "ogg" | "opus" => "libopus",
-        "mkv" | "mka" => "libopus",
-        "ts" | "mpg" => "aac",
-        "avi" => "libmp3lame",
-        "flv" => "aac",
-        "mp3" => "libmp3lame",
-        "flac" => "flac",
-        "wav" => "pcm_s16le",
-        _ => "aac",
+    if ext.eq_ignore_ascii_case("mp4")
+        || ext.eq_ignore_ascii_case("m4a")
+        || ext.eq_ignore_ascii_case("mov")
+        || ext.eq_ignore_ascii_case("f4v")
+        || ext.eq_ignore_ascii_case("3gp")
+        || ext.eq_ignore_ascii_case("ts")
+        || ext.eq_ignore_ascii_case("mpg")
+        || ext.eq_ignore_ascii_case("flv")
+    {
+        "aac"
+    } else if ext.eq_ignore_ascii_case("webm")
+        || ext.eq_ignore_ascii_case("ogg")
+        || ext.eq_ignore_ascii_case("opus")
+        || ext.eq_ignore_ascii_case("mkv")
+        || ext.eq_ignore_ascii_case("mka")
+    {
+        "libopus"
+    } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
+        "libmp3lame"
+    } else if ext.eq_ignore_ascii_case("flac") {
+        "flac"
+    } else if ext.eq_ignore_ascii_case("wav") {
+        "pcm_s16le"
+    } else {
+        "aac"
     }
 }
 
@@ -240,14 +254,29 @@ pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
 /// causing allocation failures on long audio tracks. Matroska writes metadata
 /// incrementally without unbounded buffering.
 pub(super) fn audio_only_extension_for(ext: &str) -> &'static str {
-    match ext.to_ascii_lowercase().as_str() {
-        "mp4" | "m4a" | "mov" | "f4v" | "3gp" | "ts" | "mpg" | "flv" => "mka",
-        "mkv" | "mka" | "webm" => "mka",
-        "avi" | "mp3" => "mp3",
-        "ogg" | "opus" => "opus",
-        "flac" => "flac",
-        "wav" => "wav",
-        _ => "mka",
+    if ext.eq_ignore_ascii_case("mp4")
+        || ext.eq_ignore_ascii_case("m4a")
+        || ext.eq_ignore_ascii_case("mov")
+        || ext.eq_ignore_ascii_case("f4v")
+        || ext.eq_ignore_ascii_case("3gp")
+        || ext.eq_ignore_ascii_case("ts")
+        || ext.eq_ignore_ascii_case("mpg")
+        || ext.eq_ignore_ascii_case("flv")
+        || ext.eq_ignore_ascii_case("mkv")
+        || ext.eq_ignore_ascii_case("mka")
+        || ext.eq_ignore_ascii_case("webm")
+    {
+        "mka"
+    } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
+        "mp3"
+    } else if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("opus") {
+        "opus"
+    } else if ext.eq_ignore_ascii_case("flac") {
+        "flac"
+    } else if ext.eq_ignore_ascii_case("wav") {
+        "wav"
+    } else {
+        "mka"
     }
 }
 

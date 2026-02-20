@@ -484,17 +484,17 @@ fn extract_initials_json(webpage: &str) -> Option<serde_json::Value> {
 ///
 /// Looks for `a.video-thumb__image-container` elements with href attributes.
 fn extract_user_video_urls(webpage: &str) -> Vec<String> {
-    use once_cell::sync::Lazy;
     use regex::Regex;
+    use std::sync::LazyLock;
 
-    static VIDEO_THUMB_HREF: Lazy<Regex> = Lazy::new(|| {
+    static VIDEO_THUMB_HREF: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r#"<a[^>]+class=[\"'][^\"']*\bvideo-thumb__image-container[^>]+href=[\"']([^\"']+)[\"']"#,
         )
         .expect("Valid video thumb href pattern")
     });
 
-    static VIDEO_THUMB_HREF_ALT: Lazy<Regex> = Lazy::new(|| {
+    static VIDEO_THUMB_HREF_ALT: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r#"<a[^>]+href=[\"']([^\"']+)[\"'][^>]+class=[\"'][^\"']*\bvideo-thumb__image-container"#,
         )

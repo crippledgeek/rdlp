@@ -59,14 +59,24 @@ impl FromStr for SubtitleKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "normal" => Ok(Self::Normal),
-            "forced" => Ok(Self::Forced),
-            "hearing_impaired" | "hearingimpaired" | "hi" | "sdh" => Ok(Self::HearingImpaired),
-            "commentary" => Ok(Self::Commentary),
-            "lyrics" => Ok(Self::Lyrics),
-            "karaoke" => Ok(Self::Karaoke),
-            _ => Err(format!("unsupported subtitle kind: {s}")),
+        if s.eq_ignore_ascii_case("normal") {
+            Ok(Self::Normal)
+        } else if s.eq_ignore_ascii_case("forced") {
+            Ok(Self::Forced)
+        } else if s.eq_ignore_ascii_case("hearing_impaired")
+            || s.eq_ignore_ascii_case("hearingimpaired")
+            || s.eq_ignore_ascii_case("hi")
+            || s.eq_ignore_ascii_case("sdh")
+        {
+            Ok(Self::HearingImpaired)
+        } else if s.eq_ignore_ascii_case("commentary") {
+            Ok(Self::Commentary)
+        } else if s.eq_ignore_ascii_case("lyrics") {
+            Ok(Self::Lyrics)
+        } else if s.eq_ignore_ascii_case("karaoke") {
+            Ok(Self::Karaoke)
+        } else {
+            Err(format!("unsupported subtitle kind: {s}"))
         }
     }
 }

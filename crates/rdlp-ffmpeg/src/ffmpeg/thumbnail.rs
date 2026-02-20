@@ -314,7 +314,7 @@ impl FFmpegRunner {
 
             // 3. Create output context
             let mut ofmt_ctx: *mut ffi::AVFormatContext = ptr::null_mut();
-            let matroska_name = CString::new("matroska").unwrap();
+            let matroska_name = CString::new("matroska").expect("static string has no null bytes");
             let ret = ffi::avformat_alloc_output_context2(
                 &mut ofmt_ctx,
                 ptr::null(),
@@ -430,8 +430,8 @@ impl FFmpegRunner {
                 _ => ("image/jpeg", "cover.jpg"),
             };
 
-            let key_mime = CString::new("mimetype").unwrap();
-            let val_mime = CString::new(mimetype).unwrap();
+            let key_mime = CString::new("mimetype").expect("static string has no null bytes");
+            let val_mime = CString::new(mimetype).expect("mimetype has no null bytes");
             ffi::av_dict_set(
                 &mut (*out_stream).metadata,
                 key_mime.as_ptr(),
@@ -439,8 +439,8 @@ impl FFmpegRunner {
                 0,
             );
 
-            let key_fname = CString::new("filename").unwrap();
-            let val_fname = CString::new(filename).unwrap();
+            let key_fname = CString::new("filename").expect("static string has no null bytes");
+            let val_fname = CString::new(filename).expect("filename has no null bytes");
             ffi::av_dict_set(
                 &mut (*out_stream).metadata,
                 key_fname.as_ptr(),
@@ -475,8 +475,8 @@ impl FFmpegRunner {
 
             // 8. Set cluster_time_limit and write header
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
-            let key = CString::new("cluster_time_limit").unwrap();
-            let value = CString::new("500").unwrap();
+            let key = CString::new("cluster_time_limit").expect("static string has no null bytes");
+            let value = CString::new("500").expect("static string has no null bytes");
             ffi::av_dict_set(&mut opts, key.as_ptr(), value.as_ptr(), 0);
 
             let ret = ffi::avformat_init_output(ofmt_ctx, &mut opts);

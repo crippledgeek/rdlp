@@ -28,15 +28,15 @@
 //! let duration = flashvars.get_f64("video_duration");
 //! ```
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Pattern to extract a single KVS flashvar value (string).
 ///
 /// Matches: `key: 'value'` anywhere in the flashvars block.
 /// No line-start anchor because KVS sites often emit all entries on one line.
-static KVS_STRING_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\w+)\s*:\s*'([^']*)'").expect("Valid KVS string pattern"));
+static KVS_STRING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\w+)\s*:\s*'([^']*)'").expect("Valid KVS string pattern"));
 
 /// Parsed KVS flashvars as key-value pairs.
 ///
@@ -121,8 +121,14 @@ pub fn parse_kvs_flashvars(flashvars_content: &str) -> KvsFlashvars {
         .captures_iter(flashvars_content)
         .map(|caps| {
             (
-                caps.get(1).unwrap().as_str().to_string(),
-                caps.get(2).unwrap().as_str().to_string(),
+                caps.get(1)
+                    .expect("capture group 1 exists in matched pattern")
+                    .as_str()
+                    .to_string(),
+                caps.get(2)
+                    .expect("capture group 2 exists in matched pattern")
+                    .as_str()
+                    .to_string(),
             )
         })
         .collect();

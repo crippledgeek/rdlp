@@ -4,18 +4,18 @@
 //! and legacy HTML fallback helpers.
 
 use log::debug;
-use once_cell::sync::Lazy;
 use rdlp_core::InfoDict;
 use regex::Regex;
 use scraper::Html;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 
 use super::patterns::VIDEO_CLOSED_PATTERN;
 
 /// Pattern to extract RTA age verification meta tag content.
-static RTA_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static RTA_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<meta\s+name=["']rating["']\s+content=["']RTA-5042-1996-1400-1577-RTA["']"#)
         .expect("Valid RTA pattern")
 });
@@ -28,16 +28,16 @@ static LEGACY_TITLE_PATTERNS: [&str; 3] = [
     r"<title[^>]*>(.+?)(?:,\s*[^,]*?\s*Porn\s*[^,]*?:\s*xHamster[^<]*| - xHamster\.com)</title>",
 ];
 
-static LEGACY_DESCRIPTION_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_DESCRIPTION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"<span>Description: </span>([^<]+)").expect("Valid description pattern")
 });
 
-static LEGACY_UPLOAD_DATE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_UPLOAD_DATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"hint=["'](\d{4}-\d{2}-\d{2}) \d{2}:\d{2}:\d{2} [A-Z]{3,4}"#)
         .expect("Valid upload date pattern")
 });
 
-static LEGACY_UPLOADER_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_UPLOADER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<span[^>]+itemprop=["']author[^>]+><a[^>]+><span[^>]+>([^<]+)"#)
         .expect("Valid uploader pattern")
 });
@@ -52,25 +52,25 @@ static LEGACY_DURATION_PATTERNS: [&str; 2] = [
     r"Runtime:\s*</span>\s*([\d:]+)",
 ];
 
-static LEGACY_VIEW_COUNT_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_VIEW_COUNT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"content=["']User(?:View|Play)s:(\d+)"#).expect("Valid view count pattern")
 });
 
-static LEGACY_LIKES_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_LIKES_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"hint=['"](?P<likes>\d+) Likes / (?P<dislikes>\d+) Dislikes"#)
         .expect("Valid likes pattern")
 });
 
-static LEGACY_COMMENT_COUNT_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_COMMENT_COUNT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"</label>Comments \((?P<count>\d+)\)</div>").expect("Valid comment count pattern")
 });
 
-static LEGACY_CATEGORIES_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static LEGACY_CATEGORIES_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<table.+?(<span>Categories:.+?)</table>").expect("Valid categories pattern")
 });
 
-static CATEGORY_LINK_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<a[^>]+>(.+?)</a>").expect("Valid category link pattern"));
+static CATEGORY_LINK_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<a[^>]+>(.+?)</a>").expect("Valid category link pattern"));
 
 /// Detect if a video page indicates the video is unavailable.
 ///

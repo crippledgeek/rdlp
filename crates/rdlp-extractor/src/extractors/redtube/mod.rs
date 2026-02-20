@@ -153,10 +153,10 @@ impl InfoExtractor for RedTubeExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     /// Shared test fixture (compiled once, reused across all tests)
-    static TEST_REDTUBE: Lazy<RedTubeExtractor> = Lazy::new(RedTubeExtractor::new);
+    static TEST_REDTUBE: LazyLock<RedTubeExtractor> = LazyLock::new(RedTubeExtractor::new);
 
     #[test]
     fn test_redtube_url_pattern() {

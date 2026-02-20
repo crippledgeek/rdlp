@@ -19,9 +19,9 @@
 pub mod cipher;
 
 use log::{debug, info, warn};
-use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Extracted video sources from a Megacloud embed.
 #[derive(Debug, Clone)]
@@ -61,7 +61,7 @@ pub struct SubtitleTrack {
 /// Captures the source ID from paths like:
 /// - `/embed-2/v2/e-1/{id}?z=`
 /// - `/e-1/{id}?z=`
-static SOURCE_ID_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static SOURCE_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"/(?:e-\d+|embed-\d+/v\d+/e-\d+)/([^?]+)").expect("Valid source ID pattern")
 });
 
@@ -69,7 +69,7 @@ static SOURCE_ID_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// source ID). Used to construct the getSources URL on the same domain.
 ///
 /// Captures: `https://rapid-cloud.co/embed-2/v2/e-1`
-static EMBED_BASE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static EMBED_BASE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(https?://[^/]+/embed-\d+/v\d+/e-\d+)/[^?]+").expect("Valid embed base pattern")
 });
 
@@ -173,7 +173,7 @@ fn extract_embed_base(embed_url: &str) -> Option<String> {
 /// 4. Div data attribute: `<div data-dpi="KEY" ...></div>`
 /// 5. Script nonce: `<script nonce="KEY">`
 /// 6. Window variable: `window._xy_ws = "KEY"`
-static CLIENT_KEY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static CLIENT_KEY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r#"<meta name="_gg_fb" content="[a-zA-Z0-9]+">"#)
             .expect("Valid meta pattern"),
@@ -193,11 +193,11 @@ static CLIENT_KEY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 });
 
 /// General quoted-key pattern for most obfuscation methods.
-static QUOTED_KEY: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#""[a-zA-Z0-9]+""#).expect("Valid quoted key pattern"));
+static QUOTED_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""[a-zA-Z0-9]+""#).expect("Valid quoted key pattern"));
 
 /// Pattern for the 3-part `_lk_db` key components.
-static LK_DB_PARTS: Lazy<[Regex; 3]> = Lazy::new(|| {
+static LK_DB_PARTS: LazyLock<[Regex; 3]> = LazyLock::new(|| {
     [
         Regex::new(r#"x:\s+"[a-zA-Z0-9]+""#).expect("Valid x pattern"),
         Regex::new(r#"y:\s+"[a-zA-Z0-9]+""#).expect("Valid y pattern"),
@@ -206,8 +206,8 @@ static LK_DB_PARTS: Lazy<[Regex; 3]> = Lazy::new(|| {
 });
 
 /// Comment key pattern (no quotes, colon-delimited).
-static COMMENT_KEY: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r":[a-zA-Z0-9]+ ").expect("Valid comment key pattern"));
+static COMMENT_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r":[a-zA-Z0-9]+ ").expect("Valid comment key pattern"));
 
 /// Fetch the v3 embed page and extract the client key.
 async fn extract_client_key(source_id: &str, ctx: &ExtractionContext) -> Result<String> {

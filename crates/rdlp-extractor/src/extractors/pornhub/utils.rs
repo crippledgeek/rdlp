@@ -2,10 +2,10 @@
 //!
 //! Contains helper functions for parsing, validation, and common operations.
 
-use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
 use scraper::Html;
+use std::sync::LazyLock;
 
 use super::patterns::FLASHVARS_PATTERN;
 use crate::base::common::BaseExtractor;
@@ -19,25 +19,25 @@ const AGE_COOKIES: &[&str] = &[
 ];
 
 // Pre-compiled regexes for error detection (avoid repeated compilation)
-static REMOVED_VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static REMOVED_VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?s)<div[^>]+class=["'](?:[^"']*\s)?(?:removeduserMessageSection|removed)(?:\s[^"']*)?["'][^>]*>(?P<error>.+?)</div>"#,
     )
     .expect("Valid removed video pattern")
 });
 
-static NO_VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static NO_VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)<section[^>]+class=["']noVideo["'][^>]*>(?P<error>.+?)</section>"#)
         .expect("Valid no video pattern")
 });
 
-static GEO_BLOCKED_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"class=["']geoBlocked["']"#).expect("Valid geo blocked pattern"));
+static GEO_BLOCKED_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"class=["']geoBlocked["']"#).expect("Valid geo blocked pattern"));
 
-static LOCKED_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"<[^>]+\bid=["']lockedPlayer"#).expect("Valid locked pattern"));
+static LOCKED_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<[^>]+\bid=["']lockedPlayer"#).expect("Valid locked pattern"));
 
-static SHARE_TITLE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+static SHARE_TITLE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"shareTitle\s*[:=]\s*["']([^"']+)["']"#).expect("Valid share title pattern")
 });
 

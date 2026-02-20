@@ -6,9 +6,9 @@
 
 use crate::utils::decode_html_entities;
 use log::debug;
-use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Base URL for the 9anime site.
 const BASE_URL: &str = "https://9animetv.to";
@@ -58,22 +58,22 @@ pub struct SourceResult {
 /// Captures the full block from the opening `<div` (or any tag) with `data-id`
 /// through to the next `</div>`. Attribute extraction is done separately to
 /// handle any attribute ordering. The `(?s)` flag enables `.` to match newlines.
-static SERVER_ITEM_BLOCK: Lazy<Regex> = Lazy::new(|| {
+static SERVER_ITEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)<div[^>]*\bdata-id="\d+"[^>]*>.*?</div>"#)
         .expect("Valid server item block pattern")
 });
 
 /// Extract `data-id` value from a tag's attributes.
-static DATA_ID_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid data-id pattern"));
+static DATA_ID_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid data-id pattern"));
 
 /// Extract `data-server-id` value from a tag's attributes.
-static SERVER_ID_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\bdata-server-id="(\d+)""#).expect("Valid server-id pattern"));
+static SERVER_ID_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdata-server-id="(\d+)""#).expect("Valid server-id pattern"));
 
 /// Extract `data-type` value from a tag's attributes.
-static DATA_TYPE_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\bdata-type="([^"]+)""#).expect("Valid data-type pattern"));
+static DATA_TYPE_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdata-type="([^"]+)""#).expect("Valid data-type pattern"));
 
 /// Fetch the list of streaming servers for an episode.
 ///
@@ -112,8 +112,8 @@ pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<
 /// Scans for `>text<` pairs and returns the first non-whitespace match.
 /// Handles nested elements like `<div ...><a ...>ServerName</a></div>`.
 fn extract_inner_text(html: &str) -> Option<String> {
-    static INNER_TEXT: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#">([^<]+)<"#).expect("Valid inner text pattern"));
+    static INNER_TEXT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#">([^<]+)<"#).expect("Valid inner text pattern"));
 
     INNER_TEXT.captures_iter(html).find_map(|c| {
         let text = c[1].trim();
@@ -239,19 +239,19 @@ pub struct EpisodeInfo {
 }
 
 /// Pattern to match episode items: `<a ... data-id="26565" data-number="1" title="The World of Swords" ...>`
-static EP_ITEM_DATA_ID: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid ep data-id pattern"));
+static EP_ITEM_DATA_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid ep data-id pattern"));
 
 /// Extract `data-number` from an episode item.
-static EP_DATA_NUMBER: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\bdata-number="(\d+)""#).expect("Valid ep data-number pattern"));
+static EP_DATA_NUMBER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bdata-number="(\d+)""#).expect("Valid ep data-number pattern"));
 
 /// Extract `title` from an episode item.
-static EP_TITLE_ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\btitle="([^"]+)""#).expect("Valid ep title pattern"));
+static EP_TITLE_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\btitle="([^"]+)""#).expect("Valid ep title pattern"));
 
 /// Pattern to match episode `<a>` blocks.
-static EP_ITEM_BLOCK: Lazy<Regex> = Lazy::new(|| {
+static EP_ITEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s)<a[^>]*\bclass="[^"]*ep-item[^"]*"[^>]*>.*?</a>"#)
         .expect("Valid ep-item block pattern")
 });

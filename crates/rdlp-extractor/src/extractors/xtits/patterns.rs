@@ -1,9 +1,9 @@
 //! URL and extraction patterns for XTits
 //!
-//! Static regex patterns compiled once at first use via `once_cell::sync::Lazy`.
+//! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// URL pattern for XTits video pages
 ///
@@ -11,7 +11,7 @@ use regex::Regex;
 /// - Standard: `https://www.xtits.xxx/videos/183207/slug/`
 /// - Without trailing slash: `https://www.xtits.xxx/videos/183207/slug`
 /// - Without slug: `https://www.xtits.xxx/videos/183207/`
-pub static XTITS_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XTITS_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://(?:www\.)?xtits\.xxx/videos/(?P<id>\d+)/")
         .expect("Valid XTits URL pattern")
 });
@@ -19,7 +19,7 @@ pub static XTITS_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// URL pattern for XTits embed pages
 ///
 /// Supports: `https://www.xtits.xxx/embed/183207`
-pub static XTITS_EMBED_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XTITS_EMBED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://(?:www\.)?xtits\.xxx/embed/(?P<id>\d+)")
         .expect("Valid XTits embed pattern")
 });
@@ -28,7 +28,7 @@ pub static XTITS_EMBED_PATTERN: Lazy<Regex> = Lazy::new(|| {
 ///
 /// KVS players embed video configuration in a `var flashvars = {...};` block.
 /// This captures the JSON-like object content.
-pub static FLASHVARS_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static FLASHVARS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)var\s+flashvars\s*=\s*\{(.+?)\};").expect("Valid flashvars pattern")
 });
 

@@ -158,7 +158,10 @@ impl Orchestrator {
         }
 
         // Delegate to the interactive callback
-        let callback = self.interactive.as_ref().unwrap();
+        let callback = self
+            .interactive
+            .as_ref()
+            .expect("interactive callback is set for interactive mode");
         let grouped_owned: Vec<Format> = by_key.values().map(|f| (*f).clone()).collect();
 
         let selection = callback.select_format(&grouped_owned, info).await;

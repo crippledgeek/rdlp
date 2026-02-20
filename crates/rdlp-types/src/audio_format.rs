@@ -92,22 +92,39 @@ impl FromStr for AudioFormat {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "mp3" => Ok(Self::Mp3),
-            "aac" => Ok(Self::Aac),
-            "m4a" => Ok(Self::M4a),
-            "opus" => Ok(Self::Opus),
-            "vorbis" | "ogg" => Ok(Self::Vorbis),
-            "flac" => Ok(Self::Flac),
-            "alac" => Ok(Self::Alac),
-            "wav" => Ok(Self::Wav),
-            "ac3" => Ok(Self::Ac3),
-            "eac3" | "e-ac-3" | "e-ac3" => Ok(Self::Eac3),
-            "dts" | "dca" => Ok(Self::Dts),
-            "mp2" => Ok(Self::Mp2),
-            "wavpack" | "wv" => Ok(Self::WavPack),
-            "tta" => Ok(Self::Tta),
-            _ => Err(format!("unsupported audio format: {s}")),
+        if s.eq_ignore_ascii_case("mp3") {
+            Ok(Self::Mp3)
+        } else if s.eq_ignore_ascii_case("aac") {
+            Ok(Self::Aac)
+        } else if s.eq_ignore_ascii_case("m4a") {
+            Ok(Self::M4a)
+        } else if s.eq_ignore_ascii_case("opus") {
+            Ok(Self::Opus)
+        } else if s.eq_ignore_ascii_case("vorbis") || s.eq_ignore_ascii_case("ogg") {
+            Ok(Self::Vorbis)
+        } else if s.eq_ignore_ascii_case("flac") {
+            Ok(Self::Flac)
+        } else if s.eq_ignore_ascii_case("alac") {
+            Ok(Self::Alac)
+        } else if s.eq_ignore_ascii_case("wav") {
+            Ok(Self::Wav)
+        } else if s.eq_ignore_ascii_case("ac3") {
+            Ok(Self::Ac3)
+        } else if s.eq_ignore_ascii_case("eac3")
+            || s.eq_ignore_ascii_case("e-ac-3")
+            || s.eq_ignore_ascii_case("e-ac3")
+        {
+            Ok(Self::Eac3)
+        } else if s.eq_ignore_ascii_case("dts") || s.eq_ignore_ascii_case("dca") {
+            Ok(Self::Dts)
+        } else if s.eq_ignore_ascii_case("mp2") {
+            Ok(Self::Mp2)
+        } else if s.eq_ignore_ascii_case("wavpack") || s.eq_ignore_ascii_case("wv") {
+            Ok(Self::WavPack)
+        } else if s.eq_ignore_ascii_case("tta") {
+            Ok(Self::Tta)
+        } else {
+            Err(format!("unsupported audio format: {s}"))
         }
     }
 }

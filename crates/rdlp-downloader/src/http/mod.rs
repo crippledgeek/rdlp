@@ -438,7 +438,7 @@ impl Downloader for HttpDownloader {
                     self.config.concurrent_fragments
                 );
                 return self
-                    .download_parallel(url, path, size.unwrap(), progress)
+                    .download_parallel(url, path, size.expect("size is Some when use_parallel is true"), progress)
                     .await;
             }
 

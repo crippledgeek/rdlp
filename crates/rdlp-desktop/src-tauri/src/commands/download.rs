@@ -122,7 +122,7 @@ pub async fn start_download(
             ..FormatOptions::default()
         },
         subtitles: SubtitleOptions {
-            write_subs: if options.subtitles { Some(true) } else { None },
+            write_subs: options.subtitles.then_some(true),
             sub_langs: options.subtitle_langs,
             sub_format: settings.default_subtitle_format,
             ..SubtitleOptions::default()

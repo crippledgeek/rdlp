@@ -44,13 +44,18 @@ impl FromStr for SubtitleFormat {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "srt" => Ok(Self::Srt),
-            "vtt" | "webvtt" => Ok(Self::Vtt),
-            "ass" => Ok(Self::Ass),
-            "ssa" => Ok(Self::Ssa),
-            "lrc" => Ok(Self::Lrc),
-            _ => Err(format!("unsupported subtitle format: {s}")),
+        if s.eq_ignore_ascii_case("srt") {
+            Ok(Self::Srt)
+        } else if s.eq_ignore_ascii_case("vtt") || s.eq_ignore_ascii_case("webvtt") {
+            Ok(Self::Vtt)
+        } else if s.eq_ignore_ascii_case("ass") {
+            Ok(Self::Ass)
+        } else if s.eq_ignore_ascii_case("ssa") {
+            Ok(Self::Ssa)
+        } else if s.eq_ignore_ascii_case("lrc") {
+            Ok(Self::Lrc)
+        } else {
+            Err(format!("unsupported subtitle format: {s}"))
         }
     }
 }
