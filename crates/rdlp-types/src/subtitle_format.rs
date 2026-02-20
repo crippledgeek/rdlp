@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::parse_error::ParseEnumError;
+
 /// Supported subtitle formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,7 +43,7 @@ impl fmt::Display for SubtitleFormat {
 }
 
 impl FromStr for SubtitleFormat {
-    type Err = String;
+    type Err = ParseEnumError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if s.eq_ignore_ascii_case("srt") {
@@ -55,7 +57,10 @@ impl FromStr for SubtitleFormat {
         } else if s.eq_ignore_ascii_case("lrc") {
             Ok(Self::Lrc)
         } else {
-            Err(format!("unsupported subtitle format: {s}"))
+            Err(ParseEnumError {
+                type_name: "SubtitleFormat",
+                input: s.to_string(),
+            })
         }
     }
 }

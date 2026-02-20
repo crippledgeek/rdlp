@@ -15,7 +15,7 @@ pub use selector::FormatSelector;
 ///
 /// Represents a single downloadable stream (video, audio, or combined).
 /// Sites often provide multiple formats with different qualities, codecs, and containers.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Format {
     /// Unique format identifier
     pub format_id: String,

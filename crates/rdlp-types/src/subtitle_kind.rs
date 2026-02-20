@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::parse_error::ParseEnumError;
+
 /// Classification of subtitle track purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +58,7 @@ impl fmt::Display for SubtitleKind {
 }
 
 impl FromStr for SubtitleKind {
-    type Err = String;
+    type Err = ParseEnumError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.eq_ignore_ascii_case("normal") {
@@ -76,7 +78,10 @@ impl FromStr for SubtitleKind {
         } else if s.eq_ignore_ascii_case("karaoke") {
             Ok(Self::Karaoke)
         } else {
-            Err(format!("unsupported subtitle kind: {s}"))
+            Err(ParseEnumError {
+                type_name: "SubtitleKind",
+                input: s.to_string(),
+            })
         }
     }
 }

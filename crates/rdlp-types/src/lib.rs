@@ -29,6 +29,7 @@ pub mod config;
 pub mod container;
 pub mod format;
 pub mod info_dict;
+pub mod parse_error;
 pub mod protocol;
 pub mod search;
 pub mod subtitle_format;
@@ -43,6 +44,7 @@ pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
 pub use format::{Format, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
+pub use parse_error::ParseEnumError;
 pub use protocol::DownloadProtocol;
 pub use search::{
     SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchQuery, SearchResultPreview,

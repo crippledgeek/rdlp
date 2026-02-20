@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::parse_error::ParseEnumError;
+
 /// Supported audio formats for extraction and conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,7 +91,7 @@ impl fmt::Display for AudioFormat {
 }
 
 impl FromStr for AudioFormat {
-    type Err = String;
+    type Err = ParseEnumError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if s.eq_ignore_ascii_case("mp3") {
@@ -124,7 +126,10 @@ impl FromStr for AudioFormat {
         } else if s.eq_ignore_ascii_case("tta") {
             Ok(Self::Tta)
         } else {
-            Err(format!("unsupported audio format: {s}"))
+            Err(ParseEnumError {
+                type_name: "AudioFormat",
+                input: s.to_string(),
+            })
         }
     }
 }

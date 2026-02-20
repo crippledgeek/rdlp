@@ -3,11 +3,12 @@
 //! Provides functions for extracting video source URLs from HTML and
 //! building Format objects with filesize detection.
 
-use log::{debug, warn};
 use rdlp_core::{ExtractionContext, Format};
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
+
+use crate::base::common::BaseExtractor;
 
 /// Video metadata extracted from HTML: (format_id, video_url, ext, height, width)
 pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
@@ -156,40 +157,8 @@ pub(crate) async fn build_formats(
             format.acodec = Some(CODEC_AAC.to_owned());
         }
 
-        // Fetch filesize via HEAD request
-        match ctx.http_client.head(&video_url).send().await {
-            Ok(response) => {
-                debug!(status:? = response.status(), content_length:? = response.content_length(); "HEAD response");
-
-                format.filesize = response.content_length();
-
-                // Fallback: If HEAD didn't give us content-length, try Range request
-                if format.filesize.is_none() || format.filesize == Some(0) {
-                    debug!("HEAD request returned no size, trying Range request");
-
-                    if let Ok(range_response) = ctx
-                        .http_client
-                        .get(&video_url)
-                        .header("Range", "bytes=0-0")
-                        .send()
-                        .await
-                    {
-                        debug!(status:? = range_response.status(); "Range response");
-
-                        if let Some(content_range) = range_response.headers().get("content-range") {
-                            if let Ok(range_str) = content_range.to_str() {
-                                if let Some(total) = range_str.split('/').nth(1) {
-                                    format.filesize = total.parse::<u64>().ok();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(url:? = video_url; "HEAD request failed: {e}");
-            }
-        }
+        format.filesize =
+            BaseExtractor::detect_file_size(&video_url, &ctx.http_client, Some("TNAFlix")).await;
 
         formats.push(format);
     }

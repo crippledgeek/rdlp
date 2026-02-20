@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::parse_error::ParseEnumError;
+
 /// Supported container formats for video/audio files.
 ///
 /// Used for merge output, remux targets, and video recode targets.
@@ -141,7 +143,7 @@ impl fmt::Display for ContainerFormat {
 }
 
 impl FromStr for ContainerFormat {
-    type Err = String;
+    type Err = ParseEnumError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if s.eq_ignore_ascii_case("mp4") {
@@ -204,7 +206,10 @@ impl FromStr for ContainerFormat {
         } else if s.eq_ignore_ascii_case("ac3") {
             Ok(Self::Ac3)
         } else {
-            Err(format!("unsupported container format: {s}"))
+            Err(ParseEnumError {
+                type_name: "ContainerFormat",
+                input: s.to_string(),
+            })
         }
     }
 }

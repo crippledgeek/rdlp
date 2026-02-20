@@ -30,14 +30,14 @@
 //! let id = BaseExtractor::extract_id_from_url(url, &MY_URL_PATTERN, "id");
 //!
 //! // Detect file size with fallback strategies
-//! let size = BaseExtractor::detect_file_size(&video_url, ctx).await;
+//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
 //! ```
 
 #[cfg(test)]
 mod tests;
 
 use log::{debug, trace};
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
+use rdlp_core::{ExtractionContext, Format, RdlpError, Result, check_http_response};
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
@@ -190,7 +190,8 @@ impl BaseExtractor {
     ///
     /// # Errors
     /// - `RdlpError::Extraction` if URL is too long
-    /// - `RdlpError::Network` if the request fails or returns non-2xx status
+    /// - `RdlpError::Network` if the request fails
+    /// - `RdlpError::Http` if the response has a non-2xx status
     ///
     /// # Example
     ///
@@ -214,7 +215,7 @@ impl BaseExtractor {
             .await
             .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
 
-        Self::check_http_response(&response)?;
+        check_http_response(&response)?;
 
         let webpage = response
             .text()
@@ -271,7 +272,7 @@ impl BaseExtractor {
             .await
             .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
 
-        Self::check_http_response(&response)?;
+        check_http_response(&response)?;
 
         let webpage = response
             .text()
@@ -283,32 +284,6 @@ impl BaseExtractor {
         }
 
         Ok(webpage)
-    }
-
-    /// Check HTTP response status and return appropriate error
-    ///
-    /// # Arguments
-    /// * `response` - The HTTP response to check
-    ///
-    /// # Returns
-    /// `Ok(())` if status is 2xx, otherwise an appropriate error
-    pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
-        let status = response.status();
-
-        if status.is_success() {
-            return Ok(());
-        }
-
-        let error_msg = match status.as_u16() {
-            403 => "Access forbidden (403) - may require authentication or cookies",
-            404 => "Page not found (404) - video may have been removed",
-            429 => "Rate limited (429) - too many requests, try again later",
-            451 => "Unavailable for legal reasons (451) - content blocked in your region",
-            500..=599 => "Server error - the website may be experiencing issues",
-            _ => "Unexpected HTTP status",
-        };
-
-        Err(RdlpError::Network(format!("{error_msg}: HTTP {status}")))
     }
 
     // ========================================================================
@@ -603,15 +578,16 @@ impl BaseExtractor {
     // Size Detection
     // ========================================================================
 
-    /// Detect file size using HEAD request with Range fallback
+    /// Detect file size using HEAD request with Range fallback.
     ///
-    /// This method tries two strategies:
+    /// Tries two strategies:
     /// 1. HEAD request to get Content-Length header
     /// 2. Range request (bytes=0-0) to parse Content-Range header
     ///
     /// # Arguments
     /// * `url` - The URL to check
-    /// * `ctx` - Extraction context
+    /// * `http_client` - The HTTP client to use
+    /// * `log_prefix` - Optional prefix for debug log messages
     ///
     /// # Returns
     /// File size in bytes if detected, `None` otherwise
@@ -619,59 +595,21 @@ impl BaseExtractor {
     /// # Example
     ///
     /// ```rust,ignore
-    /// if let Some(size) = BaseExtractor::detect_file_size(&format.url, ctx).await {
-    ///     format.filesize = Some(size);
-    /// }
+    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None).await;
+    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS")).await;
     /// ```
-    pub async fn detect_file_size(url: &str, ctx: &ExtractionContext) -> Option<u64> {
-        // Strategy 1: HEAD request
-        if let Ok(response) = ctx.http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    debug!(size, method = "HEAD"; "[BaseExtractor] Detected Content-Length");
-                    return Some(size);
-                }
-            }
-        }
-
-        // Strategy 2: Range request fallback
-        if let Ok(response) = ctx
-            .http_client
-            .get(url)
-            .header("Range", "bytes=0-0")
-            .send()
-            .await
-        {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    // Parse "bytes 0-0/123456"
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            debug!(size, method = "Range"; "[BaseExtractor] Detected Content-Range");
-                            return Some(size);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Detect file size using a provided HTTP client
-    ///
-    /// This variant is useful for parallel detection where you need to pass
-    /// the client directly instead of the full context.
-    pub async fn detect_file_size_with_client(
+    pub async fn detect_file_size(
         url: &str,
-        http_client: &std::sync::Arc<reqwest::Client>,
+        http_client: &reqwest::Client,
+        log_prefix: Option<&str>,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
         if let Ok(response) = http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    return Some(size);
+            if let Some(size) = response.content_length().filter(|&s| s > 0) {
+                if let Some(prefix) = log_prefix {
+                    debug!(size, method = "HEAD"; "[{prefix}] Detected Content-Length");
                 }
+                return Some(size);
             }
         }
 
@@ -682,60 +620,29 @@ impl BaseExtractor {
             .send()
             .await
         {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    // Parse "bytes 0-0/123456"
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            return Some(size);
-                        }
-                    }
+            if let Some(size) = Self::parse_content_range_total(response.headers()) {
+                if let Some(prefix) = log_prefix {
+                    debug!(size, method = "Range"; "[{prefix}] Detected Content-Range");
                 }
+                return Some(size);
             }
         }
 
         None
     }
 
-    /// Detect file size with verbose logging prefix
+    /// Parse total file size from a Content-Range header.
     ///
-    /// Same as `detect_file_size` but with a custom log prefix for clarity.
-    pub async fn detect_file_size_verbose(
-        url: &str,
-        ctx: &ExtractionContext,
-        log_prefix: &str,
-    ) -> Option<u64> {
-        // Strategy 1: HEAD request
-        if let Ok(response) = ctx.http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    debug!(size, method = "HEAD"; "[{log_prefix}] Detected Content-Length");
-                    return Some(size);
-                }
-            }
-        }
-
-        // Strategy 2: Range request fallback
-        if let Ok(response) = ctx
-            .http_client
-            .get(url)
-            .header("Range", "bytes=0-0")
-            .send()
-            .await
-        {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            debug!(size, method = "Range"; "[{log_prefix}] Detected Content-Range");
-                            return Some(size);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+    /// Parses the format `bytes 0-0/123456` and returns the total size.
+    fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+        headers
+            .get("content-range")?
+            .to_str()
+            .ok()?
+            .split('/')
+            .nth(1)?
+            .parse()
+            .ok()
     }
 
     // ========================================================================
@@ -810,12 +717,13 @@ impl BaseExtractor {
     /// A Format struct with quality metadata populated
     #[must_use]
     pub fn build_format(
-        format_id: String,
-        url: String,
-        ext: String,
+        format_id: impl Into<String>,
+        url: impl Into<String>,
+        ext: impl Into<String>,
         height: Option<u32>,
     ) -> Format {
-        let mut format = Format::new(&format_id, &url, &ext, rdlp_core::DownloadProtocol::Https);
+        let ext = ext.into();
+        let mut format = Format::new(format_id, url, &ext, rdlp_core::DownloadProtocol::Https);
 
         if let Some(h) = height {
             format.height = Some(h);

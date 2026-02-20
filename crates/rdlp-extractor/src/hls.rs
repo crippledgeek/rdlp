@@ -1217,7 +1217,7 @@ pub async fn detect_format_sizes(
                     let mut format = format;
                     let result = timeout(
                         Duration::from_secs(5),
-                        BaseExtractor::detect_file_size_with_client(&url, &http_client),
+                        BaseExtractor::detect_file_size(&url, &http_client, None),
                     )
                     .await;
 
