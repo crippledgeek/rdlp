@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { formatDistanceToNowStrict, fromUnixTime } from "date-fns";
-import { useSettingsStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel } from "./FormatOptionsPanel";
 import type {
     AudioFormat,
@@ -82,7 +83,7 @@ export function ResultRow({
     onOpenFormatDialog,
     onToggleSelect,
 }: ResultRowProps) {
-    const settings = useSettingsStore((s) => s.settings);
+    const { data: settings = null } = useQuery(settingsQueryOptions());
     const [showOptions, setShowOptions] = useState(false);
     const [panelOptions, setPanelOptions] = useState<DownloadOptions>(() =>
         buildOptionsFromSettings(settings),

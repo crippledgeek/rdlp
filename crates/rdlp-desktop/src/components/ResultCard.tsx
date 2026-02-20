@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDistanceToNow, fromUnixTime } from "date-fns";
-import { useSettingsStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel } from "./FormatOptionsPanel";
 import type {
     AudioFormat,
@@ -70,7 +71,7 @@ export function ResultCard({
     const duration = formatDuration(result.duration);
     const views = formatViews(result.view_count);
     const uploadDate = formatUploadDate(result.upload_date);
-    const settings = useSettingsStore((s) => s.settings);
+    const { data: settings = null } = useQuery(settingsQueryOptions());
 
     const [showOptions, setShowOptions] = useState(false);
     const [panelOptions, setPanelOptions] = useState<DownloadOptions>(() =>
