@@ -6,12 +6,13 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use rdlp_core::{Config, Format, InfoDict};
 use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Helper function to create a test orchestrator with event channel
 pub(super) fn create_test_orchestrator() -> Orchestrator {
-    let config = Config::default();
+    let config = Arc::new(Config::default());
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let id = DownloadId::next();
     let token = CancellationToken::new();
@@ -776,7 +777,7 @@ fn test_generate_output_path_custom_template() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -797,7 +798,7 @@ fn test_generate_output_path_subdirectory_template() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -832,7 +833,7 @@ fn test_generate_output_path_field_with_default() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -857,7 +858,7 @@ fn test_generate_output_path_sanitizes_template_field_values() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -888,7 +889,7 @@ fn test_generate_output_path_with_format_fields() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -912,7 +913,7 @@ fn test_generate_output_path_numeric_padding() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -937,7 +938,7 @@ fn test_generate_output_path_missing_field_defaults_to_na() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),
@@ -960,7 +961,7 @@ fn test_generate_output_path_with_output_directory() {
     };
     let (tx, _rx) = mpsc::channel::<Event>(64);
     let orchestrator = Orchestrator::new(
-        config,
+        Arc::new(config),
         tx,
         DownloadId::next(),
         CancellationToken::new(),

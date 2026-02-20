@@ -102,14 +102,14 @@ impl Orchestrator {
     /// Create a new orchestrator with default registries
     ///
     /// # Arguments
-    /// * `config` - Download configuration
+    /// * `config` - Download configuration (Arc-wrapped for cheap sharing)
     /// * `event_tx` - Channel sender for lifecycle events
     /// * `download_id` - Unique identifier for this download
     /// * `cancel_token` - Token for cooperative cancellation
     /// * `interactive` - Optional callback for interactive user input
     #[must_use]
     pub fn new(
-        config: Config,
+        config: Arc<Config>,
         event_tx: mpsc::Sender<Event>,
         download_id: DownloadId,
         cancel_token: CancellationToken,
@@ -120,9 +120,6 @@ impl Orchestrator {
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar.clone());
         let js_engine = Arc::new(BoaJsEngine::new());
-
-        // Wrap config in Arc once and share it
-        let config = Arc::new(config);
 
         let extraction_context = Arc::new(ExtractionContext::new(
             http_client,
@@ -181,7 +178,7 @@ impl Orchestrator {
     #[doc(hidden)]
     #[allow(dead_code)]
     pub fn with_registries(
-        config: Config,
+        config: Arc<Config>,
         extractor_registry: Arc<dyn ExtractorRegistryTrait>,
         downloader_registry: Arc<dyn DownloaderRegistryTrait>,
         event_tx: mpsc::Sender<Event>,
@@ -193,8 +190,6 @@ impl Orchestrator {
         let http_client =
             HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
         let js_engine = Arc::new(BoaJsEngine::new());
-
-        let config = Arc::new(config);
 
         let extraction_context = Arc::new(ExtractionContext::new(
             http_client,

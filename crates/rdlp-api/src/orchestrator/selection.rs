@@ -199,6 +199,7 @@ mod tests {
     use crate::handle::DownloadId;
     use crate::orchestrator::{DownloadPlan, Orchestrator};
     use rdlp_core::{Config, DownloadProtocol, Format, InfoDict};
+    use std::sync::Arc;
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
@@ -214,7 +215,7 @@ mod tests {
     fn orchestrator_with_config(config: Config) -> Orchestrator {
         let (tx, _rx) = mpsc::channel::<Event>(64);
         Orchestrator::new(
-            config,
+            Arc::new(config),
             tx,
             DownloadId::next(),
             CancellationToken::new(),
