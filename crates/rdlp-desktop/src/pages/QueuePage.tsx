@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Download } from "lucide-react";
 import { JobCard } from "../components/JobCard";
 import {
     downloadsQueryOptions,
@@ -39,13 +40,12 @@ export function QueuePage() {
 
     if (jobs.length === 0) {
         return (
-            <div className="queue-page">
-                <div className="status-message">
-                    <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
+            <div className="max-w-3xl">
+                <div
+                    className="flex flex-col items-center justify-center
+                        gap-3 py-16 text-muted-foreground"
+                >
+                    <Download className="h-10 w-10 opacity-40" />
                     <p>No downloads yet.</p>
                 </div>
             </div>
@@ -53,38 +53,50 @@ export function QueuePage() {
     }
 
     return (
-        <div className="queue-page">
+        <div className="max-w-3xl">
             {activeJobs.length > 0 && (
-                <section className="queue-section">
-                    <h3 className="queue-section-title">
+                <section className="mb-6">
+                    <h3
+                        className="mb-2.5 border-b border-border pb-1.5
+                            text-[11px] font-bold uppercase tracking-widest
+                            text-muted-foreground"
+                    >
                         Active ({activeJobs.length})
                     </h3>
-                    {activeJobs.map((job) => (
-                        <JobCard
-                            key={job.id}
-                            job={job}
-                            onCancel={handleCancel}
-                            onRemove={handleRemove}
-                            onRetry={handleRetry}
-                        />
-                    ))}
+                    <div className="space-y-2">
+                        {activeJobs.map((job) => (
+                            <JobCard
+                                key={job.id}
+                                job={job}
+                                onCancel={handleCancel}
+                                onRemove={handleRemove}
+                                onRetry={handleRetry}
+                            />
+                        ))}
+                    </div>
                 </section>
             )}
 
             {completedJobs.length > 0 && (
-                <section className="queue-section">
-                    <h3 className="queue-section-title">
+                <section className="mb-6">
+                    <h3
+                        className="mb-2.5 border-b border-border pb-1.5
+                            text-[11px] font-bold uppercase tracking-widest
+                            text-muted-foreground"
+                    >
                         History ({completedJobs.length})
                     </h3>
-                    {completedJobs.map((job) => (
-                        <JobCard
-                            key={job.id}
-                            job={job}
-                            onCancel={handleCancel}
-                            onRemove={handleRemove}
-                            onRetry={handleRetry}
-                        />
-                    ))}
+                    <div className="space-y-2">
+                        {completedJobs.map((job) => (
+                            <JobCard
+                                key={job.id}
+                                job={job}
+                                onCancel={handleCancel}
+                                onRemove={handleRemove}
+                                onRetry={handleRetry}
+                            />
+                        ))}
+                    </div>
                 </section>
             )}
         </div>
