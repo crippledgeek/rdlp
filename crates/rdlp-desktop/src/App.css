@@ -2327,3 +2327,147 @@ body {
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+
+/* ========== Result Row (List View) ========== */
+
+.result-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  height: 52px;
+  padding: 0 var(--gap-lg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition:
+    background var(--duration-fast),
+    border-left-color var(--duration-fast);
+  border-left: 2px solid transparent;
+  position: relative;
+}
+
+.result-row:hover {
+  background: var(--surface-2);
+}
+
+.result-row-focused {
+  background: var(--surface-2);
+  border-left-color: var(--accent);
+}
+
+.result-row-selected {
+  background: var(--accent-dim);
+}
+
+.result-row-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.result-row-thumb {
+  width: 64px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.result-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.result-row-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  background: var(--surface-3);
+}
+
+.result-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.result-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-row-meta {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.result-row-col {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-family: "Space Mono", "SF Mono", monospace;
+  color: var(--text-1);
+  text-align: right;
+}
+
+.result-row-duration {
+  width: 48px;
+}
+
+.result-row-date {
+  width: 40px;
+  color: var(--text-2);
+}
+
+.result-row-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  flex-shrink: 0;
+}
+
+.result-row:hover .result-row-actions,
+.result-row-focused .result-row-actions {
+  opacity: 1;
+}
+
+.result-row-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    background var(--duration-fast);
+}
+
+.result-row-action:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.result-row-popover {
+  position: absolute;
+  top: 100%;
+  right: var(--gap-lg);
+  z-index: 100;
+  background: var(--surface-3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: var(--gap-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: card-enter var(--duration-fast) var(--ease-out) both;
+  min-width: 260px;
+}
