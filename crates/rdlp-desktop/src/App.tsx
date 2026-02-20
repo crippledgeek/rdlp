@@ -54,11 +54,11 @@ function App() {
 
     // Restore search from sidebar history
     const handleRestoreSearch = useCallback(
-        (_query: string, _site: string, _filters: SearchFilter[]) => {
+        (restoredQuery: string, restoredSite: string, restoredFilters: SearchFilter[]) => {
             const store = useSearchStore.getState();
-            store.setQuery(_query);
-            store.setSite(_site);
-            if (_filters.length > 0) store.setFilters(_filters);
+            store.setQuery(restoredQuery);
+            store.setSite(restoredSite);
+            if (restoredFilters.length > 0) store.setFilters(restoredFilters);
             setActiveTab("search");
             setTimeout(() => { void store.search(); }, 0);
         },
@@ -87,10 +87,12 @@ function App() {
                 e.preventDefault();
                 toggleSidebar();
             }
-            // Ctrl+K: focus search
+            // Ctrl+K: focus search input
             if ((e.ctrlKey || e.metaKey) && e.key === "k") {
                 e.preventDefault();
                 setActiveTab("search");
+                // Dispatch custom event for CommandBar to pick up
+                window.dispatchEvent(new CustomEvent("rdlp-focus-search"));
             }
             // Ctrl+L: toggle view mode
             if ((e.ctrlKey || e.metaKey) && e.key === "l") {

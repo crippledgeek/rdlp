@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
 import { ResultsList } from "../components/ResultsList";
@@ -7,6 +7,7 @@ import { SearchIdleState } from "../components/SearchIdleState";
 import { BatchActionBar } from "../components/BatchActionBar";
 import { FormatDialog } from "../components/FormatDialog";
 import { useSearchStore, useQueueStore } from "../lib/store";
+import { useSearchHistory } from "../hooks/useSearchHistory";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useKeyboardNavigation } from "../hooks/useKeyboardNavigation";
 import type { DownloadOptions, ViewMode } from "../types";
@@ -32,10 +33,20 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const providers = useSearchStore((s) => s.providers);
     const startDownload = useQueueStore((s) => s.startDownload);
 
+    const { addEntry } = useSearchHistory();
     const isOnline = useOnlineStatus();
 
     const [formatDialogUrl, setFormatDialogUrl] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+
+    // Record search history when results arrive
+    useEffect(() => {
+        if (status === "results" && query.trim() !== "" && site !== "") {
+            const displayName =
+                providers.find((p) => p.name === site)?.display_name ?? site;
+            addEntry({ query, site, siteDisplayName: displayName, filters: [] });
+        }
+    }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleDownload = useCallback(
         (url: string) => { void startDownload(url); },

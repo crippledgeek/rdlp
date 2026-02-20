@@ -34,6 +34,13 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
         }
     }, [activeTab, inputRef]);
 
+    // Listen for Ctrl+K custom event to focus the input
+    useEffect(() => {
+        const handler = () => inputRef.current?.focus();
+        window.addEventListener("rdlp-focus-search", handler);
+        return () => window.removeEventListener("rdlp-focus-search", handler);
+    }, [inputRef]);
+
     const isDisabled = status === "loading" || query.trim() === "";
 
     const handleSubmit = (e: React.FormEvent) => {

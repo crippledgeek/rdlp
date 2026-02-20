@@ -3,7 +3,7 @@
 // Stores the last 30 searches grouped by site. Supports add, remove,
 // clear, and restore operations. Deduplicates by query+site.
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "rdlp-search-history";
 const MAX_ENTRIES = 30;
@@ -25,13 +25,22 @@ function emitChange() {
     }
 }
 
+// Cached snapshot to avoid infinite re-renders from useSyncExternalStore.
+// JSON.parse() returns a new reference each call; we cache by raw string.
+const EMPTY: SearchHistoryEntry[] = [];
+let cachedRaw: string | null = null;
+let cachedEntries: SearchHistoryEntry[] = EMPTY;
+
 function getSnapshot(): SearchHistoryEntry[] {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw) as SearchHistoryEntry[];
+        if (!raw) return EMPTY;
+        if (raw === cachedRaw) return cachedEntries;
+        cachedRaw = raw;
+        cachedEntries = JSON.parse(raw) as SearchHistoryEntry[];
+        return cachedEntries;
     } catch {
-        return [];
+        return EMPTY;
     }
 }
 
@@ -97,7 +106,7 @@ export function useSearchHistory() {
         save([]);
     }, []);
 
-    const grouped = groupBySite(entries);
+    const grouped = useMemo(() => groupBySite(entries), [entries]);
 
     return { entries, grouped, addEntry, removeEntry, clearAll };
 }
