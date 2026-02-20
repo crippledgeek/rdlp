@@ -183,8 +183,22 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         }
         exprTimerRef.current = setTimeout(async () => {
             try {
-                const ids = formatData?.formats.map((f) => f.format_id) ?? [];
-                const matches = await api.validateFormatExpression(value, ids);
+                const fmts = formatData?.formats.map((f) => ({
+                    format_id: f.format_id,
+                    ext: f.ext,
+                    width: f.width,
+                    height: f.height,
+                    fps: f.fps,
+                    tbr: f.tbr,
+                    vcodec: f.vcodec,
+                    acodec: f.acodec,
+                    filesize: f.filesize,
+                    vbr: f.vbr,
+                    abr: f.abr,
+                    asr: f.asr,
+                    protocol: f.protocol,
+                })) ?? [];
+                const matches = await api.validateFormatExpression(value, fmts);
                 setExprMatches(new Set(matches));
                 setExprError(null);
             } catch (err) {

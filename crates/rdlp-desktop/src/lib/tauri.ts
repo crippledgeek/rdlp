@@ -143,10 +143,32 @@ export function onFormatSelected(
 /** Validate a format expression and return matching format IDs. */
 export async function validateFormatExpression(
     expression: string,
-    formatIds: string[],
+    formats: FormatData[],
 ): Promise<string[]> {
     return invoke<string[]>("validate_format_expression", {
         expression,
-        formatIds,
+        formats,
     });
+}
+
+/**
+ * Format metadata for expression validation.
+ *
+ * Mirrors the Rust `FormatData` struct. Sent to the backend so
+ * format filter predicates (e.g. `[height<=1080]`) can match.
+ */
+export interface FormatData {
+    format_id: string;
+    ext: string;
+    width: number | null;
+    height: number | null;
+    fps: number | null;
+    tbr: number | null;
+    vcodec: string | null;
+    acodec: string | null;
+    filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
 }

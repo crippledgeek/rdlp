@@ -111,8 +111,7 @@ pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
 ///
 /// Maps each relevant event variant to the appropriate frontend event
 /// name and payload. Events that have no frontend representation
-/// (e.g. `Started`, `FormatSelected`, `SubtitlesFound`) are silently
-/// ignored.
+/// (e.g. `Started`, `SubtitlesFound`) are silently ignored.
 ///
 /// # Arguments
 ///

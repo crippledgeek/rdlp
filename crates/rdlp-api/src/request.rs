@@ -187,6 +187,8 @@ pub struct PostProcessOptions {
     pub loudnorm: Option<bool>,
     /// Loudness normalization preset name (e.g. `"streaming"`).
     pub loudnorm_preset: Option<String>,
+    /// Recode (transcode) video into a different container format.
+    pub recode_video: Option<ContainerFormat>,
 }
 
 /// Network, retry, and cookie options.
@@ -261,6 +263,7 @@ mod tests {
         assert!(req.postprocess.normalize_audio.is_none());
         assert!(req.postprocess.loudnorm.is_none());
         assert!(req.postprocess.loudnorm_preset.is_none());
+        assert!(req.postprocess.recode_video.is_none());
 
         // NetworkOptions defaults
         assert!(req.network.retries.is_none());

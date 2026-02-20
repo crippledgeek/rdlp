@@ -130,6 +130,7 @@ pub async fn start_download(
         postprocess: PostProcessOptions {
             remux,
             extract_audio,
+            recode_video: options.recode_video,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             ..PostProcessOptions::default()
