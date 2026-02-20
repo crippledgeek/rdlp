@@ -89,7 +89,7 @@ impl RdlpClient {
         let (tx, rx) = mpsc::channel::<Event>(256);
         let cancel_token = CancellationToken::new();
 
-        let config = self.build_config(&request);
+        let config = Arc::new(self.build_config(&request));
         let interactive_flag = request.format.interactive;
         let url = request.url.clone();
         let interactive_cb = self.interactive.clone();
@@ -164,9 +164,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator
             .load_cookies()
             .await
@@ -198,10 +197,14 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator =
-            Orchestrator::new(config, tx, id, cancel_token, self.interactive.clone());
+        let orchestrator = Orchestrator::new(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            self.interactive.clone(),
+        );
         orchestrator
             .load_cookies()
             .await
@@ -218,9 +221,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator
             .list_extractors()
             .into_iter()
@@ -237,9 +239,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator
             .list_search_extractors()
             .into_iter()
@@ -264,9 +265,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator
             .search_filters(site)
             .map_err(|e| RdlpApiError::InvalidInput {
@@ -294,9 +294,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator.search(site, query).await.map_err(Into::into)
     }
 
@@ -318,9 +317,8 @@ impl RdlpClient {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
-        let config = (*self.config).clone();
 
-        let orchestrator = Orchestrator::new(config, tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
         orchestrator
             .list_downloaders()
             .into_iter()
