@@ -24,8 +24,16 @@ export function SettingsPage() {
         return <div className="status-message">Loading settings...</div>;
     }
 
+    const [saveError, setSaveError] = useState<string | null>(null);
+
     const handleSave = async () => {
-        await updateSettings(draft);
+        try {
+            setSaveError(null);
+            await updateSettings(draft);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setSaveError(msg);
+        }
     };
 
     const handlePickDir = async () => {
@@ -196,6 +204,10 @@ export function SettingsPage() {
                     Verbose logging
                 </label>
             </div>
+
+            {saveError && (
+                <div className="settings-error">{saveError}</div>
+            )}
 
             <button className="save-btn" onClick={handleSave}>
                 Save Settings

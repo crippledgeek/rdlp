@@ -13,6 +13,7 @@ import {
     setSearchParam,
 } from "./stores/searchParamsStore";
 import { searchQueryOptions } from "./api/search";
+import { queryKeys } from "./query/queryKeys";
 import { downloadsQueryOptions } from "./api/downloads";
 import type { SearchFilter, ViewMode } from "./types";
 
@@ -80,7 +81,7 @@ function AppContent() {
             // Invalidate the search query to trigger a re-fetch after atom updates propagate
             setTimeout(() => {
                 void queryClient.invalidateQueries({
-                    queryKey: ["search"],
+                    queryKey: queryKeys.search(restoredQuery, restoredSite, restoredFilters),
                     refetchType: "all",
                 });
             }, 0);
