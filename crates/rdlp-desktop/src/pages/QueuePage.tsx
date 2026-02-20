@@ -1,18 +1,18 @@
-import { useEffect } from "react";
-import { useQueueStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
 import { JobCard } from "../components/JobCard";
+import {
+    downloadsQueryOptions,
+    cancelDownload,
+    removeJob,
+    startDownload,
+    buildDefaultOptions,
+} from "../api/downloads";
+import { settingsQueryOptions } from "../api/settings";
 
 /** Download queue page showing active and completed jobs. */
 export function QueuePage() {
-    const jobs = useQueueStore((s) => s.jobs);
-    const refreshQueue = useQueueStore((s) => s.refreshQueue);
-    const cancelDownload = useQueueStore((s) => s.cancelDownload);
-    const removeJob = useQueueStore((s) => s.removeJob);
-    const startDownload = useQueueStore((s) => s.startDownload);
-
-    useEffect(() => {
-        void refreshQueue();
-    }, [refreshQueue]);
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+    const { data: settings = null } = useQuery(settingsQueryOptions());
 
     const handleCancel = (id: string) => {
         void cancelDownload(id);
@@ -23,7 +23,8 @@ export function QueuePage() {
     };
 
     const handleRetry = (url: string) => {
-        void startDownload(url);
+        const options = buildDefaultOptions(settings);
+        void startDownload(url, options);
     };
 
     const activeJobs = jobs.filter(

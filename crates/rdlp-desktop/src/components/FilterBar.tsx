@@ -2,7 +2,10 @@
 // Compact 28px controls with active-state highlighting.
 
 import { useEffect, useState } from "react";
-import { useSearchStore } from "../lib/store";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { searchParamsAtom } from "../stores/searchParamsStore";
+import { filtersQueryOptions, searchQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
 
 const DEFAULT_FILTER_KEYS = new Set([
@@ -17,37 +20,46 @@ function isFilterActive(value: string, defaultValue: string | null): boolean {
 
 /** Compact chip-styled filter bar with default + advanced filters. */
 export function FilterBar() {
-    const filters = useSearchStore((s) => s.filters);
-    const setFilters = useSearchStore((s) => s.setFilters);
-    const filterDescriptors = useSearchStore((s) => s.filterDescriptors);
-    const loadFilters = useSearchStore((s) => s.loadFilters);
-    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
-    const search = useSearchStore((s) => s.search);
-    const status = useSearchStore((s) => s.status);
-    const site = useSearchStore((s) => s.site);
-    const query = useSearchStore((s) => s.query);
-    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const hasUserFilters = useStore(searchParamsAtom, (s) => s.hasUserFilters);
+
+    const { data: filterDescriptors = [] } = useQuery(filtersQueryOptions(site));
+    const { isFetching, data: searchData, refetch } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
 
     const [showAdvanced, setShowAdvanced] = useState(false);
 
-    // Load filter descriptors when site changes
+    // Reset filters to defaults when filter descriptors change (new site)
     useEffect(() => {
-        if (site !== "") {
-            void loadFilters(site);
+        if (filterDescriptors.length === 0) return;
+        const defaults: SearchFilter[] = [];
+        for (const desc of filterDescriptors) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
         }
-    }, [site, loadFilters]);
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: defaults,
+            hasUserFilters: false,
+        }));
+    }, [filterDescriptors]);
 
     // Reset advanced panel on site change
     useEffect(() => {
         setShowAdvanced(false);
     }, [site]);
 
-    // Auto-search when filters change (only if results are showing)
+    // Auto-search when filters change (only if results are already showing)
     useEffect(() => {
         if (!hasUserFilters) return;
-        if (status !== "results" && status !== "empty") return;
+        // Only auto-search if a search has already been performed
+        if (searchData === undefined) return;
         if (query.trim() === "" || site === "") return;
-        void search();
+        void refetch();
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFilterChange = (key: string, value: string) => {
@@ -55,7 +67,25 @@ export function FilterBar() {
         if (value !== "") {
             updated.push({ key, value });
         }
-        setFilters(updated);
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: updated,
+            hasUserFilters: true,
+        }));
+    };
+
+    const resetFiltersToDefaults = () => {
+        const defaults: SearchFilter[] = [];
+        for (const desc of filterDescriptors) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
+        }
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: defaults,
+            hasUserFilters: false,
+        }));
     };
 
     const getFilterValue = (key: string): string => {
@@ -86,7 +116,7 @@ export function FilterBar() {
                             className={`filter-chip${active ? " filter-chip-active" : ""}`}
                             value={value}
                             onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                            disabled={status === "loading"}
+                            disabled={isFetching}
                             aria-label={desc.display_name}
                         >
                             <option value="">
@@ -151,7 +181,7 @@ export function FilterBar() {
                                     className={`filter-chip${active ? " filter-chip-active" : ""}`}
                                     value={value}
                                     onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                                    disabled={status === "loading"}
+                                    disabled={isFetching}
                                     aria-label={desc.display_name}
                                 >
                                     <option value="">Any</option>

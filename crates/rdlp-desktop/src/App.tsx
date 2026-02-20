@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-store";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
-import { useQueueStore, useSearchStore } from "./lib/store";
+import { queryClient } from "./query/queryClient";
+import { registerDownloadEvents } from "./events/registerDownloadEvents";
 import {
-    onDownloadProgress,
-    onDownloadComplete,
-    onDownloadError,
-    onDownloadLog,
-    onFormatSelected,
-} from "./lib/tauri";
+    searchParamsAtom,
+    setSearchParam,
+} from "./stores/searchParamsStore";
+import { searchQueryOptions } from "./api/search";
+import { queryKeys } from "./query/queryKeys";
+import { downloadsQueryOptions } from "./api/downloads";
 import type { SearchFilter, ViewMode } from "./types";
 
 type Tab = "search" | "queue" | "settings";
@@ -19,7 +22,8 @@ type Tab = "search" | "queue" | "settings";
 const VIEW_MODE_KEY = "rdlp-view-mode";
 const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
 
-function App() {
+/** Inner component that uses hooks requiring QueryClientProvider. */
+function AppContent() {
     const [activeTab, setActiveTab] = useState<Tab>("search");
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         return localStorage.getItem(SIDEBAR_KEY) === "true";
@@ -29,9 +33,18 @@ function App() {
     });
     const [searchDuration, setSearchDuration] = useState<number | null>(null);
 
-    const jobs = useQueueStore((s) => s.jobs);
-    const results = useSearchStore((s) => s.results);
-    const status = useSearchStore((s) => s.status);
+    // --- TanStack Store: search form state ---
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+
+    // --- TanStack Query: server state ---
+    const { isFetching, data: searchData } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+
+    const results = searchData?.results ?? [];
 
     const activeCount = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
@@ -55,29 +68,42 @@ function App() {
     // Restore search from sidebar history
     const handleRestoreSearch = useCallback(
         (restoredQuery: string, restoredSite: string, restoredFilters: SearchFilter[]) => {
-            const store = useSearchStore.getState();
-            store.setQuery(restoredQuery);
-            store.setSite(restoredSite);
-            if (restoredFilters.length > 0) store.setFilters(restoredFilters);
+            setSearchParam("query", restoredQuery);
+            setSearchParam("site", restoredSite);
+            if (restoredFilters.length > 0) {
+                searchParamsAtom.setState((prev) => ({
+                    ...prev,
+                    filters: restoredFilters,
+                    hasUserFilters: true,
+                }));
+            }
             setActiveTab("search");
-            setTimeout(() => { void store.search(); }, 0);
+            // Invalidate the search query to trigger a re-fetch after atom updates propagate
+            setTimeout(() => {
+                void queryClient.invalidateQueries({
+                    queryKey: queryKeys.search(restoredQuery, restoredSite, restoredFilters),
+                    refetchType: "all",
+                });
+            }, 0);
         },
         [],
     );
 
-    // Track search duration
+    // Track search duration via isFetching transitions
+    const searchStartRef = useRef<number | null>(null);
     useEffect(() => {
-        if (status === "loading") {
-            const start = Date.now();
-            const unsub = useSearchStore.subscribe((state) => {
-                if (state.status !== "loading") {
-                    setSearchDuration(Date.now() - start);
-                    unsub();
-                }
-            });
-            return unsub;
+        if (isFetching) {
+            searchStartRef.current = Date.now();
+        } else if (searchStartRef.current !== null) {
+            setSearchDuration(Date.now() - searchStartRef.current);
+            searchStartRef.current = null;
         }
-    }, [status]);
+    }, [isFetching]);
+
+    // Register all Tauri download event listeners (single wiring point)
+    useEffect(() => {
+        return registerDownloadEvents(queryClient);
+    }, []);
 
     // Global keyboard shortcuts
     useEffect(() => {
@@ -116,52 +142,6 @@ function App() {
         document.addEventListener("keydown", handler);
         return () => document.removeEventListener("keydown", handler);
     }, [toggleSidebar, handleViewModeChange, viewMode]);
-
-    // Tauri event listeners (unchanged from original)
-    useEffect(() => {
-        let mounted = true;
-        const unlisteners: Array<() => void> = [];
-
-        const setup = async () => {
-            const unProgress = await onDownloadProgress((payload) => {
-                useQueueStore.getState().updateJobFromProgress(
-                    payload.jobId, payload.progress, payload.speed, payload.eta,
-                );
-            });
-            if (!mounted) { unProgress(); return; }
-            unlisteners.push(unProgress);
-
-            const unComplete = await onDownloadComplete((payload) => {
-                useQueueStore.getState().markJobCompleted(payload.jobId, payload.filepath);
-            });
-            if (!mounted) { unComplete(); return; }
-            unlisteners.push(unComplete);
-
-            const unError = await onDownloadError((payload) => {
-                useQueueStore.getState().markJobFailed(payload.jobId, payload.error, payload.retryable);
-            });
-            if (!mounted) { unError(); return; }
-            unlisteners.push(unError);
-
-            const unLog = await onDownloadLog((payload) => {
-                useQueueStore.getState().updateJobStatus(payload.jobId, payload.message);
-            });
-            if (!mounted) { unLog(); return; }
-            unlisteners.push(unLog);
-
-            const unFormatSelected = await onFormatSelected((payload) => {
-                useQueueStore.getState().updateJobStatus(payload.jobId, `Format: ${payload.quality}`);
-            });
-            if (!mounted) { unFormatSelected(); return; }
-            unlisteners.push(unFormatSelected);
-        };
-
-        void setup();
-        return () => {
-            mounted = false;
-            for (const unlisten of unlisteners) unlisten();
-        };
-    }, []);
 
     return (
         <div className="app">
@@ -226,6 +206,15 @@ function App() {
                 onSwitchToQueue={() => setActiveTab("queue")}
             />
         </div>
+    );
+}
+
+/** Root component — provides QueryClient to the entire tree. */
+function App() {
+    return (
+        <QueryClientProvider client={queryClient}>
+            <AppContent />
+        </QueryClientProvider>
     );
 }
 

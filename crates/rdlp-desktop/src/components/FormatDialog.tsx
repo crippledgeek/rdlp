@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueueStore, useSettingsStore } from "../lib/store";
-import * as api from "../lib/tauri";
+import { useQuery } from "@tanstack/react-query";
+import { formatsQueryOptions } from "../api/formats";
+import { settingsQueryOptions } from "../api/settings";
+import { invokeTyped } from "../api/invokeClient";
 import { FormatOptionsPanel, PRESETS } from "./FormatOptionsPanel";
 import type {
     DownloadOptions,
@@ -89,11 +91,15 @@ function sortFormats(formats: FormatInfo[], key: SortKey, dir: SortDir): FormatI
 
 /** Full-screen modal for format selection, presets, options, and expert mode. */
 export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
-    const loadFormats = useQueueStore((s) => s.loadFormats);
-    const clearFormats = useQueueStore((s) => s.clearFormats);
-    const formatData = useQueueStore((s) => s.selectedFormat);
-    const isLoading = useQueueStore((s) => s.formatDialogLoading);
-    const settings = useSettingsStore((s) => s.settings);
+    // --- TanStack Query: server state ---
+    const {
+        data: formatData,
+        isPending: isLoading,
+        isError: isQueryError,
+        error: queryError,
+        refetch,
+    } = useQuery(formatsQueryOptions(url));
+    const { data: settings = null } = useQuery(settingsQueryOptions());
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [mergeId, setMergeId] = useState<string | null>(null);
@@ -120,16 +126,19 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     const dialogRef = useRef<HTMLDivElement>(null);
     const exprTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Load formats on mount
+    // Surface query-level errors in local state
     useEffect(() => {
-        loadFormats(url).catch((err) => {
-            setError(err instanceof Error ? err.message : String(err));
-        });
+        if (isQueryError && queryError) {
+            setError(queryError instanceof Error ? queryError.message : String(queryError));
+        }
+    }, [isQueryError, queryError]);
+
+    // Cleanup timer on unmount
+    useEffect(() => {
         return () => {
-            clearFormats();
             if (exprTimerRef.current) clearTimeout(exprTimerRef.current);
         };
-    }, [url, loadFormats, clearFormats]);
+    }, []);
 
     // Close on Escape
     useEffect(() => {
@@ -198,11 +207,19 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                     asr: f.asr,
                     protocol: f.protocol,
                 })) ?? [];
-                const matches = await api.validateFormatExpression(value, fmts);
+                const matches = await invokeTyped<string[]>(
+                    "validate_format_expression",
+                    { expression: value, formats: fmts },
+                );
                 setExprMatches(new Set(matches));
                 setExprError(null);
-            } catch (err) {
-                setExprError(err instanceof Error ? err.message : String(err));
+            } catch (err: unknown) {
+                const msg = err instanceof Error
+                    ? err.message
+                    : typeof err === "object" && err !== null && "message" in err
+                        ? String((err as { message: unknown }).message)
+                        : String(err);
+                setExprError(msg);
                 setExprMatches(new Set());
             }
         }, 400);
@@ -273,9 +290,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             <p>{error}</p>
                             <button onClick={() => {
                                 setError(null);
-                                loadFormats(url).catch((err) =>
-                                    setError(err instanceof Error ? err.message : String(err)),
-                                );
+                                void refetch();
                             }}>
                                 Retry
                             </button>
