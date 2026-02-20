@@ -63,11 +63,16 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
     return (
         <form className="flex items-center gap-1.5" onSubmit={handleSubmit} ref={formRef}>
             <select
-                className="h-9 px-2.5 pr-7 border border-border rounded-md bg-card text-foreground text-xs font-medium cursor-pointer appearance-none transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 bg-[length:10px_10px] bg-[position:right_8px_center] bg-no-repeat bg-[url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8d93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E&quot;)]"
+                className="h-9 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                 value={site}
                 onChange={(e) => handleSiteChange(e.target.value)}
                 disabled={isFetching}
                 aria-label="Search site"
+                style={{
+                    backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                    backgroundRepeat: "no-repeat",
+                    backgroundPosition: "right 8px center",
+                }}
             >
                 {providers.length === 0 && (
                     <option value="">Loading...</option>
@@ -83,14 +88,14 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                 <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none transition-colors group-focus-within:text-primary" />
                 <input
                     ref={inputRef}
-                    className="peer w-full py-[7px] pl-8 pr-[70px] border border-border rounded-md bg-card text-foreground text-[13px] transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                    className="peer w-full py-[7px] pl-8 pr-[70px] border border-input rounded-md bg-card text-foreground text-[13px] transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                     type="text"
                     placeholder="Search videos..."
                     value={query}
                     onChange={(e) => setSearchParam("query", e.target.value)}
                     disabled={isFetching}
                 />
-                <kbd className="absolute right-2 px-1.5 py-px rounded-sm bg-white/[0.04] border border-border text-muted-foreground font-mono text-[10px] pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
+                <kbd className="absolute right-2 px-1.5 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06] text-muted-foreground font-mono text-[10px] pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
             </div>
 
             <Button

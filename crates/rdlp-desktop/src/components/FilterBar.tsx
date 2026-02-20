@@ -184,30 +184,34 @@ export function FilterBar() {
             </div>
 
             {showAdvanced && advancedFilters.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-2.5 p-2.5 border-t border-border">
+                <div className="flex flex-wrap gap-2.5 mt-1.5 p-2.5 bg-card border border-border rounded-md animate-in fade-in duration-200">
                     {advancedFilters.map((desc) => {
                         const value = getFilterValue(desc.key);
                         const active = isFilterActive(value, desc.default);
                         return (
-                            <div key={desc.key} className="flex flex-col gap-1">
-                                <label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                            <div key={desc.key} className="flex flex-col gap-[3px]">
+                                <label className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">
                                     {desc.display_name}
                                 </label>
                                 <select
                                     className={cn(
-                                        "h-7 px-2.5 pr-6 border rounded-md bg-transparent text-muted-foreground text-[11px] font-medium cursor-pointer appearance-none transition-colors",
+                                        "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
                                         "hover:border-white/[0.08] hover:text-foreground/70",
-                                        "focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20",
+                                        "focus:outline-none focus:ring-1 focus:ring-ring",
                                         "disabled:opacity-40 disabled:cursor-not-allowed",
-                                        "bg-[length:8px_8px] bg-[position:right_8px_center] bg-no-repeat",
-                                        active
-                                            ? "border-primary/30 text-foreground bg-primary/[0.06] bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")]"
-                                            : "border-white/[0.04] bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='%2352545a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")]"
+                                        active && "border-primary/30 text-foreground bg-primary/[0.06]",
                                     )}
                                     value={value}
                                     onChange={(e) => handleFilterChange(desc.key, e.target.value)}
                                     disabled={isFetching}
                                     aria-label={desc.display_name}
+                                    style={{
+                                        backgroundImage: active
+                                            ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
+                                            : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                                        backgroundRepeat: "no-repeat",
+                                        backgroundPosition: "right 6px center",
+                                    }}
                                 >
                                     <option value="">Any</option>
                                     {desc.allowed_values.map((v) => (
