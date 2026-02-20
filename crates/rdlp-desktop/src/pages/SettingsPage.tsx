@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { useSettingsStore, useSearchStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { settingsQueryOptions, updateSettings, pickDirectory } from "../api/settings";
+import { providersQueryOptions } from "../api/search";
 import type {
     AppSettings,
     AudioFormat,
@@ -8,16 +10,9 @@ import type {
 } from "../types";
 
 export function SettingsPage() {
-    const { settings, loading, loadSettings, updateSettings, pickDirectory } =
-        useSettingsStore();
-    const providers = useSearchStore((s) => s.providers);
-    const loadProviders = useSearchStore((s) => s.loadProviders);
+    const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
+    const { data: providers = [] } = useQuery(providersQueryOptions());
     const [draft, setDraft] = useState<AppSettings | null>(null);
-
-    useEffect(() => {
-        loadSettings();
-        void loadProviders();
-    }, [loadSettings, loadProviders]);
 
     useEffect(() => {
         if (settings) {
@@ -25,7 +20,7 @@ export function SettingsPage() {
         }
     }, [settings]);
 
-    if (loading || !draft) {
+    if (settingsLoading || !draft) {
         return <div className="status-message">Loading settings...</div>;
     }
 
