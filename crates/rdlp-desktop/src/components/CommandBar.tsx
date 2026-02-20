@@ -4,8 +4,10 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
+import { Search, ArrowRight, Loader2 } from "lucide-react";
 import { searchParamsAtom, setSearchParam } from "../stores/searchParamsStore";
 import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { Button } from "@/components/ui/button";
 
 interface CommandBarProps {
     /** Ref exposed so keyboard nav can focus the input externally. */
@@ -59,9 +61,9 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
     };
 
     return (
-        <form className="command-bar" onSubmit={handleSubmit} ref={formRef}>
+        <form className="flex items-center gap-1.5" onSubmit={handleSubmit} ref={formRef}>
             <select
-                className="command-bar-site"
+                className="h-9 px-2.5 pr-7 border border-border rounded-md bg-card text-foreground text-xs font-medium cursor-pointer appearance-none transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 bg-[length:10px_10px] bg-[position:right_8px_center] bg-no-repeat bg-[url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238b8d93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E&quot;)]"
                 value={site}
                 onChange={(e) => handleSiteChange(e.target.value)}
                 disabled={isFetching}
@@ -77,47 +79,32 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                 ))}
             </select>
 
-            <div className="command-bar-input-wrapper">
-                <svg
-                    className="command-bar-search-icon"
-                    viewBox="0 0 24 24" width="14" height="14"
-                    fill="none" stroke="currentColor"
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                >
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="M21 21l-4.3-4.3" />
-                </svg>
+            <div className="flex-1 relative flex items-center group">
+                <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none transition-colors group-focus-within:text-primary" />
                 <input
                     ref={inputRef}
-                    className="command-bar-input"
+                    className="peer w-full py-[7px] pl-8 pr-[70px] border border-border rounded-md bg-card text-foreground text-[13px] transition-colors placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                     type="text"
                     placeholder="Search videos..."
                     value={query}
                     onChange={(e) => setSearchParam("query", e.target.value)}
                     disabled={isFetching}
                 />
-                <kbd className="command-bar-shortcut">Ctrl+K</kbd>
+                <kbd className="absolute right-2 px-1.5 py-px rounded-sm bg-white/[0.04] border border-border text-muted-foreground font-mono text-[10px] pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
             </div>
 
-            <button
+            <Button
                 type="submit"
-                className="command-bar-submit"
                 disabled={isDisabled}
                 aria-label="Search"
+                className="h-9 w-9 shrink-0 p-0 bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-35"
             >
                 {isFetching ? (
-                    <span className="command-bar-spinner" />
+                    <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                    <svg
-                        viewBox="0 0 24 24" width="14" height="14"
-                        fill="none" stroke="currentColor"
-                        strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                    >
-                        <line x1="5" y1="12" x2="19" y2="12" />
-                        <polyline points="12 5 19 12 12 19" />
-                    </svg>
+                    <ArrowRight className="size-3.5" />
                 )}
-            </button>
+            </Button>
         </form>
     );
 }

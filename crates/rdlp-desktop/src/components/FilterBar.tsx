@@ -4,6 +4,9 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
+import { Settings, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { searchParamsAtom } from "../stores/searchParamsStore";
 import { filtersQueryOptions, searchQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
@@ -105,19 +108,32 @@ export function FilterBar() {
     if (filterDescriptors.length === 0) return null;
 
     return (
-        <div className="filter-bar">
-            <div className="filter-bar-chips">
+        <div className="pt-1.5">
+            <div className="flex items-center gap-1 flex-wrap">
                 {defaultFilters.map((desc) => {
                     const value = getFilterValue(desc.key);
                     const active = isFilterActive(value, desc.default);
                     return (
                         <select
                             key={desc.key}
-                            className={`filter-chip${active ? " filter-chip-active" : ""}`}
+                            className={cn(
+                                "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
+                                "hover:border-white/[0.08] hover:text-foreground/70",
+                                "focus:outline-none focus:ring-1 focus:ring-ring",
+                                "disabled:opacity-40 disabled:cursor-not-allowed",
+                                active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                            )}
                             value={value}
                             onChange={(e) => handleFilterChange(desc.key, e.target.value)}
                             disabled={isFetching}
                             aria-label={desc.display_name}
+                            style={{
+                                backgroundImage: active
+                                    ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
+                                    : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                                backgroundRepeat: "no-repeat",
+                                backgroundPosition: "right 6px center",
+                            }}
                         >
                             <option value="">
                                 {desc.display_name}
@@ -132,53 +148,62 @@ export function FilterBar() {
                 })}
 
                 {advancedFilters.length > 0 && (
-                    <button
+                    <Button
+                        variant="outline"
                         type="button"
-                        className={`filter-chip-toggle ${showAdvanced ? "active" : ""}`}
+                        className={cn(
+                            "h-7 px-2.5 gap-1 text-[11px] border-border/50 text-muted-foreground",
+                            showAdvanced && "border-primary text-primary bg-primary/10",
+                        )}
                         onClick={() => setShowAdvanced(!showAdvanced)}
                         aria-expanded={showAdvanced}
                         aria-label="Advanced filters"
                     >
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="3" />
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                        </svg>
+                        <Settings className="h-[11px] w-[11px]" />
                         {activeAdvancedCount > 0 && (
-                            <span className="filter-chip-badge">
+                            <span className="text-[10px] font-bold text-primary">
                                 +{activeAdvancedCount}
                             </span>
                         )}
-                    </button>
+                    </Button>
                 )}
 
                 {hasAnyActiveFilter && (
-                    <button
+                    <Button
+                        variant="ghost"
+                        size="icon"
                         type="button"
-                        className="filter-chip-reset"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
                         onClick={resetFiltersToDefaults}
                         aria-label="Reset all filters"
                         title="Reset all filters"
                     >
-                        <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 6L6 18" />
-                            <path d="M6 6l12 12" />
-                        </svg>
-                    </button>
+                        <X className="h-2.5 w-2.5" />
+                    </Button>
                 )}
             </div>
 
             {showAdvanced && advancedFilters.length > 0 && (
-                <div className="filter-bar-advanced">
+                <div className="mt-1.5 flex flex-wrap gap-2.5 p-2.5 border-t border-border">
                     {advancedFilters.map((desc) => {
                         const value = getFilterValue(desc.key);
                         const active = isFilterActive(value, desc.default);
                         return (
-                            <div key={desc.key} className="filter-bar-advanced-item">
-                                <label className="filter-bar-label">
+                            <div key={desc.key} className="flex flex-col gap-1">
+                                <label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                                     {desc.display_name}
                                 </label>
                                 <select
-                                    className={`filter-chip${active ? " filter-chip-active" : ""}`}
+                                    className={cn(
+                                        "h-7 px-2.5 pr-6 border rounded-md bg-transparent text-muted-foreground text-[11px] font-medium cursor-pointer appearance-none transition-colors",
+                                        "hover:border-white/[0.08] hover:text-foreground/70",
+                                        "focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20",
+                                        "disabled:opacity-40 disabled:cursor-not-allowed",
+                                        "bg-[length:8px_8px] bg-[position:right_8px_center] bg-no-repeat",
+                                        active
+                                            ? "border-primary/30 text-foreground bg-primary/[0.06] bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")]"
+                                            : "border-white/[0.04] bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 24 24' fill='none' stroke='%2352545a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")]"
+                                    )}
                                     value={value}
                                     onChange={(e) => handleFilterChange(desc.key, e.target.value)}
                                     disabled={isFetching}
