@@ -1,5 +1,14 @@
 import { useState } from "react";
 import { useSearchHistory } from "../hooks/useSearchHistory";
+import { cn } from "@/lib/utils";
+import {
+    Collapsible,
+    CollapsibleTrigger,
+    CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { ChevronDown, X } from "lucide-react";
 
 interface SidebarHistoryProps {
     onRestoreSearch: (query: string, site: string, filters: Array<{ key: string; value: string }>) => void;
@@ -10,40 +19,46 @@ export function SidebarHistory({ onRestoreSearch }: SidebarHistoryProps) {
     const [collapsed, setCollapsed] = useState(false);
 
     return (
-        <div className="sidebar-section">
-            <button
-                className="sidebar-section-header"
-                onClick={() => setCollapsed(!collapsed)}
-                aria-expanded={!collapsed}
-            >
-                <svg
-                    className={`sidebar-chevron ${collapsed ? "collapsed" : ""}`}
-                    viewBox="0 0 16 16" width="10" height="10"
-                    fill="currentColor"
+        <Collapsible
+            open={!collapsed}
+            onOpenChange={(open) => setCollapsed(!open)}
+            className="px-1 py-1"
+        >
+            <CollapsibleTrigger asChild>
+                <button
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-white/[0.04] transition-colors"
+                    aria-expanded={!collapsed}
                 >
-                    <path d="M4 6l4 4 4-4" />
-                </svg>
-                <span>HISTORY</span>
-            </button>
+                    <ChevronDown
+                        className={cn(
+                            "h-2.5 w-2.5 shrink-0 transition-transform",
+                            collapsed && "-rotate-90",
+                        )}
+                    />
+                    <span>History</span>
+                </button>
+            </CollapsibleTrigger>
 
-            {!collapsed && (
-                <div className="sidebar-section-content">
+            <CollapsibleContent>
+                <ScrollArea className="max-h-[300px]">
                     {grouped.length === 0 ? (
-                        <div className="sidebar-empty">No recent searches</div>
+                        <div className="py-1.5 text-center text-[11px] text-muted-foreground">
+                            No recent searches
+                        </div>
                     ) : (
-                        <>
+                        <div className="flex flex-col gap-0.5 py-0.5">
                             {grouped.map((group) => (
-                                <div key={group.site} className="sidebar-history-group">
-                                    <div className="sidebar-history-site">
+                                <div key={group.site}>
+                                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                                         {group.displayName}
                                     </div>
                                     {group.entries.map((entry) => (
                                         <div
                                             key={`${entry.site}-${entry.query}`}
-                                            className="sidebar-history-item"
+                                            className="group flex items-center gap-0.5"
                                         >
                                             <button
-                                                className="sidebar-history-query"
+                                                className="flex-1 truncate rounded-md px-2 py-1 text-left text-[11px] text-foreground transition-colors hover:bg-white/[0.04]"
                                                 onClick={() =>
                                                     onRestoreSearch(
                                                         entry.query,
@@ -56,29 +71,32 @@ export function SidebarHistory({ onRestoreSearch }: SidebarHistoryProps) {
                                                 &middot; &ldquo;{entry.query}&rdquo;
                                             </button>
                                             <button
-                                                className="sidebar-history-remove"
+                                                className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-white/[0.04] hover:text-foreground group-hover:opacity-100"
                                                 onClick={() =>
                                                     removeEntry(entry.query, entry.site)
                                                 }
                                                 aria-label={`Remove "${entry.query}"`}
                                                 title="Remove"
                                             >
-                                                &times;
+                                                <X className="h-3 w-3" />
                                             </button>
                                         </div>
                                     ))}
                                 </div>
                             ))}
+
+                            <Separator className="my-1" />
+
                             <button
-                                className="sidebar-clear-all"
+                                className="ml-auto rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
                                 onClick={clearAll}
                             >
                                 Clear All
                             </button>
-                        </>
+                        </div>
                     )}
-                </div>
-            )}
-        </div>
+                </ScrollArea>
+            </CollapsibleContent>
+        </Collapsible>
     );
 }
