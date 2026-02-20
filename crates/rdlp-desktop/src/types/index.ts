@@ -223,3 +223,6 @@ export interface AppError {
     kind: string;
     data: Record<string, unknown>;
 }
+
+/** View mode for search results display. */
+export type ViewMode = "list" | "grid";

@@ -1719,3 +1719,101 @@ body {
 .mono {
   font-family: "Space Mono", monospace;
 }
+
+/* ========== Status Bar ========== */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 var(--gap-lg);
+  background: var(--surface-0);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-2);
+  gap: var(--gap-lg);
+}
+
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar-left span {
+  font-family: "Space Mono", "SF Mono", monospace;
+}
+
+.status-bar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-bar-dot-error {
+  background: var(--status-failed);
+}
+
+.status-bar-error-text {
+  color: var(--status-failed);
+}
+
+.status-bar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.status-bar-downloads {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: "Space Mono", "SF Mono", monospace;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 var(--gap-sm);
+  transition: color var(--duration-fast);
+}
+
+.status-bar-downloads:hover {
+  color: var(--accent-hover);
+}
+
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.status-bar-view-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast),
+    background var(--duration-fast);
+}
+
+.status-bar-view-btn:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.status-bar-view-btn.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
