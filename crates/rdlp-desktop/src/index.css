@@ -72,12 +72,53 @@
 }
 
 @layer base {
-    * {
+    *,
+    *::before,
+    *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
         @apply border-border;
     }
+
+    html,
+    body,
+    #root {
+        height: 100%;
+        width: 100%;
+    }
+
     body {
         @apply bg-background text-foreground;
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        overflow: hidden;
     }
+
+    ::selection {
+        @apply bg-primary text-background;
+    }
+
+    :focus-visible {
+        @apply outline-2 outline-primary outline-offset-2;
+    }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: hsl(220 5% 16%);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: hsl(220 5% 20%);
 }
 
 @keyframes loading-sweep {

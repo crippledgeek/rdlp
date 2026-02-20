@@ -1,5 +1,6 @@
 // Rich idle state: recent searches + keyboard shortcuts + quick start chips.
 
+import { Search } from "lucide-react";
 import { useSearchHistory } from "../hooks/useSearchHistory";
 import { formatDistanceToNow } from "date-fns";
 
@@ -32,30 +33,29 @@ export function SearchIdleState({
     const recent = entries.slice(0, 5);
 
     return (
-        <div className="idle-state">
-            <div className="idle-state-columns">
-                <div className="idle-state-section">
-                    <h3 className="idle-state-heading">Recent Searches</h3>
+        <div className="p-6">
+            <div className="grid grid-cols-[1.2fr_1fr] gap-6 mb-6">
+                <div>
+                    <h3 className="text-[10px] font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
+                        Recent Searches
+                    </h3>
                     {recent.length === 0 ? (
-                        <p className="idle-state-empty-text">No recent searches</p>
+                        <p className="text-muted-foreground text-xs">No recent searches</p>
                     ) : (
-                        <div className="idle-state-recents">
+                        <div className="flex flex-col gap-0.5">
                             {recent.map((entry) => (
                                 <button
                                     key={`${entry.site}-${entry.query}`}
-                                    className="idle-state-recent"
+                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm bg-transparent border-none cursor-pointer text-left w-full transition-colors text-foreground hover:bg-card"
                                     onClick={() =>
                                         onRestoreSearch(entry.query, entry.site, entry.filters)
                                     }
                                 >
-                                    <svg className="idle-state-recent-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <circle cx="11" cy="11" r="8" />
-                                        <path d="M21 21l-4.3-4.3" />
-                                    </svg>
-                                    <span className="idle-state-recent-query">
+                                    <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                    <span className="text-[13px] font-medium truncate">
                                         &ldquo;{entry.query}&rdquo;
                                     </span>
-                                    <span className="idle-state-recent-meta">
+                                    <span className="text-[11px] text-muted-foreground whitespace-nowrap ml-auto">
                                         {entry.siteDisplayName} &middot;{" "}
                                         {formatDistanceToNow(entry.timestamp, { addSuffix: true })}
                                     </span>
@@ -65,12 +65,16 @@ export function SearchIdleState({
                     )}
                 </div>
 
-                <div className="idle-state-section">
-                    <h3 className="idle-state-heading">Keyboard Shortcuts</h3>
-                    <div className="idle-state-shortcuts">
+                <div>
+                    <h3 className="text-[10px] font-semibold text-muted-foreground tracking-wider uppercase mb-2.5">
+                        Keyboard Shortcuts
+                    </h3>
+                    <div className="flex flex-col gap-1">
                         {SHORTCUTS.map((s) => (
-                            <div key={s.keys} className="idle-state-shortcut">
-                                <kbd className="idle-state-kbd">{s.keys}</kbd>
+                            <div key={s.keys} className="flex items-center gap-2.5 text-xs text-muted-foreground">
+                                <kbd className="inline-block min-w-16 px-1.5 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06] font-mono text-[10px] text-muted-foreground text-center">
+                                    {s.keys}
+                                </kbd>
                                 <span>{s.desc}</span>
                             </div>
                         ))}
@@ -78,12 +82,12 @@ export function SearchIdleState({
                 </div>
             </div>
 
-            <div className="idle-state-quickstart">
-                <span className="idle-state-quickstart-label">Try:</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs text-muted-foreground">Try:</span>
                 {QUICK_QUERIES.map((q) => (
                     <button
                         key={q}
-                        className="idle-state-chip"
+                        className="px-3 py-1 border border-white/[0.06] rounded-md bg-transparent text-muted-foreground text-xs cursor-pointer transition-colors hover:border-primary hover:text-primary hover:bg-primary/[0.12]"
                         onClick={() => onQuickSearch(q)}
                     >
                         {q}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
+import { Search, Download, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -15,12 +16,19 @@ import {
 import { searchQueryOptions } from "./api/search";
 import { queryKeys } from "./query/queryKeys";
 import { downloadsQueryOptions } from "./api/downloads";
+import { cn } from "@/lib/utils";
 import type { SearchFilter, ViewMode } from "./types";
 
 type Tab = "search" | "queue" | "settings";
 
 const VIEW_MODE_KEY = "rdlp-view-mode";
 const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
+
+const TAB_CONFIG = [
+    { id: "search" as const, label: "Search", icon: Search },
+    { id: "queue" as const, label: "Queue", icon: Download },
+    { id: "settings" as const, label: "Settings", icon: Settings },
+] as const;
 
 /** Inner component that uses hooks requiring QueryClientProvider. */
 function AppContent() {
@@ -144,52 +152,44 @@ function AppContent() {
     }, [toggleSidebar, handleViewModeChange, viewMode]);
 
     return (
-        <div className="app">
-            <nav className="tab-bar">
-                <button
-                    className={`tab-button ${activeTab === "search" ? "active" : ""}`}
-                    onClick={() => setActiveTab("search")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="11" cy="11" r="8" />
-                        <path d="M21 21l-4.3-4.3" />
-                    </svg>
-                    Search
-                </button>
-                <button
-                    className={`tab-button ${activeTab === "queue" ? "active" : ""}`}
-                    onClick={() => setActiveTab("queue")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    Queue
-                    {activeCount > 0 && (
-                        <span className="tab-badge">{activeCount}</span>
-                    )}
-                </button>
-                <button
-                    className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
-                    onClick={() => setActiveTab("settings")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                    Settings
-                </button>
+        <div className="flex flex-col h-full bg-background">
+            <nav
+                className="flex items-center gap-0.5 px-3 bg-background border-b border-border shrink-0 h-12"
+                style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+            >
+                {TAB_CONFIG.map(({ id, label, icon: Icon }) => (
+                    <button
+                        key={id}
+                        className={cn(
+                            "flex items-center gap-1.5 px-3 h-full border-none bg-transparent text-muted-foreground text-[13px] font-medium tracking-wide cursor-pointer relative transition-colors select-none",
+                            "hover:text-foreground/70",
+                            activeTab === id && "text-foreground",
+                        )}
+                        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                        onClick={() => setActiveTab(id)}
+                    >
+                        <Icon className={cn("h-4 w-4 opacity-60 transition-opacity", activeTab === id && "opacity-100")} />
+                        {label}
+                        {id === "queue" && activeCount > 0 && (
+                            <span className="min-w-[18px] h-[18px] px-[5px] rounded-full bg-primary text-background text-[10px] font-bold font-mono flex items-center justify-center">
+                                {activeCount}
+                            </span>
+                        )}
+                        {activeTab === id && (
+                            <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary rounded-t-sm animate-in fade-in zoom-in-x-0 duration-200" />
+                        )}
+                    </button>
+                ))}
             </nav>
 
-            <div className="app-body">
+            <div className="flex flex-1 overflow-hidden">
                 <Sidebar
                     collapsed={sidebarCollapsed}
                     onSwitchToQueue={() => setActiveTab("queue")}
                     onRestoreSearch={handleRestoreSearch}
                 />
 
-                <main className="content">
+                <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 scroll-smooth min-w-0">
                     {activeTab === "search" && (
                         <SearchPage activeTab={activeTab} viewMode={viewMode} />
                     )}

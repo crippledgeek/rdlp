@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { AudioFormat, ContainerFormat, DownloadOptions } from "../types";
 
 /** A format preset with a human-readable label and yt-dlp selector string. */
@@ -85,18 +87,29 @@ export function FormatOptionsPanel({
     };
 
     return (
-        <div className="format-options-panel">
+        <div className="flex flex-col gap-1.5">
             {!hidePresets && (
-                <div className="options-popover-section">
-                    <div className="options-popover-label">Quality Preset</div>
-                    <div className="preset-radio-group">
+                <div className="flex flex-col gap-1">
+                    <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Quality Preset</div>
+                    <div className="flex flex-wrap gap-1">
                         {PRESETS.map((p) => (
-                            <label key={p.id}>
+                            <label
+                                key={p.id}
+                                className={cn(
+                                    "inline-flex items-center gap-[5px] px-2.5 py-[5px] border border-white/[0.06] rounded-sm bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
+                                    "hover:border-white/[0.12] hover:text-foreground",
+                                    currentPreset === p.id && "border-primary text-primary bg-primary/[0.12]",
+                                )}
+                            >
                                 <input
                                     type="radio"
                                     name="preset"
                                     checked={currentPreset === p.id}
                                     onChange={() => handlePreset(p)}
+                                    className={cn(
+                                        "appearance-none w-3 h-3 border-2 border-muted rounded-full bg-muted cursor-pointer shrink-0 relative transition-colors",
+                                        currentPreset === p.id && "border-primary bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-1 after:h-1 after:rounded-full after:bg-background",
+                                    )}
                                 />
                                 {p.label}
                             </label>
@@ -105,12 +118,17 @@ export function FormatOptionsPanel({
                 </div>
             )}
 
-            <div className="options-popover-section">
-                <div className="options-popover-label">Remux</div>
+            <div className="flex flex-col gap-1">
+                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Remux</div>
                 <select
-                    className="filter-select"
+                    className="h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={value.remux ?? ""}
                     onChange={(e) => handleRemux(e.target.value)}
+                    style={{
+                        backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                        backgroundRepeat: "no-repeat",
+                        backgroundPosition: "right 8px center",
+                    }}
                 >
                     <option value="">None</option>
                     {REMUX_OPTIONS.map((o) => (
@@ -121,12 +139,17 @@ export function FormatOptionsPanel({
                 </select>
             </div>
 
-            <div className="options-popover-section">
-                <div className="options-popover-label">Extract Audio</div>
+            <div className="flex flex-col gap-1">
+                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Extract Audio</div>
                 <select
-                    className="filter-select"
+                    className="h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={value.extractAudio ?? ""}
                     onChange={(e) => handleAudio(e.target.value)}
+                    style={{
+                        backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                        backgroundRepeat: "no-repeat",
+                        backgroundPosition: "right 8px center",
+                    }}
                 >
                     <option value="">None</option>
                     {AUDIO_OPTIONS.map((o) => (
@@ -137,20 +160,19 @@ export function FormatOptionsPanel({
                 </select>
             </div>
 
-            <div className="options-popover-section">
-                <label className="options-popover-label" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <input
-                        type="checkbox"
+            <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer">
+                    <Checkbox
                         checked={value.subtitles}
-                        onChange={(e) => handleSubtitles(e.target.checked)}
+                        onCheckedChange={(checked) => handleSubtitles(checked === true)}
                     />
                     Download Subtitles
                 </label>
                 {value.subtitles && (
-                    <div style={{ marginTop: "6px" }}>
+                    <div className="mt-1.5">
                         {availableSubtitleLangs.length > 0 ? (
                             <select
-                                className="filter-select"
+                                className="h-auto min-h-[60px] w-full rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                                 multiple
                                 value={value.subtitleLangs}
                                 onChange={(e) => {
@@ -160,7 +182,6 @@ export function FormatOptionsPanel({
                                     );
                                     onChange({ ...value, subtitleLangs: selected });
                                 }}
-                                style={{ minHeight: "60px", width: "100%" }}
                             >
                                 {availableSubtitleLangs.map((lang) => (
                                     <option key={lang} value={lang}>
@@ -170,25 +191,23 @@ export function FormatOptionsPanel({
                             </select>
                         ) : (
                             <input
-                                className="format-expr-input"
+                                className="w-full py-[7px] px-2.5 border border-input rounded-md bg-muted text-foreground font-mono text-xs transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                                 type="text"
                                 placeholder="en,sv,ja"
                                 value={value.subtitleLangs.join(",")}
                                 onChange={(e) => handleSubLangs(e.target.value)}
-                                style={{ fontSize: "12px", padding: "7px 10px" }}
                             />
                         )}
                     </div>
                 )}
             </div>
 
-            <div className="options-popover-section">
-                <label className="options-popover-label" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <input
-                        type="checkbox"
+            <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer">
+                    <Checkbox
                         checked={value.embedThumbnail}
-                        onChange={(e) =>
-                            onChange({ ...value, embedThumbnail: e.target.checked })
+                        onCheckedChange={(checked) =>
+                            onChange({ ...value, embedThumbnail: checked === true })
                         }
                     />
                     Embed Thumbnail

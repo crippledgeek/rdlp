@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { X, Loader2 } from "lucide-react";
 import { formatsQueryOptions } from "../api/formats";
 import { settingsQueryOptions } from "../api/settings";
 import { invokeTyped } from "../api/invokeClient";
 import { FormatOptionsPanel, PRESETS } from "./FormatOptionsPanel";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { cn } from "@/lib/utils";
 import type {
     DownloadOptions,
     FormatInfo,
@@ -41,12 +46,12 @@ function formatResolution(f: FormatInfo): string {
     return f.format_note ?? "-";
 }
 
-/** Type badge label. */
+/** Type badge label and classes. */
 function formatType(f: FormatInfo): { label: string; className: string } {
-    if (f.protocol.includes("m3u8")) return { label: "HLS", className: "format-type-hls" };
-    if (f.has_video && f.has_audio) return { label: "V+A", className: "format-type-av" };
-    if (f.has_video) return { label: "Video", className: "format-type-video" };
-    return { label: "Audio", className: "format-type-audio" };
+    if (f.protocol.includes("m3u8")) return { label: "HLS", className: "bg-yellow-500/[0.12] text-yellow-500" };
+    if (f.has_video && f.has_audio) return { label: "V+A", className: "bg-primary/[0.12] text-primary" };
+    if (f.has_video) return { label: "Video", className: "bg-blue-500/[0.12] text-blue-400" };
+    return { label: "Audio", className: "bg-purple-500/[0.12] text-purple-400" };
 }
 
 /** Compare helper for sorting nullable fields. */
@@ -255,61 +260,80 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         : null;
 
     return (
-        <div className="format-dialog-overlay" onClick={handleBackdropClick}>
-            <div className="format-dialog" ref={dialogRef}>
-                <div className="format-dialog-header">
-                    <span className="format-dialog-title">
+        <div
+            className="fixed inset-0 bg-black/65 backdrop-blur-sm flex items-center justify-center z-[100] animate-in fade-in"
+            onClick={handleBackdropClick}
+        >
+            <div
+                className="w-[90vw] max-w-[860px] max-h-[85vh] bg-card border border-white/[0.06] rounded-lg shadow-[0_24px_72px_rgba(0,0,0,0.6)] flex flex-col animate-in fade-in-0 zoom-in-95"
+                ref={dialogRef}
+            >
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                    <span className="text-[15px] font-bold text-foreground truncate flex-1">
                         {formatData?.title ?? "Choose Format"}
                     </span>
-                    <button
-                        className="format-dialog-close"
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
                         onClick={onClose}
                         aria-label="Close"
                     >
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                    </button>
+                        <X className="h-[18px] w-[18px]" />
+                    </Button>
                 </div>
 
-                <div className="format-dialog-body">
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
                     {isLoading && (
-                        <div className="status-message">
-                            <div className="loading-dots">
-                                <span />
-                                <span />
-                                <span />
-                            </div>
+                        <div className="flex flex-col items-center justify-center gap-2.5 py-8 text-muted-foreground">
+                            <Loader2 className="h-6 w-6 animate-spin" />
                             <p>Loading formats...</p>
                         </div>
                     )}
 
                     {error && (
-                        <div className="error-banner">
-                            <p>{error}</p>
-                            <button onClick={() => {
-                                setError(null);
-                                void refetch();
-                            }}>
-                                Retry
-                            </button>
-                        </div>
+                        <Alert variant="destructive">
+                            <AlertDescription className="flex items-center gap-2.5">
+                                {error}
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="ml-auto h-6 text-[11px]"
+                                    onClick={() => {
+                                        setError(null);
+                                        void refetch();
+                                    }}
+                                >
+                                    Retry
+                                </Button>
+                            </AlertDescription>
+                        </Alert>
                     )}
 
                     {!isLoading && !error && formatData && (
                         <>
                             {/* Preset tier */}
-                            <div className="options-popover-section">
-                                <div className="options-popover-label">Quality Preset</div>
-                                <div className="preset-radio-group">
+                            <div className="flex flex-col gap-1">
+                                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Quality Preset</div>
+                                <div className="flex flex-wrap gap-1">
                                     {PRESETS.map((p) => (
-                                        <label key={p.id}>
+                                        <label
+                                            key={p.id}
+                                            className={cn(
+                                                "inline-flex items-center gap-[5px] px-2.5 py-[5px] border border-white/[0.06] rounded-sm bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
+                                                "hover:border-white/[0.12] hover:text-foreground",
+                                                activePresetId === p.id && "border-primary text-primary bg-primary/[0.12]",
+                                            )}
+                                        >
                                             <input
                                                 type="radio"
                                                 name="dialog-preset"
                                                 checked={activePresetId === p.id}
                                                 onChange={() => handlePresetSelect(p.selector)}
+                                                className={cn(
+                                                    "appearance-none w-3 h-3 border-2 border-muted rounded-full bg-muted cursor-pointer shrink-0 relative transition-colors",
+                                                    activePresetId === p.id && "border-primary bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-1 after:h-1 after:rounded-full after:bg-background",
+                                                )}
                                             />
                                             {p.label}
                                         </label>
@@ -318,62 +342,43 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             </div>
 
                             {/* Format table toggle */}
-                            <button
-                                className="filter-toggle"
+                            <Button
+                                variant="outline"
+                                className="w-fit text-xs"
                                 onClick={() => setShowTable((v) => !v)}
                                 aria-expanded={showTable}
                             >
                                 {showTable ? "Hide all formats" : `Show all formats (${sorted.length})`}
-                            </button>
+                            </Button>
 
                             {showTable && (
-                                <div className="format-table-wrapper">
-                                    <table className="format-table">
+                                <div className="overflow-x-auto border border-border rounded-md animate-in fade-in-0 zoom-in-95">
+                                    <table className="w-full border-collapse font-mono text-xs">
                                         <thead>
                                             <tr>
-                                                <th
-                                                    className={`sortable ${sortKey === "height" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("height")}
-                                                >
-                                                    Resolution{renderSortIndicator("height")}
+                                                {([
+                                                    ["height", "Resolution"],
+                                                    ["ext", "Ext"],
+                                                    ["fps", "FPS"],
+                                                    ["tbr", "Bitrate"],
+                                                    ["vcodec", "Video"],
+                                                    ["acodec", "Audio"],
+                                                    ["filesize", "Size"],
+                                                ] as [SortKey, string][]).map(([key, label]) => (
+                                                    <th
+                                                        key={key}
+                                                        className={cn(
+                                                            "sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none cursor-pointer transition-colors hover:text-foreground",
+                                                            sortKey === key && "text-primary",
+                                                        )}
+                                                        onClick={() => handleSortClick(key)}
+                                                    >
+                                                        {label}{renderSortIndicator(key)}
+                                                    </th>
+                                                ))}
+                                                <th className="sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none">
+                                                    Type
                                                 </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "ext" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("ext")}
-                                                >
-                                                    Ext{renderSortIndicator("ext")}
-                                                </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "fps" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("fps")}
-                                                >
-                                                    FPS{renderSortIndicator("fps")}
-                                                </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "tbr" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("tbr")}
-                                                >
-                                                    Bitrate{renderSortIndicator("tbr")}
-                                                </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "vcodec" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("vcodec")}
-                                                >
-                                                    Video{renderSortIndicator("vcodec")}
-                                                </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "acodec" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("acodec")}
-                                                >
-                                                    Audio{renderSortIndicator("acodec")}
-                                                </th>
-                                                <th
-                                                    className={`sortable ${sortKey === "filesize" ? "sorted" : ""}`}
-                                                    onClick={() => handleSortClick("filesize")}
-                                                >
-                                                    Size{renderSortIndicator("filesize")}
-                                                </th>
-                                                <th>Type</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -383,24 +388,25 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                                     f.format_id === selectedId ||
                                                     f.format_id === mergeId;
                                                 const isExprMatch = exprMatches.has(f.format_id);
-                                                let rowClass = "";
-                                                if (isSelected) rowClass += " format-row-selected";
-                                                if (isExprMatch) rowClass += " format-row-expr-match";
                                                 return (
                                                     <tr
                                                         key={f.format_id}
-                                                        className={rowClass}
+                                                        className={cn(
+                                                            "cursor-pointer transition-colors hover:bg-muted",
+                                                            isSelected && "bg-primary/[0.12]",
+                                                            isExprMatch && !isSelected && "bg-yellow-500/[0.08]",
+                                                        )}
                                                         onClick={(e) => handleRowClick(f.format_id, e)}
                                                     >
-                                                        <td>{formatResolution(f)}</td>
-                                                        <td>{f.ext}</td>
-                                                        <td>{f.fps !== null ? Math.round(f.fps) : "-"}</td>
-                                                        <td>{formatBitrate(f.tbr)}</td>
-                                                        <td>{f.vcodec ?? "-"}</td>
-                                                        <td>{f.acodec ?? "-"}</td>
-                                                        <td>{formatSize(f.filesize)}</td>
-                                                        <td>
-                                                            <span className={`format-type-badge ${type.className}`}>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{formatResolution(f)}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{f.ext}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{f.fps !== null ? Math.round(f.fps) : "-"}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{formatBitrate(f.tbr)}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{f.vcodec ?? "-"}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{f.acodec ?? "-"}</td>
+                                                        <td className={cn("px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap", isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground")}>{formatSize(f.filesize)}</td>
+                                                        <td className="px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap">
+                                                            <span className={cn("inline-block px-[7px] py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase font-mono", type.className)}>
                                                                 {type.label}
                                                             </span>
                                                         </td>
@@ -411,13 +417,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     </table>
 
                                     {selectedId && (
-                                        <div className="format-selection-hint">
-                                            Selected: <strong>{selectedId}</strong>
+                                        <div className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted border-t border-border">
+                                            Selected: <strong className="text-primary font-mono">{selectedId}</strong>
                                             {mergeId && (
-                                                <> + <strong>{mergeId}</strong> (merge)</>
+                                                <> + <strong className="text-primary font-mono">{mergeId}</strong> (merge)</>
                                             )}
-                                            <span className="hint-text">
-                                                {!mergeId && " — Shift+click another format to merge"}
+                                            <span className="text-muted-foreground italic">
+                                                {!mergeId && " \u2014 Shift+click another format to merge"}
                                             </span>
                                         </div>
                                     )}
@@ -425,27 +431,29 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             )}
 
                             {/* Expert mode */}
-                            <label className="expert-toggle">
-                                <input
-                                    type="checkbox"
+                            <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground cursor-pointer select-none transition-colors hover:text-foreground">
+                                <Checkbox
                                     checked={expertMode}
-                                    onChange={(e) => setExpertMode(e.target.checked)}
+                                    onCheckedChange={(checked) => setExpertMode(checked === true)}
                                 />
                                 Expert Mode
                             </label>
 
                             {expertMode && (
-                                <div className="format-expr-section">
-                                    <div className="options-popover-label">Format Expression</div>
+                                <div className="flex flex-col gap-1 animate-in fade-in-0 zoom-in-95">
+                                    <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">Format Expression</div>
                                     <input
-                                        className={`format-expr-input ${exprError ? "expr-error" : ""}`}
+                                        className={cn(
+                                            "w-full py-2.5 px-3.5 border border-input rounded-md bg-muted text-foreground font-mono text-[13px] transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring",
+                                            exprError && "border-destructive ring-1 ring-destructive/30",
+                                        )}
                                         type="text"
                                         placeholder="e.g. bestvideo[height<=1080]+bestaudio/best"
                                         value={expr}
                                         onChange={(e) => handleExprChange(e.target.value)}
                                     />
                                     {exprError && (
-                                        <span className="format-expr-error">{exprError}</span>
+                                        <span className="text-[11px] text-destructive">{exprError}</span>
                                     )}
                                 </div>
                             )}
@@ -461,20 +469,16 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                     )}
                 </div>
 
-                <div className="format-dialog-footer">
-                    <button
-                        className="format-dialog-cancel"
-                        onClick={onClose}
-                    >
+                <div className="flex items-center justify-end gap-1.5 px-4 py-2.5 border-t border-border shrink-0">
+                    <Button variant="outline" onClick={onClose}>
                         Cancel
-                    </button>
-                    <button
-                        className="format-dialog-submit"
+                    </Button>
+                    <Button
                         onClick={handleConfirm}
                         disabled={isLoading || !!error}
                     >
                         Download
-                    </button>
+                    </Button>
                 </div>
             </div>
         </div>
