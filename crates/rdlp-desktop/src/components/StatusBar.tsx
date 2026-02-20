@@ -1,4 +1,8 @@
-import { useSearchStore, useQueueStore } from "../lib/store";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { searchParamsAtom } from "../stores/searchParamsStore";
+import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { downloadsQueryOptions } from "../api/downloads";
 import type { ViewMode } from "../types";
 
 interface StatusBarProps {
@@ -16,10 +20,28 @@ export function StatusBar({
     searchDuration,
     onSwitchToQueue,
 }: StatusBarProps) {
-    const status = useSearchStore((s) => s.status);
-    const site = useSearchStore((s) => s.site);
-    const providers = useSearchStore((s) => s.providers);
-    const jobs = useQueueStore((s) => s.jobs);
+    // --- TanStack Store: search form state ---
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+
+    // --- TanStack Query: server state ---
+    const { data: providers = [] } = useQuery(providersQueryOptions());
+    const { isFetching, isError, isSuccess } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+
+    // Derive status from query state (same pattern as SearchPage)
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+        ? "loading"
+        : isError
+            ? "error"
+            : isSuccess && resultCount === 0
+                ? "empty"
+                : isSuccess
+                    ? "results"
+                    : "idle";
 
     const activeJobs = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",

@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { useQueueStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { downloadsQueryOptions } from "../api/downloads";
 
 interface SidebarDownloadsProps {
     onSwitchToQueue: () => void;
 }
 
 export function SidebarDownloads({ onSwitchToQueue }: SidebarDownloadsProps) {
-    const jobs = useQueueStore((s) => s.jobs);
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
     const [collapsed, setCollapsed] = useState(false);
 
     const sorted = [...jobs].sort((a, b) => {
