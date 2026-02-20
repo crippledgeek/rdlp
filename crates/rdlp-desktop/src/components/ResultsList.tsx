@@ -24,7 +24,7 @@ export function ResultsList({
     onToggleSelect,
 }: ResultsListProps) {
     return (
-        <div className="results-list">
+        <div className="border-t border-border">
             {results.map((result, idx) => (
                 <ResultRow
                     key={`${idx}-${result.video_url}`}
