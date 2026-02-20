@@ -308,10 +308,10 @@ mod tests {
 
         // Fill row by row
         let mut idx = 0;
-        for row in 0..row_count {
-            for col in 0..column_count {
+        for grid_row in &mut grid {
+            for cell in grid_row.iter_mut().take(column_count) {
                 if idx < src.len() {
-                    grid[row][col] = src[idx];
+                    *cell = src[idx];
                     idx += 1;
                 }
             }
@@ -325,8 +325,8 @@ mod tests {
         // Read column by column in sorted key order
         let mut result = Vec::with_capacity(src.len());
         for &(_, col_idx) in &key_map {
-            for row in 0..row_count {
-                result.push(grid[row][col_idx]);
+            for grid_row in &grid {
+                result.push(grid_row[col_idx]);
             }
         }
         result

@@ -209,9 +209,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         }
 
         Event::FormatSelected {
-            format_id,
-            quality,
-            ..
+            format_id, quality, ..
         } => {
             let payload = FormatSelectedPayload {
                 job_id: job_id.to_owned(),

@@ -3,11 +3,12 @@
 //! Provides functions for extracting video source URLs from HTML and
 //! building Format objects with filesize detection.
 
-use log::{debug, warn};
-use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format};
 use regex::Regex;
 use scraper::{Html, Selector};
+use std::sync::LazyLock;
+
+use crate::base::common::BaseExtractor;
 
 /// Video metadata extracted from HTML: (format_id, video_url, ext, height, width)
 pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32>);
@@ -17,23 +18,23 @@ pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32
 // ============================================================================
 
 /// Selector for video source tags: <source src="..." type="video/mp4">
-pub(crate) static SOURCE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector"));
+pub(crate) static SOURCE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector"));
 
 /// Regex to extract CDN URL from MovieFap JavaScript
-pub(crate) static CDN_URL_REGEX: Lazy<Regex> = Lazy::new(|| {
+pub(crate) static CDN_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).expect("Valid CDN URL regex")
 });
 
 /// Regex to extract video items from MovieFap XML
-pub(crate) static MOVIEFAP_XML_REGEX: Lazy<Regex> = Lazy::new(|| {
+pub(crate) static MOVIEFAP_XML_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
         .expect("Valid MovieFap XML regex")
 });
 
 /// Regex patterns for extracting config URLs (multiple fallback strategies)
 #[allow(dead_code)] // Used by extract_config_url which is tested
-pub(crate) static CONFIG_URL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+pub(crate) static CONFIG_URL_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r#"flashvars\.config\s*=\s*escape\("([^"]+)""#).expect("Valid config pattern 1"),
         Regex::new(r#"<input[^>]+name="config\d?"[^>]+value="([^"]+)""#)
@@ -156,40 +157,8 @@ pub(crate) async fn build_formats(
             format.acodec = Some(CODEC_AAC.to_owned());
         }
 
-        // Fetch filesize via HEAD request
-        match ctx.http_client.head(&video_url).send().await {
-            Ok(response) => {
-                debug!(status:? = response.status(), content_length:? = response.content_length(); "HEAD response");
-
-                format.filesize = response.content_length();
-
-                // Fallback: If HEAD didn't give us content-length, try Range request
-                if format.filesize.is_none() || format.filesize == Some(0) {
-                    debug!("HEAD request returned no size, trying Range request");
-
-                    if let Ok(range_response) = ctx
-                        .http_client
-                        .get(&video_url)
-                        .header("Range", "bytes=0-0")
-                        .send()
-                        .await
-                    {
-                        debug!(status:? = range_response.status(); "Range response");
-
-                        if let Some(content_range) = range_response.headers().get("content-range") {
-                            if let Ok(range_str) = content_range.to_str() {
-                                if let Some(total) = range_str.split('/').nth(1) {
-                                    format.filesize = total.parse::<u64>().ok();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(url:? = video_url; "HEAD request failed: {e}");
-            }
-        }
+        format.filesize =
+            BaseExtractor::detect_file_size(&video_url, &ctx.http_client, Some("TNAFlix")).await;
 
         formats.push(format);
     }

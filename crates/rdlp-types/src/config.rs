@@ -523,18 +523,22 @@ mod tests {
 
     #[test]
     fn test_stdout_valid_when_no_postprocessing() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            ..Default::default()
+        };
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_stdout_rejects_extract_audio() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
-        config.extract_audio = true;
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            extract_audio: true,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert_eq!(
             err,
@@ -546,10 +550,12 @@ mod tests {
 
     #[test]
     fn test_stdout_rejects_remux() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
-        config.remux_container = Some(ContainerFormat::Mp4);
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            remux_container: Some(ContainerFormat::Mp4),
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert_eq!(
             err,
@@ -561,8 +567,10 @@ mod tests {
 
     #[test]
     fn test_stdout_rejects_embed_thumbnail() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
+        let config = Config {
+            output_to_stdout: true,
+            ..Default::default()
+        };
         // embed_thumbnail defaults to true, which should fail
         assert!(config.embed_thumbnail);
         let err = config.validate().unwrap_err();
@@ -576,10 +584,12 @@ mod tests {
 
     #[test]
     fn test_stdout_rejects_embed_metadata() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
-        config.embed_metadata = true;
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            embed_metadata: true,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert_eq!(
             err,
@@ -591,10 +601,12 @@ mod tests {
 
     #[test]
     fn test_stdout_rejects_normalize_audio() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
-        config.normalize_audio = true;
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            normalize_audio: true,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert_eq!(
             err,
@@ -606,10 +618,12 @@ mod tests {
 
     #[test]
     fn test_stdout_rejects_normalize_boost() {
-        let mut config = Config::default();
-        config.output_to_stdout = true;
-        config.embed_thumbnail = false;
-        config.normalize_boost = true;
+        let config = Config {
+            output_to_stdout: true,
+            embed_thumbnail: false,
+            normalize_boost: true,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert_eq!(
             err,

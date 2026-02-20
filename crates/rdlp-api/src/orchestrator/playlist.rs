@@ -1524,7 +1524,7 @@ mod tests {
         let primary = "https://s2.netmagcdn.com/hls/ep1/master.m3u8";
         let primary_host = extract_cdn_host(primary);
 
-        let mut urls = vec![
+        let mut urls = [
             "https://s1.netmagcdn.com/hls/ep1/alt.m3u8".to_string(),
             "https://s2.netmagcdn.com/hls/ep1/alt2.m3u8".to_string(),
             "https://s3.netmagcdn.com/hls/ep1/alt3.m3u8".to_string(),

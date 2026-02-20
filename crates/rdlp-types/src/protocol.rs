@@ -61,33 +61,43 @@ impl FromStr for DownloadProtocol {
     type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match s.to_ascii_lowercase().as_str() {
-            "http" => Self::Http,
-            "https" => Self::Https,
-            "m3u8" => Self::M3u8,
-            "m3u8_native" => Self::M3u8Native,
-            "http_dash_segments" => Self::HttpDashSegments,
-            _ => Self::Other(s.to_string()),
+        Ok(if s.eq_ignore_ascii_case("http") {
+            Self::Http
+        } else if s.eq_ignore_ascii_case("https") {
+            Self::Https
+        } else if s.eq_ignore_ascii_case("m3u8") {
+            Self::M3u8
+        } else if s.eq_ignore_ascii_case("m3u8_native") {
+            Self::M3u8Native
+        } else if s.eq_ignore_ascii_case("http_dash_segments") {
+            Self::HttpDashSegments
+        } else {
+            Self::Other(s.to_string())
         })
     }
 }
 
 impl From<String> for DownloadProtocol {
     fn from(s: String) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "http" => Self::Http,
-            "https" => Self::Https,
-            "m3u8" => Self::M3u8,
-            "m3u8_native" => Self::M3u8Native,
-            "http_dash_segments" => Self::HttpDashSegments,
-            _ => Self::Other(s),
+        if s.eq_ignore_ascii_case("http") {
+            Self::Http
+        } else if s.eq_ignore_ascii_case("https") {
+            Self::Https
+        } else if s.eq_ignore_ascii_case("m3u8") {
+            Self::M3u8
+        } else if s.eq_ignore_ascii_case("m3u8_native") {
+            Self::M3u8Native
+        } else if s.eq_ignore_ascii_case("http_dash_segments") {
+            Self::HttpDashSegments
+        } else {
+            Self::Other(s)
         }
     }
 }
 
 impl From<&str> for DownloadProtocol {
     fn from(s: &str) -> Self {
-        s.parse().unwrap()
+        s.parse().expect("DownloadProtocol::from_str is infallible")
     }
 }
 

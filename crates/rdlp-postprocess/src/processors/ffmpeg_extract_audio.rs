@@ -50,10 +50,12 @@ impl FFmpegExtractAudio {
                 }
             } else if let Some((worst, best)) = codec_config.quality_scale {
                 // Non-numeric = VBR quality string (e.g., "best", "worst")
-                let scale = match q.to_lowercase().as_str() {
-                    "best" | "0" => best,
-                    "worst" | "9" | "10" => worst,
-                    _ => q.parse().unwrap_or((worst + best) / 2),
+                let scale = if q.eq_ignore_ascii_case("best") || q == "0" {
+                    best
+                } else if q.eq_ignore_ascii_case("worst") || q == "9" || q == "10" {
+                    worst
+                } else {
+                    q.parse().unwrap_or((worst + best) / 2)
                 };
                 opts.quality_scale = Some(scale as i32);
             }

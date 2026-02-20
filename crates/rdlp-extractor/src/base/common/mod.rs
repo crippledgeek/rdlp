@@ -30,17 +30,17 @@
 //! let id = BaseExtractor::extract_id_from_url(url, &MY_URL_PATTERN, "id");
 //!
 //! // Detect file size with fallback strategies
-//! let size = BaseExtractor::detect_file_size(&video_url, ctx).await;
+//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
 //! ```
 
 #[cfg(test)]
 mod tests;
 
 use log::{debug, trace};
-use once_cell::sync::Lazy;
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
+use rdlp_core::{ExtractionContext, Format, RdlpError, Result, check_http_response};
 use regex::Regex;
 use scraper::{Html, Selector};
+use std::sync::LazyLock;
 
 // Re-export security functions from rdlp-security
 pub use rdlp_security::{
@@ -73,75 +73,78 @@ pub const DEFAULT_DEBUG_SAMPLE_SIZE: usize = 5000;
 // ============================================================================
 
 /// Selector for Open Graph title: `<meta property="og:title" content="...">`
-pub static OG_TITLE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector"));
+pub static OG_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector")
+});
 
 /// Selector for Open Graph description: `<meta property="og:description" content="...">`
-pub static OG_DESCRIPTION_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub static OG_DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[property="og:description"]"#).expect("Valid OG description selector")
 });
 
 /// Selector for Open Graph image: `<meta property="og:image" content="...">`
-pub static OG_IMAGE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"meta[property="og:image"]"#).expect("Valid OG image selector"));
+pub static OG_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"meta[property="og:image"]"#).expect("Valid OG image selector")
+});
 
 /// Selector for meta description: `<meta name="description" content="...">`
-pub static META_DESCRIPTION_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub static META_DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[name="description"]"#).expect("Valid meta description selector")
 });
 
 /// Selector for Twitter title: `<meta name="twitter:title" content="...">`
-pub static TWITTER_TITLE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub static TWITTER_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[name="twitter:title"]"#).expect("Valid Twitter title selector")
 });
 
 /// Selector for Twitter image: `<meta name="twitter:image" content="...">`
-pub static TWITTER_IMAGE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[name="twitter:image"]"#).expect("Valid Twitter image selector")
 });
 
 /// Selector for HTML title tag: `<title>...</title>`
-pub static TITLE_TAG_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse("title").expect("Valid title selector"));
+pub static TITLE_TAG_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("title").expect("Valid title selector"));
 
 /// Selector for H1 heading: `<h1>...</h1>`
-pub static H1_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse("h1").expect("Valid h1 selector"));
+pub static H1_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h1").expect("Valid h1 selector"));
 
 /// Selector for JSON-LD scripts: `<script type="application/ld+json">`
-pub static JSONLD_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+pub static JSONLD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"script[type="application/ld+json"]"#).expect("Valid JSON-LD selector")
 });
 
 /// Selector for canonical link: `<link rel="canonical" href="...">`
-pub static CANONICAL_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"link[rel="canonical"]"#).expect("Valid canonical selector"));
+pub static CANONICAL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"link[rel="canonical"]"#).expect("Valid canonical selector")
+});
 
 // ============================================================================
 // Common Static Patterns
 // ============================================================================
 
 /// Pattern to extract quality from URL (e.g., "720p", "1080P")
-pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\d+)[pP]").expect("Valid quality pattern"));
+pub static QUALITY_FROM_URL_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+)[pP]").expect("Valid quality pattern"));
 
 /// Pattern to extract bitrate from URL (e.g., "720P_4000K")
-pub static BITRATE_FROM_URL_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern"));
+pub static BITRATE_FROM_URL_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern"));
 
 /// Pattern for ISO 8601 duration (e.g., "PT1H2M3S")
-pub static ISO8601_DURATION_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static ISO8601_DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$")
         .expect("Valid ISO8601 duration pattern")
 });
 
 /// Pattern for ISO 8601 date (e.g., "2024-01-15" or "2024-01-15T10:30:00Z")
-pub static ISO8601_DATE_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern"));
+pub static ISO8601_DATE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern"));
 
 /// Pattern to strip HTML tags from text
-pub static HTML_TAG_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
+pub static HTML_TAG_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
 
 // ============================================================================
 // Base Extractor
@@ -187,7 +190,8 @@ impl BaseExtractor {
     ///
     /// # Errors
     /// - `RdlpError::Extraction` if URL is too long
-    /// - `RdlpError::Network` if the request fails or returns non-2xx status
+    /// - `RdlpError::Network` if the request fails
+    /// - `RdlpError::Http` if the response has a non-2xx status
     ///
     /// # Example
     ///
@@ -211,7 +215,7 @@ impl BaseExtractor {
             .await
             .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
 
-        Self::check_http_response(&response)?;
+        check_http_response(&response)?;
 
         let webpage = response
             .text()
@@ -268,7 +272,7 @@ impl BaseExtractor {
             .await
             .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
 
-        Self::check_http_response(&response)?;
+        check_http_response(&response)?;
 
         let webpage = response
             .text()
@@ -280,32 +284,6 @@ impl BaseExtractor {
         }
 
         Ok(webpage)
-    }
-
-    /// Check HTTP response status and return appropriate error
-    ///
-    /// # Arguments
-    /// * `response` - The HTTP response to check
-    ///
-    /// # Returns
-    /// `Ok(())` if status is 2xx, otherwise an appropriate error
-    pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
-        let status = response.status();
-
-        if status.is_success() {
-            return Ok(());
-        }
-
-        let error_msg = match status.as_u16() {
-            403 => "Access forbidden (403) - may require authentication or cookies",
-            404 => "Page not found (404) - video may have been removed",
-            429 => "Rate limited (429) - too many requests, try again later",
-            451 => "Unavailable for legal reasons (451) - content blocked in your region",
-            500..=599 => "Server error - the website may be experiencing issues",
-            _ => "Unexpected HTTP status",
-        };
-
-        Err(RdlpError::Network(format!("{error_msg}: HTTP {status}")))
     }
 
     // ========================================================================
@@ -359,7 +337,7 @@ impl BaseExtractor {
     /// # Example
     ///
     /// ```rust,ignore
-    /// static VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    /// static VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     ///     Regex::new(r"example\.com/video/(?P<id>\d+)").unwrap()
     /// });
     ///
@@ -390,7 +368,7 @@ impl BaseExtractor {
     ///
     /// ```rust,ignore
     /// // Pattern where ID can be in group 1 or group 2
-    /// static PATTERN: Lazy<Regex> = Lazy::new(|| {
+    /// static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     ///     Regex::new(r"example\.com/(?:video/(\d+)|v(\d+))").unwrap()
     /// });
     ///
@@ -600,15 +578,16 @@ impl BaseExtractor {
     // Size Detection
     // ========================================================================
 
-    /// Detect file size using HEAD request with Range fallback
+    /// Detect file size using HEAD request with Range fallback.
     ///
-    /// This method tries two strategies:
+    /// Tries two strategies:
     /// 1. HEAD request to get Content-Length header
     /// 2. Range request (bytes=0-0) to parse Content-Range header
     ///
     /// # Arguments
     /// * `url` - The URL to check
-    /// * `ctx` - Extraction context
+    /// * `http_client` - The HTTP client to use
+    /// * `log_prefix` - Optional prefix for debug log messages
     ///
     /// # Returns
     /// File size in bytes if detected, `None` otherwise
@@ -616,59 +595,21 @@ impl BaseExtractor {
     /// # Example
     ///
     /// ```rust,ignore
-    /// if let Some(size) = BaseExtractor::detect_file_size(&format.url, ctx).await {
-    ///     format.filesize = Some(size);
-    /// }
+    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None).await;
+    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS")).await;
     /// ```
-    pub async fn detect_file_size(url: &str, ctx: &ExtractionContext) -> Option<u64> {
-        // Strategy 1: HEAD request
-        if let Ok(response) = ctx.http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    debug!(size, method = "HEAD"; "[BaseExtractor] Detected Content-Length");
-                    return Some(size);
-                }
-            }
-        }
-
-        // Strategy 2: Range request fallback
-        if let Ok(response) = ctx
-            .http_client
-            .get(url)
-            .header("Range", "bytes=0-0")
-            .send()
-            .await
-        {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    // Parse "bytes 0-0/123456"
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            debug!(size, method = "Range"; "[BaseExtractor] Detected Content-Range");
-                            return Some(size);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Detect file size using a provided HTTP client
-    ///
-    /// This variant is useful for parallel detection where you need to pass
-    /// the client directly instead of the full context.
-    pub async fn detect_file_size_with_client(
+    pub async fn detect_file_size(
         url: &str,
-        http_client: &std::sync::Arc<reqwest::Client>,
+        http_client: &reqwest::Client,
+        log_prefix: Option<&str>,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
         if let Ok(response) = http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    return Some(size);
+            if let Some(size) = response.content_length().filter(|&s| s > 0) {
+                if let Some(prefix) = log_prefix {
+                    debug!(size, method = "HEAD"; "[{prefix}] Detected Content-Length");
                 }
+                return Some(size);
             }
         }
 
@@ -679,60 +620,29 @@ impl BaseExtractor {
             .send()
             .await
         {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    // Parse "bytes 0-0/123456"
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            return Some(size);
-                        }
-                    }
+            if let Some(size) = Self::parse_content_range_total(response.headers()) {
+                if let Some(prefix) = log_prefix {
+                    debug!(size, method = "Range"; "[{prefix}] Detected Content-Range");
                 }
+                return Some(size);
             }
         }
 
         None
     }
 
-    /// Detect file size with verbose logging prefix
+    /// Parse total file size from a Content-Range header.
     ///
-    /// Same as `detect_file_size` but with a custom log prefix for clarity.
-    pub async fn detect_file_size_verbose(
-        url: &str,
-        ctx: &ExtractionContext,
-        log_prefix: &str,
-    ) -> Option<u64> {
-        // Strategy 1: HEAD request
-        if let Ok(response) = ctx.http_client.head(url).send().await {
-            if let Some(size) = response.content_length() {
-                if size > 0 {
-                    debug!(size, method = "HEAD"; "[{log_prefix}] Detected Content-Length");
-                    return Some(size);
-                }
-            }
-        }
-
-        // Strategy 2: Range request fallback
-        if let Ok(response) = ctx
-            .http_client
-            .get(url)
-            .header("Range", "bytes=0-0")
-            .send()
-            .await
-        {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    if let Some(total) = range_str.split('/').nth(1) {
-                        if let Ok(size) = total.parse::<u64>() {
-                            debug!(size, method = "Range"; "[{log_prefix}] Detected Content-Range");
-                            return Some(size);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+    /// Parses the format `bytes 0-0/123456` and returns the total size.
+    fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+        headers
+            .get("content-range")?
+            .to_str()
+            .ok()?
+            .split('/')
+            .nth(1)?
+            .parse()
+            .ok()
     }
 
     // ========================================================================
@@ -807,12 +717,13 @@ impl BaseExtractor {
     /// A Format struct with quality metadata populated
     #[must_use]
     pub fn build_format(
-        format_id: String,
-        url: String,
-        ext: String,
+        format_id: impl Into<String>,
+        url: impl Into<String>,
+        ext: impl Into<String>,
         height: Option<u32>,
     ) -> Format {
-        let mut format = Format::new(&format_id, &url, &ext, rdlp_core::DownloadProtocol::Https);
+        let ext = ext.into();
+        let mut format = Format::new(format_id, url, &ext, rdlp_core::DownloadProtocol::Https);
 
         if let Some(h) = height {
             format.height = Some(h);

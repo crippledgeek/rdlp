@@ -1,9 +1,9 @@
 //! URL and extraction patterns for RedTube
 //!
-//! Static regex patterns compiled once at first use via `once_cell::sync::Lazy`.
+//! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Static URL pattern regex for RedTube (initialized once at first use)
 ///
@@ -11,7 +11,7 @@ use regex::Regex;
 /// - Standard URLs: https://www.redtube.com/123456
 /// - Brazilian domain: https://www.redtube.com.br/123456
 /// - Embed URLs: https://embed.redtube.com/?id=123456
-pub static REDTUBE_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static REDTUBE_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"https?://(?:(?:\w+\.)?redtube\.com(?:\.br)?/|embed\.redtube\.com/\?.*\bid=)(?P<id>\d+)",
     )
@@ -19,11 +19,11 @@ pub static REDTUBE_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Regex to extract JavaScript sources object: sources: {"720": "url", ...}
-pub static SOURCES_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"sources\s*:\s*(\{[^}]+\})"#).expect("Valid sources pattern"));
+pub static SOURCES_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"sources\s*:\s*(\{[^}]+\})"#).expect("Valid sources pattern"));
 
 /// Regex to extract mediaDefinition array: mediaDefinition: [{...}, ...]
-pub static MEDIA_DEF_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static MEDIA_DEF_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)mediaDefinition\s*:\s*(\[.+?\])").expect("Valid mediaDefinition pattern")
 });
 

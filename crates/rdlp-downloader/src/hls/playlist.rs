@@ -168,7 +168,7 @@ async fn parse_master_playlist(
         .filter(|v| !v.is_i_frame)
         .max_by_key(|v| v.bandwidth)
         .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
-        .unwrap(); // safe: checked non-empty above
+        .expect("master playlist has at least one variant");
 
     let base_url = url::Url::parse(m3u8_url)
         .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;

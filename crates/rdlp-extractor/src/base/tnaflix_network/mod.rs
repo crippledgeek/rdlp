@@ -9,9 +9,9 @@ mod json_ld;
 #[cfg(test)]
 mod tests;
 
-use once_cell::sync::Lazy;
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use scraper::{Html, Selector};
+use std::sync::LazyLock;
 
 // Re-export VideoMetadata type for crate-internal use
 pub(crate) use formats::VideoMetadata;
@@ -27,51 +27,53 @@ pub(crate) use json_ld::{
 // ============================================================================
 
 /// Selector for title input field: <input name="title" value="...">
-static TITLE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"input[name="title"]"#).expect("Valid CSS selector"));
+static TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"input[name="title"]"#).expect("Valid CSS selector"));
 
 /// Selector for h1 title fallback
-static H1_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse("h1").expect("Valid CSS selector"));
+static H1_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h1").expect("Valid CSS selector"));
 
 /// Selector for description input field
-static DESC_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"input[name="description"]"#).expect("Valid CSS selector"));
+static DESC_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"input[name="description"]"#).expect("Valid CSS selector"));
 
 /// Selector for uploader input field
-static UPLOADER_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"input[name="username"]"#).expect("Valid CSS selector"));
+static UPLOADER_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"input[name="username"]"#).expect("Valid CSS selector"));
 
 /// Selector for Open Graph title
-static OG_TITLE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector"));
+static OG_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector")
+});
 
 /// Selector for Open Graph description
-static OG_DESC_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+static OG_DESC_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[property="og:description"]"#).expect("Valid OG description selector")
 });
 
 /// Selector for meta description
-static META_DESC_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+static META_DESC_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[name="description"]"#).expect("Valid meta description selector")
 });
 
 /// Selector for HTML title tag
-static TITLE_TAG_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse("title").expect("Valid title selector"));
+static TITLE_TAG_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("title").expect("Valid title selector"));
 
 /// Selector for Open Graph thumbnail
-static THUMBNAIL_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"meta[property="og:image"]"#).expect("Valid CSS selector"));
+static THUMBNAIL_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[property="og:image"]"#).expect("Valid CSS selector"));
 
 /// Selector for Twitter card image
-static TWITTER_IMAGE_SELECTOR: Lazy<Selector> = Lazy::new(|| {
+static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(r#"meta[name="twitter:image"]"#).expect("Valid Twitter image selector")
 });
 
 /// Selector for link rel image_src
-static LINK_IMAGE_SELECTOR: Lazy<Selector> =
-    Lazy::new(|| Selector::parse(r#"link[rel="image_src"]"#).expect("Valid link image selector"));
+static LINK_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"link[rel="image_src"]"#).expect("Valid link image selector")
+});
 
 // ============================================================================
 // Extracted Metadata Structure

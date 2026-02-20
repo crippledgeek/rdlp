@@ -2,8 +2,8 @@
 //!
 //! Contains all regex patterns for matching and parsing URLs.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// URL pattern for PornHub videos
 ///
@@ -16,7 +16,7 @@ use regex::Regex;
 /// - Alt TLDs: `.net`, `.org`
 /// - Country codes: `de.pornhub.com`, `fr.pornhub.com`
 /// - Onion: `pornhubvybmsymdol4iibwgwtkpwmeyd6luq2gxajgjzfjvotyt5zhyd.onion`
-pub static PORNHUB_VIDEO_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static PORNHUB_VIDEO_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?x)
         https?://
@@ -38,7 +38,7 @@ pub static PORNHUB_VIDEO_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// Supports:
 /// - Standard: `https://www.pornhub.com/playlist/123456`
 /// - Alt TLDs and country codes
-pub static PORNHUB_PLAYLIST_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static PORNHUB_PLAYLIST_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?x)
         https?://
@@ -51,7 +51,7 @@ pub static PORNHUB_PLAYLIST_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Pattern to extract video links from playlist HTML
-pub static VIDEO_LINK_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static VIDEO_LINK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"href="(/(?:view_video\.php\?.*?\bviewkey=|embed/)(ph[0-9a-f]+))[^"]*"[^>]*(?:title="([^"]*)")?"#,
     )
@@ -59,35 +59,37 @@ pub static VIDEO_LINK_PATTERN: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Pattern to extract video count from JavaScript
-pub static VIDEO_COUNT_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"var\s+itemsCount\s*=\s*(\d+)").expect("Valid video count pattern"));
+pub static VIDEO_COUNT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"var\s+itemsCount\s*=\s*(\d+)").expect("Valid video count pattern")
+});
 
 /// Pattern to extract AJAX token from JavaScript
-pub static AJAX_TOKEN_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"var\s+token\s*=\s*"([^"]+)""#).expect("Valid AJAX token pattern"));
+pub static AJAX_TOKEN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"var\s+token\s*=\s*"([^"]+)""#).expect("Valid AJAX token pattern")
+});
 
 /// Pattern to extract flashvars JSON
-pub static FLASHVARS_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static FLASHVARS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"var\s+flashvars_\d+\s*=\s*(\{.+?});").expect("Valid flashvars pattern")
 });
 
 /// Pattern to extract quality from URL (e.g., "1080P_4000K")
-pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(\d+)[pP]").expect("Valid quality pattern"));
+pub static QUALITY_FROM_URL_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(\d+)[pP]").expect("Valid quality pattern"));
 
 /// Pattern to extract qualityItems JSON arrays
-pub static QUALITY_ITEMS_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static QUALITY_ITEMS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"var\s+qualityItems_\w+\s*=\s*(\[.+?])\s*;"#).expect("Valid qualityItems pattern")
 });
 
 /// Pattern to extract media/quality variables
-pub static MEDIA_VAR_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static MEDIA_VAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"var\s+(media|quality)_(\w+)\s*=\s*["']([^"']+)["']\s*;"#)
         .expect("Valid media var pattern")
 });
 
 /// Pattern to extract download button URLs
-pub static DOWNLOAD_BTN_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static DOWNLOAD_BTN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a[^>]+\bclass=["'][^"']*downloadBtn[^"']*["'][^>]+\bhref=["']([^"']+)["']"#)
         .expect("Valid download button pattern")
 });

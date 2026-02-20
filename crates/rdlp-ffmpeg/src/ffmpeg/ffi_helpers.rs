@@ -149,10 +149,11 @@ impl FFmpegRunner {
             .map_err(|_| PostProcessError::ffmpeg_failed("invalid sample format name"))?;
 
         // Option key CStrings (static values, can't fail)
-        let key_channel_layout = CString::new("channel_layout").unwrap();
-        let key_sample_fmt = CString::new("sample_fmt").unwrap();
-        let key_time_base = CString::new("time_base").unwrap();
-        let key_sample_rate = CString::new("sample_rate").unwrap();
+        let key_channel_layout =
+            CString::new("channel_layout").expect("static string has no null bytes");
+        let key_sample_fmt = CString::new("sample_fmt").expect("static string has no null bytes");
+        let key_time_base = CString::new("time_base").expect("static string has no null bytes");
+        let key_sample_rate = CString::new("sample_rate").expect("static string has no null bytes");
 
         // SAFETY: All pointers are valid for the duration of this block.
         // avfilter_graph_alloc_filter allocates within the graph's lifetime.

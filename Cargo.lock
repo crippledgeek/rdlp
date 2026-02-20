@@ -4114,7 +4114,6 @@ dependencies = [
  "log",
  "m3u8-rs",
  "mockito",
- "once_cell",
  "rdlp-core",
  "rdlp-crypto",
  "rdlp-security",

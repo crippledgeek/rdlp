@@ -234,7 +234,7 @@ impl FFmpegRunner {
 
             // 2. Create output context - EXPLICITLY request Matroska muxer
             let mut ofmt_ctx: *mut ffi::AVFormatContext = ptr::null_mut();
-            let matroska_name = CString::new("matroska").unwrap();
+            let matroska_name = CString::new("matroska").expect("static string has no null bytes");
             let ret = ffi::avformat_alloc_output_context2(
                 &mut ofmt_ctx,
                 ptr::null(),
@@ -348,8 +348,8 @@ impl FFmpegRunner {
 
             // 6. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
-            let key = CString::new("cluster_time_limit").unwrap();
-            let value = CString::new("500").unwrap();
+            let key = CString::new("cluster_time_limit").expect("static string has no null bytes");
+            let value = CString::new("500").expect("static string has no null bytes");
             ffi::av_dict_set(&mut opts, key.as_ptr(), value.as_ptr(), 0);
 
             // 7. Initialize muxer with options

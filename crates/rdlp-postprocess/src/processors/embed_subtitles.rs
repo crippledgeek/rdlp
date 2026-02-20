@@ -344,8 +344,10 @@ mod tests {
         };
         let processor = EmbedSubtitles::new(ffmpeg);
         let info = InfoDict::new("id", "title", "extractor", "https://example.com");
-        let mut config = PostProcessConfig::default();
-        config.embed_subtitles = true;
+        let config = PostProcessConfig {
+            embed_subtitles: true,
+            ..Default::default()
+        };
         assert!(processor.should_run(&info, &config));
     }
 
@@ -513,8 +515,10 @@ mod tests {
         };
         let processor = EmbedSubtitles::new(ffmpeg);
         let info = InfoDict::new("id", "title", "extractor", "https://example.com");
-        let mut config = PostProcessConfig::default();
-        config.embed_subtitles = true;
+        let config = PostProcessConfig {
+            embed_subtitles: true,
+            ..Default::default()
+        };
 
         let dir = TempDir::new().unwrap();
         let video = dir.path().join("video.avi");
@@ -536,8 +540,10 @@ mod tests {
         };
         let processor = EmbedSubtitles::new(ffmpeg);
         let info = InfoDict::new("id", "title", "extractor", "https://example.com");
-        let mut config = PostProcessConfig::default();
-        config.embed_subtitles = true;
+        let config = PostProcessConfig {
+            embed_subtitles: true,
+            ..Default::default()
+        };
 
         let dir = TempDir::new().unwrap();
         let video = dir.path().join("video.mp4");
@@ -559,9 +565,11 @@ mod tests {
         };
         let processor = EmbedSubtitles::new(ffmpeg);
         let info = InfoDict::new("id", "title", "extractor", "https://example.com");
-        let mut config = PostProcessConfig::default();
-        config.embed_subtitles = true;
-        config.write_subtitles = false;
+        let config = PostProcessConfig {
+            embed_subtitles: true,
+            write_subtitles: false,
+            ..Default::default()
+        };
 
         let dir = TempDir::new().unwrap();
         let video = dir.path().join("video.mp4");
@@ -587,9 +595,11 @@ mod tests {
         };
         let processor = EmbedSubtitles::new(ffmpeg);
         let info = InfoDict::new("id", "title", "extractor", "https://example.com");
-        let mut config = PostProcessConfig::default();
-        config.embed_subtitles = true;
-        config.write_subtitles = true;
+        let config = PostProcessConfig {
+            embed_subtitles: true,
+            write_subtitles: true,
+            ..Default::default()
+        };
 
         let dir = TempDir::new().unwrap();
         let video = dir.path().join("video.mp4");

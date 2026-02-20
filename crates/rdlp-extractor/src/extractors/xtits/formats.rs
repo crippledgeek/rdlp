@@ -25,7 +25,9 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Primary format: video_url
     if flashvars.has("video_url") {
-        let url = flashvars.get("video_url").unwrap();
+        let url = flashvars
+            .get("video_url")
+            .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_url_text").unwrap_or("default");
         let format = build_kvs_format(quality, url);
         debug!(format_id = format.format_id.as_str(), url; "[XTits] Primary format");
@@ -34,7 +36,9 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Alternate format: video_alt_url
     if flashvars.has("video_alt_url") {
-        let url = flashvars.get("video_alt_url").unwrap();
+        let url = flashvars
+            .get("video_alt_url")
+            .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_alt_url_text").unwrap_or("alt");
         let format = build_kvs_format(quality, url);
         debug!(format_id = format.format_id.as_str(), url; "[XTits] Alt format");
@@ -43,7 +47,9 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Second alternate (rare): video_alt_url2
     if flashvars.has("video_alt_url2") {
-        let url = flashvars.get("video_alt_url2").unwrap();
+        let url = flashvars
+            .get("video_alt_url2")
+            .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_alt_url2_text").unwrap_or("alt2");
         let format = build_kvs_format(quality, url);
         debug!(format_id = format.format_id.as_str(), url; "[XTits] Alt2 format");

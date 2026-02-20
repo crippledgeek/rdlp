@@ -478,9 +478,11 @@ mod tests {
 
     #[test]
     fn test_build_config_preserves_base_when_no_override() {
-        let mut base_config = Config::default();
-        base_config.verbose = true;
-        base_config.overwrite = true;
+        let base_config = Config {
+            verbose: true,
+            overwrite: true,
+            ..Config::default()
+        };
 
         let client = RdlpClient::builder().config(base_config).build().unwrap();
         let request = DownloadRequest::new("http://example.com");
@@ -494,10 +496,12 @@ mod tests {
     fn test_build_config_preserves_remux_from_base_config() {
         use rdlp_core::ContainerFormat;
 
-        let mut base_config = Config::default();
-        base_config.remux_container = Some(ContainerFormat::Mkv);
-        base_config.embed_metadata = true;
-        base_config.normalize_audio = true;
+        let base_config = Config {
+            remux_container: Some(ContainerFormat::Mkv),
+            embed_metadata: true,
+            normalize_audio: true,
+            ..Config::default()
+        };
 
         let client = RdlpClient::builder().config(base_config).build().unwrap();
         // Default request has all None — should NOT overwrite config values

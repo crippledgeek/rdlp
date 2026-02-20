@@ -2254,11 +2254,11 @@ mod tests {
 
     #[test]
     fn test_mux_timing_state_stall_tracking() {
-        let mut timing = MuxTimingState::default();
-
-        // Simulate pos advancing — stall_count resets
-        timing.last_pos_check = 1000;
-        timing.stall_count = 2;
+        let mut timing = MuxTimingState {
+            last_pos_check: 1000,
+            stall_count: 2,
+            ..Default::default()
+        };
         // pos advanced
         let new_pos: i64 = 2000;
         if new_pos > timing.last_pos_check {

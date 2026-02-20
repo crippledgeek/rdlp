@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_default() {
-        let _extractor = NineAnimeExtractor::default();
+        let _extractor = NineAnimeExtractor;
     }
 
     #[test]

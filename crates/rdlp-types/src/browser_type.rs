@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+use crate::parse_error::ParseEnumError;
+
 /// Supported browsers for cookie extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,15 +34,21 @@ impl fmt::Display for BrowserType {
 }
 
 impl FromStr for BrowserType {
-    type Err = String;
+    type Err = ParseEnumError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "chrome" | "chromium" | "google-chrome" => Ok(Self::Chrome),
-            "firefox" | "mozilla" => Ok(Self::Firefox),
-            _ => Err(format!(
-                "unsupported browser: {s}. Supported: chrome, firefox"
-            )),
+        if s.eq_ignore_ascii_case("chrome")
+            || s.eq_ignore_ascii_case("chromium")
+            || s.eq_ignore_ascii_case("google-chrome")
+        {
+            Ok(Self::Chrome)
+        } else if s.eq_ignore_ascii_case("firefox") || s.eq_ignore_ascii_case("mozilla") {
+            Ok(Self::Firefox)
+        } else {
+            Err(ParseEnumError {
+                type_name: "BrowserType",
+                input: s.to_string(),
+            })
         }
     }
 }

@@ -135,8 +135,8 @@ mod tests {
         let js = json_to_js(&JsonValue::Bool(true), &mut ctx).unwrap();
         assert_eq!(js.as_boolean(), Some(true));
 
-        let js = json_to_js(&serde_json::json!(3.14), &mut ctx).unwrap();
-        assert_eq!(js.as_number(), Some(3.14));
+        let js = json_to_js(&serde_json::json!(2.72), &mut ctx).unwrap();
+        assert_eq!(js.as_number(), Some(2.72));
     }
 
     #[test]

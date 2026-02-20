@@ -1,6 +1,6 @@
 //! URL patterns for xHamster extractor
 //!
-//! Static regex patterns compiled once at first use via `once_cell::sync::Lazy`.
+//! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 //!
 //! ## Supported Domains
 //!
@@ -10,8 +10,8 @@
 //! - Country-code subdomains: `de.xhamster.com`, `pt.xhamster.com`
 //! - Mobile: `m.xhamster.com` (rewritten to desktop in extractor)
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Shared domain pattern for all xHamster URL regexes.
 const DOMAINS: &str =
@@ -24,7 +24,7 @@ const DOMAINS: &str =
 /// - New: `/videos/{slug}-{id}`
 ///
 /// Video IDs can be numeric or alphanumeric (e.g. `xhnBJZx`).
-pub static XHAMSTER_VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XHAMSTER_VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"https?://(?:[^/?#]+\.)?{DOMAINS}/(?:movies/(?P<id>[0-9A-Za-z]+)/(?P<display_id>[^/]*)\.html|videos/(?P<display_id_2>[^/]*)-(?P<id_2>[0-9A-Za-z]+))"
     ))
@@ -34,7 +34,7 @@ pub static XHAMSTER_VIDEO_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// URL pattern for xHamster embed pages.
 ///
 /// Matches: `https://xhamster.com/xembed.php?video=12345`
-pub static XHAMSTER_EMBED_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XHAMSTER_EMBED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"https?://(?:[^/?#]+\.)?{DOMAINS}/xembed\.php\?video=(?P<id>\d+)"
     ))
@@ -46,7 +46,7 @@ pub static XHAMSTER_EMBED_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// Matches:
 /// - `https://xhamster.com/users/netvideogirls/videos`
 /// - `https://xhamster.com/creators/squirt-orgasm-69`
-pub static XHAMSTER_USER_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XHAMSTER_USER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"https?://(?:[^/?#]+\.)?{DOMAINS}/(?:(?P<user>users)|creators)/(?P<id>[^/?#&]+)"
     ))
@@ -56,54 +56,55 @@ pub static XHAMSTER_USER_PATTERN: Lazy<Regex> = Lazy::new(|| {
 /// Regex to extract `window.initials` JSON from page source.
 ///
 /// Uses `(?s)` (DOTALL) so `.` matches newlines — the JSON often spans multiple lines.
-pub static INITIALS_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static INITIALS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;\s*(?:</script>|$)")
         .expect("Valid initials pattern")
 });
 
 /// Fallback pattern for `window.initials` (less strict).
-pub static INITIALS_FALLBACK_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static INITIALS_FALLBACK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;")
         .expect("Valid initials fallback pattern")
 });
 
 /// Pattern for legacy `sources: {...}` JS object.
-pub static LEGACY_SOURCES_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static LEGACY_SOURCES_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"sources\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid legacy sources pattern")
 });
 
 /// Pattern for legacy `file: "url"` variable.
-pub static LEGACY_FILE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static LEGACY_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"file\s*:\s*["'](?P<url>.+?)["']"#).expect("Valid legacy file pattern")
 });
 
 /// Pattern for `<a class="mp4Thumb" href="url">`.
-pub static LEGACY_MP4_THUMB_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static LEGACY_MP4_THUMB_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a\s+href=["'](?P<url>.+?)["']\s+class=["']mp4Thumb"#)
         .expect("Valid legacy mp4Thumb pattern")
 });
 
 /// Pattern for `<video file="url">`.
-pub static LEGACY_VIDEO_FILE_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static LEGACY_VIDEO_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<video[^>]+file=["'](?P<url>.+?)["'][^>]*>"#)
         .expect("Valid legacy video file pattern")
 });
 
 /// Pattern for error/closed video detection.
-pub static VIDEO_CLOSED_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static VIDEO_CLOSED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<div[^>]+id=["']videoClosed["'][^>]*>(.+?)</div>"#)
         .expect("Valid videoClosed pattern")
 });
 
 /// Pattern for embed page video URL extraction.
-pub static EMBED_VIDEO_URL_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static EMBED_VIDEO_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"href="(https?://xhamster\.com/(?:movies/\d+/[^"]*\.html|videos/[^/]*-[0-9A-Za-z]+))[^"]*""#)
         .expect("Valid embed video URL pattern")
 });
 
 /// Pattern for embed page `vars` JSON.
-pub static EMBED_VARS_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid embed vars pattern"));
+pub static EMBED_VARS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid embed vars pattern")
+});
 
 /// Check if a URL matches any xHamster pattern (video, embed, or user).
 pub fn is_suitable(url: &str) -> bool {
@@ -151,8 +152,8 @@ pub fn extract_user_info(url: &str) -> Option<(String, bool)> {
 }
 
 /// Pattern to strip `m.` subdomain from mobile xHamster URLs.
-static MOBILE_URL_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(https?://(?:.+?\.)?)m\.").expect("Valid mobile URL pattern"));
+static MOBILE_URL_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(https?://(?:.+?\.)?)m\.").expect("Valid mobile URL pattern"));
 
 /// Rewrite mobile URL to desktop (strip `m.` subdomain).
 pub fn rewrite_mobile_url(url: &str) -> String {
@@ -162,7 +163,7 @@ pub fn rewrite_mobile_url(url: &str) -> String {
 /// URL pattern for xHamster search pages.
 ///
 /// Matches: `https://xhamster.com/search/query-terms`
-pub static XHAMSTER_SEARCH_PATTERN: Lazy<Regex> = Lazy::new(|| {
+pub static XHAMSTER_SEARCH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r"https?://(?:[^/?#]+\.)?(?:{DOMAINS})/search/[^/?#]+"
     ))

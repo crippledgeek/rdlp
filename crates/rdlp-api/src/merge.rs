@@ -142,8 +142,10 @@ mod tests {
 
     #[test]
     fn test_output_none_preserves_output_dir() {
-        let mut config = Config::default();
-        config.output_directory = PathBuf::from("/kept");
+        let mut config = Config {
+            output_directory: PathBuf::from("/kept"),
+            ..Config::default()
+        };
         let opts = OutputOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.output_directory, PathBuf::from("/kept"));
@@ -151,8 +153,10 @@ mod tests {
 
     #[test]
     fn test_output_some_overrides_output_dir() {
-        let mut config = Config::default();
-        config.output_directory = PathBuf::from("/old");
+        let mut config = Config {
+            output_directory: PathBuf::from("/old"),
+            ..Config::default()
+        };
         let opts = OutputOptions {
             output_dir: Some(PathBuf::from("/new")),
             ..OutputOptions::default()
@@ -163,8 +167,10 @@ mod tests {
 
     #[test]
     fn test_output_none_preserves_template() {
-        let mut config = Config::default();
-        config.output_template = "kept.%(ext)s".to_string();
+        let mut config = Config {
+            output_template: "kept.%(ext)s".to_string(),
+            ..Config::default()
+        };
         let opts = OutputOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.output_template, "kept.%(ext)s");
@@ -172,8 +178,10 @@ mod tests {
 
     #[test]
     fn test_output_stdout_disables_incompatible_defaults() {
-        let mut config = Config::default();
-        config.embed_thumbnail = true;
+        let mut config = Config {
+            embed_thumbnail: true,
+            ..Config::default()
+        };
         let opts = OutputOptions {
             stdout: Some(true),
             ..OutputOptions::default()
@@ -187,8 +195,10 @@ mod tests {
 
     #[test]
     fn test_output_some_overrides_template() {
-        let mut config = Config::default();
-        config.output_template = "old.%(ext)s".to_string();
+        let mut config = Config {
+            output_template: "old.%(ext)s".to_string(),
+            ..Config::default()
+        };
         let opts = OutputOptions {
             template: Some("new.%(ext)s".into()),
             ..OutputOptions::default()
@@ -201,8 +211,10 @@ mod tests {
 
     #[test]
     fn test_format_none_preserves_selector() {
-        let mut config = Config::default();
-        config.format = Some("kept".to_string());
+        let mut config = Config {
+            format: Some("kept".to_string()),
+            ..Config::default()
+        };
         let opts = FormatOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.format, Some("kept".to_string()));
@@ -210,8 +222,10 @@ mod tests {
 
     #[test]
     fn test_format_some_overrides_selector() {
-        let mut config = Config::default();
-        config.format = Some("old".to_string());
+        let mut config = Config {
+            format: Some("old".to_string()),
+            ..Config::default()
+        };
         let opts = FormatOptions {
             selector: Some("bestaudio".into()),
             ..FormatOptions::default()
@@ -222,8 +236,10 @@ mod tests {
 
     #[test]
     fn test_format_audio_multistreams_none_preserves() {
-        let mut config = Config::default();
-        config.audio_multistreams = true;
+        let mut config = Config {
+            audio_multistreams: true,
+            ..Config::default()
+        };
         let opts = FormatOptions::default();
         opts.merge_into(&mut config);
         assert!(config.audio_multistreams);
@@ -231,8 +247,10 @@ mod tests {
 
     #[test]
     fn test_format_audio_multistreams_some_overrides() {
-        let mut config = Config::default();
-        config.audio_multistreams = false;
+        let mut config = Config {
+            audio_multistreams: false,
+            ..Config::default()
+        };
         let opts = FormatOptions {
             audio_multistreams: Some(true),
             ..FormatOptions::default()
@@ -245,8 +263,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_none_preserves_write_subs() {
-        let mut config = Config::default();
-        config.write_subtitles = true;
+        let mut config = Config {
+            write_subtitles: true,
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert!(config.write_subtitles);
@@ -254,8 +274,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_some_overrides_write_subs() {
-        let mut config = Config::default();
-        config.write_subtitles = false;
+        let mut config = Config {
+            write_subtitles: false,
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             write_subs: Some(true),
             ..SubtitleOptions::default()
@@ -266,8 +288,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_none_preserves_write_auto_subs() {
-        let mut config = Config::default();
-        config.write_auto_subtitles = true;
+        let mut config = Config {
+            write_auto_subtitles: true,
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert!(config.write_auto_subtitles);
@@ -275,8 +299,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_some_overrides_write_auto_subs() {
-        let mut config = Config::default();
-        config.write_auto_subtitles = false;
+        let mut config = Config {
+            write_auto_subtitles: false,
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             write_auto_subs: Some(true),
             ..SubtitleOptions::default()
@@ -287,8 +313,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_empty_preserves_sub_langs() {
-        let mut config = Config::default();
-        config.subtitle_langs = vec!["en".into(), "ja".into()];
+        let mut config = Config {
+            subtitle_langs: vec!["en".into(), "ja".into()],
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.subtitle_langs, vec!["en", "ja"]);
@@ -296,8 +324,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_nonempty_overrides_sub_langs() {
-        let mut config = Config::default();
-        config.subtitle_langs = vec!["en".into()];
+        let mut config = Config {
+            subtitle_langs: vec!["en".into()],
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             sub_langs: vec!["de".into(), "fr".into()],
             ..SubtitleOptions::default()
@@ -308,8 +338,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_none_preserves_sub_format() {
-        let mut config = Config::default();
-        config.subtitle_format = Some(rdlp_core::SubtitleFormat::Vtt);
+        let mut config = Config {
+            subtitle_format: Some(rdlp_core::SubtitleFormat::Vtt),
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.subtitle_format, Some(rdlp_core::SubtitleFormat::Vtt));
@@ -317,8 +349,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_some_overrides_sub_format() {
-        let mut config = Config::default();
-        config.subtitle_format = Some(rdlp_core::SubtitleFormat::Vtt);
+        let mut config = Config {
+            subtitle_format: Some(rdlp_core::SubtitleFormat::Vtt),
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             sub_format: Some(rdlp_core::SubtitleFormat::Srt),
             ..SubtitleOptions::default()
@@ -329,8 +363,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_none_preserves_embed_subs() {
-        let mut config = Config::default();
-        config.embed_subtitles = true;
+        let mut config = Config {
+            embed_subtitles: true,
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert!(config.embed_subtitles);
@@ -338,8 +374,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_some_overrides_embed_subs() {
-        let mut config = Config::default();
-        config.embed_subtitles = false;
+        let mut config = Config {
+            embed_subtitles: false,
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             embed_subs: Some(true),
             ..SubtitleOptions::default()
@@ -350,8 +388,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_none_preserves_strict_subs() {
-        let mut config = Config::default();
-        config.strict_subs = true;
+        let mut config = Config {
+            strict_subs: true,
+            ..Config::default()
+        };
         let opts = SubtitleOptions::default();
         opts.merge_into(&mut config);
         assert!(config.strict_subs);
@@ -359,8 +399,10 @@ mod tests {
 
     #[test]
     fn test_subtitle_some_overrides_strict_subs() {
-        let mut config = Config::default();
-        config.strict_subs = false;
+        let mut config = Config {
+            strict_subs: false,
+            ..Config::default()
+        };
         let opts = SubtitleOptions {
             strict_subs: Some(true),
             ..SubtitleOptions::default()
@@ -373,8 +415,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_remux() {
-        let mut config = Config::default();
-        config.remux_container = Some(rdlp_core::ContainerFormat::Mkv);
+        let mut config = Config {
+            remux_container: Some(rdlp_core::ContainerFormat::Mkv),
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(
@@ -385,8 +429,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_remux() {
-        let mut config = Config::default();
-        config.remux_container = None;
+        let mut config = Config {
+            remux_container: None,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             remux: Some(rdlp_core::ContainerFormat::Mp4),
             ..PostProcessOptions::default()
@@ -400,9 +446,11 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_extract_audio() {
-        let mut config = Config::default();
-        config.extract_audio = true;
-        config.audio_format = Some(rdlp_core::AudioFormat::Mp3);
+        let mut config = Config {
+            extract_audio: true,
+            audio_format: Some(rdlp_core::AudioFormat::Mp3),
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.extract_audio);
@@ -411,9 +459,11 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_extract_audio() {
-        let mut config = Config::default();
-        config.extract_audio = false;
-        config.audio_format = None;
+        let mut config = Config {
+            extract_audio: false,
+            audio_format: None,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             extract_audio: Some(rdlp_core::AudioFormat::Aac),
             ..PostProcessOptions::default()
@@ -425,8 +475,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_embed_metadata() {
-        let mut config = Config::default();
-        config.embed_metadata = true;
+        let mut config = Config {
+            embed_metadata: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.embed_metadata);
@@ -434,8 +486,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_embed_metadata() {
-        let mut config = Config::default();
-        config.embed_metadata = false;
+        let mut config = Config {
+            embed_metadata: false,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             embed_metadata: Some(true),
             ..PostProcessOptions::default()
@@ -446,8 +500,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_embed_thumbnail() {
-        let mut config = Config::default();
-        config.embed_thumbnail = true;
+        let mut config = Config {
+            embed_thumbnail: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.embed_thumbnail);
@@ -455,8 +511,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_embed_thumbnail() {
-        let mut config = Config::default();
-        config.embed_thumbnail = false;
+        let mut config = Config {
+            embed_thumbnail: false,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             embed_thumbnail: Some(true),
             ..PostProcessOptions::default()
@@ -467,9 +525,11 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_no_thumbnail() {
-        let mut config = Config::default();
-        config.embed_thumbnail = true;
-        config.write_thumbnail = true;
+        let mut config = Config {
+            embed_thumbnail: true,
+            write_thumbnail: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.embed_thumbnail);
@@ -478,9 +538,11 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_no_thumbnail() {
-        let mut config = Config::default();
-        config.embed_thumbnail = true;
-        config.write_thumbnail = true;
+        let mut config = Config {
+            embed_thumbnail: true,
+            write_thumbnail: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             no_thumbnail: Some(true),
             ..PostProcessOptions::default()
@@ -492,8 +554,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_write_thumbnail() {
-        let mut config = Config::default();
-        config.write_thumbnail = true;
+        let mut config = Config {
+            write_thumbnail: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.write_thumbnail);
@@ -501,8 +565,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_write_thumbnail() {
-        let mut config = Config::default();
-        config.write_thumbnail = false;
+        let mut config = Config {
+            write_thumbnail: false,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             write_thumbnail: Some(true),
             ..PostProcessOptions::default()
@@ -513,8 +579,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_normalize_audio() {
-        let mut config = Config::default();
-        config.normalize_audio = true;
+        let mut config = Config {
+            normalize_audio: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.normalize_audio);
@@ -522,8 +590,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_normalize_audio() {
-        let mut config = Config::default();
-        config.normalize_audio = false;
+        let mut config = Config {
+            normalize_audio: false,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             normalize_audio: Some(true),
             ..PostProcessOptions::default()
@@ -534,8 +604,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_loudnorm() {
-        let mut config = Config::default();
-        config.loudnorm = true;
+        let mut config = Config {
+            loudnorm: true,
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert!(config.loudnorm);
@@ -543,8 +615,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_loudnorm() {
-        let mut config = Config::default();
-        config.loudnorm = false;
+        let mut config = Config {
+            loudnorm: false,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             loudnorm: Some(true),
             ..PostProcessOptions::default()
@@ -555,8 +629,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_loudnorm_preset() {
-        let mut config = Config::default();
-        config.loudnorm_preset = Some("broadcast".into());
+        let mut config = Config {
+            loudnorm_preset: Some("broadcast".into()),
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.loudnorm_preset.as_deref(), Some("broadcast"));
@@ -564,8 +640,10 @@ mod tests {
 
     #[test]
     fn test_postprocess_some_overrides_loudnorm_preset() {
-        let mut config = Config::default();
-        config.loudnorm_preset = Some("broadcast".into());
+        let mut config = Config {
+            loudnorm_preset: Some("broadcast".into()),
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             loudnorm_preset: Some("streaming".into()),
             ..PostProcessOptions::default()
@@ -576,37 +654,37 @@ mod tests {
 
     #[test]
     fn test_postprocess_none_preserves_recode_video() {
-        let mut config = Config::default();
-        config.recode_video = Some(rdlp_core::ContainerFormat::Mkv);
+        let mut config = Config {
+            recode_video: Some(rdlp_core::ContainerFormat::Mkv),
+            ..Config::default()
+        };
         let opts = PostProcessOptions::default();
         opts.merge_into(&mut config);
-        assert_eq!(
-            config.recode_video,
-            Some(rdlp_core::ContainerFormat::Mkv)
-        );
+        assert_eq!(config.recode_video, Some(rdlp_core::ContainerFormat::Mkv));
     }
 
     #[test]
     fn test_postprocess_some_overrides_recode_video() {
-        let mut config = Config::default();
-        config.recode_video = None;
+        let mut config = Config {
+            recode_video: None,
+            ..Config::default()
+        };
         let opts = PostProcessOptions {
             recode_video: Some(rdlp_core::ContainerFormat::Mp4),
             ..PostProcessOptions::default()
         };
         opts.merge_into(&mut config);
-        assert_eq!(
-            config.recode_video,
-            Some(rdlp_core::ContainerFormat::Mp4)
-        );
+        assert_eq!(config.recode_video, Some(rdlp_core::ContainerFormat::Mp4));
     }
 
     // ─── NetworkOptions ──────────────────────────────────────────────
 
     #[test]
     fn test_network_none_preserves_retries() {
-        let mut config = Config::default();
-        config.retries = 42;
+        let mut config = Config {
+            retries: 42,
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.retries, 42);
@@ -614,8 +692,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_retries() {
-        let mut config = Config::default();
-        config.retries = 10;
+        let mut config = Config {
+            retries: 10,
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             retries: Some(3),
             ..NetworkOptions::default()
@@ -626,8 +706,10 @@ mod tests {
 
     #[test]
     fn test_network_none_preserves_timeout_secs() {
-        let mut config = Config::default();
-        config.socket_timeout = Some(99);
+        let mut config = Config {
+            socket_timeout: Some(99),
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.socket_timeout, Some(99));
@@ -635,8 +717,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_timeout_secs() {
-        let mut config = Config::default();
-        config.socket_timeout = Some(30);
+        let mut config = Config {
+            socket_timeout: Some(30),
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             timeout_secs: Some(120),
             ..NetworkOptions::default()
@@ -647,8 +731,10 @@ mod tests {
 
     #[test]
     fn test_network_none_preserves_concurrent_fragments() {
-        let mut config = Config::default();
-        config.concurrent_fragments = 16;
+        let mut config = Config {
+            concurrent_fragments: 16,
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.concurrent_fragments, 16);
@@ -656,8 +742,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_concurrent_fragments() {
-        let mut config = Config::default();
-        config.concurrent_fragments = 4;
+        let mut config = Config {
+            concurrent_fragments: 4,
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             concurrent_fragments: Some(8),
             ..NetworkOptions::default()
@@ -668,8 +756,10 @@ mod tests {
 
     #[test]
     fn test_network_none_preserves_rate_limit() {
-        let mut config = Config::default();
-        config.rate_limit = Some(1_000_000);
+        let mut config = Config {
+            rate_limit: Some(1_000_000),
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(config.rate_limit, Some(1_000_000));
@@ -677,8 +767,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_rate_limit() {
-        let mut config = Config::default();
-        config.rate_limit = None;
+        let mut config = Config {
+            rate_limit: None,
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             rate_limit: Some(500_000),
             ..NetworkOptions::default()
@@ -689,8 +781,10 @@ mod tests {
 
     #[test]
     fn test_network_none_preserves_cookies_from_browser() {
-        let mut config = Config::default();
-        config.cookies_from_browser = Some(rdlp_core::BrowserType::Firefox);
+        let mut config = Config {
+            cookies_from_browser: Some(rdlp_core::BrowserType::Firefox),
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(
@@ -701,8 +795,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_cookies_from_browser() {
-        let mut config = Config::default();
-        config.cookies_from_browser = None;
+        let mut config = Config {
+            cookies_from_browser: None,
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             cookies_from_browser: Some(rdlp_core::BrowserType::Chrome),
             ..NetworkOptions::default()
@@ -716,8 +812,10 @@ mod tests {
 
     #[test]
     fn test_network_none_preserves_cookies_file() {
-        let mut config = Config::default();
-        config.cookies_file = Some(PathBuf::from("/kept/cookies.txt"));
+        let mut config = Config {
+            cookies_file: Some(PathBuf::from("/kept/cookies.txt")),
+            ..Config::default()
+        };
         let opts = NetworkOptions::default();
         opts.merge_into(&mut config);
         assert_eq!(
@@ -728,8 +826,10 @@ mod tests {
 
     #[test]
     fn test_network_some_overrides_cookies_file() {
-        let mut config = Config::default();
-        config.cookies_file = None;
+        let mut config = Config {
+            cookies_file: None,
+            ..Config::default()
+        };
         let opts = NetworkOptions {
             cookies_file: Some(PathBuf::from("/new/cookies.txt")),
             ..NetworkOptions::default()

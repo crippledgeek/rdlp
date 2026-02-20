@@ -62,7 +62,7 @@ pub trait PostProcessorRegistryTrait: Send + Sync {
     async fn remux_faststart(&self, input: &Path, output: &Path) -> anyhow::Result<()>;
 
     /// List all registered post-processors.
-    fn list_processors(&self) -> Vec<String>;
+    fn list_processors(&self) -> Vec<&str>;
 
     /// Get a post-processor by name.
     fn get_processor(&self, name: &str) -> Option<Arc<dyn PostProcessor>>;
@@ -232,11 +232,8 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         Ok(())
     }
 
-    fn list_processors(&self) -> Vec<String> {
-        self.processors
-            .iter()
-            .map(|p| p.name().to_string())
-            .collect()
+    fn list_processors(&self) -> Vec<&str> {
+        self.processors.iter().map(|p| p.name()).collect()
     }
 
     fn get_processor(&self, name: &str) -> Option<Arc<dyn PostProcessor>> {

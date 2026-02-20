@@ -234,23 +234,24 @@ pub async fn validate_format_expression(
     tokio::task::spawn_blocking(move || {
         use rdlp_types::FormatSelector;
 
-        let selector =
-            FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
-                field: "expression".to_owned(),
-                message: e,
-            })?;
+        let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
+            field: "expression".to_owned(),
+            message: e,
+        })?;
 
         if formats.is_empty() {
             return Ok(Vec::new());
         }
 
-        use rdlp_types::protocol::DownloadProtocol;
         use rdlp_types::Format;
+        use rdlp_types::protocol::DownloadProtocol;
 
         let format_list: Vec<Format> = formats
             .iter()
             .map(|fd| {
-                let protocol = fd.protocol.parse::<DownloadProtocol>()
+                let protocol = fd
+                    .protocol
+                    .parse::<DownloadProtocol>()
                     .unwrap_or(DownloadProtocol::Https);
                 let mut f = Format::new(
                     &fd.format_id,
@@ -273,8 +274,7 @@ pub async fn validate_format_expression(
             .collect();
 
         let selected = selector.select(&format_list);
-        let matched: Vec<String> =
-            selected.iter().map(|f| f.format_id.clone()).collect();
+        let matched: Vec<String> = selected.iter().map(|f| f.format_id.clone()).collect();
         Ok(matched)
     })
     .await
@@ -456,31 +456,19 @@ mod tests {
             make_format_data("137", "mp4", Some("h264"), Some("aac"), Some(1080)),
             make_format_data("140", "m4a", Some("none"), Some("aac"), None),
         ];
-        let result = super::validate_format_expression(
-            "best".to_owned(),
-            formats,
-        )
-        .await;
+        let result = super::validate_format_expression("best".to_owned(), formats).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_format_expression_invalid() {
-        let result = super::validate_format_expression(
-            "".to_owned(),
-            vec![],
-        )
-        .await;
+        let result = super::validate_format_expression("".to_owned(), vec![]).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_validate_format_expression_empty_formats() {
-        let result = super::validate_format_expression(
-            "bv+ba".to_owned(),
-            vec![],
-        )
-        .await;
+        let result = super::validate_format_expression("bv+ba".to_owned(), vec![]).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -491,11 +479,7 @@ mod tests {
             make_format_data("137", "mp4", Some("h264"), Some("aac"), Some(1080)),
             make_format_data("140", "m4a", Some("none"), Some("aac"), None),
         ];
-        let result = super::validate_format_expression(
-            "137".to_owned(),
-            formats,
-        )
-        .await;
+        let result = super::validate_format_expression("137".to_owned(), formats).await;
         assert!(result.is_ok());
         let matches = result.unwrap();
         assert_eq!(matches, vec!["137"]);
@@ -508,11 +492,8 @@ mod tests {
             make_format_data("v1080", "mp4", Some("h264"), Some("none"), Some(1080)),
             make_format_data("a128", "m4a", Some("none"), Some("aac"), None),
         ];
-        let result = super::validate_format_expression(
-            "bv[height<=720]+ba".to_owned(),
-            formats,
-        )
-        .await;
+        let result =
+            super::validate_format_expression("bv[height<=720]+ba".to_owned(), formats).await;
         assert!(result.is_ok());
         let matches = result.unwrap();
         assert_eq!(matches, vec!["v720", "a128"]);
@@ -524,11 +505,7 @@ mod tests {
             make_format_data("v1", "mp4", Some("h264"), Some("none"), Some(720)),
             make_format_data("v2", "webm", Some("vp9"), Some("none"), Some(720)),
         ];
-        let result = super::validate_format_expression(
-            "bv[ext=webm]".to_owned(),
-            formats,
-        )
-        .await;
+        let result = super::validate_format_expression("bv[ext=webm]".to_owned(), formats).await;
         assert!(result.is_ok());
         let matches = result.unwrap();
         assert_eq!(matches, vec!["v2"]);
