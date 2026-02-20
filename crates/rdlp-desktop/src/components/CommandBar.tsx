@@ -2,7 +2,10 @@
 // Site selector + search input with shortcut hint + icon-only submit.
 
 import { useEffect, useRef } from "react";
-import { useSearchStore } from "../lib/store";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { searchParamsAtom, setSearchParam } from "../stores/searchParamsStore";
+import { providersQueryOptions, searchQueryOptions } from "../api/search";
 
 interface CommandBarProps {
     /** Ref exposed so keyboard nav can focus the input externally. */
@@ -12,20 +15,21 @@ interface CommandBarProps {
 
 /** Compact 36px command bar: site selector, search input, submit icon. */
 export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
-    const query = useSearchStore((s) => s.query);
-    const setQuery = useSearchStore((s) => s.setQuery);
-    const site = useSearchStore((s) => s.site);
-    const setSite = useSearchStore((s) => s.setSite);
-    const providers = useSearchStore((s) => s.providers);
-    const loadProviders = useSearchStore((s) => s.loadProviders);
-    const search = useSearchStore((s) => s.search);
-    const status = useSearchStore((s) => s.status);
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+
+    const { data: providers = [] } = useQuery(providersQueryOptions());
+    const { isFetching, refetch } = useQuery(searchQueryOptions(query, site, filters));
 
     const formRef = useRef<HTMLFormElement>(null);
 
+    // Auto-select first provider when providers load and no site is set
     useEffect(() => {
-        void loadProviders();
-    }, [loadProviders]);
+        if (site === "" && providers.length > 0) {
+            setSearchParam("site", providers[0].name);
+        }
+    }, [providers, site]);
 
     // Auto-focus when switching to search tab
     useEffect(() => {
@@ -41,17 +45,17 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
         return () => window.removeEventListener("rdlp-focus-search", handler);
     }, [inputRef]);
 
-    const isDisabled = status === "loading" || query.trim() === "";
+    const isDisabled = isFetching || query.trim() === "";
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!isDisabled) {
-            void search();
+            void refetch();
         }
     };
 
     const handleSiteChange = (newSite: string) => {
-        setSite(newSite);
+        setSearchParam("site", newSite);
     };
 
     return (
@@ -60,7 +64,7 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                 className="command-bar-site"
                 value={site}
                 onChange={(e) => handleSiteChange(e.target.value)}
-                disabled={status === "loading"}
+                disabled={isFetching}
                 aria-label="Search site"
             >
                 {providers.length === 0 && (
@@ -89,8 +93,8 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                     type="text"
                     placeholder="Search videos..."
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    disabled={status === "loading"}
+                    onChange={(e) => setSearchParam("query", e.target.value)}
+                    disabled={isFetching}
                 />
                 <kbd className="command-bar-shortcut">Ctrl+K</kbd>
             </div>
@@ -101,7 +105,7 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
                 disabled={isDisabled}
                 aria-label="Search"
             >
-                {status === "loading" ? (
+                {isFetching ? (
                     <span className="command-bar-spinner" />
                 ) : (
                     <svg
