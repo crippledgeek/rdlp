@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-store";
+import { Search, Download, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
-import { useQueueStore, useSearchStore } from "./lib/store";
+import { queryClient } from "./query/queryClient";
+import { registerDownloadEvents } from "./events/registerDownloadEvents";
 import {
-    onDownloadProgress,
-    onDownloadComplete,
-    onDownloadError,
-    onDownloadLog,
-    onFormatSelected,
-} from "./lib/tauri";
+    searchParamsAtom,
+    setSearchParam,
+} from "./stores/searchParamsStore";
+import { searchQueryOptions } from "./api/search";
+import { queryKeys } from "./query/queryKeys";
+import { downloadsQueryOptions } from "./api/downloads";
+import { cn } from "@/lib/utils";
 import type { SearchFilter, ViewMode } from "./types";
 
 type Tab = "search" | "queue" | "settings";
@@ -19,7 +24,14 @@ type Tab = "search" | "queue" | "settings";
 const VIEW_MODE_KEY = "rdlp-view-mode";
 const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
 
-function App() {
+const TAB_CONFIG = [
+    { id: "search" as const, label: "Search", icon: Search },
+    { id: "queue" as const, label: "Queue", icon: Download },
+    { id: "settings" as const, label: "Settings", icon: Settings },
+] as const;
+
+/** Inner component that uses hooks requiring QueryClientProvider. */
+function AppContent() {
     const [activeTab, setActiveTab] = useState<Tab>("search");
     const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
         return localStorage.getItem(SIDEBAR_KEY) === "true";
@@ -29,9 +41,18 @@ function App() {
     });
     const [searchDuration, setSearchDuration] = useState<number | null>(null);
 
-    const jobs = useQueueStore((s) => s.jobs);
-    const results = useSearchStore((s) => s.results);
-    const status = useSearchStore((s) => s.status);
+    // --- TanStack Store: search form state ---
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+
+    // --- TanStack Query: server state ---
+    const { isFetching, data: searchData } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+
+    const results = searchData?.results ?? [];
 
     const activeCount = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
@@ -55,29 +76,42 @@ function App() {
     // Restore search from sidebar history
     const handleRestoreSearch = useCallback(
         (restoredQuery: string, restoredSite: string, restoredFilters: SearchFilter[]) => {
-            const store = useSearchStore.getState();
-            store.setQuery(restoredQuery);
-            store.setSite(restoredSite);
-            if (restoredFilters.length > 0) store.setFilters(restoredFilters);
+            setSearchParam("query", restoredQuery);
+            setSearchParam("site", restoredSite);
+            if (restoredFilters.length > 0) {
+                searchParamsAtom.setState((prev) => ({
+                    ...prev,
+                    filters: restoredFilters,
+                    hasUserFilters: true,
+                }));
+            }
             setActiveTab("search");
-            setTimeout(() => { void store.search(); }, 0);
+            // Invalidate the search query to trigger a re-fetch after atom updates propagate
+            setTimeout(() => {
+                void queryClient.invalidateQueries({
+                    queryKey: queryKeys.search(restoredQuery, restoredSite, restoredFilters),
+                    refetchType: "all",
+                });
+            }, 0);
         },
         [],
     );
 
-    // Track search duration
+    // Track search duration via isFetching transitions
+    const searchStartRef = useRef<number | null>(null);
     useEffect(() => {
-        if (status === "loading") {
-            const start = Date.now();
-            const unsub = useSearchStore.subscribe((state) => {
-                if (state.status !== "loading") {
-                    setSearchDuration(Date.now() - start);
-                    unsub();
-                }
-            });
-            return unsub;
+        if (isFetching) {
+            searchStartRef.current = Date.now();
+        } else if (searchStartRef.current !== null) {
+            setSearchDuration(Date.now() - searchStartRef.current);
+            searchStartRef.current = null;
         }
-    }, [status]);
+    }, [isFetching]);
+
+    // Register all Tauri download event listeners (single wiring point)
+    useEffect(() => {
+        return registerDownloadEvents(queryClient);
+    }, []);
 
     // Global keyboard shortcuts
     useEffect(() => {
@@ -117,99 +151,45 @@ function App() {
         return () => document.removeEventListener("keydown", handler);
     }, [toggleSidebar, handleViewModeChange, viewMode]);
 
-    // Tauri event listeners (unchanged from original)
-    useEffect(() => {
-        let mounted = true;
-        const unlisteners: Array<() => void> = [];
-
-        const setup = async () => {
-            const unProgress = await onDownloadProgress((payload) => {
-                useQueueStore.getState().updateJobFromProgress(
-                    payload.jobId, payload.progress, payload.speed, payload.eta,
-                );
-            });
-            if (!mounted) { unProgress(); return; }
-            unlisteners.push(unProgress);
-
-            const unComplete = await onDownloadComplete((payload) => {
-                useQueueStore.getState().markJobCompleted(payload.jobId, payload.filepath);
-            });
-            if (!mounted) { unComplete(); return; }
-            unlisteners.push(unComplete);
-
-            const unError = await onDownloadError((payload) => {
-                useQueueStore.getState().markJobFailed(payload.jobId, payload.error, payload.retryable);
-            });
-            if (!mounted) { unError(); return; }
-            unlisteners.push(unError);
-
-            const unLog = await onDownloadLog((payload) => {
-                useQueueStore.getState().updateJobStatus(payload.jobId, payload.message);
-            });
-            if (!mounted) { unLog(); return; }
-            unlisteners.push(unLog);
-
-            const unFormatSelected = await onFormatSelected((payload) => {
-                useQueueStore.getState().updateJobStatus(payload.jobId, `Format: ${payload.quality}`);
-            });
-            if (!mounted) { unFormatSelected(); return; }
-            unlisteners.push(unFormatSelected);
-        };
-
-        void setup();
-        return () => {
-            mounted = false;
-            for (const unlisten of unlisteners) unlisten();
-        };
-    }, []);
-
     return (
-        <div className="app">
-            <nav className="tab-bar">
-                <button
-                    className={`tab-button ${activeTab === "search" ? "active" : ""}`}
-                    onClick={() => setActiveTab("search")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="11" cy="11" r="8" />
-                        <path d="M21 21l-4.3-4.3" />
-                    </svg>
-                    Search
-                </button>
-                <button
-                    className={`tab-button ${activeTab === "queue" ? "active" : ""}`}
-                    onClick={() => setActiveTab("queue")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    Queue
-                    {activeCount > 0 && (
-                        <span className="tab-badge">{activeCount}</span>
-                    )}
-                </button>
-                <button
-                    className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
-                    onClick={() => setActiveTab("settings")}
-                >
-                    <svg className="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                    Settings
-                </button>
+        <div className="flex flex-col h-full bg-background">
+            <nav
+                className="flex items-center gap-0.5 px-3 bg-background border-b border-border shrink-0 h-12"
+                style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+            >
+                {TAB_CONFIG.map(({ id, label, icon: Icon }) => (
+                    <button
+                        key={id}
+                        className={cn(
+                            "flex items-center gap-1.5 px-3 h-full border-none bg-transparent text-muted-foreground text-[13px] font-medium tracking-wide cursor-pointer relative transition-colors select-none",
+                            "hover:text-foreground/70",
+                            activeTab === id && "text-foreground",
+                        )}
+                        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+                        onClick={() => setActiveTab(id)}
+                    >
+                        <Icon className={cn("h-4 w-4 opacity-60 transition-opacity", activeTab === id && "opacity-100")} />
+                        {label}
+                        {id === "queue" && activeCount > 0 && (
+                            <span className="min-w-[18px] h-[18px] px-[5px] rounded-full bg-primary text-background text-[10px] font-bold font-mono flex items-center justify-center">
+                                {activeCount}
+                            </span>
+                        )}
+                        {activeTab === id && (
+                            <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary rounded-t-sm animate-in fade-in zoom-in-x-0 duration-200" />
+                        )}
+                    </button>
+                ))}
             </nav>
 
-            <div className="app-body">
+            <div className="flex flex-1 overflow-hidden">
                 <Sidebar
                     collapsed={sidebarCollapsed}
                     onSwitchToQueue={() => setActiveTab("queue")}
                     onRestoreSearch={handleRestoreSearch}
                 />
 
-                <main className="content">
+                <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 scroll-smooth min-w-0">
                     {activeTab === "search" && (
                         <SearchPage activeTab={activeTab} viewMode={viewMode} />
                     )}
@@ -226,6 +206,15 @@ function App() {
                 onSwitchToQueue={() => setActiveTab("queue")}
             />
         </div>
+    );
+}
+
+/** Root component — provides QueryClient to the entire tree. */
+function App() {
+    return (
+        <QueryClientProvider client={queryClient}>
+            <AppContent />
+        </QueryClientProvider>
     );
 }
 

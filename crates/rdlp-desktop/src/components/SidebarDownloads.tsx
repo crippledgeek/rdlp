@@ -1,12 +1,23 @@
 import { useState } from "react";
-import { useQueueStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { downloadsQueryOptions } from "../api/downloads";
+import { cn } from "@/lib/utils";
+import {
+    Collapsible,
+    CollapsibleTrigger,
+    CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { ChevronDown, Check, X, Circle } from "lucide-react";
 
 interface SidebarDownloadsProps {
     onSwitchToQueue: () => void;
 }
 
 export function SidebarDownloads({ onSwitchToQueue }: SidebarDownloadsProps) {
-    const jobs = useQueueStore((s) => s.jobs);
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
     const [collapsed, setCollapsed] = useState(false);
 
     const sorted = [...jobs].sort((a, b) => {
@@ -21,71 +32,82 @@ export function SidebarDownloads({ onSwitchToQueue }: SidebarDownloadsProps) {
     ).length;
 
     return (
-        <div className="sidebar-section">
-            <button
-                className="sidebar-section-header"
-                onClick={() => setCollapsed(!collapsed)}
-                aria-expanded={!collapsed}
-            >
-                <svg
-                    className={`sidebar-chevron ${collapsed ? "collapsed" : ""}`}
-                    viewBox="0 0 16 16" width="10" height="10"
-                    fill="currentColor"
+        <Collapsible
+            open={!collapsed}
+            onOpenChange={(open) => setCollapsed(!open)}
+            className="px-1 py-1"
+        >
+            <CollapsibleTrigger asChild>
+                <button
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-white/[0.04] transition-colors"
+                    aria-expanded={!collapsed}
                 >
-                    <path d="M4 6l4 4 4-4" />
-                </svg>
-                <span>DOWNLOADS</span>
-                {activeCount > 0 && (
-                    <span className="sidebar-badge">{activeCount}</span>
-                )}
-            </button>
-
-            {!collapsed && (
-                <div className="sidebar-section-content">
-                    {sorted.length === 0 ? (
-                        <div className="sidebar-empty">No downloads</div>
-                    ) : (
-                        sorted.map((job) => (
-                            <button
-                                key={job.id}
-                                className="sidebar-download-item"
-                                onClick={onSwitchToQueue}
-                                title={job.title ?? job.url}
-                            >
-                                <div className="sidebar-download-row">
-                                    {job.status === "completed" && (
-                                        <span className="sidebar-status-icon completed">&#x2713;</span>
-                                    )}
-                                    {job.status === "failed" && (
-                                        <span className="sidebar-status-icon failed">&#x2717;</span>
-                                    )}
-                                    {(job.status === "running" || job.status === "pending") && (
-                                        <span className="sidebar-status-icon running" />
-                                    )}
-                                    <span className="sidebar-download-title">
-                                        {job.title ?? "Untitled"}
-                                    </span>
-                                </div>
-
-                                {(job.status === "running" || job.status === "pending") && (
-                                    <>
-                                        <div className="sidebar-progress-track">
-                                            <div
-                                                className="sidebar-progress-fill"
-                                                style={{ width: `${(job.progress ?? 0) * 100}%` }}
-                                            />
-                                        </div>
-                                        <div className="sidebar-download-meta">
-                                            {job.speed && <span>{job.speed}</span>}
-                                            {job.eta && <span>&middot; {job.eta}</span>}
-                                        </div>
-                                    </>
-                                )}
-                            </button>
-                        ))
+                    <ChevronDown
+                        className={cn(
+                            "h-2.5 w-2.5 shrink-0 transition-transform",
+                            collapsed && "-rotate-90",
+                        )}
+                    />
+                    <span>Downloads</span>
+                    {activeCount > 0 && (
+                        <Badge
+                            variant="default"
+                            className="ml-auto h-4 min-w-4 px-1 text-[9px] leading-none"
+                        >
+                            {activeCount}
+                        </Badge>
                     )}
-                </div>
-            )}
-        </div>
+                </button>
+            </CollapsibleTrigger>
+
+            <CollapsibleContent>
+                <ScrollArea className="max-h-[300px]">
+                    {sorted.length === 0 ? (
+                        <div className="py-1.5 text-center text-[11px] text-muted-foreground">
+                            No downloads
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-0.5 py-0.5">
+                            {sorted.map((job) => (
+                                <button
+                                    key={job.id}
+                                    className="flex w-full flex-col gap-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]"
+                                    onClick={onSwitchToQueue}
+                                    title={job.title ?? job.url}
+                                >
+                                    <div className="flex items-center gap-1.5">
+                                        {job.status === "completed" && (
+                                            <Check className="h-3 w-3 shrink-0 text-primary" />
+                                        )}
+                                        {job.status === "failed" && (
+                                            <X className="h-3 w-3 shrink-0 text-destructive" />
+                                        )}
+                                        {(job.status === "running" || job.status === "pending") && (
+                                            <Circle className="h-3 w-3 shrink-0 animate-pulse text-primary" />
+                                        )}
+                                        <span className="truncate text-[11px] text-foreground">
+                                            {job.title ?? "Untitled"}
+                                        </span>
+                                    </div>
+
+                                    {(job.status === "running" || job.status === "pending") && (
+                                        <>
+                                            <Progress
+                                                value={(job.progress ?? 0) * 100}
+                                                className="h-[3px]"
+                                            />
+                                            <div className="flex gap-1 font-mono text-[10px] text-muted-foreground">
+                                                {job.speed && <span>{job.speed}</span>}
+                                                {job.eta && <span>&middot; {job.eta}</span>}
+                                            </div>
+                                        </>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </ScrollArea>
+            </CollapsibleContent>
+        </Collapsible>
     );
 }

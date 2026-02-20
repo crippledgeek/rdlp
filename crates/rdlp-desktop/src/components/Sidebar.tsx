@@ -1,5 +1,6 @@
 import { SidebarDownloads } from "./SidebarDownloads";
 import { SidebarHistory } from "./SidebarHistory";
+import { cn } from "@/lib/utils";
 import type { SearchFilter } from "../types";
 
 interface SidebarProps {
@@ -14,7 +15,12 @@ export function Sidebar({
     onRestoreSearch,
 }: SidebarProps) {
     return (
-        <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+        <aside
+            className={cn(
+                "w-60 shrink-0 bg-background border-r border-border flex flex-col overflow-hidden transition-[width] duration-150 ease-out",
+                collapsed && "w-0 border-r-0",
+            )}
+        >
             <SidebarDownloads onSwitchToQueue={onSwitchToQueue} />
             <SidebarHistory onRestoreSearch={onRestoreSearch} />
         </aside>

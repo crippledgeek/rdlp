@@ -1,23 +1,24 @@
 import { useEffect, useState } from "react";
-import { useSettingsStore, useSearchStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { settingsQueryOptions, updateSettings, pickDirectory } from "../api/settings";
+import { providersQueryOptions } from "../api/search";
 import type {
     AppSettings,
     AudioFormat,
     ContainerFormat,
     SubtitleFormat,
 } from "../types";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export function SettingsPage() {
-    const { settings, loading, loadSettings, updateSettings, pickDirectory } =
-        useSettingsStore();
-    const providers = useSearchStore((s) => s.providers);
-    const loadProviders = useSearchStore((s) => s.loadProviders);
+    const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
+    const { data: providers = [] } = useQuery(providersQueryOptions());
     const [draft, setDraft] = useState<AppSettings | null>(null);
-
-    useEffect(() => {
-        loadSettings();
-        void loadProviders();
-    }, [loadSettings, loadProviders]);
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -25,12 +26,18 @@ export function SettingsPage() {
         }
     }, [settings]);
 
-    if (loading || !draft) {
-        return <div className="status-message">Loading settings...</div>;
+    if (settingsLoading || !draft) {
+        return <div className="flex items-center justify-center py-16 text-muted-foreground">Loading settings...</div>;
     }
 
     const handleSave = async () => {
-        await updateSettings(draft);
+        try {
+            setSaveError(null);
+            await updateSettings(draft);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setSaveError(msg);
+        }
     };
 
     const handlePickDir = async () => {
@@ -41,21 +48,21 @@ export function SettingsPage() {
     };
 
     return (
-        <div className="settings-page">
-            <h2>Settings</h2>
+        <div className="max-w-xl">
+            <h2 className="text-lg font-bold mb-4 text-foreground">Settings</h2>
 
-            <div className="setting-row">
-                <label>Output Directory</label>
-                <div className="dir-picker">
-                    <input type="text" value={draft.output_dir} readOnly />
-                    <button onClick={handlePickDir}>Browse</button>
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Output Directory</Label>
+                <div className="flex gap-1.5">
+                    <Input type="text" value={draft.output_dir} readOnly className="flex-1 font-mono text-xs" />
+                    <Button variant="outline" onClick={handlePickDir}>Browse</Button>
                 </div>
             </div>
 
-            <div className="setting-row">
-                <label>Default Remux Format</label>
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Remux Format</Label>
                 <select
-                    className="filter-select"
+                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={draft.default_remux ?? ""}
                     onChange={(e) =>
                         setDraft({
@@ -72,10 +79,10 @@ export function SettingsPage() {
                 </select>
             </div>
 
-            <div className="setting-row">
-                <label>Default Audio Extraction</label>
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Audio Extraction</Label>
                 <select
-                    className="filter-select"
+                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={draft.default_extract_audio ?? ""}
                     onChange={(e) =>
                         setDraft({
@@ -93,10 +100,10 @@ export function SettingsPage() {
                 </select>
             </div>
 
-            <div className="setting-row">
-                <label>Default Subtitle Format</label>
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Subtitle Format</Label>
                 <select
-                    className="filter-select"
+                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={draft.default_subtitle_format ?? ""}
                     onChange={(e) =>
                         setDraft({
@@ -113,10 +120,9 @@ export function SettingsPage() {
                 </select>
             </div>
 
-            <div className="setting-row">
-                <label>Default Subtitle Languages</label>
-                <input
-                    className="settings-text-input"
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Subtitle Languages</Label>
+                <Input
                     type="text"
                     placeholder="en,sv,ja"
                     value={draft.default_subtitle_langs.join(",")}
@@ -132,10 +138,10 @@ export function SettingsPage() {
                 />
             </div>
 
-            <div className="setting-row">
-                <label>Default Search Provider</label>
+            <div className="mb-4">
+                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Search Provider</Label>
                 <select
-                    className="filter-select"
+                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
                     value={draft.default_search_provider ?? ""}
                     onChange={(e) =>
                         setDraft({
@@ -154,57 +160,54 @@ export function SettingsPage() {
                 </select>
             </div>
 
-            <div className="setting-row">
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={draft.embed_thumbnail}
-                        onChange={(e) =>
-                            setDraft({
-                                ...draft,
-                                embed_thumbnail: e.target.checked,
-                            })
-                        }
-                    />
+            <div
+                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                onClick={() => setDraft({ ...draft, embed_thumbnail: !draft.embed_thumbnail })}
+            >
+                <Checkbox
+                    checked={draft.embed_thumbnail}
+                    onCheckedChange={(checked) => setDraft({ ...draft, embed_thumbnail: checked === true })}
+                />
+                <Label className="text-sm font-medium text-muted-foreground cursor-pointer">
                     Embed thumbnails
-                </label>
+                </Label>
             </div>
 
-            <div className="setting-row">
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={draft.embed_metadata}
-                        onChange={(e) =>
-                            setDraft({
-                                ...draft,
-                                embed_metadata: e.target.checked,
-                            })
-                        }
-                    />
+            <div
+                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                onClick={() => setDraft({ ...draft, embed_metadata: !draft.embed_metadata })}
+            >
+                <Checkbox
+                    checked={draft.embed_metadata}
+                    onCheckedChange={(checked) => setDraft({ ...draft, embed_metadata: checked === true })}
+                />
+                <Label className="text-sm font-medium text-muted-foreground cursor-pointer">
                     Embed metadata
-                </label>
+                </Label>
             </div>
 
-            <div className="setting-row">
-                <label>
-                    <input
-                        type="checkbox"
-                        checked={draft.verbose}
-                        onChange={(e) =>
-                            setDraft({
-                                ...draft,
-                                verbose: e.target.checked,
-                            })
-                        }
-                    />
+            <div
+                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                onClick={() => setDraft({ ...draft, verbose: !draft.verbose })}
+            >
+                <Checkbox
+                    checked={draft.verbose}
+                    onCheckedChange={(checked) => setDraft({ ...draft, verbose: checked === true })}
+                />
+                <Label className="text-sm font-medium text-muted-foreground cursor-pointer">
                     Verbose logging
-                </label>
+                </Label>
             </div>
 
-            <button className="save-btn" onClick={handleSave}>
+            {saveError && (
+                <Alert variant="destructive" className="mb-4">
+                    <AlertDescription>{saveError}</AlertDescription>
+                </Alert>
+            )}
+
+            <Button onClick={handleSave} className="bg-primary text-primary-foreground hover:bg-primary/90">
                 Save Settings
-            </button>
+            </Button>
         </div>
     );
 }

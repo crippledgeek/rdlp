@@ -2,8 +2,13 @@
 
 import { useState, useRef, useEffect } from "react";
 import { formatDistanceToNowStrict, fromUnixTime } from "date-fns";
-import { useSettingsStore } from "../lib/store";
+import { useQuery } from "@tanstack/react-query";
+import { Download, LayoutGrid, ChevronDown } from "lucide-react";
+import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel } from "./FormatOptionsPanel";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
 import type {
     AudioFormat,
     ContainerFormat,
@@ -82,7 +87,7 @@ export function ResultRow({
     onOpenFormatDialog,
     onToggleSelect,
 }: ResultRowProps) {
-    const settings = useSettingsStore((s) => s.settings);
+    const { data: settings = null } = useQuery(settingsQueryOptions());
     const [showOptions, setShowOptions] = useState(false);
     const [panelOptions, setPanelOptions] = useState<DownloadOptions>(() =>
         buildOptionsFromSettings(settings),
@@ -121,92 +126,94 @@ export function ResultRow({
     return (
         <div
             ref={rowRef}
-            className={[
-                "result-row",
-                focused ? "result-row-focused" : "",
-                selected ? "result-row-selected" : "",
-            ].join(" ")}
+            className={cn(
+                "group flex items-center gap-2.5 h-[52px] px-3 border-b border-white/[0.03] border-l-2 border-l-transparent relative transition-colors",
+                "hover:bg-card",
+                focused && "bg-card border-l-primary",
+                selected && "bg-primary/10",
+            )}
             data-focused={focused || undefined}
         >
             {selected && (
-                <div className="result-row-checkbox" onClick={onToggleSelect}>
-                    <svg viewBox="0 0 16 16" width="12" height="12" fill="var(--accent)">
-                        <rect x="1" y="1" width="14" height="14" rx="2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />
-                        <path d="M4 8l3 3 5-6" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                </div>
+                <Checkbox
+                    checked={true}
+                    className="shrink-0"
+                    onClick={onToggleSelect}
+                />
             )}
 
-            <div className="result-row-thumb">
+            <div className="w-16 h-9 shrink-0 rounded-sm overflow-hidden bg-background">
                 {result.thumbnail_url ? (
-                    <img src={result.thumbnail_url} alt="" loading="lazy" />
+                    <img className="w-full h-full object-cover" src={result.thumbnail_url} alt="" loading="lazy" />
                 ) : (
-                    <div className="result-row-thumb-placeholder" />
+                    <div className="w-full h-full bg-muted" />
                 )}
             </div>
 
-            <div className="result-row-info">
-                <div className="result-row-title" title={result.title}>
+            <div className="flex-1 min-w-0 flex flex-col gap-px">
+                <div className="text-[13px] font-medium text-foreground truncate" title={result.title}>
                     {result.title}
                 </div>
                 {views && (
-                    <div className="result-row-meta">{views}</div>
+                    <div className="text-[11px] text-muted-foreground">{views}</div>
                 )}
             </div>
 
-            <div className="result-row-col result-row-duration">{duration}</div>
-            <div className="result-row-col result-row-date">{date}</div>
+            <div className="shrink-0 w-12 text-xs font-mono text-muted-foreground text-right">{duration}</div>
+            <div className="shrink-0 w-10 text-xs font-mono text-muted-foreground text-right">{date}</div>
 
-            <div className="result-row-actions">
-                <button
-                    className="result-row-action"
+            <div className={cn(
+                "flex gap-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100",
+                focused && "opacity-100",
+            )}>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 hover:text-primary hover:bg-primary/10"
                     onClick={(e) => { e.stopPropagation(); onDownload(result.video_url); }}
                     title="Download"
                     aria-label="Download"
                 >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                </button>
-                <button
-                    className="result-row-action"
+                    <Download className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 hover:text-primary hover:bg-primary/10"
                     onClick={(e) => { e.stopPropagation(); onOpenFormatDialog(result.video_url); }}
                     title="Choose format"
                     aria-label="Choose format"
                 >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="7" height="7" />
-                        <rect x="14" y="3" width="7" height="7" />
-                        <rect x="14" y="14" width="7" height="7" />
-                        <rect x="3" y="14" width="7" height="7" />
-                    </svg>
-                </button>
-                <button
-                    className="result-row-action"
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 hover:text-primary hover:bg-primary/10"
                     onClick={(e) => { e.stopPropagation(); setShowOptions((v) => !v); }}
                     title="Download options"
                     aria-label="Download options"
                 >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M6 9l6 6 6-6" />
-                    </svg>
-                </button>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
             </div>
 
             {showOptions && (
-                <div className="result-row-popover" ref={popoverRef} onClick={(e) => e.stopPropagation()}>
+                <div
+                    className="absolute top-full right-3 z-[100] bg-muted border border-white/[0.08] rounded-md p-2.5 shadow-lg min-w-[260px] animate-in fade-in-0 zoom-in-95"
+                    ref={popoverRef}
+                    onClick={(e) => e.stopPropagation()}
+                >
                     <FormatOptionsPanel value={panelOptions} onChange={setPanelOptions} />
-                    <button
-                        className="options-popover-confirm"
+                    <Button
+                        className="w-full mt-2.5 bg-primary text-primary-foreground hover:bg-primary/90"
                         onClick={() => {
                             onDownloadWithOptions(result.video_url, panelOptions);
                             setShowOptions(false);
                         }}
                     >
                         Download with Options
-                    </button>
+                    </Button>
                 </div>
             )}
         </div>

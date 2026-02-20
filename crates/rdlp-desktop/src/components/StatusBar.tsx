@@ -1,4 +1,11 @@
-import { useSearchStore, useQueueStore } from "../lib/store";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { LayoutList, LayoutGrid } from "lucide-react";
+import { searchParamsAtom } from "../stores/searchParamsStore";
+import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { downloadsQueryOptions } from "../api/downloads";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { ViewMode } from "../types";
 
 interface StatusBarProps {
@@ -16,10 +23,28 @@ export function StatusBar({
     searchDuration,
     onSwitchToQueue,
 }: StatusBarProps) {
-    const status = useSearchStore((s) => s.status);
-    const site = useSearchStore((s) => s.site);
-    const providers = useSearchStore((s) => s.providers);
-    const jobs = useQueueStore((s) => s.jobs);
+    // --- TanStack Store: search form state ---
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+
+    // --- TanStack Query: server state ---
+    const { data: providers = [] } = useQuery(providersQueryOptions());
+    const { isFetching, isError, isSuccess } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
+    const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+
+    // Derive status from query state (same pattern as SearchPage)
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+        ? "loading"
+        : isError
+            ? "error"
+            : isSuccess && resultCount === 0
+                ? "empty"
+                : isSuccess
+                    ? "results"
+                    : "idle";
 
     const activeJobs = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
@@ -49,19 +74,26 @@ export function StatusBar({
     }
 
     return (
-        <div className="status-bar">
-            <div className="status-bar-left">
+        <div className="flex items-center h-6 px-3 bg-background border-t border-border shrink-0">
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
                 {status === "error" && (
-                    <span className="status-bar-dot status-bar-dot-error" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" />
                 )}
-                <span className={status === "error" ? "status-bar-error-text" : ""}>
+                <span
+                    className={cn(
+                        "font-mono text-[11px] truncate",
+                        status === "error"
+                            ? "text-destructive"
+                            : "text-muted-foreground",
+                    )}
+                >
                     {leftText}
                 </span>
             </div>
-            <div className="status-bar-center">
+            <div className="flex items-center justify-center flex-1">
                 {centerText && (
                     <button
-                        className="status-bar-downloads"
+                        className="font-mono text-[11px] text-primary hover:text-primary/80 bg-transparent border-none cursor-pointer"
                         onClick={onSwitchToQueue}
                         title="Switch to Queue tab"
                     >
@@ -69,32 +101,35 @@ export function StatusBar({
                     </button>
                 )}
             </div>
-            <div className="status-bar-right">
-                <button
-                    className={`status-bar-view-btn ${viewMode === "list" ? "active" : ""}`}
+            <div className="flex items-center gap-0.5 justify-end flex-1">
+                <Button
+                    variant="ghost"
+                    className={cn(
+                        "h-[18px] w-[22px] p-0",
+                        viewMode === "list"
+                            ? "text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                    )}
                     onClick={() => onViewModeChange("list")}
                     title="List view"
                     aria-label="List view"
                 >
-                    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-                        <rect x="1" y="2" width="14" height="1.5" rx="0.5" />
-                        <rect x="1" y="7" width="14" height="1.5" rx="0.5" />
-                        <rect x="1" y="12" width="14" height="1.5" rx="0.5" />
-                    </svg>
-                </button>
-                <button
-                    className={`status-bar-view-btn ${viewMode === "grid" ? "active" : ""}`}
+                    <LayoutList size={14} />
+                </Button>
+                <Button
+                    variant="ghost"
+                    className={cn(
+                        "h-[18px] w-[22px] p-0",
+                        viewMode === "grid"
+                            ? "text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                    )}
                     onClick={() => onViewModeChange("grid")}
                     title="Grid view"
                     aria-label="Grid view"
                 >
-                    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-                        <rect x="1" y="1" width="6" height="6" rx="1" />
-                        <rect x="9" y="1" width="6" height="6" rx="1" />
-                        <rect x="1" y="9" width="6" height="6" rx="1" />
-                        <rect x="9" y="9" width="6" height="6" rx="1" />
-                    </svg>
-                </button>
+                    <LayoutGrid size={14} />
+                </Button>
             </div>
         </div>
     );

@@ -2,7 +2,13 @@
 // Compact 28px controls with active-state highlighting.
 
 import { useEffect, useState } from "react";
-import { useSearchStore } from "../lib/store";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { Settings, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { searchParamsAtom } from "../stores/searchParamsStore";
+import { filtersQueryOptions, searchQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
 
 const DEFAULT_FILTER_KEYS = new Set([
@@ -17,37 +23,46 @@ function isFilterActive(value: string, defaultValue: string | null): boolean {
 
 /** Compact chip-styled filter bar with default + advanced filters. */
 export function FilterBar() {
-    const filters = useSearchStore((s) => s.filters);
-    const setFilters = useSearchStore((s) => s.setFilters);
-    const filterDescriptors = useSearchStore((s) => s.filterDescriptors);
-    const loadFilters = useSearchStore((s) => s.loadFilters);
-    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
-    const search = useSearchStore((s) => s.search);
-    const status = useSearchStore((s) => s.status);
-    const site = useSearchStore((s) => s.site);
-    const query = useSearchStore((s) => s.query);
-    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const hasUserFilters = useStore(searchParamsAtom, (s) => s.hasUserFilters);
+
+    const { data: filterDescriptors = [] } = useQuery(filtersQueryOptions(site));
+    const { isFetching, data: searchData, refetch } = useQuery(
+        searchQueryOptions(query, site, filters),
+    );
 
     const [showAdvanced, setShowAdvanced] = useState(false);
 
-    // Load filter descriptors when site changes
+    // Reset filters to defaults when filter descriptors change (new site)
     useEffect(() => {
-        if (site !== "") {
-            void loadFilters(site);
+        if (filterDescriptors.length === 0) return;
+        const defaults: SearchFilter[] = [];
+        for (const desc of filterDescriptors) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
         }
-    }, [site, loadFilters]);
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: defaults,
+            hasUserFilters: false,
+        }));
+    }, [filterDescriptors]);
 
     // Reset advanced panel on site change
     useEffect(() => {
         setShowAdvanced(false);
     }, [site]);
 
-    // Auto-search when filters change (only if results are showing)
+    // Auto-search when filters change (only if results are already showing)
     useEffect(() => {
         if (!hasUserFilters) return;
-        if (status !== "results" && status !== "empty") return;
+        // Only auto-search if a search has already been performed
+        if (searchData === undefined) return;
         if (query.trim() === "" || site === "") return;
-        void search();
+        void refetch();
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFilterChange = (key: string, value: string) => {
@@ -55,7 +70,25 @@ export function FilterBar() {
         if (value !== "") {
             updated.push({ key, value });
         }
-        setFilters(updated);
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: updated,
+            hasUserFilters: true,
+        }));
+    };
+
+    const resetFiltersToDefaults = () => {
+        const defaults: SearchFilter[] = [];
+        for (const desc of filterDescriptors) {
+            if (desc.default !== null) {
+                defaults.push({ key: desc.key, value: desc.default });
+            }
+        }
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: defaults,
+            hasUserFilters: false,
+        }));
     };
 
     const getFilterValue = (key: string): string => {
@@ -75,19 +108,32 @@ export function FilterBar() {
     if (filterDescriptors.length === 0) return null;
 
     return (
-        <div className="filter-bar">
-            <div className="filter-bar-chips">
+        <div className="pt-1.5">
+            <div className="flex items-center gap-1 flex-wrap">
                 {defaultFilters.map((desc) => {
                     const value = getFilterValue(desc.key);
                     const active = isFilterActive(value, desc.default);
                     return (
                         <select
                             key={desc.key}
-                            className={`filter-chip${active ? " filter-chip-active" : ""}`}
+                            className={cn(
+                                "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
+                                "hover:border-white/[0.08] hover:text-foreground/70",
+                                "focus:outline-none focus:ring-1 focus:ring-ring",
+                                "disabled:opacity-40 disabled:cursor-not-allowed",
+                                active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                            )}
                             value={value}
                             onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                            disabled={status === "loading"}
+                            disabled={isFetching}
                             aria-label={desc.display_name}
+                            style={{
+                                backgroundImage: active
+                                    ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
+                                    : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                                backgroundRepeat: "no-repeat",
+                                backgroundPosition: "right 6px center",
+                            }}
                         >
                             <option value="">
                                 {desc.display_name}
@@ -102,57 +148,70 @@ export function FilterBar() {
                 })}
 
                 {advancedFilters.length > 0 && (
-                    <button
+                    <Button
+                        variant="outline"
                         type="button"
-                        className={`filter-chip-toggle ${showAdvanced ? "active" : ""}`}
+                        className={cn(
+                            "h-7 px-2.5 gap-1 text-[11px] border-border/50 text-muted-foreground",
+                            showAdvanced && "border-primary text-primary bg-primary/10",
+                        )}
                         onClick={() => setShowAdvanced(!showAdvanced)}
                         aria-expanded={showAdvanced}
                         aria-label="Advanced filters"
                     >
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="3" />
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                        </svg>
+                        <Settings className="h-[11px] w-[11px]" />
                         {activeAdvancedCount > 0 && (
-                            <span className="filter-chip-badge">
+                            <span className="text-[10px] font-bold text-primary">
                                 +{activeAdvancedCount}
                             </span>
                         )}
-                    </button>
+                    </Button>
                 )}
 
                 {hasAnyActiveFilter && (
-                    <button
+                    <Button
+                        variant="ghost"
+                        size="icon"
                         type="button"
-                        className="filter-chip-reset"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
                         onClick={resetFiltersToDefaults}
                         aria-label="Reset all filters"
                         title="Reset all filters"
                     >
-                        <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 6L6 18" />
-                            <path d="M6 6l12 12" />
-                        </svg>
-                    </button>
+                        <X className="h-2.5 w-2.5" />
+                    </Button>
                 )}
             </div>
 
             {showAdvanced && advancedFilters.length > 0 && (
-                <div className="filter-bar-advanced">
+                <div className="flex flex-wrap gap-2.5 mt-1.5 p-2.5 bg-card border border-border rounded-md animate-in fade-in duration-200">
                     {advancedFilters.map((desc) => {
                         const value = getFilterValue(desc.key);
                         const active = isFilterActive(value, desc.default);
                         return (
-                            <div key={desc.key} className="filter-bar-advanced-item">
-                                <label className="filter-bar-label">
+                            <div key={desc.key} className="flex flex-col gap-[3px]">
+                                <label className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">
                                     {desc.display_name}
                                 </label>
                                 <select
-                                    className={`filter-chip${active ? " filter-chip-active" : ""}`}
+                                    className={cn(
+                                        "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
+                                        "hover:border-white/[0.08] hover:text-foreground/70",
+                                        "focus:outline-none focus:ring-1 focus:ring-ring",
+                                        "disabled:opacity-40 disabled:cursor-not-allowed",
+                                        active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                                    )}
                                     value={value}
                                     onChange={(e) => handleFilterChange(desc.key, e.target.value)}
-                                    disabled={status === "loading"}
+                                    disabled={isFetching}
                                     aria-label={desc.display_name}
+                                    style={{
+                                        backgroundImage: active
+                                            ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
+                                            : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
+                                        backgroundRepeat: "no-repeat",
+                                        backgroundPosition: "right 6px center",
+                                    }}
                                 >
                                     <option value="">Any</option>
                                     {desc.allowed_values.map((v) => (

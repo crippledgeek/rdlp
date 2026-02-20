@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useStore } from "@tanstack/react-store";
+import { useQuery } from "@tanstack/react-query";
+import { WifiOff, AlertCircle } from "lucide-react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
 import { ResultsList } from "../components/ResultsList";
@@ -6,7 +9,21 @@ import { ResultCard } from "../components/ResultCard";
 import { SearchIdleState } from "../components/SearchIdleState";
 import { BatchActionBar } from "../components/BatchActionBar";
 import { FormatDialog } from "../components/FormatDialog";
-import { useSearchStore, useQueueStore } from "../lib/store";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+    searchParamsAtom,
+    setSearchParam,
+} from "../stores/searchParamsStore";
+import {
+    providersQueryOptions,
+    searchQueryOptions,
+} from "../api/search";
+import { settingsQueryOptions } from "../api/settings";
+import {
+    startDownload as apiStartDownload,
+    buildDefaultOptions,
+} from "../api/downloads";
 import { useSearchHistory } from "../hooks/useSearchHistory";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useKeyboardNavigation } from "../hooks/useKeyboardNavigation";
@@ -19,19 +36,39 @@ interface SearchPageProps {
 
 /** Main search page composing command bar, filters, results, and dialogs. */
 export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
-    const status = useSearchStore((s) => s.status);
-    const results = useSearchStore((s) => s.results);
-    const error = useSearchStore((s) => s.error);
-    const search = useSearchStore((s) => s.search);
-    const query = useSearchStore((s) => s.query);
-    const site = useSearchStore((s) => s.site);
-    const setQuery = useSearchStore((s) => s.setQuery);
-    const setSite = useSearchStore((s) => s.setSite);
-    const setFilters = useSearchStore((s) => s.setFilters);
-    const hasUserFilters = useSearchStore((s) => s.hasUserFilters);
-    const resetFiltersToDefaults = useSearchStore((s) => s.resetFiltersToDefaults);
-    const providers = useSearchStore((s) => s.providers);
-    const startDownload = useQueueStore((s) => s.startDownload);
+    // --- TanStack Store: search form state ---
+    const query = useStore(searchParamsAtom, (s) => s.query);
+    const site = useStore(searchParamsAtom, (s) => s.site);
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+    const hasUserFilters = useStore(searchParamsAtom, (s) => s.hasUserFilters);
+
+    // --- TanStack Query: server state ---
+    const { data: providers = [] } = useQuery(providersQueryOptions());
+    const {
+        data: searchData,
+        isFetching,
+        isError,
+        isSuccess,
+        error: queryError,
+        refetch,
+    } = useQuery(searchQueryOptions(query, site, filters));
+    const { data: settings = null } = useQuery(settingsQueryOptions());
+
+    // Derive results and status from query state
+    const results = searchData?.results ?? [];
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+        ? "loading"
+        : isError
+            ? "error"
+            : isSuccess && results.length === 0
+                ? "empty"
+                : isSuccess
+                    ? "results"
+                    : "idle";
+
+    const error = isError
+        ? (queryError instanceof Error ? queryError.message : String(queryError))
+        : null;
 
     const { addEntry } = useSearchHistory();
     const isOnline = useOnlineStatus();
@@ -49,15 +86,19 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleDownload = useCallback(
-        (url: string) => { void startDownload(url); },
-        [startDownload],
+        (url: string) => {
+            const opts = buildDefaultOptions(settings);
+            void apiStartDownload(url, opts);
+        },
+        [settings],
     );
 
     const handleDownloadWithOptions = useCallback(
         (url: string, options: Partial<DownloadOptions>) => {
-            void startDownload(url, options);
+            const defaults = buildDefaultOptions(settings);
+            void apiStartDownload(url, { ...defaults, ...options });
         },
-        [startDownload],
+        [settings],
     );
 
     const handleOpenFormatDialog = useCallback(
@@ -68,11 +109,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleFormatDialogConfirm = useCallback(
         (options: DownloadOptions) => {
             if (formatDialogUrl) {
-                void startDownload(formatDialogUrl, options);
+                void apiStartDownload(formatDialogUrl, options);
             }
             setFormatDialogUrl(null);
         },
-        [formatDialogUrl, startDownload],
+        [formatDialogUrl],
     );
 
     // Keyboard nav callbacks (by index)
@@ -120,53 +161,79 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     }, [selectedIndices, results, handleDownload, clearSelection]);
 
     const handleRestoreSearch = useCallback(
-        (q: string, s: string, filters: Array<{ key: string; value: string }>) => {
-            setQuery(q);
-            setSite(s);
-            if (filters.length > 0) setFilters(filters);
-            // Trigger search after state updates
-            setTimeout(() => { void search(); }, 0);
+        (q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
+            setSearchParam("query", q);
+            setSearchParam("site", s);
+            if (restoredFilters.length > 0) {
+                searchParamsAtom.setState((prev) => ({
+                    ...prev,
+                    filters: restoredFilters,
+                    hasUserFilters: true,
+                }));
+            }
+            // Trigger search after atom updates propagate
+            setTimeout(() => { void refetch(); }, 0);
         },
-        [setQuery, setSite, setFilters, search],
+        [refetch],
     );
 
     const handleQuickSearch = useCallback(
         (q: string) => {
-            setQuery(q);
-            setTimeout(() => { void search(); }, 0);
+            setSearchParam("query", q);
+            // Trigger search after atom update propagates
+            setTimeout(() => { void refetch(); }, 0);
         },
-        [setQuery, search],
+        [refetch],
     );
 
+    /** Reset filters to descriptor defaults then re-search. */
+    const handleResetFiltersAndSearch = useCallback(() => {
+        // FilterBar owns the filter descriptors and resets via its own
+        // resetFiltersToDefaults. Here we just clear hasUserFilters and
+        // set filters to empty (the FilterBar effect will re-apply
+        // defaults from filter descriptors).
+        searchParamsAtom.setState((prev) => ({
+            ...prev,
+            filters: [],
+            hasUserFilters: false,
+        }));
+        setTimeout(() => { void refetch(); }, 0);
+    }, [refetch]);
+
     return (
-        <div className="search-page">
-            <div className="search-command-center">
+        <div className="flex flex-col h-full">
+            <div className="shrink-0 pb-2.5 border-b border-border mb-1.5">
                 <CommandBar inputRef={inputRef} activeTab={activeTab} />
                 <FilterBar />
             </div>
 
             {/* Loading bar */}
             {status === "loading" && (
-                <div className="search-loading-bar">
-                    <div className="search-loading-bar-fill" />
+                <div className="h-0.5 bg-muted overflow-hidden shrink-0">
+                    <div className="h-full w-2/5 bg-primary rounded-sm animate-[loading-sweep_1.5s_ease-in-out_infinite]" />
                 </div>
             )}
 
             {/* Offline banner */}
             {!isOnline && (
-                <div className="search-banner search-banner-offline">
-                    <span className="search-banner-dot" />
-                    No internet connection
-                    <button onClick={() => void search()}>Retry</button>
-                </div>
+                <Alert className="mb-1.5 bg-gray-500/[0.08] border-gray-500/15 text-muted-foreground">
+                    <WifiOff className="h-4 w-4" />
+                    <AlertDescription className="flex items-center gap-2.5">
+                        No internet connection
+                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                    </AlertDescription>
+                </Alert>
             )}
 
             {/* Error banner */}
             {status === "error" && (
-                <div className="search-banner search-banner-error">
-                    {error ?? "An unknown error occurred."}
-                    <button onClick={() => void search()}>Retry</button>
-                </div>
+                <Alert variant="destructive" className="mb-1.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="flex items-center gap-2.5">
+                        {error ?? "An unknown error occurred."}
+                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                    </AlertDescription>
+                </Alert>
             )}
 
             {/* Idle state */}
@@ -180,25 +247,25 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
             {/* No results */}
             {status === "empty" && (
-                <div className="search-no-results">
-                    <p>
+                <div className="p-6 text-muted-foreground text-[13px]">
+                    <p className="text-muted-foreground mb-2.5">
                         No results for &ldquo;{query}&rdquo;
                         {site && ` on ${providers.find((p) => p.name === site)?.display_name ?? site}`}
                     </p>
-                    <ul>
-                        <li>Try different keywords</li>
+                    <ul className="list-disc pl-4">
+                        <li className="mb-1">Try different keywords</li>
                         {hasUserFilters && (
-                            <li>
+                            <li className="mb-1">
                                 Remove active filters{" "}
                                 <button
-                                    className="search-link-btn"
-                                    onClick={() => { resetFiltersToDefaults(); void search(); }}
+                                    className="text-primary hover:text-primary/80 underline cursor-pointer bg-transparent border-none font-inherit text-inherit p-0"
+                                    onClick={handleResetFiltersAndSearch}
                                 >
                                     Clear filters
                                 </button>
                             </li>
                         )}
-                        <li>Search on a different site</li>
+                        <li className="mb-1">Search on a different site</li>
                     </ul>
                 </div>
             )}
@@ -217,7 +284,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             )}
 
             {status === "results" && viewMode === "grid" && (
-                <div className="results-grid results-grid-dense">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                     {results.map((result, idx) => (
                         <ResultCard
                             key={`${idx}-${result.video_url}`}
