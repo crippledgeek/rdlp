@@ -5,13 +5,11 @@ import { formatDistanceToNowStrict, fromUnixTime } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { Download, LayoutGrid, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
-import { FormatOptionsPanel } from "./FormatOptionsPanel";
+import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import type {
-    AudioFormat,
-    ContainerFormat,
     DownloadOptions,
     SearchResultPreview,
 } from "../types";
@@ -58,24 +56,6 @@ function formatViews(count: number | null): string {
     return `${count} views`;
 }
 
-function buildOptionsFromSettings(settings: {
-    default_remux: ContainerFormat | null;
-    default_extract_audio: AudioFormat | null;
-    default_subtitle_langs: string[];
-    embed_thumbnail: boolean;
-} | null): DownloadOptions {
-    return {
-        format: null,
-        outputDir: null,
-        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
-        subtitleLangs: settings?.default_subtitle_langs ?? [],
-        remux: settings?.default_remux ?? null,
-        extractAudio: settings?.default_extract_audio ?? null,
-        embedThumbnail: settings?.embed_thumbnail ?? true,
-        audioMultistreams: false,
-        recodeVideo: null,
-    };
-}
 
 /** Dense list row for a single search result. */
 export function ResultRow({
@@ -90,14 +70,14 @@ export function ResultRow({
     const { data: settings = null } = useQuery(settingsQueryOptions());
     const [showOptions, setShowOptions] = useState(false);
     const [panelOptions, setPanelOptions] = useState<DownloadOptions>(() =>
-        buildOptionsFromSettings(settings),
+        buildDefaultOptions(settings),
     );
     const popoverRef = useRef<HTMLDivElement>(null);
     const rowRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!showOptions) {
-            setPanelOptions(buildOptionsFromSettings(settings));
+            setPanelOptions(buildDefaultOptions(settings));
         }
     }, [settings, showOptions]);
 
