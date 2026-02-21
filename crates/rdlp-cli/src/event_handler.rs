@@ -8,7 +8,7 @@ use rdlp_api::Event;
 use rdlp_core::DownloadProgress;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Handles download lifecycle events for CLI display.
 pub struct CliEventHandler {
@@ -98,6 +98,9 @@ impl CliEventHandler {
                 ..
             } => {
                 warn!("Retry {attempt}/{max_attempts}: {reason}");
+            }
+            Event::Debug { message, .. } => {
+                debug!("{message}");
             }
         }
     }

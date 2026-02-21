@@ -334,6 +334,9 @@ impl RdlpClient {
         request.subtitles.merge_into(&mut config);
         request.postprocess.merge_into(&mut config);
         request.network.merge_into(&mut config);
+        if let Some(v) = request.verbose {
+            config.verbose = v;
+        }
         config
     }
 }
@@ -519,6 +522,44 @@ mod tests {
             config.normalize_audio,
             "normalize_audio must be preserved from base config"
         );
+    }
+
+    #[test]
+    fn test_build_config_verbose_none_preserves_base() {
+        let base_config = Config {
+            verbose: true,
+            ..Config::default()
+        };
+        let client = RdlpClient::builder().config(base_config).build().unwrap();
+        let request = DownloadRequest::new("http://example.com");
+        let config = client.build_config(&request);
+        assert!(config.verbose, "verbose must be preserved when request.verbose is None");
+    }
+
+    #[test]
+    fn test_build_config_verbose_some_overrides() {
+        let base_config = Config {
+            verbose: false,
+            ..Config::default()
+        };
+        let client = RdlpClient::builder().config(base_config).build().unwrap();
+        let mut request = DownloadRequest::new("http://example.com");
+        request.verbose = Some(true);
+        let config = client.build_config(&request);
+        assert!(config.verbose, "verbose must be overridden by request.verbose = Some(true)");
+    }
+
+    #[test]
+    fn test_build_config_verbose_false_overrides() {
+        let base_config = Config {
+            verbose: true,
+            ..Config::default()
+        };
+        let client = RdlpClient::builder().config(base_config).build().unwrap();
+        let mut request = DownloadRequest::new("http://example.com");
+        request.verbose = Some(false);
+        let config = client.build_config(&request);
+        assert!(!config.verbose, "verbose must be overridden by request.verbose = Some(false)");
     }
 
     #[test]

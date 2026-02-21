@@ -34,6 +34,8 @@ pub struct DownloadRequest {
     pub network: NetworkOptions,
     /// If `true`, only extract metadata without downloading.
     pub plan_only: bool,
+    /// Enable verbose logging. `None` preserves base config.
+    pub verbose: Option<bool>,
 }
 
 impl DownloadRequest {
@@ -232,6 +234,7 @@ mod tests {
         // Top-level defaults
         assert!(req.url.is_empty());
         assert!(!req.plan_only);
+        assert!(req.verbose.is_none());
 
         // OutputOptions defaults
         assert!(req.output.output_dir.is_none());
@@ -309,10 +312,12 @@ mod tests {
                 ..NetworkOptions::default()
             },
             plan_only: true,
+            verbose: Some(true),
         };
 
         assert_eq!(req.url, "https://example.com/video");
         assert!(req.plan_only);
+        assert_eq!(req.verbose, Some(true));
 
         // Output overrides
         assert_eq!(

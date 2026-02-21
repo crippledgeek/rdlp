@@ -38,6 +38,7 @@ fn event_tag(event: &Event) -> &'static str {
         Event::PlaylistDetected { .. } => "playlist_detected",
         Event::PlaylistItemStarted { .. } => "playlist_item_started",
         Event::Retrying { .. } => "retrying",
+        Event::Debug { .. } => "debug",
     }
 }
 

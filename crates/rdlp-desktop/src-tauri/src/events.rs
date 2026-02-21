@@ -60,6 +60,8 @@ pub(crate) enum LogLevel {
     Info,
     /// Warning messages (retries, quality fallbacks).
     Warn,
+    /// Debug/verbose messages (detailed extraction and download steps).
+    Debug,
 }
 
 /// Format-selected payload emitted as `"format-selected"`.
@@ -225,6 +227,16 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: format!("Format selected: {quality} ({format_id})"),
             };
             let _ = app.emit("download-log", &log);
+        }
+
+        Event::Debug { message, .. } => {
+            let payload = DownloadLogPayload {
+                job_id: job_id.to_owned(),
+                level: LogLevel::Debug,
+                message: message.clone(),
+            };
+
+            let _ = app.emit("download-log", &payload);
         }
 
         // All other events are not forwarded to the frontend.

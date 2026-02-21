@@ -3,6 +3,7 @@
 //! Handles FFmpeg remuxing, metadata embedding, and audio extraction.
 
 use super::{Orchestrator, Result};
+use crate::events::Event;
 use log::{debug, info, warn};
 use rdlp_core::PostProcessConfig;
 use std::path::PathBuf;
@@ -108,7 +109,12 @@ impl Orchestrator {
 
         if self.config.verbose {
             let processors = registry.list_processors();
-            debug!("Available processors: {}", processors.join(", "));
+            let msg = format!("Available processors: {}", processors.join(", "));
+            debug!("{msg}");
+            self.emit(Event::Debug {
+                id: self.download_id,
+                message: msg,
+            });
         }
 
         // Run FFmpeg remux to fix container (faststart, timestamps)
@@ -129,7 +135,12 @@ impl Orchestrator {
                     info!("Post-processing complete");
                     if self.config.verbose {
                         for file in &result.files {
-                            debug!(path:? = file.display(); "Output");
+                            let msg = format!("Output: {}", file.display());
+                            debug!("{msg}");
+                            self.emit(Event::Debug {
+                                id: self.download_id,
+                                message: msg,
+                            });
                         }
                     }
                 }

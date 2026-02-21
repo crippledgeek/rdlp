@@ -135,6 +135,7 @@ pub async fn start_download(
             embed_metadata: Some(settings.embed_metadata),
             ..PostProcessOptions::default()
         },
+        verbose: if settings.verbose { Some(true) } else { None },
         ..DownloadRequest::default()
     };
 

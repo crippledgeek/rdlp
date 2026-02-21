@@ -139,6 +139,8 @@ impl From<&Event> for EventDto {
                     "reason": reason,
                 }),
             ),
+
+            Event::Debug { message, .. } => ("debug", json!({ "message": message })),
         };
 
         Self {
