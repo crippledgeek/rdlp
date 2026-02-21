@@ -1,8 +1,27 @@
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import type { AudioFormat, ContainerFormat, DownloadOptions } from "../types";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import type {
+    AppSettings,
+    AudioFormat,
+    ContainerFormat,
+    DownloadOptions,
+} from "../types";
 
 /** A format preset with a human-readable label and yt-dlp selector string. */
 export interface FormatPreset {
@@ -14,8 +33,16 @@ export interface FormatPreset {
 /** Shared preset definitions used by both the popover and FormatDialog. */
 export const PRESETS: FormatPreset[] = [
     { id: "best", label: "Best Quality", selector: "bestvideo+bestaudio/best" },
-    { id: "1080p", label: "1080p", selector: "bestvideo[height<=1080]+bestaudio/best[height<=1080]" },
-    { id: "720p", label: "720p", selector: "bestvideo[height<=720]+bestaudio/best[height<=720]" },
+    {
+        id: "1080p",
+        label: "1080p",
+        selector: "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+    },
+    {
+        id: "720p",
+        label: "720p",
+        selector: "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    },
     { id: "audio-only", label: "Audio Only", selector: "bestaudio/best" },
 ];
 
@@ -34,16 +61,30 @@ const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "flac", label: "FLAC" },
 ];
 
+/** Sentinel value for "no selection" in Radix Select (empty string is not supported). */
+const NONE_SENTINEL = "none";
+
 /**
- * Tailwind classes for native `<select>` elements with a custom chevron icon.
- * Uses a data URI SVG background image to avoid inline style attributes.
+ * Build a `DownloadOptions` from persisted settings.
+ *
+ * Leaves `format` as `null` so the backend applies its smart default
+ * selector (`bv*+ba/b` with FFmpeg, `b/bv+ba` without).
  */
-const selectClasses = cn(
-    "h-8 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-muted-foreground",
-    "cursor-pointer appearance-none transition-colors",
-    "bg-[url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2210%22%20height%3D%2210%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%2F%3E%3C%2Fsvg%3E')] bg-no-repeat bg-[position:right_8px_center]",
-    "focus:outline-none focus:ring-1 focus:ring-ring",
-);
+export function buildDefaultOptions(
+    settings: AppSettings | null,
+): DownloadOptions {
+    return {
+        format: null,
+        outputDir: settings?.output_dir ?? null,
+        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
+        subtitleLangs: settings?.default_subtitle_langs ?? [],
+        remux: settings?.default_remux ?? null,
+        extractAudio: settings?.default_extract_audio ?? null,
+        embedThumbnail: settings?.embed_thumbnail ?? true,
+        audioMultistreams: false,
+        recodeVideo: null,
+    };
+}
 
 interface FormatOptionsPanelProps {
     value: DownloadOptions;
@@ -55,9 +96,8 @@ interface FormatOptionsPanelProps {
 
 /** Derive which preset ID matches the current format selector, if any. */
 function activePreset(format: string | null): string | null {
-    if (!format) return "best";
-    const match = PRESETS.find((p) => p.selector === format);
-    return match?.id ?? null;
+    if (!format) return null;
+    return PRESETS.find((p) => p.selector === format)?.id ?? null;
 }
 
 /** Controlled panel for download options: presets, remux, audio, subs, thumbnail. */
@@ -69,21 +109,23 @@ export function FormatOptionsPanel({
 }: FormatOptionsPanelProps) {
     const currentPreset = activePreset(value.format);
 
-    const handlePreset = (preset: FormatPreset) => {
-        onChange({ ...value, format: preset.selector });
+    const handlePreset = (presetId: string) => {
+        const preset = PRESETS.find((p) => p.id === presetId);
+        if (preset) onChange({ ...value, format: preset.selector });
     };
 
     const handleRemux = (val: string) => {
         onChange({
             ...value,
-            remux: val === "" ? null : (val as ContainerFormat),
+            remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
         });
     };
 
     const handleAudio = (val: string) => {
         onChange({
             ...value,
-            extractAudio: val === "" ? null : (val as AudioFormat),
+            extractAudio:
+                val === NONE_SENTINEL ? null : (val as AudioFormat),
         });
     };
 
@@ -99,6 +141,18 @@ export function FormatOptionsPanel({
         onChange({ ...value, subtitleLangs: langs });
     };
 
+    const handleSubLangSelect = (val: string) => {
+        if (val === NONE_SENTINEL) {
+            onChange({ ...value, subtitleLangs: [] });
+            return;
+        }
+        const current = value.subtitleLangs;
+        const next = current.includes(val)
+            ? current.filter((l) => l !== val)
+            : [...current, val];
+        onChange({ ...value, subtitleLangs: next });
+    };
+
     return (
         <div className="flex flex-col gap-1.5">
             {!hidePresets && (
@@ -106,82 +160,85 @@ export function FormatOptionsPanel({
                     <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                         Quality Preset
                     </Label>
-                    <div className="flex flex-wrap gap-1">
+                    <RadioGroup
+                        value={currentPreset ?? ""}
+                        onValueChange={handlePreset}
+                        className="flex flex-wrap gap-1"
+                    >
                         {PRESETS.map((p) => (
-                            <label
+                            <Label
                                 key={p.id}
+                                htmlFor={`preset-${p.id}`}
                                 className={cn(
                                     "inline-flex items-center gap-[5px] px-2.5 py-[5px] border border-white/[0.06] rounded-sm bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
                                     "hover:border-white/[0.12] hover:text-foreground",
-                                    currentPreset === p.id && "border-primary text-primary bg-primary/[0.12]",
+                                    currentPreset === p.id &&
+                                        "border-primary text-primary bg-primary/[0.12]",
                                 )}
                             >
-                                <input
-                                    type="radio"
-                                    name="preset"
-                                    checked={currentPreset === p.id}
-                                    onChange={() => handlePreset(p)}
-                                    className={cn(
-                                        "appearance-none w-3 h-3 border-2 border-muted rounded-full bg-muted cursor-pointer shrink-0 relative transition-colors",
-                                        currentPreset === p.id && "border-primary bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-1 after:h-1 after:rounded-full after:bg-background",
-                                    )}
+                                <RadioGroupItem
+                                    value={p.id}
+                                    id={`preset-${p.id}`}
+                                    className="size-3.5"
                                 />
                                 {p.label}
-                            </label>
+                            </Label>
                         ))}
-                    </div>
+                    </RadioGroup>
                 </div>
             )}
 
             <div className="flex flex-col gap-1">
-                <Label
-                    htmlFor="remux-select"
-                    className="text-[11px] font-semibold text-muted-foreground tracking-wide"
-                >
+                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                     Remux
                 </Label>
-                <select
-                    id="remux-select"
-                    className={selectClasses}
-                    value={value.remux ?? ""}
-                    onChange={(e) => handleRemux(e.target.value)}
+                <Select
+                    value={value.remux ?? NONE_SENTINEL}
+                    onValueChange={handleRemux}
                 >
-                    <option value="">None</option>
-                    {REMUX_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                            {o.label}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        {REMUX_OPTIONS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             </div>
 
             <div className="flex flex-col gap-1">
-                <Label
-                    htmlFor="audio-select"
-                    className="text-[11px] font-semibold text-muted-foreground tracking-wide"
-                >
+                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                     Extract Audio
                 </Label>
-                <select
-                    id="audio-select"
-                    className={selectClasses}
-                    value={value.extractAudio ?? ""}
-                    onChange={(e) => handleAudio(e.target.value)}
+                <Select
+                    value={value.extractAudio ?? NONE_SENTINEL}
+                    onValueChange={handleAudio}
                 >
-                    <option value="">None</option>
-                    {AUDIO_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                            {o.label}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        {AUDIO_OPTIONS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             </div>
 
             <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                     <Checkbox
                         checked={value.subtitles}
-                        onCheckedChange={(checked) => handleSubtitles(checked === true)}
+                        onCheckedChange={(checked) =>
+                            handleSubtitles(checked === true)
+                        }
                         id="subtitles"
                     />
                     <Label
@@ -194,27 +251,44 @@ export function FormatOptionsPanel({
                 {value.subtitles && (
                     <div className="mt-1.5">
                         {availableSubtitleLangs.length > 0 ? (
-                            <select
-                                className={cn(
-                                    "h-auto min-h-[60px] w-full rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground",
-                                    "cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-ring",
-                                )}
-                                multiple
-                                value={value.subtitleLangs}
-                                onChange={(e) => {
-                                    const selected = Array.from(
-                                        e.target.selectedOptions,
-                                        (o) => o.value,
-                                    );
-                                    onChange({ ...value, subtitleLangs: selected });
-                                }}
-                            >
-                                {availableSubtitleLangs.map((lang) => (
-                                    <option key={lang} value={lang}>
-                                        {lang}
-                                    </option>
-                                ))}
-                            </select>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="w-full justify-between text-xs font-normal"
+                                    >
+                                        <span className="truncate">
+                                            {value.subtitleLangs.length > 0
+                                                ? value.subtitleLangs.join(", ")
+                                                : "None"}
+                                        </span>
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                    align="start"
+                                    className="w-(--radix-popover-trigger-width) p-2"
+                                >
+                                    <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                                        {availableSubtitleLangs.map((lang) => (
+                                            <Label
+                                                key={lang}
+                                                htmlFor={`sub-lang-${lang}`}
+                                                className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs cursor-pointer hover:bg-accent"
+                                            >
+                                                <Checkbox
+                                                    id={`sub-lang-${lang}`}
+                                                    checked={value.subtitleLangs.includes(lang)}
+                                                    onCheckedChange={() =>
+                                                        handleSubLangSelect(lang)
+                                                    }
+                                                />
+                                                {lang}
+                                            </Label>
+                                        ))}
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
                         ) : (
                             <Input
                                 className="font-mono text-xs"
@@ -233,7 +307,10 @@ export function FormatOptionsPanel({
                     <Checkbox
                         checked={value.embedThumbnail}
                         onCheckedChange={(checked) =>
-                            onChange({ ...value, embedThumbnail: checked === true })
+                            onChange({
+                                ...value,
+                                embedThumbnail: checked === true,
+                            })
                         }
                         id="embed-thumbnail"
                     />

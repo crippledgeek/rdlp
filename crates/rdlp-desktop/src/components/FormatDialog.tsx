@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
+import { Loader2, AlertCircle, ChevronUp, ChevronDown, FolderOpen } from "lucide-react";
 import { formatsQueryOptions } from "../api/formats";
-import { settingsQueryOptions } from "../api/settings";
+import { settingsQueryOptions, pickDirectory } from "../api/settings";
 import { invokeTyped } from "../api/invokeClient";
-import { FormatOptionsPanel, PRESETS } from "./FormatOptionsPanel";
+import { FormatOptionsPanel, PRESETS, buildDefaultOptions } from "./FormatOptionsPanel";
 import { cn } from "@/lib/utils";
 import {
     Dialog,
@@ -20,6 +20,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import type {
     DownloadOptions,
     FormatInfo,
@@ -130,19 +133,28 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     const [exprError, setExprError] = useState<string | null>(null);
     const [exprMatches, setExprMatches] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
-    const [options, setOptions] = useState<DownloadOptions>({
-        format: null,
-        outputDir: null,
-        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
-        subtitleLangs: settings?.default_subtitle_langs ?? [],
-        remux: settings?.default_remux ?? null,
-        extractAudio: settings?.default_extract_audio ?? null,
-        embedThumbnail: settings?.embed_thumbnail ?? true,
-        audioMultistreams: false,
-        recodeVideo: null,
-    });
+    const [settingsApplied, setSettingsApplied] = useState(false);
+    const [options, setOptions] = useState<DownloadOptions>(() =>
+        buildDefaultOptions(settings),
+    );
 
     const exprTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Sync options when settings first load (fixes race condition where
+    // useState captures settings at mount before the query resolves)
+    useEffect(() => {
+        if (settings && !settingsApplied) {
+            setOptions((prev) => ({
+                ...prev,
+                subtitles: (settings.default_subtitle_langs ?? []).length > 0,
+                subtitleLangs: settings.default_subtitle_langs ?? [],
+                remux: settings.default_remux ?? prev.remux,
+                extractAudio: settings.default_extract_audio ?? prev.extractAudio,
+                embedThumbnail: settings.embed_thumbnail ?? prev.embedThumbnail,
+            }));
+            setSettingsApplied(true);
+        }
+    }, [settings, settingsApplied]);
 
     // Surface query-level errors in local state
     useEffect(() => {
@@ -178,11 +190,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         }
     };
 
-    // Preset selection
-    const handlePresetSelect = (selector: string) => {
+    // Preset selection (uses preset ID, not selector)
+    const handlePresetSelect = (presetId: string) => {
+        const preset = PRESETS.find((p) => p.id === presetId);
+        if (!preset) return;
         setSelectedId(null);
         setMergeId(null);
-        setOptions((prev) => ({ ...prev, format: selector }));
+        setOptions((prev) => ({ ...prev, format: preset.selector }));
     };
 
     // Expert expression change with debounced validation
@@ -242,6 +256,14 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         onConfirm({ ...options, format });
     };
 
+    // Output directory picker
+    const handleBrowseDir = async () => {
+        const dir = await pickDirectory();
+        if (dir) {
+            setOptions((prev) => ({ ...prev, outputDir: dir }));
+        }
+    };
+
     const sorted = formatData
         ? sortFormats(formatData.formats, sortKey, sortDir)
         : [];
@@ -255,9 +277,9 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
             : <ChevronDown className="inline size-3" />;
     };
 
-    // Derive active preset from selected state
+    // Derive active preset from selected state (no fallback to "best")
     const activePresetId = (!selectedId && !mergeId && !expertMode)
-        ? PRESETS.find((p) => p.selector === options.format)?.id ?? "best"
+        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
         : null;
 
     /** Shared cell class for consistent td styling based on row state. */
@@ -300,7 +322,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     className="ml-auto h-6 text-[11px]"
                                     onClick={() => {
                                         setError(null);
-                                        void refetch();
+                                        refetch().catch((e) => console.error("Refetch failed:", e));
                                     }}
                                 >
                                     Retry
@@ -316,133 +338,131 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                 <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                                     Quality Preset
                                 </div>
-                                <div className="flex flex-wrap gap-1">
+                                <RadioGroup
+                                    value={activePresetId ?? ""}
+                                    onValueChange={handlePresetSelect}
+                                    className="flex flex-wrap gap-1.5"
+                                >
                                     {PRESETS.map((p) => (
-                                        <label
+                                        <Label
                                             key={p.id}
+                                            htmlFor={`dialog-preset-${p.id}`}
                                             className={cn(
-                                                "inline-flex items-center gap-[5px] px-2.5 py-[5px] border border-white/[0.06] rounded-sm bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
-                                                "hover:border-white/[0.12] hover:text-foreground",
-                                                activePresetId === p.id && "border-primary text-primary bg-primary/[0.12]",
+                                                "inline-flex items-center gap-1.5 px-2.5 py-[5px] border border-border rounded-md bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
+                                                "hover:border-muted-foreground/30 hover:text-foreground",
+                                                activePresetId === p.id && "border-primary text-primary bg-primary/[0.08]",
                                             )}
                                         >
-                                            <input
-                                                type="radio"
-                                                name="dialog-preset"
-                                                checked={activePresetId === p.id}
-                                                onChange={() => handlePresetSelect(p.selector)}
-                                                className={cn(
-                                                    "appearance-none w-3 h-3 border-2 border-muted rounded-full bg-muted cursor-pointer shrink-0 relative transition-colors",
-                                                    activePresetId === p.id && "border-primary bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-1 after:h-1 after:rounded-full after:bg-background",
-                                                )}
-                                            />
+                                            <RadioGroupItem value={p.id} id={`dialog-preset-${p.id}`} className="size-3.5" />
                                             {p.label}
-                                        </label>
+                                        </Label>
                                     ))}
-                                </div>
+                                </RadioGroup>
                             </div>
 
                             {/* Format table toggle */}
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="self-start text-xs text-muted-foreground hover:text-foreground"
-                                onClick={() => setShowTable((v) => !v)}
-                                aria-expanded={showTable}
-                            >
-                                {showTable
-                                    ? <><ChevronUp className="size-3.5" />Hide all formats</>
-                                    : <><ChevronDown className="size-3.5" />Show all formats ({sorted.length})</>}
-                            </Button>
-
-                            {showTable && (
-                                <div className="flex flex-col border border-border rounded-md animate-in fade-in-0 zoom-in-95">
-                                    <ScrollArea className="max-h-[40vh]">
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full border-collapse font-mono text-xs">
-                                                <thead>
-                                                    <tr>
-                                                        {([
-                                                            ["height", "Resolution"],
-                                                            ["ext", "Ext"],
-                                                            ["fps", "FPS"],
-                                                            ["tbr", "Bitrate"],
-                                                            ["vcodec", "Video"],
-                                                            ["acodec", "Audio"],
-                                                            ["filesize", "Size"],
-                                                        ] as [SortKey, string][]).map(([key, label]) => (
-                                                            <th
-                                                                key={key}
-                                                                className={cn(
-                                                                    "sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none cursor-pointer transition-colors hover:text-foreground",
-                                                                    sortKey === key && "text-primary",
-                                                                )}
-                                                                onClick={() => handleSortClick(key)}
-                                                            >
-                                                                <span className="inline-flex items-center gap-1">
-                                                                    {label}
-                                                                    {renderSortIndicator(key)}
-                                                                </span>
-                                                            </th>
-                                                        ))}
-                                                        <th className="sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none">
-                                                            Type
-                                                        </th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {sorted.map((f) => {
-                                                        const type = formatType(f);
-                                                        const isSelected =
-                                                            f.format_id === selectedId ||
-                                                            f.format_id === mergeId;
-                                                        const isExprMatch = exprMatches.has(f.format_id);
-                                                        return (
-                                                            <tr
-                                                                key={f.format_id}
-                                                                className={cn(
-                                                                    "cursor-pointer transition-colors hover:bg-muted",
-                                                                    isSelected && "bg-primary/[0.12]",
-                                                                    isExprMatch && !isSelected && "bg-yellow-500/[0.08]",
-                                                                )}
-                                                                onClick={(e) => handleRowClick(f.format_id, e)}
-                                                            >
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{formatResolution(f)}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{f.ext}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{f.fps !== null ? Math.round(f.fps) : "-"}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{formatBitrate(f.tbr)}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{f.vcodec ?? "-"}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{f.acodec ?? "-"}</td>
-                                                                <td className={cellClass(isSelected, isExprMatch)}>{formatSize(f.filesize)}</td>
-                                                                <td className="px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap">
-                                                                    <span className={cn(
-                                                                        "inline-block px-[7px] py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase font-mono",
-                                                                        type.className,
-                                                                    )}>
-                                                                        {type.label}
+                            <Collapsible open={showTable} onOpenChange={setShowTable}>
+                                <CollapsibleTrigger asChild>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="self-start text-xs text-muted-foreground hover:text-foreground gap-1"
+                                        aria-expanded={showTable}
+                                    >
+                                        {showTable
+                                            ? <><ChevronUp className="size-3.5" />Hide all formats</>
+                                            : <><ChevronDown className="size-3.5" />Show all formats ({sorted.length})</>}
+                                    </Button>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                    <div className="flex flex-col border border-border rounded-md mt-1">
+                                        <ScrollArea className="max-h-[40vh]">
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full border-collapse font-mono text-xs">
+                                                    <thead>
+                                                        <tr>
+                                                            {([
+                                                                ["height", "Resolution"],
+                                                                ["ext", "Ext"],
+                                                                ["fps", "FPS"],
+                                                                ["tbr", "Bitrate"],
+                                                                ["vcodec", "Video"],
+                                                                ["acodec", "Audio"],
+                                                                ["filesize", "Size"],
+                                                            ] as [SortKey, string][]).map(([key, label]) => (
+                                                                <th
+                                                                    key={key}
+                                                                    className={cn(
+                                                                        "sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none cursor-pointer transition-colors hover:text-foreground",
+                                                                        sortKey === key && "text-primary",
+                                                                    )}
+                                                                    onClick={() => handleSortClick(key)}
+                                                                >
+                                                                    <span className="inline-flex items-center gap-1">
+                                                                        {label}
+                                                                        {renderSortIndicator(key)}
                                                                     </span>
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </ScrollArea>
+                                                                </th>
+                                                            ))}
+                                                            <th className="sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none">
+                                                                Type
+                                                            </th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {sorted.map((f) => {
+                                                            const type = formatType(f);
+                                                            const isSelected =
+                                                                f.format_id === selectedId ||
+                                                                f.format_id === mergeId;
+                                                            const isExprMatch = exprMatches.has(f.format_id);
+                                                            return (
+                                                                <tr
+                                                                    key={f.format_id}
+                                                                    className={cn(
+                                                                        "cursor-pointer transition-colors hover:bg-muted",
+                                                                        isSelected && "bg-primary/[0.12]",
+                                                                        isExprMatch && !isSelected && "bg-yellow-500/[0.08]",
+                                                                    )}
+                                                                    onClick={(e) => handleRowClick(f.format_id, e)}
+                                                                >
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatResolution(f)}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.ext}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.fps !== null ? Math.round(f.fps) : "-"}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatBitrate(f.tbr)}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.vcodec ?? "-"}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.acodec ?? "-"}</td>
+                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatSize(f.filesize)}</td>
+                                                                    <td className="px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap">
+                                                                        <span className={cn(
+                                                                            "inline-block px-[7px] py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase font-mono",
+                                                                            type.className,
+                                                                        )}>
+                                                                            {type.label}
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </ScrollArea>
 
-                                    {selectedId && (
-                                        <div className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted border-t border-border">
-                                            Selected: <strong className="text-primary font-mono">{selectedId}</strong>
-                                            {mergeId && (
-                                                <> + <strong className="text-primary font-mono">{mergeId}</strong> (merge)</>
-                                            )}
-                                            <span className="text-muted-foreground italic">
-                                                {!mergeId && " \u2014 Shift+click another format to merge"}
-                                            </span>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
+                                        {selectedId && (
+                                            <div className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted border-t border-border">
+                                                Selected: <strong className="text-primary font-mono">{selectedId}</strong>
+                                                {mergeId && (
+                                                    <> + <strong className="text-primary font-mono">{mergeId}</strong> (merge)</>
+                                                )}
+                                                <span className="text-muted-foreground italic">
+                                                    {!mergeId && " \u2014 Shift+click another format to merge"}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </CollapsibleContent>
+                            </Collapsible>
 
                             {/* Expert mode */}
                             <div className="flex items-center gap-2">
@@ -479,6 +499,33 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     )}
                                 </div>
                             )}
+
+                            <Separator />
+
+                            {/* Output directory picker */}
+                            <div className="flex flex-col gap-1.5">
+                                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                    Save to
+                                </Label>
+                                <div className="flex gap-1.5">
+                                    <Input
+                                        className="flex-1 text-xs h-8"
+                                        type="text"
+                                        readOnly
+                                        value={options.outputDir ?? settings?.output_dir ?? ""}
+                                        placeholder="Default output directory"
+                                    />
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 px-2.5 shrink-0"
+                                        onClick={() => { handleBrowseDir().catch((e) => console.error("Browse directory failed:", e)); }}
+                                    >
+                                        <FolderOpen className="size-3.5" />
+                                        Browse
+                                    </Button>
+                                </div>
+                            </div>
 
                             {/* Download options */}
                             <FormatOptionsPanel

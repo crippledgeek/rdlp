@@ -47,7 +47,9 @@ impl PostProcessor for FFmpegRemuxer {
     }
 
     fn should_run(&self, _info: &InfoDict, config: &PostProcessConfig) -> bool {
-        config.remux_container.is_some()
+        // Skip remux when audio extraction is active — extract_audio produces
+        // a standalone audio file that should not be remuxed into a video container.
+        config.remux_container.is_some() && !config.extract_audio
     }
 
     async fn process(
@@ -154,6 +156,36 @@ mod tests {
             let remuxer = FFmpegRemuxer::new(Arc::new(ffmpeg));
             // Should run after merger (100) but before video convertor (40)
             assert_eq!(remuxer.priority(), 45);
+        }
+    }
+
+    #[test]
+    fn test_should_run_skips_when_extract_audio() {
+        if let Ok(ffmpeg) = FFmpegRunner::new() {
+            let remuxer = FFmpegRemuxer::new(Arc::new(ffmpeg));
+            let info = InfoDict::new("id", "title", "ext", "url");
+
+            // Remux alone — should run
+            let config = PostProcessConfig {
+                remux_container: Some(ContainerFormat::Mkv),
+                ..PostProcessConfig::default()
+            };
+            assert!(remuxer.should_run(&info, &config));
+
+            // Remux + extract_audio — should NOT run
+            let config = PostProcessConfig {
+                remux_container: Some(ContainerFormat::Mkv),
+                extract_audio: true,
+                ..PostProcessConfig::default()
+            };
+            assert!(!remuxer.should_run(&info, &config));
+
+            // extract_audio alone (no remux) — should NOT run
+            let config = PostProcessConfig {
+                extract_audio: true,
+                ..PostProcessConfig::default()
+            };
+            assert!(!remuxer.should_run(&info, &config));
         }
     }
 }

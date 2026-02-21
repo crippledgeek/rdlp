@@ -188,7 +188,7 @@ export interface FormatSelectedPayload {
 /** Log message payload emitted as "download-log". */
 export interface DownloadLogPayload {
     jobId: string;
-    level: "info" | "warn";
+    level: "info" | "warn" | "debug";
     message: string;
 }
 

@@ -135,33 +135,35 @@ pub async fn start_download(
             embed_metadata: Some(settings.embed_metadata),
             ..PostProcessOptions::default()
         },
+        verbose: if settings.verbose { Some(true) } else { None },
         ..DownloadRequest::default()
     };
 
-    // Start the download via rdlp-api
+    // Start the download via rdlp-api (must be outside any lock scope)
     let mut handle = state.client.download(request);
 
-    // Extract cancel token BEFORE moving handle into the spawned task
+    // Atomically store the cancel token and transition to Running in a
+    // single lock acquisition. This prevents concurrent commands from
+    // observing the job in a Pending-with-cancel or Running-without-cancel
+    // intermediate state.
     let cancel_token = handle.cancel_token();
-    {
-        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-        queue.set_cancel(&job_id, Box::new(move || cancel_token.cancel()));
-    }
-
-    // Mark job as running and set started_at
     let now = chrono::Utc::now().timestamp();
     {
         let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(job) = queue.get_job_mut(&job_id) {
-            job.status = JobStatus::Running;
-            job.started_at = Some(now);
-        }
+        queue.start_job(&job_id, Box::new(move || cancel_token.cancel()), now);
     }
 
     let queue = state.queue.clone();
     let id = job_id.clone();
 
-    // Spawn background event loop
+    // Spawn background event loop.
+    //
+    // Lock safety: The `MutexGuard` acquired below is dropped at the
+    // end of each loop iteration before `.recv().await` yields. This
+    // ensures the lock is never held across an await point, avoiding
+    // both deadlocks and prolonged contention. The pattern is sound
+    // because `MutexGuard` (from `std::sync::Mutex`) is `!Send`, and
+    // Rust prevents it from being held across `.await` at compile time.
     tokio::spawn(async move {
         while let Some(event) = handle.events().recv().await {
             // Forward to frontend

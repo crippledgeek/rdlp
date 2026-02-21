@@ -9,7 +9,10 @@ import type { FormatListResponse } from "../types";
 export function formatsQueryOptions(url: string | null) {
     return queryOptions({
         queryKey: queryKeys.formats(url ?? ""),
-        queryFn: () => invokeTyped<FormatListResponse>("get_formats", { url: url! }),
+        queryFn: () => {
+            if (!url) throw new Error("URL is required for format query");
+            return invokeTyped<FormatListResponse>("get_formats", { url });
+        },
         enabled: url !== null && url !== "",
     });
 }

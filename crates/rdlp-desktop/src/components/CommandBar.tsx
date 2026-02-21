@@ -59,7 +59,7 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!isDisabled) {
-            void refetch();
+            refetch().catch((e) => console.error("Refetch failed:", e));
         }
     };
 

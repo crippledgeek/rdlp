@@ -196,9 +196,11 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
                 }
                 Err(e) => {
                     warn!(name:? = processor.name(); "Post-processor failed: {e}");
-                    // Continue with other processors on non-fatal errors
-                    // Fatal errors should be propagated
-                    if is_fatal_error(&e) {
+                    // Propagate fatal errors and user-requested primary operations.
+                    // Audio extraction is explicitly requested by the user, so
+                    // failures must surface rather than silently returning the
+                    // original video file.
+                    if is_fatal_error(&e, processor.name()) {
                         return Err(e.into());
                     }
                 }
@@ -245,11 +247,23 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
 }
 
 /// Check if an error is fatal and should stop processing.
-fn is_fatal_error(error: &rdlp_core::RdlpError) -> bool {
-    // Check for fatal error types
+///
+/// An error is fatal when:
+/// - It indicates a missing component ("not found").
+/// - It comes from a user-requested primary operation (audio extraction,
+///   audio normalization) where silently continuing would produce the
+///   wrong output format.
+fn is_fatal_error(error: &rdlp_core::RdlpError, processor_name: &str) -> bool {
+    // Always fatal: missing component
+    if matches!(error, rdlp_core::RdlpError::FFmpeg(msg) if msg.contains("not found")) {
+        return true;
+    }
+
+    // User-requested primary operations: failures must surface so the user
+    // knows the requested conversion did not happen.
     matches!(
-        error,
-        rdlp_core::RdlpError::FFmpeg(msg) if msg.contains("not found"),
+        processor_name,
+        "FFmpegExtractAudio" | "FFmpegNormalizeAudio"
     )
 }
 
@@ -279,5 +293,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_is_fatal_error_extract_audio() {
+        // Audio extraction errors are always fatal regardless of error type
+        let err = rdlp_core::RdlpError::PostProcess("audio extraction failed".into());
+        assert!(is_fatal_error(&err, "FFmpegExtractAudio"));
+
+        let err = rdlp_core::RdlpError::FFmpeg("encoder open failed".into());
+        assert!(is_fatal_error(&err, "FFmpegExtractAudio"));
+    }
+
+    #[test]
+    fn test_is_fatal_error_normalize_audio() {
+        let err = rdlp_core::RdlpError::PostProcess("normalization failed".into());
+        assert!(is_fatal_error(&err, "FFmpegNormalizeAudio"));
+    }
+
+    #[test]
+    fn test_is_fatal_error_non_primary_processor() {
+        // Non-primary processor errors are NOT fatal (unless "not found")
+        let err = rdlp_core::RdlpError::PostProcess("metadata embed failed".into());
+        assert!(!is_fatal_error(&err, "FFmpegMetadata"));
+
+        let err = rdlp_core::RdlpError::PostProcess("thumbnail embed failed".into());
+        assert!(!is_fatal_error(&err, "EmbedThumbnail"));
+    }
+
+    #[test]
+    fn test_is_fatal_error_not_found_always_fatal() {
+        // "not found" errors are fatal for ANY processor
+        let err = rdlp_core::RdlpError::FFmpeg("codec not found".into());
+        assert!(is_fatal_error(&err, "FFmpegMetadata"));
+        assert!(is_fatal_error(&err, "EmbedThumbnail"));
     }
 }

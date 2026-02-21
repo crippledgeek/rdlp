@@ -5,6 +5,8 @@
 //! [`pick_directory`] command uses the native OS folder picker via
 //! `tauri-plugin-dialog`.
 
+use std::time::Duration;
+
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -26,15 +28,14 @@ use crate::state::{AppSettings, AppState};
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if the settings mutex is poisoned.
+/// This function does not currently return errors but returns
+/// `Result` for forward-compatible IPC signatures.
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, AppError> {
     let settings = state
         .settings
         .lock()
-        .map_err(|e| AppError::Internal {
-            message: format!("Settings lock poisoned: {e}"),
-        })?
+        .unwrap_or_else(|e| e.into_inner())
         .clone();
 
     Ok(settings)
@@ -52,18 +53,18 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, App
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if the settings mutex is poisoned.
+/// Returns [`AppError::Internal`] if saving settings to disk fails.
 #[tauri::command]
 pub async fn update_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let mut current = state.settings.lock().map_err(|e| AppError::Internal {
-        message: format!("Settings lock poisoned: {e}"),
-    })?;
+    let mut current = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
     *current = settings;
-    current.save().ok();
+    current.save().map_err(|e| AppError::Internal {
+        message: format!("Failed to save settings: {e}"),
+    })?;
 
     Ok(())
 }
@@ -96,9 +97,14 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
         let _ = tx.send(folder);
     });
 
-    let folder = rx.await.map_err(|_| AppError::Internal {
-        message: "Folder picker channel closed unexpectedly".to_owned(),
-    })?;
+    let folder = tokio::time::timeout(Duration::from_secs(300), rx)
+        .await
+        .map_err(|_| AppError::Internal {
+            message: "Folder picker timed out after 5 minutes".to_owned(),
+        })?
+        .map_err(|_| AppError::Internal {
+            message: "Folder picker channel closed unexpectedly".to_owned(),
+        })?;
 
     match folder {
         Some(file_path) => {

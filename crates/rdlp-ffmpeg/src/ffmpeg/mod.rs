@@ -150,7 +150,7 @@ pub static AUDIO_CODECS: &[(&str, AudioCodecConfig)] = &[
     (
         "flac",
         AudioCodecConfig {
-            encoder: None, // Native FLAC encoder
+            encoder: Some("flac"), // Native FLAC encoder
             extension: "flac",
             quality_scale: None,
             bitrate_range: None, // Lossless
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(mp3.quality_scale, Some((9, 0)));
 
         let flac = get_audio_codec("flac").unwrap();
-        assert!(flac.encoder.is_none()); // Native codec
+        assert_eq!(flac.encoder, Some("flac")); // Native FLAC encoder
         assert!(flac.bitrate_range.is_none()); // Lossless
     }
 

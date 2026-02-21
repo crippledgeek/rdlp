@@ -26,7 +26,7 @@ tauri-plugin-shell = "2"
 
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 thiserror = { workspace = true }
 log = { workspace = true }
 uuid = { version = "1", features = ["v4"] }

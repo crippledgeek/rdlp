@@ -4,7 +4,8 @@ import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import { queryClient } from "../query/queryClient";
-import type { AppSettings, DownloadJob, DownloadOptions } from "../types";
+import type { DownloadJob, DownloadOptions } from "../types";
+export { buildDefaultOptions } from "../components/FormatOptionsPanel";
 
 /** Fetch the current download queue. */
 export function downloadsQueryOptions() {
@@ -12,21 +13,6 @@ export function downloadsQueryOptions() {
         queryKey: queryKeys.downloads.list(),
         queryFn: () => invokeTyped<DownloadJob[]>("get_queue"),
     });
-}
-
-/** Build default DownloadOptions from AppSettings. */
-export function buildDefaultOptions(settings: AppSettings | null): DownloadOptions {
-    return {
-        format: null,
-        outputDir: null,
-        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
-        subtitleLangs: settings?.default_subtitle_langs ?? [],
-        remux: settings?.default_remux ?? null,
-        extractAudio: settings?.default_extract_audio ?? null,
-        embedThumbnail: settings?.embed_thumbnail ?? true,
-        audioMultistreams: false,
-        recodeVideo: null,
-    };
 }
 
 /** Start a download. Returns the job ID from the backend. */

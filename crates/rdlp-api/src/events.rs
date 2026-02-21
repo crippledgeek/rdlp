@@ -135,6 +135,18 @@ pub enum Event {
         /// Reason for the retry.
         reason: String,
     },
+
+    /// Debug-level log message emitted when verbose mode is enabled.
+    ///
+    /// These messages provide detailed internal state for troubleshooting
+    /// (e.g. available processors, output file paths). Only emitted when
+    /// `config.verbose` is `true`.
+    Debug {
+        /// The download this event belongs to.
+        id: DownloadId,
+        /// Debug message.
+        message: String,
+    },
 }
 
 impl Event {
@@ -155,7 +167,8 @@ impl Event {
             | Self::Cancelled { id }
             | Self::PlaylistDetected { id, .. }
             | Self::PlaylistItemStarted { id, .. }
-            | Self::Retrying { id, .. } => *id,
+            | Self::Retrying { id, .. }
+            | Self::Debug { id, .. } => *id,
         }
     }
 }
@@ -230,6 +243,10 @@ mod tests {
                 attempt: 2,
                 max_attempts: 5,
                 reason: "connection reset".into(),
+            },
+            Event::Debug {
+                id,
+                message: "Available processors: remux, thumbnail".into(),
             },
         ];
 
