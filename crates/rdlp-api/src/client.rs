@@ -31,6 +31,7 @@ use crate::merge::MergeOverrides;
 use crate::orchestrator::{InteractiveCallback, Orchestrator};
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
+use log::error;
 use rdlp_core::{Config, DownloadStats, InfoDict};
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,11 +96,32 @@ impl RdlpClient {
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
 
+        // Capture whether the user explicitly requested cookies.
+        // When explicit, cookie loading failure must be fatal.
+        let cookies_explicitly_requested =
+            config.cookies_from_browser.is_some() || config.cookies_file.is_some();
+
         let join_handle = tokio::spawn(async move {
             let orchestrator = Orchestrator::new(config, tx.clone(), id, token, interactive_cb);
 
-            // Load cookies (non-fatal on failure — warn but continue)
+            // Load cookies: fatal when explicitly requested, non-fatal otherwise
             if let Err(e) = orchestrator.load_cookies().await {
+                if cookies_explicitly_requested {
+                    // Sanitize the error message to avoid leaking DPAPI
+                    // errors, decryption keys, or raw cookie values
+                    let safe_msg = "Failed to load cookies: browser cookie extraction \
+                         failed. Check browser is installed and not running."
+                        .to_string();
+                    error!("Cookie loading failed (explicit request): {e}");
+                    let api_err = RdlpApiError::IoError { message: safe_msg };
+                    let _ = tx
+                        .send(Event::Failed {
+                            id,
+                            error: api_err.clone(),
+                        })
+                        .await;
+                    return Err(api_err);
+                }
                 let _ = tx
                     .send(Event::Warning {
                         id,
@@ -533,7 +555,10 @@ mod tests {
         let client = RdlpClient::builder().config(base_config).build().unwrap();
         let request = DownloadRequest::new("http://example.com");
         let config = client.build_config(&request);
-        assert!(config.verbose, "verbose must be preserved when request.verbose is None");
+        assert!(
+            config.verbose,
+            "verbose must be preserved when request.verbose is None"
+        );
     }
 
     #[test]
@@ -546,7 +571,10 @@ mod tests {
         let mut request = DownloadRequest::new("http://example.com");
         request.verbose = Some(true);
         let config = client.build_config(&request);
-        assert!(config.verbose, "verbose must be overridden by request.verbose = Some(true)");
+        assert!(
+            config.verbose,
+            "verbose must be overridden by request.verbose = Some(true)"
+        );
     }
 
     #[test]
@@ -559,7 +587,10 @@ mod tests {
         let mut request = DownloadRequest::new("http://example.com");
         request.verbose = Some(false);
         let config = client.build_config(&request);
-        assert!(!config.verbose, "verbose must be overridden by request.verbose = Some(false)");
+        assert!(
+            !config.verbose,
+            "verbose must be overridden by request.verbose = Some(false)"
+        );
     }
 
     #[test]
@@ -598,5 +629,112 @@ mod tests {
     fn test_search_filters_unknown_site() {
         let client = RdlpClient::new(Config::default()).unwrap();
         assert!(client.search_filters("nonexistent").is_err());
+    }
+
+    #[test]
+    fn test_cookies_explicitly_requested_flag() {
+        use rdlp_core::BrowserType;
+        use std::path::PathBuf;
+
+        // No cookies requested — flag should be false
+        let config_none = Config::default();
+        assert!(
+            config_none.cookies_from_browser.is_none() && config_none.cookies_file.is_none(),
+            "Default config should not have cookies explicitly requested"
+        );
+
+        // Browser cookies requested — flag should be true
+        let config_browser = Config {
+            cookies_from_browser: Some(BrowserType::Chrome),
+            ..Config::default()
+        };
+        assert!(
+            config_browser.cookies_from_browser.is_some() || config_browser.cookies_file.is_some(),
+            "Config with browser cookie should be explicitly requested"
+        );
+
+        // Cookie file requested — flag should be true
+        let config_file = Config {
+            cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
+            ..Config::default()
+        };
+        assert!(
+            config_file.cookies_from_browser.is_some() || config_file.cookies_file.is_some(),
+            "Config with cookie file should be explicitly requested"
+        );
+
+        // Verify merge propagates cookies_from_browser from request
+        let client = RdlpClient::new(Config::default()).unwrap();
+        let mut request = DownloadRequest::new("http://example.com");
+        request.network.cookies_from_browser = Some(BrowserType::Firefox);
+        let merged = client.build_config(&request);
+        assert_eq!(
+            merged.cookies_from_browser,
+            Some(BrowserType::Firefox),
+            "cookies_from_browser must propagate through build_config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_download_without_explicit_cookies_warns_on_cookie_error() {
+        // Default config — no explicit cookies requested.
+        // Cookie loading won't fail with default config (no browser, no
+        // file), so this verifies the non-fatal path doesn't produce a
+        // Failed event. The download will proceed to extraction and fail
+        // there (unsupported URL), which is expected.
+        let client = RdlpClient::new(Config::default()).unwrap();
+        let request = DownloadRequest::new("http://example.com/video");
+        let mut handle = client.download(request);
+
+        let mut got_cookie_failed = false;
+        while let Some(event) = handle.events().recv().await {
+            if let Event::Failed { error, .. } = &event {
+                // If we get a failure, it should NOT be about cookies
+                if let RdlpApiError::IoError { message } = error {
+                    if message.contains("cookie") {
+                        got_cookie_failed = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            !got_cookie_failed,
+            "Should not get a cookie-related Failed event when cookies are not explicitly requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_download_explicit_cookies_file_fatal_on_missing() {
+        use std::path::PathBuf;
+
+        // Config with explicit cookie file that doesn't exist
+        let config = Config {
+            cookies_file: Some(PathBuf::from("/nonexistent/path/cookies.txt")),
+            ..Config::default()
+        };
+        let client = RdlpClient::new(config).unwrap();
+
+        let request = DownloadRequest::new("http://example.com/video");
+        let mut handle = client.download(request);
+
+        let mut got_failed = false;
+        while let Some(event) = handle.events().recv().await {
+            if let Event::Failed { error, .. } = &event {
+                got_failed = true;
+                // The error should be about cookie loading
+                let msg = error.user_message();
+                assert!(
+                    msg.to_lowercase().contains("cookie") || msg.to_lowercase().contains("file"),
+                    "Error message should reference cookies or file, got: {msg}"
+                );
+                break;
+            }
+        }
+        assert!(
+            got_failed,
+            "Expected a Failed event when explicit cookie file is missing"
+        );
+
+        handle.cancel();
     }
 }

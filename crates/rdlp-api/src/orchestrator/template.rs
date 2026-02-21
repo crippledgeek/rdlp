@@ -507,10 +507,26 @@ impl OutputTemplate {
                 Segment::Literal(text) => output.push_str(text),
                 Segment::Field(spec) => {
                     let value = self.resolve_field(spec, &info_json, &format_json, ext, ctx)?;
-                    // Sanitize path separators from field values so they don't
-                    // create unintended subdirectories. Only literal `/` in
-                    // the template string should create directory structure.
-                    let sanitized = value.replace(['/', '\\'], "_");
+                    // Sanitize Windows-restricted characters from field values
+                    // so they don't create invalid paths or unintended
+                    // subdirectories. Also strip null bytes and non-whitespace
+                    // control characters which are invalid in filenames on
+                    // all platforms. Only literal `/` in the template string
+                    // should create directory structure.
+                    let sanitized = value
+                        .chars()
+                        .filter(|c| {
+                            // Strip null byte and non-whitespace C0/C1 controls.
+                            // Keep \t, \n, \r (whitespace) for formats like
+                            // pretty-JSON and newline-separated lists.
+                            *c != '\0'
+                                && (!c.is_control() || *c == '\t' || *c == '\n' || *c == '\r')
+                        })
+                        .map(|c| match c {
+                            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+                            _ => c,
+                        })
+                        .collect::<String>();
                     output.push_str(&sanitized);
                 }
             }
@@ -1608,7 +1624,9 @@ mod tests {
         let result = t
             .render(&test_info(), &test_format(), "mp4", &test_ctx())
             .unwrap();
-        assert_eq!(result, "\"My Video Title\"");
+        // JSON wraps strings in `"`, which are Windows-restricted
+        // chars and get sanitized to `_` by render()
+        assert_eq!(result, "_My Video Title_");
     }
 
     #[test]
@@ -1840,5 +1858,48 @@ mod tests {
             .render(&test_info(), &test_format(), "mp4", &test_ctx())
             .unwrap();
         assert_eq!(result, "TestExtractor/005 - My Video Title [abc123].mp4");
+    }
+
+    #[test]
+    fn test_render_field_sanitizes_windows_chars() {
+        // All 9 Windows-restricted path characters must be replaced
+        // with `_` in field values: / \ : * ? " < > |
+        let t = OutputTemplate::parse("%(title)s").unwrap();
+        let info = {
+            let mut i = test_info();
+            i.title = r#"a/b\c:d*e?f"g<h>i|j"#.to_string();
+            i
+        };
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+        assert_eq!(result, "a_b_c_d_e_f_g_h_i_j");
+    }
+
+    #[test]
+    fn test_render_literal_slash_preserved_as_directory_separator() {
+        // Literal `/` in the template string creates directories
+        // and must NOT be sanitized — only field values are sanitized
+        let t = OutputTemplate::parse("%(extractor)s/%(title)s.%(ext)s").unwrap();
+        let info = {
+            let mut i = test_info();
+            i.title = "safe-title".to_string();
+            i
+        };
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+        assert_eq!(result, "TestExtractor/safe-title.mp4");
+    }
+
+    #[test]
+    fn test_render_field_strips_null_and_control_chars() {
+        // Null bytes and control characters are stripped entirely
+        // (not replaced) because they are invalid in filenames on
+        // all platforms
+        let t = OutputTemplate::parse("%(title)s").unwrap();
+        let info = {
+            let mut i = test_info();
+            i.title = "hello\0world\x01\x1f!".to_string();
+            i
+        };
+        let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+        assert_eq!(result, "helloworld!");
     }
 }
