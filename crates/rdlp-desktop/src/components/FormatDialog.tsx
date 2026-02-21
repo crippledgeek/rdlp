@@ -400,7 +400,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     return (
         <Dialog open={true} onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent
-                className="bg-card w-[90vw] max-w-[900px] max-h-[85vh] flex flex-col gap-0 p-0"
+                className="bg-card w-[90vw] max-w-[900px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden"
                 showCloseButton={true}
             >
                 {/* -- Zone 1: Context Header -- */}
@@ -478,10 +478,11 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             </div>
 
                             {/* Scrollable table */}
-                            <ScrollArea className="flex-1 min-h-0" ref={tableRef}>
+                            <div className="flex-1 min-h-0 overflow-hidden" ref={tableRef}>
+                            <ScrollArea className="h-full">
                                 <Table className="text-xs">
                                     <TableHeader className="sticky top-0 z-10">
-                                        <TableRow className="bg-muted/80 backdrop-blur-sm hover:bg-muted/80">
+                                        <TableRow className="bg-foreground/[0.06] backdrop-blur-sm hover:bg-foreground/[0.06]">
                                             {COLUMNS.map(({ key, label, align }) => (
                                                 <TableHead
                                                     key={key}
@@ -529,20 +530,21 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     </TableBody>
                                 </Table>
                             </ScrollArea>
+                            </div>
 
                             {/* Selection info bar */}
-                            <div className="px-5 py-2 text-xs text-muted-foreground bg-muted/50 border-t border-border shrink-0 flex items-center gap-2 min-h-[36px]">
+                            <div className="px-5 py-2 text-xs text-muted-foreground bg-card border-t border-border shrink-0 flex items-center gap-2 min-h-[36px]">
                                 {selectedId ? (
                                     <>
                                         <span>
-                                            Selected: <strong className="text-foreground font-mono">{selectedId}</strong>
+                                            Selected: <strong className="text-foreground/70 font-mono">{selectedId}</strong>
                                             {findFormat(selectedId) && (
                                                 <span className="text-muted-foreground"> ({formatBrief(findFormat(selectedId)!)})</span>
                                             )}
                                             {mergeId && (
                                                 <>
                                                     {" + "}
-                                                    <strong className="text-foreground font-mono">{mergeId}</strong>
+                                                    <strong className="text-foreground/70 font-mono">{mergeId}</strong>
                                                     {findFormat(mergeId) && (
                                                         <span className="text-muted-foreground"> ({formatBrief(findFormat(mergeId)!)})</span>
                                                     )}
@@ -571,7 +573,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             </div>
 
                             {/* Expert mode */}
-                            <div className="px-5 py-2 shrink-0 flex flex-col gap-2 border-t border-border">
+                            <div className="px-5 py-2 shrink-0 flex flex-col gap-2 border-t border-border bg-card">
                                 <div className="flex items-center gap-2">
                                     <Checkbox
                                         checked={expertMode}
@@ -828,12 +830,11 @@ function GroupSection({ group, selectedId, mergeId, exprMatches, onRowClick }: G
                 return (
                     <TableRow
                         key={f.format_id}
-                        data-state={isSelected || isMerge ? "selected" : undefined}
                         className={cn(
-                            "cursor-pointer transition-colors hover:bg-foreground/[0.04]",
-                            isEven ? "bg-transparent" : "bg-foreground/[0.03]",
-                            isSelected && "bg-primary/[0.06] border-l-2 border-l-primary/70",
-                            isMerge && "bg-foreground/[0.05] border-l-2 border-l-foreground/30 border-dashed",
+                            "cursor-pointer transition-colors border-b-foreground/[0.06] hover:bg-foreground/[0.06]",
+                            isEven ? "bg-transparent" : "bg-foreground/[0.02]",
+                            isSelected && "bg-primary/20 border-l-[3px] border-l-primary",
+                            isMerge && "bg-foreground/10 border-l-[3px] border-l-foreground/40",
                             isExprMatch && !isSelected && !isMerge && "bg-yellow-500/5",
                         )}
                         onClick={(e) => onRowClick(f.format_id, e)}
