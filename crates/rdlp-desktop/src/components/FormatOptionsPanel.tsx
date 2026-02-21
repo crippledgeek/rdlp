@@ -61,17 +61,16 @@ const NONE_SENTINEL = "none";
 /**
  * Build a `DownloadOptions` from persisted settings.
  *
- * Initializes `format` to the first preset selector so the "Best Quality"
- * preset is genuinely selected rather than appearing selected while sending
- * null to the backend.
+ * Leaves `format` as `null` so the backend applies its smart default
+ * selector (`bv*+ba/b` with FFmpeg, `b/bv+ba` without).
  */
 export function buildDefaultOptions(
     settings: AppSettings | null,
 ): DownloadOptions {
     return {
-        format: PRESETS[0].selector,
+        format: null,
         outputDir: settings?.output_dir ?? null,
-        subtitles: false,
+        subtitles: (settings?.default_subtitle_langs ?? []).length > 0,
         subtitleLangs: settings?.default_subtitle_langs ?? [],
         remux: settings?.default_remux ?? null,
         extractAudio: settings?.default_extract_audio ?? null,
