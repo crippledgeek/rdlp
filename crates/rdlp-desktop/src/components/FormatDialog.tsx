@@ -469,7 +469,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                         <ToggleGroupItem
                                             key={p.id}
                                             value={p.id}
-                                            className="px-3 h-7 text-xs rounded-[5px] data-[state=on]:bg-foreground/10 data-[state=on]:text-foreground data-[state=on]:shadow-sm"
+                                            className="px-3 h-7 text-xs rounded-[5px] text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] data-[state=on]:bg-foreground/10 data-[state=on]:text-foreground data-[state=on]:shadow-sm"
                                         >
                                             {p.label}
                                         </ToggleGroupItem>
@@ -488,7 +488,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                                     className={cn(
                                                         "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none cursor-pointer transition-colors hover:text-foreground",
                                                         align === "right" && "text-right",
-                                                        sortKey === key ? "text-primary" : "text-muted-foreground",
+                                                        sortKey === key ? "text-foreground" : "text-muted-foreground",
                                                     )}
                                                     onClick={() => handleSortClick(key)}
                                                 >
@@ -556,13 +556,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                             Clear
                                         </button>
                                         {!mergeId && (
-                                            <span className="text-muted-foreground/60 italic ml-auto text-[11px]">
+                                            <span className="text-muted-foreground italic ml-auto text-[11px]">
                                                 Shift+click to merge
                                             </span>
                                         )}
                                     </>
                                 ) : (
-                                    <span className="text-muted-foreground/60 italic">
+                                    <span className="text-muted-foreground italic">
                                         {presetId
                                             ? `Using preset: ${PRESETS.find((p) => p.id === presetId)?.label}`
                                             : "Click a format to select, or choose a preset above"}
@@ -811,7 +811,7 @@ function GroupSection({ group, selectedId, mergeId, exprMatches, onRowClick }: G
             <TableRow className="hover:bg-transparent bg-transparent border-none">
                 <TableCell
                     colSpan={8}
-                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60"
+                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-foreground/40"
                 >
                     {group.label}
                 </TableCell>
@@ -830,53 +830,53 @@ function GroupSection({ group, selectedId, mergeId, exprMatches, onRowClick }: G
                         key={f.format_id}
                         data-state={isSelected || isMerge ? "selected" : undefined}
                         className={cn(
-                            "cursor-pointer transition-colors",
-                            isEven ? "bg-transparent" : "bg-muted/30",
-                            isSelected && "bg-primary/8 border-l-2 border-l-primary",
-                            isMerge && "bg-primary/5 border-l-2 border-l-primary border-dashed",
+                            "cursor-pointer transition-colors hover:bg-foreground/[0.04]",
+                            isEven ? "bg-transparent" : "bg-foreground/[0.03]",
+                            isSelected && "bg-primary/[0.06] border-l-2 border-l-primary/70",
+                            isMerge && "bg-foreground/[0.05] border-l-2 border-l-foreground/30 border-dashed",
                             isExprMatch && !isSelected && !isMerge && "bg-yellow-500/5",
                         )}
                         onClick={(e) => onRowClick(f.format_id, e)}
                     >
                         <TableCell className={cn(
                             "px-3 font-mono",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {formatResolution(f)}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {f.ext}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3 text-right font-mono",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {f.fps !== null ? Math.round(f.fps) : "\u2014"}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3 text-right font-mono",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {formatBitrate(f.tbr)}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {f.vcodec ?? "\u2014"}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {f.acodec ?? "\u2014"}
                         </TableCell>
                         <TableCell className={cn(
                             "px-3 text-right font-mono",
-                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-foreground/60",
                         )}>
                             {formatSize(f.filesize)}
                         </TableCell>
