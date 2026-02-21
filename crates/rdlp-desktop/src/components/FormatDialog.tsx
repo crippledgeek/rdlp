@@ -273,7 +273,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     );
 
     const filtered = useMemo(() => {
-        if (!activePresetId || activePresetId === "best" || activePresetId === "smallest") {
+        if (!activePresetId || activePresetId === "best") {
             return sorted;
         }
         if (activePresetId === "audio-only") {
@@ -320,7 +320,10 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     }, [selectedId]);
 
     const handlePresetSelect = useCallback((presetId: string) => {
-        if (!presetId) return;
+        if (!presetId) {
+            setOptions((prev) => ({ ...prev, format: null }));
+            return;
+        }
         const preset = PRESETS.find((p) => p.id === presetId);
         if (!preset) return;
         setSelectedId(null);
@@ -516,16 +519,24 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {groups.map((group) => (
-                                            <GroupSection
-                                                key={group.label}
-                                                group={group}
-                                                selectedId={selectedId}
-                                                mergeId={mergeId}
-                                                exprMatches={exprMatches}
-                                                onRowClick={handleRowClick}
-                                            />
-                                        ))}
+                                        {groups.length > 0 ? (
+                                            groups.map((group) => (
+                                                <GroupSection
+                                                    key={group.label}
+                                                    group={group}
+                                                    selectedId={selectedId}
+                                                    mergeId={mergeId}
+                                                    exprMatches={exprMatches}
+                                                    onRowClick={handleRowClick}
+                                                />
+                                            ))
+                                        ) : (
+                                            <TableRow className="hover:bg-transparent">
+                                                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                                                    No formats match this filter. Try a different preset or click "Best Quality" to see all.
+                                                </TableCell>
+                                            </TableRow>
+                                        )}
                                     </TableBody>
                                 </Table>
                             </ScrollArea>
