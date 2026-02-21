@@ -42,17 +42,19 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
         rafId = null;
         if (!mounted || pending.size === 0) return;
 
+        const batch = new Map(pending);
+        pending.clear();
+
         qc.setQueryData<DownloadJob[]>(
             queryKeys.downloads.list(),
             (old) => {
                 if (!old) return old;
                 return old.map((job) => {
-                    const entry = pending.get(job.id);
+                    const entry = batch.get(job.id);
                     return entry ? { ...job, ...entry } : job;
                 });
             },
         );
-        pending.clear();
     }
 
     function scheduleFlush() {

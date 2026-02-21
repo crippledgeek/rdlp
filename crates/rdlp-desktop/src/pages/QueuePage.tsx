@@ -16,16 +16,22 @@ export function QueuePage() {
     const { data: settings = null } = useQuery(settingsQueryOptions());
 
     const handleCancel = (id: string) => {
-        void cancelDownload(id);
+        cancelDownload(id).catch((e) =>
+            console.error("Failed to cancel download", e),
+        );
     };
 
     const handleRemove = (id: string) => {
-        void removeJob(id);
+        removeJob(id).catch((e) =>
+            console.error("Failed to remove job", e),
+        );
     };
 
     const handleRetry = (url: string) => {
         const options = buildDefaultOptions(settings);
-        void startDownload(url, options);
+        startDownload(url, options).catch((e) =>
+            console.error("Failed to retry download", e),
+        );
     };
 
     const activeJobs = jobs.filter(

@@ -322,7 +322,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     className="ml-auto h-6 text-[11px]"
                                     onClick={() => {
                                         setError(null);
-                                        void refetch();
+                                        refetch().catch((e) => console.error("Refetch failed:", e));
                                     }}
                                 >
                                     Retry
@@ -519,7 +519,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                         variant="outline"
                                         size="sm"
                                         className="h-8 px-2.5 shrink-0"
-                                        onClick={() => void handleBrowseDir()}
+                                        onClick={() => { handleBrowseDir().catch((e) => console.error("Browse directory failed:", e)); }}
                                     >
                                         <FolderOpen className="size-3.5" />
                                         Browse

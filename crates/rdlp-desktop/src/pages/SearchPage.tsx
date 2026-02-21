@@ -88,7 +88,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleDownload = useCallback(
         (url: string) => {
             const opts = buildDefaultOptions(settings);
-            void apiStartDownload(url, opts);
+            apiStartDownload(url, opts).catch((e) =>
+                console.error("Download failed:", e),
+            );
         },
         [settings],
     );
@@ -96,7 +98,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleDownloadWithOptions = useCallback(
         (url: string, options: Partial<DownloadOptions>) => {
             const defaults = buildDefaultOptions(settings);
-            void apiStartDownload(url, { ...defaults, ...options });
+            apiStartDownload(url, { ...defaults, ...options }).catch((e) =>
+                console.error("Download failed:", e),
+            );
         },
         [settings],
     );
@@ -109,7 +113,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleFormatDialogConfirm = useCallback(
         (options: DownloadOptions) => {
             if (formatDialogUrl) {
-                void apiStartDownload(formatDialogUrl, options);
+                apiStartDownload(formatDialogUrl, options).catch((e) =>
+                    console.error("Download failed:", e),
+                );
             }
             setFormatDialogUrl(null);
         },
@@ -172,7 +178,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                 }));
             }
             // Trigger search after atom updates propagate
-            setTimeout(() => { void refetch(); }, 0);
+            setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
         },
         [refetch],
     );
@@ -181,7 +187,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         (q: string) => {
             setSearchParam("query", q);
             // Trigger search after atom update propagates
-            setTimeout(() => { void refetch(); }, 0);
+            setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
         },
         [refetch],
     );
@@ -197,7 +203,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             filters: [],
             hasUserFilters: false,
         }));
-        setTimeout(() => { void refetch(); }, 0);
+        setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
     }, [refetch]);
 
     return (
@@ -220,7 +226,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                     <WifiOff className="h-4 w-4" />
                     <AlertDescription className="flex items-center gap-2.5">
                         No internet connection
-                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                        <Button variant="outline" size="sm" onClick={() => { refetch().catch((e) => console.error("Refetch failed:", e)); }} className="ml-auto h-6 text-[11px]">Retry</Button>
                     </AlertDescription>
                 </Alert>
             )}
@@ -231,7 +237,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription className="flex items-center gap-2.5">
                         {error ?? "An unknown error occurred."}
-                        <Button variant="outline" size="sm" onClick={() => void refetch()} className="ml-auto h-6 text-[11px]">Retry</Button>
+                        <Button variant="outline" size="sm" onClick={() => { refetch().catch((e) => console.error("Refetch failed:", e)); }} className="ml-auto h-6 text-[11px]">Retry</Button>
                     </AlertDescription>
                 </Alert>
             )}

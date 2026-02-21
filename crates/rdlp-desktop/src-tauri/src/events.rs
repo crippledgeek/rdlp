@@ -5,6 +5,7 @@
 //! events. The frontend listens for these events via Tauri's IPC
 //! event system to update the download queue UI in real time.
 
+use log::warn;
 use rdlp_api::Event;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -137,7 +138,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 total_bytes: progress.total_bytes,
             };
 
-            let _ = app.emit("download-progress", &payload);
+            if let Err(e) = app.emit("download-progress", &payload) {
+                warn!("Failed to emit download-progress for job {job_id}: {e}");
+            }
         }
 
         Event::Completed { result, .. } => {
@@ -152,7 +155,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 filepath,
             };
 
-            let _ = app.emit("download-complete", &payload);
+            if let Err(e) = app.emit("download-complete", &payload) {
+                warn!("Failed to emit download-complete for job {job_id}: {e}");
+            }
         }
 
         Event::Failed { error, .. } => {
@@ -162,7 +167,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 retryable: error.is_retryable(),
             };
 
-            let _ = app.emit("download-error", &payload);
+            if let Err(e) = app.emit("download-error", &payload) {
+                warn!("Failed to emit download-error for job {job_id}: {e}");
+            }
         }
 
         Event::MetadataReady { info, .. } => {
@@ -172,7 +179,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: format!("Metadata ready: {}", info.title),
             };
 
-            let _ = app.emit("download-log", &payload);
+            if let Err(e) = app.emit("download-log", &payload) {
+                warn!("Failed to emit download-log (metadata-ready) for job {job_id}: {e}");
+            }
         }
 
         Event::PostProcessing { stage, .. } => {
@@ -182,7 +191,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: format!("Post-processing: {stage}"),
             };
 
-            let _ = app.emit("download-log", &payload);
+            if let Err(e) = app.emit("download-log", &payload) {
+                warn!("Failed to emit download-log (post-processing) for job {job_id}: {e}");
+            }
         }
 
         Event::Warning { message, .. } => {
@@ -192,7 +203,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: message.clone(),
             };
 
-            let _ = app.emit("download-log", &payload);
+            if let Err(e) = app.emit("download-log", &payload) {
+                warn!("Failed to emit download-log (warning) for job {job_id}: {e}");
+            }
         }
 
         Event::Retrying {
@@ -207,7 +220,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: format!("Retrying ({attempt}/{max_attempts}): {reason}"),
             };
 
-            let _ = app.emit("download-log", &payload);
+            if let Err(e) = app.emit("download-log", &payload) {
+                warn!("Failed to emit download-log (retrying) for job {job_id}: {e}");
+            }
         }
 
         Event::FormatSelected {
@@ -218,7 +233,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 format_id: format_id.clone(),
                 quality: quality.clone(),
             };
-            let _ = app.emit("format-selected", &payload);
+            if let Err(e) = app.emit("format-selected", &payload) {
+                warn!("Failed to emit format-selected for job {job_id}: {e}");
+            }
 
             // Also emit as a log message for the status bar
             let log = DownloadLogPayload {
@@ -226,7 +243,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 level: LogLevel::Info,
                 message: format!("Format selected: {quality} ({format_id})"),
             };
-            let _ = app.emit("download-log", &log);
+            if let Err(e) = app.emit("download-log", &log) {
+                warn!("Failed to emit download-log (format-selected) for job {job_id}: {e}");
+            }
         }
 
         Event::Debug { message, .. } => {
@@ -236,7 +255,9 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: message.clone(),
             };
 
-            let _ = app.emit("download-log", &payload);
+            if let Err(e) = app.emit("download-log", &payload) {
+                warn!("Failed to emit download-log (debug) for job {job_id}: {e}");
+            }
         }
 
         // All other events are not forwarded to the frontend.

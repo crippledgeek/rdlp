@@ -144,6 +144,37 @@ impl DownloadQueue {
         self.cancel_fns.insert(id.into(), cancel_fn);
     }
 
+    /// Atomically store the cancel function and transition a job to Running.
+    ///
+    /// Combines `set_cancel` + status transition into a single operation so
+    /// that no concurrent observer can see the job in Pending-with-cancel or
+    /// Running-without-cancel intermediate states.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The job ID to update.
+    /// * `cancel_fn` - A function that cancels the download when called.
+    /// * `started_at` - Unix timestamp (seconds) when the download started.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the job was found and updated, `false` otherwise.
+    pub fn start_job(
+        &mut self,
+        id: &str,
+        cancel_fn: Box<dyn Fn() + Send + Sync>,
+        started_at: i64,
+    ) -> bool {
+        self.cancel_fns.insert(id.to_owned(), cancel_fn);
+        if let Some(job) = self.jobs.get_mut(id) {
+            job.status = JobStatus::Running;
+            job.started_at = Some(started_at);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Take (remove) the cancel function for a job.
     ///
     /// Returns `None` if no cancel function is stored for the given ID.
@@ -258,5 +289,58 @@ mod tests {
         assert!(json["title"].is_null());
         assert!(json["progress"].is_null());
         assert_eq!(json["retryable"], false);
+    }
+
+    #[test]
+    fn test_start_job_sets_running_and_cancel() {
+        let mut queue = DownloadQueue::new();
+        queue.add_job("job-1", "https://example.com/v1");
+
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = called.clone();
+        let cancel_fn: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let ts = 1700000000;
+        assert!(queue.start_job("job-1", cancel_fn, ts));
+
+        let job = queue.get_job("job-1").expect("job should exist");
+        assert_eq!(job.status, JobStatus::Running);
+        assert_eq!(job.started_at, Some(ts));
+
+        // Cancel function should be stored and invocable
+        let cancel = queue.take_cancel("job-1").expect("cancel fn should exist");
+        cancel();
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_start_job_returns_false_for_missing_job() {
+        let mut queue = DownloadQueue::new();
+        let cancel_fn: Box<dyn Fn() + Send + Sync> = Box::new(|| {});
+        assert!(!queue.start_job("nonexistent", cancel_fn, 0));
+    }
+
+    #[test]
+    fn test_start_job_no_intermediate_state() {
+        // Verifies that after start_job, the job is atomically
+        // Running with a cancel function — never one without the other
+        let mut queue = DownloadQueue::new();
+        queue.add_job("job-1", "https://example.com/v1");
+
+        // Before start_job: Pending, no cancel
+        assert_eq!(queue.get_job("job-1").unwrap().status, JobStatus::Pending);
+        assert!(queue.take_cancel("job-1").is_none());
+
+        // Re-add job since take_cancel removed nothing
+        let cancel_fn: Box<dyn Fn() + Send + Sync> = Box::new(|| {});
+        queue.start_job("job-1", cancel_fn, 1700000000);
+
+        // After start_job: Running AND has cancel — both set atomically
+        let job = queue.get_job("job-1").unwrap();
+        assert_eq!(job.status, JobStatus::Running);
+        assert_eq!(job.started_at, Some(1700000000));
+        assert!(queue.take_cancel("job-1").is_some());
     }
 }

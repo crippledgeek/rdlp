@@ -62,7 +62,7 @@ export function FilterBar() {
         // Only auto-search if a search has already been performed
         if (searchData === undefined) return;
         if (query.trim() === "" || site === "") return;
-        void refetch();
+        refetch().catch((e) => console.error("Refetch failed:", e));
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFilterChange = (key: string, value: string) => {
