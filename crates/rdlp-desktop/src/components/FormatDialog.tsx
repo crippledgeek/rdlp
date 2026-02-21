@@ -222,6 +222,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     const [error, setError] = useState<string | null>(null);
     const [settingsApplied, setSettingsApplied] = useState(false);
     const [showOptions, setShowOptions] = useState(false);
+    const [presetId, setPresetId] = useState<string | null>(null);
     const [options, setOptions] = useState<DownloadOptions>(() =>
         buildDefaultOptions(settings),
     );
@@ -262,31 +263,18 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     // -- Derived data -------------------------------------------------
 
-    // Active preset (only when no manual selection or expert mode)
-    const activePresetId = (!selectedId && !mergeId && !expertMode)
-        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
-        : null;
-
     const sorted = useMemo(
         () => (formatData ? sortFormats(formatData.formats, sortKey, sortDir) : []),
         [formatData, sortKey, sortDir],
     );
 
     const filtered = useMemo(() => {
-        if (!activePresetId || activePresetId === "best") {
-            return sorted;
-        }
-        if (activePresetId === "audio-only") {
-            return sorted.filter((f) => !f.has_video);
-        }
-        if (activePresetId === "1080p") {
-            return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
-        }
-        if (activePresetId === "720p") {
-            return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
-        }
+        if (!presetId || presetId === "best") return sorted;
+        if (presetId === "audio-only") return sorted.filter((f) => !f.has_video);
+        if (presetId === "1080p") return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
+        if (presetId === "720p") return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
         return sorted;
-    }, [sorted, activePresetId]);
+    }, [sorted, presetId]);
 
     const groups = useMemo(() => groupFormats(filtered), [filtered]);
 
@@ -316,16 +304,19 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
             setMergeId(null);
         }
         // Clear preset when manually selecting
+        setPresetId(null);
         setOptions((prev) => ({ ...prev, format: null }));
     }, [selectedId]);
 
-    const handlePresetSelect = useCallback((presetId: string) => {
-        if (!presetId) {
+    const handlePresetSelect = useCallback((newPresetId: string) => {
+        if (!newPresetId) {
+            setPresetId(null);
             setOptions((prev) => ({ ...prev, format: null }));
             return;
         }
-        const preset = PRESETS.find((p) => p.id === presetId);
+        const preset = PRESETS.find((p) => p.id === newPresetId);
         if (!preset) return;
+        setPresetId(newPresetId);
         setSelectedId(null);
         setMergeId(null);
         setOptions((prev) => ({ ...prev, format: preset.selector }));
@@ -470,7 +461,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             <div className="px-5 pt-3 pb-2 shrink-0">
                                 <ToggleGroup
                                     type="single"
-                                    value={activePresetId ?? ""}
+                                    value={presetId ?? ""}
                                     onValueChange={handlePresetSelect}
                                     className="justify-start gap-0 bg-muted rounded-md p-0.5"
                                 >
@@ -478,9 +469,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                         <ToggleGroupItem
                                             key={p.id}
                                             value={p.id}
-                                            className={cn(
-                                                "px-3 h-7 text-xs rounded-[5px] data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm",
-                                            )}
+                                            className="px-3 h-7 text-xs rounded-[5px] data-[state=on]:bg-foreground/10 data-[state=on]:text-foreground data-[state=on]:shadow-sm"
                                         >
                                             {p.label}
                                         </ToggleGroupItem>
@@ -574,8 +563,8 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                     </>
                                 ) : (
                                     <span className="text-muted-foreground/60 italic">
-                                        {activePresetId
-                                            ? `Using preset: ${PRESETS.find((p) => p.id === activePresetId)?.label}`
+                                        {presetId
+                                            ? `Using preset: ${PRESETS.find((p) => p.id === presetId)?.label}`
                                             : "Click a format to select, or choose a preset above"}
                                     </span>
                                 )}
