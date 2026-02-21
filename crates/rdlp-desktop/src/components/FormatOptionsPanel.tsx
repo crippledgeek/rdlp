@@ -1,7 +1,13 @@
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
     Select,
@@ -245,48 +251,44 @@ export function FormatOptionsPanel({
                 {value.subtitles && (
                     <div className="mt-1.5">
                         {availableSubtitleLangs.length > 0 ? (
-                            <Select
-                                value={
-                                    value.subtitleLangs.length > 0
-                                        ? value.subtitleLangs[
-                                              value.subtitleLangs.length - 1
-                                          ]
-                                        : NONE_SENTINEL
-                                }
-                                onValueChange={handleSubLangSelect}
-                            >
-                                <SelectTrigger
-                                    size="sm"
-                                    className="w-full text-xs"
-                                >
-                                    <SelectValue
-                                        placeholder="Select languages"
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="w-full justify-between text-xs font-normal"
                                     >
-                                        {value.subtitleLangs.length > 0
-                                            ? value.subtitleLangs.join(", ")
-                                            : "None"}
-                                    </SelectValue>
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={NONE_SENTINEL}>
-                                        None
-                                    </SelectItem>
-                                    {availableSubtitleLangs.map((lang) => (
-                                        <SelectItem key={lang} value={lang}>
-                                            <span className="flex items-center gap-2">
-                                                {value.subtitleLangs.includes(
-                                                    lang,
-                                                ) && (
-                                                    <span className="text-primary">
-                                                        *
-                                                    </span>
-                                                )}
+                                        <span className="truncate">
+                                            {value.subtitleLangs.length > 0
+                                                ? value.subtitleLangs.join(", ")
+                                                : "None"}
+                                        </span>
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                    align="start"
+                                    className="w-(--radix-popover-trigger-width) p-2"
+                                >
+                                    <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                                        {availableSubtitleLangs.map((lang) => (
+                                            <Label
+                                                key={lang}
+                                                htmlFor={`sub-lang-${lang}`}
+                                                className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs cursor-pointer hover:bg-accent"
+                                            >
+                                                <Checkbox
+                                                    id={`sub-lang-${lang}`}
+                                                    checked={value.subtitleLangs.includes(lang)}
+                                                    onCheckedChange={() =>
+                                                        handleSubLangSelect(lang)
+                                                    }
+                                                />
                                                 {lang}
-                                            </span>
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                            </Label>
+                                        ))}
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
                         ) : (
                             <Input
                                 className="font-mono text-xs"

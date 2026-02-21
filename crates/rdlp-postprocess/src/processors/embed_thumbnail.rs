@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_ffmpeg::RemuxOptions;
 
 /// Supported thumbnail formats.
 const THUMBNAIL_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
@@ -167,16 +168,44 @@ impl PostProcessor for EmbedThumbnail {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        // Check if container supports thumbnails
-        if !Self::supports_thumbnail(extension) {
-            debug!(extension; "Container does not support thumbnail embedding");
-            return Ok(PostProcessResult::new(info.clone(), files));
-        }
+        // Auto-remux unsupported containers (e.g. .ts) to MP4 before embedding
+        let mut temp_files: Vec<PathBuf> = Vec::new();
+        let (media_file, extension, output_files) = if !Self::supports_thumbnail(extension) {
+            let remuxed_path = media_file.with_extension("mp4");
+            info!(
+                from:? = media_file.display(),
+                to:? = remuxed_path.display();
+                "Auto-remuxing unsupported container to MP4 for thumbnail embedding"
+            );
+
+            let opts = RemuxOptions {
+                faststart: true,
+                ..Default::default()
+            };
+            match self.ffmpeg.remux(media_file, &remuxed_path, &opts).await {
+                Ok(()) => {
+                    // Track original file as temp for cleanup
+                    temp_files.push(media_file.clone());
+                    let ext = "mp4";
+                    (remuxed_path.clone(), ext.to_string(), vec![remuxed_path])
+                }
+                Err(e) => {
+                    warn!("Auto-remux to MP4 failed, skipping thumbnail embed: {e}");
+                    return Ok(PostProcessResult::new(info.clone(), files));
+                }
+            }
+        } else {
+            (media_file.clone(), extension.to_string(), files.clone())
+        };
 
         // Find thumbnail file
-        let Some(thumbnail_file) = Self::find_thumbnail(media_file) else {
+        let Some(thumbnail_file) = Self::find_thumbnail(&media_file) else {
             debug!(file:? = media_file.display(); "No thumbnail file found");
-            return Ok(PostProcessResult::new(info.clone(), files));
+            return Ok(PostProcessResult {
+                info: info.clone(),
+                files: output_files,
+                temp_files,
+            });
         };
 
         info!(
@@ -191,28 +220,26 @@ impl PostProcessor for EmbedThumbnail {
         // Embed via library bindings
         match self
             .ffmpeg
-            .embed_thumbnail(media_file, &thumbnail_file, &temp_output, extension)
+            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension)
             .await
         {
             Ok(()) => {
                 // Replace original with temp
-                tokio::fs::rename(&temp_output, media_file).await?;
+                tokio::fs::rename(&temp_output, &media_file).await?;
                 info!(file:? = media_file.display(); "Thumbnail embedded via FFmpeg");
 
                 // For MP4-family: write covr atom so Windows Explorer shows the thumbnail
-                if Self::is_mp4_family(extension) {
-                    Self::write_covr_atom(media_file, &thumbnail_file).await;
+                if Self::is_mp4_family(&extension) {
+                    Self::write_covr_atom(&media_file, &thumbnail_file).await;
                 }
 
                 // Clean up thumbnail unless --write-thumbnail was requested
-                let temp_files = if config.write_thumbnail {
-                    Vec::new()
-                } else {
-                    vec![thumbnail_file]
-                };
+                if !config.write_thumbnail {
+                    temp_files.push(thumbnail_file);
+                }
                 Ok(PostProcessResult {
                     info: info.clone(),
-                    files,
+                    files: output_files,
                     temp_files,
                 })
             }
@@ -221,8 +248,12 @@ impl PostProcessor for EmbedThumbnail {
                 // Clean up temp file if it exists
                 let _ = tokio::fs::remove_file(&temp_output).await;
 
-                // Non-fatal - return original files
-                Ok(PostProcessResult::new(info.clone(), files))
+                // Non-fatal - return original files (which may be the remuxed file)
+                Ok(PostProcessResult {
+                    info: info.clone(),
+                    files: output_files,
+                    temp_files,
+                })
             }
         }
     }
@@ -243,6 +274,9 @@ mod tests {
         assert!(EmbedThumbnail::supports_thumbnail("opus"));
         assert!(!EmbedThumbnail::supports_thumbnail("txt"));
         assert!(!EmbedThumbnail::supports_thumbnail("avi"));
+        // .ts is NOT in the supported list — triggers auto-remux to MP4
+        assert!(!EmbedThumbnail::supports_thumbnail("ts"));
+        assert!(!EmbedThumbnail::supports_thumbnail("TS"));
     }
 
     #[test]
