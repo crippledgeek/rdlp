@@ -262,22 +262,38 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     // -- Derived data -------------------------------------------------
 
+    // Active preset (only when no manual selection or expert mode)
+    const activePresetId = (!selectedId && !mergeId && !expertMode)
+        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
+        : null;
+
     const sorted = useMemo(
         () => (formatData ? sortFormats(formatData.formats, sortKey, sortDir) : []),
         [formatData, sortKey, sortDir],
     );
 
-    const groups = useMemo(() => groupFormats(sorted), [sorted]);
+    const filtered = useMemo(() => {
+        if (!activePresetId || activePresetId === "best" || activePresetId === "smallest") {
+            return sorted;
+        }
+        if (activePresetId === "audio-only") {
+            return sorted.filter((f) => !f.has_video);
+        }
+        if (activePresetId === "1080p") {
+            return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
+        }
+        if (activePresetId === "720p") {
+            return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
+        }
+        return sorted;
+    }, [sorted, activePresetId]);
+
+    const groups = useMemo(() => groupFormats(filtered), [filtered]);
 
     const subtitleLangs = useMemo(
         () => formatData?.subtitles.map((s) => s.lang) ?? [],
         [formatData],
     );
-
-    // Active preset (only when no manual selection or expert mode)
-    const activePresetId = (!selectedId && !mergeId && !expertMode)
-        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
-        : null;
 
     // -- Handlers -----------------------------------------------------
 
@@ -390,7 +406,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     return (
         <Dialog open={true} onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent
-                className="w-[90vw] max-w-[900px] max-h-[85vh] flex flex-col gap-0 p-0"
+                className="bg-card w-[90vw] max-w-[900px] max-h-[85vh] flex flex-col gap-0 p-0"
                 showCloseButton={true}
             >
                 {/* -- Zone 1: Context Header -- */}
