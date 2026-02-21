@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, AlertCircle, ChevronUp, ChevronDown, FolderOpen } from "lucide-react";
+import {
+    Loader2,
+    AlertCircle,
+    ChevronUp,
+    ChevronDown,
+    FolderOpen,
+    Settings2,
+} from "lucide-react";
 import { formatsQueryOptions } from "../api/formats";
 import { settingsQueryOptions, pickDirectory } from "../api/settings";
 import { invokeTyped } from "../api/invokeClient";
-import { FormatOptionsPanel, PRESETS, buildDefaultOptions } from "./FormatOptionsPanel";
+import { PRESETS, buildDefaultOptions } from "./FormatOptionsPanel";
 import { cn } from "@/lib/utils";
 import {
     Dialog,
@@ -20,13 +27,43 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+    Collapsible,
+    CollapsibleTrigger,
+    CollapsibleContent,
+} from "@/components/ui/collapsible";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table";
+import {
+    ToggleGroup,
+    ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import type {
+    AudioFormat,
+    ContainerFormat,
     DownloadOptions,
     FormatInfo,
 } from "../types";
+
+// -- Types ------------------------------------------------------------
 
 type SortKey = "height" | "ext" | "fps" | "tbr" | "vcodec" | "acodec" | "filesize";
 type SortDir = "asc" | "desc";
@@ -37,41 +74,76 @@ interface FormatDialogProps {
     onClose: () => void;
 }
 
-/** Format bytes into a human-readable string. */
+interface FormatGroup {
+    label: string;
+    formats: FormatInfo[];
+}
+
+// -- Constants --------------------------------------------------------
+
+const COLUMNS: Array<{ key: SortKey; label: string; align: "left" | "right" }> = [
+    { key: "height", label: "Resolution", align: "left" },
+    { key: "ext", label: "Ext", align: "left" },
+    { key: "fps", label: "FPS", align: "right" },
+    { key: "tbr", label: "Bitrate", align: "right" },
+    { key: "vcodec", label: "Video", align: "left" },
+    { key: "acodec", label: "Audio", align: "left" },
+    { key: "filesize", label: "Size", align: "right" },
+];
+
+const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
+    { value: "mp4", label: "MP4" },
+    { value: "mkv", label: "MKV" },
+    { value: "webm", label: "WebM" },
+];
+
+const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
+    { value: "mp3", label: "MP3" },
+    { value: "aac", label: "AAC" },
+    { value: "opus", label: "Opus" },
+    { value: "flac", label: "FLAC" },
+];
+
+const NONE_SENTINEL = "none";
+
+// -- Utility functions ------------------------------------------------
+
 function formatSize(bytes: number | null): string {
-    if (bytes === null) return "-";
+    if (bytes === null) return "\u2014";
     if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
     if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
     if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(0)} KB`;
     return `${bytes} B`;
 }
 
-/** Format bitrate (kbps). */
 function formatBitrate(kbps: number | null): string {
-    if (kbps === null) return "-";
+    if (kbps === null) return "\u2014";
     if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
     return `${Math.round(kbps)} kbps`;
 }
 
-/** Resolution display string. */
 function formatResolution(f: FormatInfo): string {
-    if (f.height && f.width) return `${f.width}x${f.height}`;
+    if (f.height && f.width) return `${f.width}\u00d7${f.height}`;
     if (f.height) return `${f.height}p`;
-    return f.format_note ?? "-";
+    return f.format_note ?? "\u2014";
 }
 
-/** Type badge label and styling. */
 function formatType(f: FormatInfo): { label: string; className: string } {
     if (f.protocol.includes("m3u8"))
-        return { label: "HLS", className: "bg-yellow-500/[0.12] text-yellow-500" };
+        return { label: "HLS", className: "bg-yellow-500/10 text-yellow-500" };
     if (f.has_video && f.has_audio)
-        return { label: "V+A", className: "bg-primary/[0.12] text-primary" };
+        return { label: "V+A", className: "bg-primary/10 text-primary" };
     if (f.has_video)
-        return { label: "Video", className: "bg-blue-500/[0.12] text-blue-400" };
-    return { label: "Audio", className: "bg-purple-500/[0.12] text-purple-400" };
+        return { label: "Video", className: "bg-blue-500/10 text-blue-400" };
+    return { label: "Audio", className: "bg-purple-500/10 text-purple-400" };
 }
 
-/** Compare helper for sorting nullable fields. */
+/** Brief description for the selection info bar. */
+function formatBrief(f: FormatInfo): string {
+    const res = f.height ? `${f.height}p` : f.format_note ?? "";
+    return `${res} ${f.ext}`.trim();
+}
+
 function cmpNullable(a: number | null, b: number | null, dir: SortDir): number {
     if (a === null && b === null) return 0;
     if (a === null) return 1;
@@ -79,41 +151,56 @@ function cmpNullable(a: number | null, b: number | null, dir: SortDir): number {
     return dir === "asc" ? a - b : b - a;
 }
 
-/** Sort formats by a given key and direction. */
 function sortFormats(formats: FormatInfo[], key: SortKey, dir: SortDir): FormatInfo[] {
     const sorted = [...formats];
     sorted.sort((a, b) => {
         switch (key) {
-            case "height":
-                return cmpNullable(a.height, b.height, dir);
-            case "ext":
-                return dir === "asc"
-                    ? a.ext.localeCompare(b.ext)
-                    : b.ext.localeCompare(a.ext);
-            case "fps":
-                return cmpNullable(a.fps, b.fps, dir);
-            case "tbr":
-                return cmpNullable(a.tbr, b.tbr, dir);
-            case "vcodec":
-                return dir === "asc"
-                    ? (a.vcodec ?? "").localeCompare(b.vcodec ?? "")
-                    : (b.vcodec ?? "").localeCompare(a.vcodec ?? "");
-            case "acodec":
-                return dir === "asc"
-                    ? (a.acodec ?? "").localeCompare(b.acodec ?? "")
-                    : (b.acodec ?? "").localeCompare(a.acodec ?? "");
-            case "filesize":
-                return cmpNullable(a.filesize, b.filesize, dir);
-            default:
-                return 0;
+            case "height": return cmpNullable(a.height, b.height, dir);
+            case "ext": return dir === "asc" ? a.ext.localeCompare(b.ext) : b.ext.localeCompare(a.ext);
+            case "fps": return cmpNullable(a.fps, b.fps, dir);
+            case "tbr": return cmpNullable(a.tbr, b.tbr, dir);
+            case "vcodec": return dir === "asc" ? (a.vcodec ?? "").localeCompare(b.vcodec ?? "") : (b.vcodec ?? "").localeCompare(a.vcodec ?? "");
+            case "acodec": return dir === "asc" ? (a.acodec ?? "").localeCompare(b.acodec ?? "") : (b.acodec ?? "").localeCompare(a.acodec ?? "");
+            case "filesize": return cmpNullable(a.filesize, b.filesize, dir);
+            default: return 0;
         }
     });
     return sorted;
 }
 
-/** Full-screen modal for format selection, presets, options, and expert mode. */
+/** Group sorted formats into Video+Audio, Video Only, Audio Only sections. */
+function groupFormats(formats: FormatInfo[]): FormatGroup[] {
+    const videoAudio: FormatInfo[] = [];
+    const videoOnly: FormatInfo[] = [];
+    const audioOnly: FormatInfo[] = [];
+
+    for (const f of formats) {
+        if (f.has_video && f.has_audio) videoAudio.push(f);
+        else if (f.has_video) videoOnly.push(f);
+        else audioOnly.push(f);
+    }
+
+    const groups: FormatGroup[] = [];
+    if (videoAudio.length > 0) groups.push({ label: "Video + Audio", formats: videoAudio });
+    if (videoOnly.length > 0) groups.push({ label: "Video Only", formats: videoOnly });
+    if (audioOnly.length > 0) groups.push({ label: "Audio Only", formats: audioOnly });
+    return groups;
+}
+
+/** Build a summary string for the collapsed options trigger. */
+function optionsSummary(opts: DownloadOptions): string {
+    const parts: string[] = [];
+    if (opts.remux) parts.push(`${opts.remux.toUpperCase()} remux`);
+    if (opts.extractAudio) parts.push(`${opts.extractAudio.toUpperCase()} audio`);
+    if (opts.subtitles && opts.subtitleLangs.length > 0)
+        parts.push(`Subs: ${opts.subtitleLangs.join(", ")}`);
+    if (opts.embedThumbnail) parts.push("Thumbnail");
+    return parts.length > 0 ? parts.join(" \u00b7 ") : "Default settings";
+}
+
+/** Full-screen modal for format selection with hero table, presets, and collapsed options. */
 export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
-    // --- TanStack Query: server state ---
+    // -- Server state -------------------------------------------------
     const {
         data: formatData,
         isPending: isLoading,
@@ -123,25 +210,28 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     } = useQuery(formatsQueryOptions(url));
     const { data: settings = null } = useQuery(settingsQueryOptions());
 
+    // -- Local state --------------------------------------------------
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [mergeId, setMergeId] = useState<string | null>(null);
     const [sortKey, setSortKey] = useState<SortKey>("height");
     const [sortDir, setSortDir] = useState<SortDir>("desc");
-    const [showTable, setShowTable] = useState(false);
     const [expertMode, setExpertMode] = useState(false);
     const [expr, setExpr] = useState("");
     const [exprError, setExprError] = useState<string | null>(null);
     const [exprMatches, setExprMatches] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
     const [settingsApplied, setSettingsApplied] = useState(false);
+    const [showOptions, setShowOptions] = useState(false);
     const [options, setOptions] = useState<DownloadOptions>(() =>
         buildDefaultOptions(settings),
     );
 
     const exprTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const tableRef = useRef<HTMLDivElement>(null);
 
-    // Sync options when settings first load (fixes race condition where
-    // useState captures settings at mount before the query resolves)
+    // -- Effects ------------------------------------------------------
+
+    // Sync options when settings first load
     useEffect(() => {
         if (settings && !settingsApplied) {
             setOptions((prev) => ({
@@ -156,51 +246,78 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         }
     }, [settings, settingsApplied]);
 
-    // Surface query-level errors in local state
+    // Surface query errors in local state
     useEffect(() => {
         if (isQueryError && queryError) {
             setError(queryError instanceof Error ? queryError.message : String(queryError));
         }
     }, [isQueryError, queryError]);
 
-    // Cleanup timer on unmount
+    // Cleanup debounce timer
     useEffect(() => {
         return () => {
             if (exprTimerRef.current) clearTimeout(exprTimerRef.current);
         };
     }, []);
 
-    // Sort header click
-    const handleSortClick = (key: SortKey) => {
-        if (key === sortKey) {
-            setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-        } else {
-            setSortKey(key);
-            setSortDir("desc");
-        }
-    };
+    // -- Derived data -------------------------------------------------
 
-    // Row click (single or shift for merge pair)
-    const handleRowClick = (id: string, e: React.MouseEvent) => {
+    const sorted = useMemo(
+        () => (formatData ? sortFormats(formatData.formats, sortKey, sortDir) : []),
+        [formatData, sortKey, sortDir],
+    );
+
+    const groups = useMemo(() => groupFormats(sorted), [sorted]);
+
+    const subtitleLangs = useMemo(
+        () => formatData?.subtitles.map((s) => s.lang) ?? [],
+        [formatData],
+    );
+
+    // Active preset (only when no manual selection or expert mode)
+    const activePresetId = (!selectedId && !mergeId && !expertMode)
+        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
+        : null;
+
+    // -- Handlers -----------------------------------------------------
+
+    const handleSortClick = useCallback((key: SortKey) => {
+        setSortKey((prev) => {
+            if (prev === key) {
+                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                return prev;
+            }
+            setSortDir("desc");
+            return key;
+        });
+    }, []);
+
+    const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
         if (e.shiftKey && selectedId !== null && selectedId !== id) {
             setMergeId(id);
         } else {
             setSelectedId(id);
             setMergeId(null);
         }
-    };
+        // Clear preset when manually selecting
+        setOptions((prev) => ({ ...prev, format: null }));
+    }, [selectedId]);
 
-    // Preset selection (uses preset ID, not selector)
-    const handlePresetSelect = (presetId: string) => {
+    const handlePresetSelect = useCallback((presetId: string) => {
+        if (!presetId) return;
         const preset = PRESETS.find((p) => p.id === presetId);
         if (!preset) return;
         setSelectedId(null);
         setMergeId(null);
         setOptions((prev) => ({ ...prev, format: preset.selector }));
-    };
+    }, []);
 
-    // Expert expression change with debounced validation
-    const handleExprChange = (value: string) => {
+    const handleClearSelection = useCallback(() => {
+        setSelectedId(null);
+        setMergeId(null);
+    }, []);
+
+    const handleExprChange = useCallback((value: string) => {
         setExpr(value);
         if (exprTimerRef.current) clearTimeout(exprTimerRef.current);
         if (value.trim() === "") {
@@ -211,19 +328,10 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         exprTimerRef.current = setTimeout(async () => {
             try {
                 const fmts = formatData?.formats.map((f) => ({
-                    format_id: f.format_id,
-                    ext: f.ext,
-                    width: f.width,
-                    height: f.height,
-                    fps: f.fps,
-                    tbr: f.tbr,
-                    vcodec: f.vcodec,
-                    acodec: f.acodec,
-                    filesize: f.filesize,
-                    vbr: f.vbr,
-                    abr: f.abr,
-                    asr: f.asr,
-                    protocol: f.protocol,
+                    format_id: f.format_id, ext: f.ext, width: f.width,
+                    height: f.height, fps: f.fps, tbr: f.tbr,
+                    vcodec: f.vcodec, acodec: f.acodec, filesize: f.filesize,
+                    vbr: f.vbr, abr: f.abr, asr: f.asr, protocol: f.protocol,
                 })) ?? [];
                 const matches = await invokeTyped<string[]>(
                     "validate_format_expression",
@@ -241,315 +349,532 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                 setExprMatches(new Set());
             }
         }, 400);
-    };
+    }, [formatData]);
 
-    // Build the final format selector from current state
-    const buildFormatSelector = (): string | null => {
+    const buildFormatSelector = useCallback((): string | null => {
         if (expertMode && expr.trim()) return expr.trim();
         if (selectedId && mergeId) return `${selectedId}+${mergeId}`;
         if (selectedId) return selectedId;
         return options.format;
-    };
+    }, [expertMode, expr, selectedId, mergeId, options.format]);
 
-    const handleConfirm = () => {
+    const handleConfirm = useCallback(() => {
         const format = buildFormatSelector();
         onConfirm({ ...options, format });
-    };
+    }, [buildFormatSelector, onConfirm, options]);
 
-    // Output directory picker
-    const handleBrowseDir = async () => {
+    const handleBrowseDir = useCallback(async () => {
         const dir = await pickDirectory();
-        if (dir) {
-            setOptions((prev) => ({ ...prev, outputDir: dir }));
-        }
-    };
+        if (dir) setOptions((prev) => ({ ...prev, outputDir: dir }));
+    }, []);
 
-    const sorted = formatData
-        ? sortFormats(formatData.formats, sortKey, sortDir)
-        : [];
+    const handleSubLangSelect = useCallback((lang: string) => {
+        setOptions((prev) => {
+            const current = prev.subtitleLangs;
+            const next = current.includes(lang)
+                ? current.filter((l) => l !== lang)
+                : [...current, lang];
+            return { ...prev, subtitleLangs: next };
+        });
+    }, []);
 
-    const subtitleLangs = formatData?.subtitles.map((s) => s.lang) ?? [];
+    // -- Lookup helpers -----------------------------------------------
 
-    const renderSortIndicator = (key: SortKey) => {
-        if (sortKey !== key) return null;
-        return sortDir === "asc"
-            ? <ChevronUp className="inline size-3" />
-            : <ChevronDown className="inline size-3" />;
-    };
-
-    // Derive active preset from selected state (no fallback to "best")
-    const activePresetId = (!selectedId && !mergeId && !expertMode)
-        ? PRESETS.find((p) => p.selector === options.format)?.id ?? null
-        : null;
-
-    /** Shared cell class for consistent td styling based on row state. */
-    const cellClass = (isSelected: boolean, isExprMatch: boolean) => cn(
-        "px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap",
-        isSelected ? "text-primary" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+    const findFormat = useCallback(
+        (id: string) => formatData?.formats.find((f) => f.format_id === id),
+        [formatData],
     );
+
+    // -- Render -------------------------------------------------------
 
     return (
         <Dialog open={true} onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent
-                className="w-[90vw] max-w-[860px] max-h-[85vh] flex flex-col gap-0 p-0"
+                className="w-[90vw] max-w-[900px] max-h-[85vh] flex flex-col gap-0 p-0"
                 showCloseButton={true}
             >
-                <DialogHeader className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-                    <DialogTitle className="text-[15px] font-bold text-foreground truncate pr-8">
-                        {formatData?.title ?? "Choose Format"}
-                    </DialogTitle>
-                    <DialogDescription className="sr-only">
-                        Select a format and download options for this video
-                    </DialogDescription>
+                {/* -- Zone 1: Context Header -- */}
+                <DialogHeader className="px-5 pt-4 pb-3 border-b border-border shrink-0">
+                    <div className="flex items-center gap-3">
+                        {formatData?.thumbnail_url && (
+                            <img
+                                src={formatData.thumbnail_url}
+                                alt=""
+                                className="w-12 h-[27px] object-cover rounded-sm shrink-0 bg-muted"
+                            />
+                        )}
+                        <div className="min-w-0 flex-1">
+                            <DialogTitle className="text-sm font-semibold text-foreground truncate pr-8">
+                                {formatData?.title ?? "Choose Format"}
+                            </DialogTitle>
+                            <DialogDescription className="sr-only">
+                                Select a format and download options for this video
+                            </DialogDescription>
+                        </div>
+                    </div>
                 </DialogHeader>
 
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+                {/* -- Zone 2: Hero Format Table -- */}
+                <div className="flex-1 min-h-0 flex flex-col">
                     {isLoading && (
-                        <div className="flex flex-col items-center justify-center gap-2.5 py-8 text-muted-foreground">
-                            <Loader2 className="h-6 w-6 animate-spin" />
-                            <p className="text-sm">Loading formats...</p>
+                        <div className="flex flex-col items-center justify-center gap-2.5 py-12 text-muted-foreground">
+                            <Loader2 className="size-5 animate-spin" />
+                            <p className="text-xs">Loading formats...</p>
                         </div>
                     )}
 
                     {error && (
-                        <Alert variant="destructive">
-                            <AlertCircle className="h-4 w-4" />
-                            <AlertDescription className="flex items-center gap-2.5">
-                                <span>{error}</span>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="ml-auto h-6 text-[11px]"
-                                    onClick={() => {
-                                        setError(null);
-                                        refetch().catch((e) => console.error("Refetch failed:", e));
-                                    }}
-                                >
-                                    Retry
-                                </Button>
-                            </AlertDescription>
-                        </Alert>
+                        <div className="p-4">
+                            <Alert variant="destructive">
+                                <AlertCircle className="size-4" />
+                                <AlertDescription className="flex items-center gap-2.5">
+                                    <span className="text-xs">{error}</span>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="ml-auto h-6 text-[11px]"
+                                        onClick={() => {
+                                            setError(null);
+                                            refetch().catch((e) => console.error("Refetch failed:", e));
+                                        }}
+                                    >
+                                        Retry
+                                    </Button>
+                                </AlertDescription>
+                            </Alert>
+                        </div>
                     )}
 
                     {!isLoading && !error && formatData && (
                         <>
-                            {/* Preset tier */}
-                            <div className="flex flex-col gap-1">
-                                <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">
-                                    Quality Preset
-                                </div>
-                                <RadioGroup
+                            {/* Preset segmented control */}
+                            <div className="px-5 pt-3 pb-2 shrink-0">
+                                <ToggleGroup
+                                    type="single"
                                     value={activePresetId ?? ""}
                                     onValueChange={handlePresetSelect}
-                                    className="flex flex-wrap gap-1.5"
+                                    className="justify-start gap-0 bg-muted rounded-md p-0.5"
                                 >
                                     {PRESETS.map((p) => (
-                                        <Label
+                                        <ToggleGroupItem
                                             key={p.id}
-                                            htmlFor={`dialog-preset-${p.id}`}
+                                            value={p.id}
                                             className={cn(
-                                                "inline-flex items-center gap-1.5 px-2.5 py-[5px] border border-border rounded-md bg-card text-xs text-muted-foreground cursor-pointer transition-colors",
-                                                "hover:border-muted-foreground/30 hover:text-foreground",
-                                                activePresetId === p.id && "border-primary text-primary bg-primary/[0.08]",
+                                                "px-3 h-7 text-xs rounded-[5px] data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm",
                                             )}
                                         >
-                                            <RadioGroupItem value={p.id} id={`dialog-preset-${p.id}`} className="size-3.5" />
                                             {p.label}
-                                        </Label>
+                                        </ToggleGroupItem>
                                     ))}
-                                </RadioGroup>
+                                </ToggleGroup>
                             </div>
 
-                            {/* Format table toggle */}
-                            <Collapsible open={showTable} onOpenChange={setShowTable}>
-                                <CollapsibleTrigger asChild>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="self-start text-xs text-muted-foreground hover:text-foreground gap-1"
-                                        aria-expanded={showTable}
-                                    >
-                                        {showTable
-                                            ? <><ChevronUp className="size-3.5" />Hide all formats</>
-                                            : <><ChevronDown className="size-3.5" />Show all formats ({sorted.length})</>}
-                                    </Button>
-                                </CollapsibleTrigger>
-                                <CollapsibleContent>
-                                    <div className="flex flex-col border border-border rounded-md mt-1">
-                                        <ScrollArea className="max-h-[40vh]">
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full border-collapse font-mono text-xs">
-                                                    <thead>
-                                                        <tr>
-                                                            {([
-                                                                ["height", "Resolution"],
-                                                                ["ext", "Ext"],
-                                                                ["fps", "FPS"],
-                                                                ["tbr", "Bitrate"],
-                                                                ["vcodec", "Video"],
-                                                                ["acodec", "Audio"],
-                                                                ["filesize", "Size"],
-                                                            ] as [SortKey, string][]).map(([key, label]) => (
-                                                                <th
-                                                                    key={key}
-                                                                    className={cn(
-                                                                        "sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none cursor-pointer transition-colors hover:text-foreground",
-                                                                        sortKey === key && "text-primary",
-                                                                    )}
-                                                                    onClick={() => handleSortClick(key)}
-                                                                >
-                                                                    <span className="inline-flex items-center gap-1">
-                                                                        {label}
-                                                                        {renderSortIndicator(key)}
-                                                                    </span>
-                                                                </th>
-                                                            ))}
-                                                            <th className="sticky top-0 px-2.5 py-2 text-left text-[10px] font-bold tracking-wider uppercase text-muted-foreground bg-muted border-b border-border whitespace-nowrap select-none">
-                                                                Type
-                                                            </th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {sorted.map((f) => {
-                                                            const type = formatType(f);
-                                                            const isSelected =
-                                                                f.format_id === selectedId ||
-                                                                f.format_id === mergeId;
-                                                            const isExprMatch = exprMatches.has(f.format_id);
-                                                            return (
-                                                                <tr
-                                                                    key={f.format_id}
-                                                                    className={cn(
-                                                                        "cursor-pointer transition-colors hover:bg-muted",
-                                                                        isSelected && "bg-primary/[0.12]",
-                                                                        isExprMatch && !isSelected && "bg-yellow-500/[0.08]",
-                                                                    )}
-                                                                    onClick={(e) => handleRowClick(f.format_id, e)}
-                                                                >
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatResolution(f)}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.ext}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.fps !== null ? Math.round(f.fps) : "-"}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatBitrate(f.tbr)}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.vcodec ?? "-"}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{f.acodec ?? "-"}</td>
-                                                                    <td className={cellClass(isSelected, isExprMatch)}>{formatSize(f.filesize)}</td>
-                                                                    <td className="px-2.5 py-1.5 border-b border-white/[0.02] whitespace-nowrap">
-                                                                        <span className={cn(
-                                                                            "inline-block px-[7px] py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase font-mono",
-                                                                            type.className,
-                                                                        )}>
-                                                                            {type.label}
-                                                                        </span>
-                                                                    </td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </ScrollArea>
+                            {/* Scrollable table */}
+                            <ScrollArea className="flex-1 min-h-0" ref={tableRef}>
+                                <Table className="text-xs">
+                                    <TableHeader className="sticky top-0 z-10">
+                                        <TableRow className="bg-muted/80 backdrop-blur-sm hover:bg-muted/80">
+                                            {COLUMNS.map(({ key, label, align }) => (
+                                                <TableHead
+                                                    key={key}
+                                                    className={cn(
+                                                        "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none cursor-pointer transition-colors hover:text-foreground",
+                                                        align === "right" && "text-right",
+                                                        sortKey === key ? "text-primary" : "text-muted-foreground",
+                                                    )}
+                                                    onClick={() => handleSortClick(key)}
+                                                >
+                                                    <span className="inline-flex items-center gap-1">
+                                                        {label}
+                                                        {sortKey === key && (
+                                                            sortDir === "asc"
+                                                                ? <ChevronUp className="size-3" />
+                                                                : <ChevronDown className="size-3" />
+                                                        )}
+                                                    </span>
+                                                </TableHead>
+                                            ))}
+                                            <TableHead className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
+                                                Type
+                                            </TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {groups.map((group) => (
+                                            <GroupSection
+                                                key={group.label}
+                                                group={group}
+                                                selectedId={selectedId}
+                                                mergeId={mergeId}
+                                                exprMatches={exprMatches}
+                                                onRowClick={handleRowClick}
+                                            />
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </ScrollArea>
 
-                                        {selectedId && (
-                                            <div className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted border-t border-border">
-                                                Selected: <strong className="text-primary font-mono">{selectedId}</strong>
-                                                {mergeId && (
-                                                    <> + <strong className="text-primary font-mono">{mergeId}</strong> (merge)</>
-                                                )}
-                                                <span className="text-muted-foreground italic">
-                                                    {!mergeId && " \u2014 Shift+click another format to merge"}
-                                                </span>
-                                            </div>
+                            {/* Selection info bar */}
+                            <div className="px-5 py-2 text-xs text-muted-foreground bg-muted/50 border-t border-border shrink-0 flex items-center gap-2 min-h-[36px]">
+                                {selectedId ? (
+                                    <>
+                                        <span>
+                                            Selected: <strong className="text-foreground font-mono">{selectedId}</strong>
+                                            {findFormat(selectedId) && (
+                                                <span className="text-muted-foreground"> ({formatBrief(findFormat(selectedId)!)})</span>
+                                            )}
+                                            {mergeId && (
+                                                <>
+                                                    {" + "}
+                                                    <strong className="text-foreground font-mono">{mergeId}</strong>
+                                                    {findFormat(mergeId) && (
+                                                        <span className="text-muted-foreground"> ({formatBrief(findFormat(mergeId)!)})</span>
+                                                    )}
+                                                </>
+                                            )}
+                                        </span>
+                                        <button
+                                            className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 bg-transparent border-none cursor-pointer"
+                                            onClick={handleClearSelection}
+                                        >
+                                            Clear
+                                        </button>
+                                        {!mergeId && (
+                                            <span className="text-muted-foreground/60 italic ml-auto text-[11px]">
+                                                Shift+click to merge
+                                            </span>
                                         )}
-                                    </div>
-                                </CollapsibleContent>
-                            </Collapsible>
+                                    </>
+                                ) : (
+                                    <span className="text-muted-foreground/60 italic">
+                                        {activePresetId
+                                            ? `Using preset: ${PRESETS.find((p) => p.id === activePresetId)?.label}`
+                                            : "Click a format to select, or choose a preset above"}
+                                    </span>
+                                )}
+                            </div>
 
                             {/* Expert mode */}
-                            <div className="flex items-center gap-2">
-                                <Checkbox
-                                    checked={expertMode}
-                                    onCheckedChange={(checked) => setExpertMode(checked === true)}
-                                    id="expert-mode"
-                                />
-                                <Label
-                                    htmlFor="expert-mode"
-                                    className="text-xs font-semibold text-muted-foreground cursor-pointer select-none transition-colors hover:text-foreground"
-                                >
-                                    Expert Mode
-                                </Label>
-                            </div>
-
-                            {expertMode && (
-                                <div className="flex flex-col gap-1 animate-in fade-in-0 zoom-in-95">
-                                    <div className="text-[11px] font-semibold text-muted-foreground tracking-wide">
-                                        Format Expression
-                                    </div>
-                                    <Input
-                                        className={cn(
-                                            "font-mono text-[13px]",
-                                            exprError && "border-destructive ring-1 ring-destructive/30",
-                                        )}
-                                        type="text"
-                                        placeholder="e.g. bestvideo[height<=1080]+bestaudio/best"
-                                        value={expr}
-                                        onChange={(e) => handleExprChange(e.target.value)}
+                            <div className="px-5 py-2 shrink-0 flex flex-col gap-2 border-t border-border">
+                                <div className="flex items-center gap-2">
+                                    <Checkbox
+                                        checked={expertMode}
+                                        onCheckedChange={(checked) => setExpertMode(checked === true)}
+                                        id="expert-mode"
                                     />
-                                    {exprError && (
-                                        <span className="text-[11px] text-destructive">{exprError}</span>
-                                    )}
-                                </div>
-                            )}
-
-                            <Separator />
-
-                            {/* Output directory picker */}
-                            <div className="flex flex-col gap-1.5">
-                                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
-                                    Save to
-                                </Label>
-                                <div className="flex gap-1.5">
-                                    <Input
-                                        className="flex-1 text-xs h-8"
-                                        type="text"
-                                        readOnly
-                                        value={options.outputDir ?? settings?.output_dir ?? ""}
-                                        placeholder="Default output directory"
-                                    />
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-8 px-2.5 shrink-0"
-                                        onClick={() => { handleBrowseDir().catch((e) => console.error("Browse directory failed:", e)); }}
+                                    <Label
+                                        htmlFor="expert-mode"
+                                        className="text-[11px] font-semibold text-muted-foreground cursor-pointer select-none"
                                     >
-                                        <FolderOpen className="size-3.5" />
-                                        Browse
-                                    </Button>
+                                        Expert Mode
+                                    </Label>
                                 </div>
+                                {expertMode && (
+                                    <div className="flex flex-col gap-1 animate-in fade-in-0 slide-in-from-top-1 duration-150">
+                                        <Input
+                                            className={cn(
+                                                "font-mono text-xs h-8",
+                                                exprError && "border-destructive ring-1 ring-destructive/30",
+                                            )}
+                                            type="text"
+                                            placeholder="e.g. bestvideo[height<=1080]+bestaudio/best"
+                                            value={expr}
+                                            onChange={(e) => handleExprChange(e.target.value)}
+                                        />
+                                        {exprError && (
+                                            <span className="text-[11px] text-destructive">{exprError}</span>
+                                        )}
+                                    </div>
+                                )}
                             </div>
-
-                            {/* Download options */}
-                            <FormatOptionsPanel
-                                value={options}
-                                onChange={setOptions}
-                                availableSubtitleLangs={subtitleLangs}
-                                hidePresets
-                            />
                         </>
                     )}
                 </div>
 
-                <DialogFooter className="px-4 py-2.5 border-t border-border shrink-0">
-                    <Button variant="outline" onClick={onClose}>
+                {/* -- Zone 3: Collapsed Options + Footer -- */}
+                {!isLoading && !error && formatData && (
+                    <div className="border-t border-border shrink-0">
+                        <Collapsible open={showOptions} onOpenChange={setShowOptions}>
+                            <CollapsibleTrigger asChild>
+                                <button className="w-full px-5 py-2 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-transparent border-none">
+                                    <Settings2 className="size-3.5" />
+                                    <span className="font-semibold">Download Options</span>
+                                    <span className="text-muted-foreground/60 ml-1 truncate">
+                                        {!showOptions && optionsSummary(options)}
+                                    </span>
+                                    {showOptions
+                                        ? <ChevronUp className="size-3.5 ml-auto shrink-0" />
+                                        : <ChevronDown className="size-3.5 ml-auto shrink-0" />}
+                                </button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                                <div className="px-5 pb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 items-center animate-in fade-in-0 slide-in-from-top-1 duration-150">
+                                    {/* Save to */}
+                                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                        Save to
+                                    </Label>
+                                    <div className="flex gap-1.5">
+                                        <Input
+                                            className="flex-1 text-xs h-7 font-mono"
+                                            type="text"
+                                            readOnly
+                                            value={options.outputDir ?? settings?.output_dir ?? ""}
+                                            placeholder="Default directory"
+                                        />
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 shrink-0 text-xs"
+                                            onClick={() => { handleBrowseDir().catch((e) => console.error("Browse directory failed:", e)); }}
+                                        >
+                                            <FolderOpen className="size-3" />
+                                        </Button>
+                                    </div>
+
+                                    {/* Remux */}
+                                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                        Remux
+                                    </Label>
+                                    <Select
+                                        value={options.remux ?? NONE_SENTINEL}
+                                        onValueChange={(val) => setOptions((prev) => ({
+                                            ...prev,
+                                            remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
+                                        }))}
+                                    >
+                                        <SelectTrigger className="h-7 text-xs">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                                            {REMUX_OPTIONS.map((o) => (
+                                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+
+                                    {/* Extract Audio */}
+                                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                        Audio
+                                    </Label>
+                                    <Select
+                                        value={options.extractAudio ?? NONE_SENTINEL}
+                                        onValueChange={(val) => setOptions((prev) => ({
+                                            ...prev,
+                                            extractAudio: val === NONE_SENTINEL ? null : (val as AudioFormat),
+                                        }))}
+                                    >
+                                        <SelectTrigger className="h-7 text-xs">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                                            {AUDIO_OPTIONS.map((o) => (
+                                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+
+                                    {/* Subtitles */}
+                                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                        Subtitles
+                                    </Label>
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex items-center gap-2">
+                                            <Checkbox
+                                                checked={options.subtitles}
+                                                onCheckedChange={(checked) => setOptions((prev) => ({
+                                                    ...prev,
+                                                    subtitles: checked === true,
+                                                }))}
+                                                id="dialog-subtitles"
+                                            />
+                                            <Label htmlFor="dialog-subtitles" className="text-xs text-muted-foreground cursor-pointer">
+                                                Download subtitles
+                                            </Label>
+                                        </div>
+                                        {options.subtitles && (
+                                            <div className="animate-in fade-in-0 duration-150">
+                                                {subtitleLangs.length > 0 ? (
+                                                    <Popover>
+                                                        <PopoverTrigger asChild>
+                                                            <Button variant="outline" size="sm" className="w-full justify-between text-xs font-normal h-7">
+                                                                <span className="truncate">
+                                                                    {options.subtitleLangs.length > 0
+                                                                        ? options.subtitleLangs.join(", ")
+                                                                        : "Select languages"}
+                                                                </span>
+                                                            </Button>
+                                                        </PopoverTrigger>
+                                                        <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-2">
+                                                            <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
+                                                                {subtitleLangs.map((lang) => (
+                                                                    <Label
+                                                                        key={lang}
+                                                                        htmlFor={`dialog-sub-${lang}`}
+                                                                        className="flex items-center gap-2 rounded-sm px-2 py-1 text-xs cursor-pointer hover:bg-accent"
+                                                                    >
+                                                                        <Checkbox
+                                                                            id={`dialog-sub-${lang}`}
+                                                                            checked={options.subtitleLangs.includes(lang)}
+                                                                            onCheckedChange={() => handleSubLangSelect(lang)}
+                                                                        />
+                                                                        {lang}
+                                                                    </Label>
+                                                                ))}
+                                                            </div>
+                                                        </PopoverContent>
+                                                    </Popover>
+                                                ) : (
+                                                    <Input
+                                                        className="font-mono text-xs h-7"
+                                                        type="text"
+                                                        placeholder="en,sv,ja"
+                                                        value={options.subtitleLangs.join(",")}
+                                                        onChange={(e) => {
+                                                            const langs = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                                                            setOptions((prev) => ({ ...prev, subtitleLangs: langs }));
+                                                        }}
+                                                    />
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Thumbnail */}
+                                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                                        Thumbnail
+                                    </Label>
+                                    <div className="flex items-center gap-2">
+                                        <Checkbox
+                                            checked={options.embedThumbnail}
+                                            onCheckedChange={(checked) => setOptions((prev) => ({
+                                                ...prev,
+                                                embedThumbnail: checked === true,
+                                            }))}
+                                            id="dialog-thumbnail"
+                                        />
+                                        <Label htmlFor="dialog-thumbnail" className="text-xs text-muted-foreground cursor-pointer">
+                                            Embed thumbnail
+                                        </Label>
+                                    </div>
+                                </div>
+                            </CollapsibleContent>
+                        </Collapsible>
+                    </div>
+                )}
+
+                <DialogFooter className="px-5 py-2.5 border-t border-border shrink-0">
+                    <Button variant="outline" size="sm" onClick={onClose}>
                         Cancel
                     </Button>
-                    <Button
-                        onClick={handleConfirm}
-                        disabled={isLoading || !!error}
-                    >
+                    <Button size="sm" onClick={handleConfirm} disabled={isLoading || !!error}>
                         Download
                     </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+    );
+}
+
+// -- Sub-components ---------------------------------------------------
+
+interface GroupSectionProps {
+    group: FormatGroup;
+    selectedId: string | null;
+    mergeId: string | null;
+    exprMatches: Set<string>;
+    onRowClick: (id: string, e: React.MouseEvent) => void;
+}
+
+/** Renders a section header + rows for a format group (Video+Audio, Video Only, Audio Only). */
+function GroupSection({ group, selectedId, mergeId, exprMatches, onRowClick }: GroupSectionProps) {
+    return (
+        <>
+            {/* Section header */}
+            <TableRow className="hover:bg-transparent bg-transparent border-none">
+                <TableCell
+                    colSpan={8}
+                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60"
+                >
+                    {group.label}
+                </TableCell>
+            </TableRow>
+
+            {/* Format rows */}
+            {group.formats.map((f, i) => {
+                const type = formatType(f);
+                const isSelected = f.format_id === selectedId;
+                const isMerge = f.format_id === mergeId;
+                const isExprMatch = exprMatches.has(f.format_id);
+                const isEven = i % 2 === 0;
+
+                return (
+                    <TableRow
+                        key={f.format_id}
+                        data-state={isSelected || isMerge ? "selected" : undefined}
+                        className={cn(
+                            "cursor-pointer transition-colors",
+                            isEven ? "bg-transparent" : "bg-muted/30",
+                            isSelected && "bg-primary/8 border-l-2 border-l-primary",
+                            isMerge && "bg-primary/5 border-l-2 border-l-primary border-dashed",
+                            isExprMatch && !isSelected && !isMerge && "bg-yellow-500/5",
+                        )}
+                        onClick={(e) => onRowClick(f.format_id, e)}
+                    >
+                        <TableCell className={cn(
+                            "px-3 font-mono",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {formatResolution(f)}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {f.ext}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3 text-right font-mono",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {f.fps !== null ? Math.round(f.fps) : "\u2014"}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3 text-right font-mono",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {formatBitrate(f.tbr)}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {f.vcodec ?? "\u2014"}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {f.acodec ?? "\u2014"}
+                        </TableCell>
+                        <TableCell className={cn(
+                            "px-3 text-right font-mono",
+                            isSelected || isMerge ? "text-foreground" : isExprMatch ? "text-yellow-500" : "text-muted-foreground",
+                        )}>
+                            {formatSize(f.filesize)}
+                        </TableCell>
+                        <TableCell className="px-3 text-center">
+                            <span className={cn(
+                                "inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase",
+                                type.className,
+                            )}>
+                                {type.label}
+                            </span>
+                        </TableCell>
+                    </TableRow>
+                );
+            })}
+        </>
     );
 }
