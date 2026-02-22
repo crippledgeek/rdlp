@@ -55,16 +55,22 @@ This document establishes the core coding standards for the rdlp video downloade
 ```
 rdlp/
 ├── crates/
-│   ├── rdlp-core/           # Traits, types, errors (foundation)
 │   ├── rdlp-types/          # Pure domain types (no I/O)
-│   ├── rdlp-http/           # HTTP client factory
+│   ├── rdlp-table/          # Column layout constants for format table
+│   ├── rdlp-core/           # Traits, types, errors (foundation)
 │   ├── rdlp-security/       # URL validation, SSRF protection
+│   ├── rdlp-http/           # HTTP client factory
+│   ├── rdlp-ratelimit/      # Async token-bucket rate limiter
+│   ├── rdlp-crypto/         # PRNG-based URL decryption
 │   ├── rdlp-extractor/      # Site-specific extractors
 │   ├── rdlp-downloader/     # HTTP + HLS downloaders
-│   ├── rdlp-postprocess/    # FFmpeg pipeline
+│   ├── rdlp-ffmpeg/         # FFmpeg library bindings wrapper
+│   ├── rdlp-postprocess/    # FFmpeg pipeline + mp4ameta
 │   ├── rdlp-cookies/        # Browser cookie extraction
 │   ├── rdlp-jsinterp/       # JavaScript interpreter
 │   ├── rdlp-plugin/         # Plugin system
+│   ├── rdlp-api/            # Frontend-agnostic API layer
+│   ├── rdlp-desktop/        # Tauri v2 desktop GUI
 │   └── rdlp-cli/            # CLI application
 ├── docs/                    # Documentation (non-root)
 ├── tests/                   # Integration tests
