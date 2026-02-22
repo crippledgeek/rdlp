@@ -7,9 +7,19 @@ import { useQuery } from "@tanstack/react-query";
 import { Settings, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { searchParamsAtom } from "../stores/searchParamsStore";
 import { filtersQueryOptions, searchQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
+
+/** Sentinel value for "no selection" since Radix Select does not support empty string values. */
+const NONE_SENTINEL = "none";
 
 const DEFAULT_FILTER_KEYS = new Set([
     "sort", "quality", "orientations", "date", "min-duration", "max-duration",
@@ -66,7 +76,8 @@ export function FilterBar() {
         refetch().catch((e) => console.error("Refetch failed:", e));
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleFilterChange = (key: string, value: string) => {
+    const handleFilterChange = (key: string, rawValue: string) => {
+        const value = rawValue === NONE_SENTINEL ? "" : rawValue;
         const updated: SearchFilter[] = filters.filter((f) => f.key !== key);
         if (value !== "") {
             updated.push({ key, value });
@@ -115,36 +126,35 @@ export function FilterBar() {
                     const value = getFilterValue(desc.key);
                     const active = isFilterActive(value, desc.default);
                     return (
-                        <select
+                        <Select
                             key={desc.key}
-                            className={cn(
-                                "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
-                                "hover:border-white/[0.08] hover:text-foreground/70",
-                                "focus:outline-none focus:ring-1 focus:ring-ring",
-                                "disabled:opacity-40 disabled:cursor-not-allowed",
-                                active && "border-primary/30 text-foreground bg-primary/[0.06]",
-                            )}
-                            value={value}
-                            onChange={(e) => handleFilterChange(desc.key, e.target.value)}
+                            value={value === "" ? NONE_SENTINEL : value}
+                            onValueChange={(val) => handleFilterChange(desc.key, val)}
                             disabled={isFetching}
-                            aria-label={desc.display_name}
-                            style={{
-                                backgroundImage: active
-                                    ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
-                                    : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                                backgroundRepeat: "no-repeat",
-                                backgroundPosition: "right 6px center",
-                            }}
                         >
-                            <option value="">
-                                {desc.display_name}
-                            </option>
-                            {desc.allowed_values.map((v) => (
-                                <option key={v.value} value={v.value}>
-                                    {v.label}
-                                </option>
-                            ))}
-                        </select>
+                            <SelectTrigger
+                                className={cn(
+                                    "h-7 w-auto rounded-md border border-border/50 bg-transparent px-2.5 text-[11px] font-medium text-muted-foreground cursor-pointer transition-colors",
+                                    "hover:border-white/[0.08] hover:text-foreground/70",
+                                    "focus:outline-none focus:ring-1 focus:ring-ring",
+                                    "disabled:opacity-40 disabled:cursor-not-allowed",
+                                    active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                                )}
+                                aria-label={desc.display_name}
+                            >
+                                <SelectValue placeholder={desc.display_name} />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NONE_SENTINEL}>
+                                    {desc.display_name}
+                                </SelectItem>
+                                {desc.allowed_values.map((v) => (
+                                    <SelectItem key={v.value} value={v.value}>
+                                        {v.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     );
                 })}
 
@@ -194,33 +204,32 @@ export function FilterBar() {
                                 <label className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">
                                     {desc.display_name}
                                 </label>
-                                <select
-                                    className={cn(
-                                        "h-7 rounded-md border border-border/50 bg-transparent px-2.5 pr-6 text-[11px] font-medium text-muted-foreground cursor-pointer appearance-none transition-colors",
-                                        "hover:border-white/[0.08] hover:text-foreground/70",
-                                        "focus:outline-none focus:ring-1 focus:ring-ring",
-                                        "disabled:opacity-40 disabled:cursor-not-allowed",
-                                        active && "border-primary/30 text-foreground bg-primary/[0.06]",
-                                    )}
-                                    value={value}
-                                    onChange={(e) => handleFilterChange(desc.key, e.target.value)}
+                                <Select
+                                    value={value === "" ? NONE_SENTINEL : value}
+                                    onValueChange={(val) => handleFilterChange(desc.key, val)}
                                     disabled={isFetching}
-                                    aria-label={desc.display_name}
-                                    style={{
-                                        backgroundImage: active
-                                            ? "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2322c55e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")"
-                                            : "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                                        backgroundRepeat: "no-repeat",
-                                        backgroundPosition: "right 6px center",
-                                    }}
                                 >
-                                    <option value="">Any</option>
-                                    {desc.allowed_values.map((v) => (
-                                        <option key={v.value} value={v.value}>
-                                            {v.label}
-                                        </option>
-                                    ))}
-                                </select>
+                                    <SelectTrigger
+                                        className={cn(
+                                            "h-7 w-auto rounded-md border border-border/50 bg-transparent px-2.5 text-[11px] font-medium text-muted-foreground cursor-pointer transition-colors",
+                                            "hover:border-white/[0.08] hover:text-foreground/70",
+                                            "focus:outline-none focus:ring-1 focus:ring-ring",
+                                            "disabled:opacity-40 disabled:cursor-not-allowed",
+                                            active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                                        )}
+                                        aria-label={desc.display_name}
+                                    >
+                                        <SelectValue placeholder="Any" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NONE_SENTINEL}>Any</SelectItem>
+                                        {desc.allowed_values.map((v) => (
+                                            <SelectItem key={v.value} value={v.value}>
+                                                {v.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
                         );
                     })}

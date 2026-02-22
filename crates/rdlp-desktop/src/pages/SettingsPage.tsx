@@ -13,6 +13,16 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+
+/** Sentinel value for "no selection" since Radix Select does not support empty string values. */
+const NONE_SENTINEL = "none";
 
 export function SettingsPage() {
     const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
@@ -61,63 +71,75 @@ export function SettingsPage() {
 
             <div className="mb-4">
                 <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Remux Format</Label>
-                <select
-                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
-                    value={draft.default_remux ?? ""}
-                    onChange={(e) =>
+                <Select
+                    value={draft.default_remux ?? NONE_SENTINEL}
+                    onValueChange={(val) =>
                         setDraft({
                             ...draft,
                             default_remux:
-                                (e.target.value as ContainerFormat) || null,
+                                val === NONE_SENTINEL ? null : (val as ContainerFormat),
                         })
                     }
                 >
-                    <option value="">None</option>
-                    <option value="mp4">MP4</option>
-                    <option value="mkv">MKV</option>
-                    <option value="webm">WebM</option>
-                </select>
+                    <SelectTrigger className="w-full text-sm">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        <SelectItem value="mp4">MP4</SelectItem>
+                        <SelectItem value="mkv">MKV</SelectItem>
+                        <SelectItem value="webm">WebM</SelectItem>
+                    </SelectContent>
+                </Select>
             </div>
 
             <div className="mb-4">
                 <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Audio Extraction</Label>
-                <select
-                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
-                    value={draft.default_extract_audio ?? ""}
-                    onChange={(e) =>
+                <Select
+                    value={draft.default_extract_audio ?? NONE_SENTINEL}
+                    onValueChange={(val) =>
                         setDraft({
                             ...draft,
                             default_extract_audio:
-                                (e.target.value as AudioFormat) || null,
+                                val === NONE_SENTINEL ? null : (val as AudioFormat),
                         })
                     }
                 >
-                    <option value="">None</option>
-                    <option value="mp3">MP3</option>
-                    <option value="aac">AAC</option>
-                    <option value="opus">Opus</option>
-                    <option value="flac">FLAC</option>
-                </select>
+                    <SelectTrigger className="w-full text-sm">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        <SelectItem value="mp3">MP3</SelectItem>
+                        <SelectItem value="aac">AAC</SelectItem>
+                        <SelectItem value="opus">Opus</SelectItem>
+                        <SelectItem value="flac">FLAC</SelectItem>
+                    </SelectContent>
+                </Select>
             </div>
 
             <div className="mb-4">
                 <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Subtitle Format</Label>
-                <select
-                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
-                    value={draft.default_subtitle_format ?? ""}
-                    onChange={(e) =>
+                <Select
+                    value={draft.default_subtitle_format ?? NONE_SENTINEL}
+                    onValueChange={(val) =>
                         setDraft({
                             ...draft,
                             default_subtitle_format:
-                                (e.target.value as SubtitleFormat) || null,
+                                val === NONE_SENTINEL ? null : (val as SubtitleFormat),
                         })
                     }
                 >
-                    <option value="">None</option>
-                    <option value="srt">SRT</option>
-                    <option value="vtt">VTT</option>
-                    <option value="ass">ASS</option>
-                </select>
+                    <SelectTrigger className="w-full text-sm">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        <SelectItem value="srt">SRT</SelectItem>
+                        <SelectItem value="vtt">VTT</SelectItem>
+                        <SelectItem value="ass">ASS</SelectItem>
+                    </SelectContent>
+                </Select>
             </div>
 
             <div className="mb-4">
@@ -140,24 +162,28 @@ export function SettingsPage() {
 
             <div className="mb-4">
                 <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Search Provider</Label>
-                <select
-                    className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
-                    value={draft.default_search_provider ?? ""}
-                    onChange={(e) =>
+                <Select
+                    value={draft.default_search_provider ?? NONE_SENTINEL}
+                    onValueChange={(val) =>
                         setDraft({
                             ...draft,
                             default_search_provider:
-                                e.target.value || null,
+                                val === NONE_SENTINEL ? null : val,
                         })
                     }
                 >
-                    <option value="">Auto</option>
-                    {providers.map((p) => (
-                        <option key={p.name} value={p.name}>
-                            {p.display_name}
-                        </option>
-                    ))}
-                </select>
+                    <SelectTrigger className="w-full text-sm">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>Auto</SelectItem>
+                        {providers.map((p) => (
+                            <SelectItem key={p.name} value={p.name}>
+                                {p.display_name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             </div>
 
             <div

@@ -8,6 +8,13 @@ import { Search, ArrowRight, Loader2, X } from "lucide-react";
 import { searchParamsAtom, setSearchParam, resetSearchParams } from "../stores/searchParamsStore";
 import { providersQueryOptions, searchQueryOptions } from "../api/search";
 import { Button } from "@/components/ui/button";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 
 interface CommandBarProps {
     /** Ref exposed so keyboard nav can focus the input externally. */
@@ -69,27 +76,25 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
 
     return (
         <form className="flex items-center gap-1.5" onSubmit={handleSubmit} ref={formRef}>
-            <select
-                className="h-9 rounded-md border border-input bg-card px-2.5 pr-7 text-xs font-medium text-foreground cursor-pointer appearance-none transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
+            <Select
                 value={site}
-                onChange={(e) => handleSiteChange(e.target.value)}
+                onValueChange={handleSiteChange}
                 disabled={isFetching}
-                aria-label="Search site"
-                style={{
-                    backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\")",
-                    backgroundRepeat: "no-repeat",
-                    backgroundPosition: "right 8px center",
-                }}
             >
-                {providers.length === 0 && (
-                    <option value="">Loading...</option>
-                )}
-                {providers.map((p) => (
-                    <option key={p.name} value={p.name}>
-                        {p.display_name}
-                    </option>
-                ))}
-            </select>
+                <SelectTrigger
+                    className="h-9 w-auto rounded-md border border-input bg-card px-2.5 text-xs font-medium text-foreground cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
+                    aria-label="Search site"
+                >
+                    <SelectValue placeholder="Loading..." />
+                </SelectTrigger>
+                <SelectContent>
+                    {providers.map((p) => (
+                        <SelectItem key={p.name} value={p.name}>
+                            {p.display_name}
+                        </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
 
             <div className="flex-1 relative flex items-center group">
                 <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none transition-colors group-focus-within:text-primary" />
