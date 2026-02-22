@@ -78,9 +78,9 @@ interface FormatDialogProps {
 // -- Constants --------------------------------------------------------
 
 const COLUMNS: Array<{ key: SortKey; label: string; align: "left" | "right"; pct: string }> = [
-    { key: "height", label: "Resolution", align: "left", pct: "22%" },
-    { key: "ext", label: "Ext", align: "left", pct: "7%" },
-    { key: "fps", label: "FPS", align: "right", pct: "7%" },
+    { key: "height", label: "Resolution", align: "left", pct: "17%" },
+    { key: "ext", label: "Ext", align: "left", pct: "9%" },
+    { key: "fps", label: "FPS", align: "right", pct: "9%" },
     { key: "tbr", label: "Bitrate", align: "right", pct: "13%" },
     { key: "vcodec", label: "Video", align: "left", pct: "12%" },
     { key: "acodec", label: "Audio", align: "left", pct: "11%" },
@@ -469,7 +469,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                                     </span>
                                                 </TableHead>
                                             ))}
-                                            <TableHead style={{ width: "15%" }} className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
+                                            <TableHead style={{ width: "16%" }} className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
                                                 Type
                                             </TableHead>
                                         </TableRow>
