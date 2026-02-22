@@ -5,7 +5,7 @@
 
 use log::warn;
 use rdlp_core::{RdlpError, Result, SearchFilter, SearchFilterDescriptor, SearchResultPreview};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use super::patterns;
 
@@ -41,8 +41,9 @@ pub(crate) struct ApiVideo {
     /// Duration string in "MM:SS" or "H:MM:SS" format.
     #[serde(default)]
     pub duration: Option<String>,
-    /// View count as a string (may contain commas).
-    #[serde(default)]
+    /// View count — the API returns this as a JSON number, but we also accept
+    /// strings (which may contain commas) for forward compatibility.
+    #[serde(default, deserialize_with = "deserialize_views")]
     pub views: Option<String>,
     /// Publication date string.
     #[serde(default)]
@@ -59,6 +60,23 @@ pub(crate) struct ApiTag {
     /// Tag display name.
     #[allow(dead_code)]
     pub tag_name: String,
+}
+
+/// Deserialize `views` from either a JSON number or a string.
+///
+/// The RedTube API returns `views` as a number (e.g. `571096`), but some
+/// responses may use a string. This accepts both and normalises to `Option<String>`.
+fn deserialize_views<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    Ok(value.and_then(|v| match v {
+        serde_json::Value::String(s) if s.is_empty() => None,
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }))
 }
 
 /// Parse the JSON API response into `SearchResultPreview` items and total count.
@@ -338,6 +356,31 @@ mod tests {
         assert_eq!(parse_view_count("0"), Some(0));
         assert_eq!(parse_view_count("42"), Some(42));
         assert_eq!(parse_view_count(""), None);
+    }
+
+    #[test]
+    fn test_parse_api_search_results_numeric_views() {
+        let json = r#"{
+            "count": 1521,
+            "videos": [{
+                "video": {
+                    "video_id": "42785231",
+                    "title": "Test Numeric Views",
+                    "url": "https://www.redtube.com/42785231",
+                    "thumb": "https://thumb.jpg",
+                    "duration": "16:53",
+                    "views": 571096,
+                    "publish_date": "2022-11-14 15:47:22",
+                    "tags": [{"tag_name": "hd"}]
+                }
+            }]
+        }"#;
+        let (results, count) = parse_api_search_results(json).unwrap();
+        assert_eq!(count, Some(1521));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Test Numeric Views");
+        assert_eq!(results[0].view_count, Some(571096));
+        assert_eq!(results[0].duration, Some(1013.0));
     }
 
     #[test]
