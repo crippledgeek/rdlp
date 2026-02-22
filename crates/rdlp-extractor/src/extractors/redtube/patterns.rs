@@ -1,9 +1,12 @@
 //! URL and extraction patterns for RedTube
 //!
 //! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
+//! Includes search URL builders and filter descriptors for the JSON API.
 
+use rdlp_core::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
 use regex::Regex;
 use std::sync::LazyLock;
+use url::form_urlencoded;
 
 /// Static URL pattern regex for RedTube (initialized once at first use)
 ///
@@ -26,6 +29,152 @@ pub static SOURCES_PATTERN: LazyLock<Regex> =
 pub static MEDIA_DEF_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)mediaDefinition\s*:\s*(\[.+?\])").expect("Valid mediaDefinition pattern")
 });
+
+/// Regex to extract video cards from HTML search results.
+///
+/// Captures:
+/// - `url`: Video page URL (href)
+/// - `title`: Video title (title attribute)
+/// - `thumb`: Thumbnail image URL (src attribute)
+/// - `duration`: Duration text (e.g. "12:34")
+pub static HTML_VIDEO_CARD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"<a[^>]+href="(?P<url>https?://(?:www\.)?redtube\.com/\d+)"[^>]+title="(?P<title>[^"]*)"[^>]*>.*?(?:<img[^>]+src="(?P<thumb>[^"]*)")?.*?(?:<span[^>]*class="[^"]*duration[^"]*"[^>]*>(?P<duration>[\d:]+)</span>)?"#,
+    )
+    .expect("Valid HTML video card pattern")
+});
+
+/// Number of results per API page.
+pub(crate) const API_RESULTS_PER_PAGE: u32 = 20;
+
+/// Build the API search URL for the first page.
+///
+/// Format: `https://api.redtube.com/?data=redtube.Videos.searchVideos&output=json
+///          &search={query}&thumbsize=big&{filters}`
+pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> String {
+    let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    let mut url = format!(
+        "https://api.redtube.com/?data=redtube.Videos.searchVideos\
+         &output=json&search={encoded_query}&thumbsize=big"
+    );
+
+    for filter in filters {
+        match filter.key.as_str() {
+            "ordering" => {
+                url.push_str("&ordering=");
+                url.push_str(&filter.value);
+            }
+            "period" => {
+                url.push_str("&period=");
+                url.push_str(&filter.value);
+            }
+            "category" => {
+                let encoded: String =
+                    form_urlencoded::byte_serialize(filter.value.as_bytes()).collect();
+                url.push_str("&category=");
+                url.push_str(&encoded);
+            }
+            "tags" => {
+                // Tags are comma-separated, each sent as tags[]
+                for tag in filter.value.split(',') {
+                    let trimmed = tag.trim();
+                    if !trimmed.is_empty() {
+                        let encoded: String =
+                            form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
+                        url.push_str("&tags[]=");
+                        url.push_str(&encoded);
+                    }
+                }
+            }
+            _ => {} // Unknown filters are silently ignored (validation is done elsewhere)
+        }
+    }
+
+    url
+}
+
+/// Append a page parameter to an existing API search URL.
+pub(crate) fn build_api_search_url_page(base_url: &str, page: u32) -> String {
+    format!("{base_url}&page={page}")
+}
+
+/// Build the HTML search fallback URL.
+///
+/// Format: `https://www.redtube.com/?search={query}`
+pub(crate) fn build_html_search_url(query: &str) -> String {
+    let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    format!("https://www.redtube.com/?search={encoded_query}")
+}
+
+/// Return the static filter descriptors for RedTube search.
+///
+/// Defines four filters:
+/// - `ordering`: sort order (enum)
+/// - `period`: time period (enum)
+/// - `category`: category (free text)
+/// - `tags`: comma-separated tags (free text)
+pub fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
+    vec![
+        SearchFilterDescriptor {
+            key: "ordering".to_string(),
+            display_name: "Sort by".to_string(),
+            allowed_values: vec![
+                SearchFilterValue {
+                    value: "relevance".to_string(),
+                    label: "Relevance".to_string(),
+                },
+                SearchFilterValue {
+                    value: "newest".to_string(),
+                    label: "Newest".to_string(),
+                },
+                SearchFilterValue {
+                    value: "mostviewed".to_string(),
+                    label: "Most viewed".to_string(),
+                },
+                SearchFilterValue {
+                    value: "rating".to_string(),
+                    label: "Top rated".to_string(),
+                },
+                SearchFilterValue {
+                    value: "mostfavoured".to_string(),
+                    label: "Most favoured".to_string(),
+                },
+            ],
+            default: Some("relevance".to_string()),
+        },
+        SearchFilterDescriptor {
+            key: "period".to_string(),
+            display_name: "Time period".to_string(),
+            allowed_values: vec![
+                SearchFilterValue {
+                    value: "alltime".to_string(),
+                    label: "All time".to_string(),
+                },
+                SearchFilterValue {
+                    value: "weekly".to_string(),
+                    label: "This week".to_string(),
+                },
+                SearchFilterValue {
+                    value: "monthly".to_string(),
+                    label: "This month".to_string(),
+                },
+            ],
+            default: Some("alltime".to_string()),
+        },
+        SearchFilterDescriptor {
+            key: "category".to_string(),
+            display_name: "Category".to_string(),
+            allowed_values: vec![], // Free text, no enum restriction
+            default: None,
+        },
+        SearchFilterDescriptor {
+            key: "tags".to_string(),
+            display_name: "Tags".to_string(),
+            allowed_values: vec![], // Free text, comma-separated
+            default: None,
+        },
+    ]
+}
 
 #[cfg(test)]
 mod tests {
@@ -66,5 +215,113 @@ mod tests {
     fn test_media_def_pattern() {
         let webpage = r#"mediaDefinition: [{"videoUrl": "test"}]"#;
         assert!(MEDIA_DEF_PATTERN.is_match(webpage));
+    }
+
+    #[test]
+    fn test_build_api_search_url_basic() {
+        let url = build_api_search_url("test query", &[]);
+        assert!(url.starts_with("https://api.redtube.com/"));
+        assert!(url.contains("search=test+query"));
+        assert!(url.contains("output=json"));
+        assert!(url.contains("thumbsize=big"));
+    }
+
+    #[test]
+    fn test_build_api_search_url_with_ordering() {
+        let filters = vec![SearchFilter {
+            key: "ordering".to_string(),
+            value: "newest".to_string(),
+        }];
+        let url = build_api_search_url("test", &filters);
+        assert!(url.contains("ordering=newest"));
+    }
+
+    #[test]
+    fn test_build_api_search_url_with_tags() {
+        let filters = vec![SearchFilter {
+            key: "tags".to_string(),
+            value: "tag1,tag2".to_string(),
+        }];
+        let url = build_api_search_url("test", &filters);
+        assert!(url.contains("tags[]=tag1"));
+        assert!(url.contains("tags[]=tag2"));
+    }
+
+    #[test]
+    fn test_build_api_search_url_with_category() {
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "Amateur".to_string(),
+        }];
+        let url = build_api_search_url("test", &filters);
+        assert!(url.contains("category=Amateur"));
+    }
+
+    #[test]
+    fn test_build_api_search_url_encodes_special_chars() {
+        let url = build_api_search_url("hello world", &[]);
+        assert!(!url.contains(' '), "URL must not contain raw spaces");
+    }
+
+    #[test]
+    fn test_build_api_search_url_page() {
+        let base = "https://api.redtube.com/?data=redtube.Videos.searchVideos&output=json&search=test&thumbsize=big";
+        let paged = build_api_search_url_page(base, 3);
+        assert!(paged.ends_with("&page=3"));
+    }
+
+    #[test]
+    fn test_build_html_search_url() {
+        let url = build_html_search_url("test query");
+        assert_eq!(url, "https://www.redtube.com/?search=test+query");
+    }
+
+    #[test]
+    fn test_search_filter_descriptors_count() {
+        let filters = search_filter_descriptors();
+        assert_eq!(filters.len(), 4);
+        let keys: Vec<&str> = filters.iter().map(|f| f.key.as_str()).collect();
+        assert!(keys.contains(&"ordering"));
+        assert!(keys.contains(&"period"));
+        assert!(keys.contains(&"category"));
+        assert!(keys.contains(&"tags"));
+    }
+
+    #[test]
+    fn test_search_filter_descriptors_ordering_values() {
+        let filters = search_filter_descriptors();
+        let ordering = filters.iter().find(|f| f.key == "ordering").unwrap();
+        assert_eq!(ordering.allowed_values.len(), 5);
+        assert_eq!(ordering.default, Some("relevance".to_string()));
+        let values: Vec<&str> = ordering
+            .allowed_values
+            .iter()
+            .map(|v| v.value.as_str())
+            .collect();
+        assert!(values.contains(&"relevance"));
+        assert!(values.contains(&"newest"));
+        assert!(values.contains(&"mostviewed"));
+        assert!(values.contains(&"rating"));
+        assert!(values.contains(&"mostfavoured"));
+    }
+
+    #[test]
+    fn test_search_filter_descriptors_period_values() {
+        let filters = search_filter_descriptors();
+        let period = filters.iter().find(|f| f.key == "period").unwrap();
+        assert_eq!(period.allowed_values.len(), 3);
+        assert_eq!(period.default, Some("alltime".to_string()));
+    }
+
+    #[test]
+    fn test_search_filter_descriptors_free_text() {
+        let filters = search_filter_descriptors();
+        let category = filters.iter().find(|f| f.key == "category").unwrap();
+        assert!(category.allowed_values.is_empty());
+        assert_eq!(category.default, None);
+
+        let tags = filters.iter().find(|f| f.key == "tags").unwrap();
+        assert!(tags.allowed_values.is_empty());
+        assert_eq!(tags.default, None);
     }
 }

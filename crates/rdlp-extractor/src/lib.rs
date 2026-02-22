@@ -109,6 +109,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(XHamsterExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(RedTubeExtractor::new()));
 
         registry
     }
