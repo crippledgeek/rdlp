@@ -77,14 +77,14 @@ interface FormatDialogProps {
 
 // -- Constants --------------------------------------------------------
 
-const COLUMNS: Array<{ key: SortKey; label: string; align: "left" | "right" }> = [
-    { key: "height", label: "Resolution", align: "left" },
-    { key: "ext", label: "Ext", align: "left" },
-    { key: "fps", label: "FPS", align: "right" },
-    { key: "tbr", label: "Bitrate", align: "right" },
-    { key: "vcodec", label: "Video", align: "left" },
-    { key: "acodec", label: "Audio", align: "left" },
-    { key: "filesize", label: "Size", align: "right" },
+const COLUMNS: Array<{ key: SortKey; label: string; align: "left" | "right"; pct: string }> = [
+    { key: "height", label: "Resolution", align: "left", pct: "22%" },
+    { key: "ext", label: "Ext", align: "left", pct: "7%" },
+    { key: "fps", label: "FPS", align: "right", pct: "7%" },
+    { key: "tbr", label: "Bitrate", align: "right", pct: "13%" },
+    { key: "vcodec", label: "Video", align: "left", pct: "12%" },
+    { key: "acodec", label: "Audio", align: "left", pct: "11%" },
+    { key: "filesize", label: "Size", align: "right", pct: "13%" },
 ];
 
 const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
@@ -444,13 +444,14 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             </div>
 
                             {/* Scrollable table */}
-                            <ScrollArea className="flex-1 min-h-0" type="auto" ref={tableRef}>
-                                <Table className="text-xs">
+                            <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-3" type="auto" ref={tableRef}>
+                                <Table className="text-xs" style={{ tableLayout: "fixed" }}>
                                     <TableHeader className="sticky top-0 z-10">
                                         <TableRow className="bg-foreground/[0.06] backdrop-blur-sm hover:bg-foreground/[0.06]">
-                                            {COLUMNS.map(({ key, label, align }) => (
+                                            {COLUMNS.map(({ key, label, align, pct }) => (
                                                 <TableHead
                                                     key={key}
+                                                    style={{ width: pct }}
                                                     className={cn(
                                                         "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none cursor-pointer transition-colors hover:text-foreground",
                                                         align === "right" && "text-right",
@@ -468,7 +469,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                                     </span>
                                                 </TableHead>
                                             ))}
-                                            <TableHead className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
+                                            <TableHead style={{ width: "15%" }} className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
                                                 Type
                                             </TableHead>
                                         </TableRow>
