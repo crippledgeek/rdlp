@@ -218,7 +218,8 @@ pub(crate) fn validate_search_filters(
                 )));
             }
             Some(desc) => {
-                // "category" and "tags" are free-text, any value is valid
+                // "category" and "tags" have suggested values for UI display,
+                // but the API accepts arbitrary strings, so bypass strict validation.
                 if filter.key == "category" || filter.key == "tags" {
                     continue;
                 }
