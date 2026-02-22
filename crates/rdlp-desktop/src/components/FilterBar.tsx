@@ -13,6 +13,7 @@ import type { SearchFilter } from "../types";
 
 const DEFAULT_FILTER_KEYS = new Set([
     "sort", "quality", "orientations", "date", "min-duration", "max-duration",
+    "ordering", "period",
 ]);
 
 /** Check if a filter value differs from its descriptor default. */

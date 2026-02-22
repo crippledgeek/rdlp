@@ -12,6 +12,7 @@ post-processes with FFmpeg library bindings. Inspired by
 - FFmpeg-based post-processing (remux, transcode, audio extraction, metadata/thumbnail embedding)
 - yt-dlp-compatible format selection and output templates
 - Browser cookie extraction (Chrome, Firefox) and Netscape cookie files
+- Keyword search across supported sites (XHamster, RedTube) with filters
 - Rate limiting, download archive, JSON metadata export
 - Interactive format and container selection
 
@@ -44,13 +45,14 @@ rdlp --audio-multistreams URL         # use bv+ba/b instead of bv*+ba/b
 rdlp -x --audio-format=flac URL       # extract audio
 rdlp --cookies-from-browser chrome URL # use browser cookies
 rdlp --dump-json URL                  # metadata as JSON
+rdlp --search "query" --search-site redtube  # keyword search
 ```
 
 Run `rdlp --help` for the full option list.
 
 ## Architecture
 
-16-crate Cargo workspace. Three-stage pipeline: extract, download, post-process.
+17-crate Cargo workspace. Three-stage pipeline: extract, download, post-process.
 
 | Crate | Purpose |
 |-------|---------|
@@ -61,7 +63,7 @@ Run `rdlp --help` for the full option list.
 | `rdlp-http` | HTTP client factory |
 | `rdlp-ratelimit` | Token-bucket rate limiter |
 | `rdlp-crypto` | URL decryption |
-| `rdlp-extractor` | Site extractors |
+| `rdlp-extractor` | Site extractors and search |
 | `rdlp-downloader` | HTTP + HLS downloaders |
 | `rdlp-ffmpeg` | FFmpeg library bindings |
 | `rdlp-postprocess` | Post-processing pipeline |
@@ -69,6 +71,7 @@ Run `rdlp --help` for the full option list.
 | `rdlp-jsinterp` | JavaScript interpreter |
 | `rdlp-plugin` | Plugin system |
 | `rdlp-table` | Format selection table layout |
+| `rdlp-desktop` | Tauri v2 desktop GUI |
 | `rdlp-cli` | CLI application |
 
 ## Contributing
