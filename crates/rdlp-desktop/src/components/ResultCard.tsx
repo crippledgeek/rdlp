@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { formatDistanceToNow, fromUnixTime } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { Download, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, parseUploadTimestamp } from "@/lib/utils";
 import type {
     DownloadOptions,
     SearchResultPreview,
@@ -26,12 +26,12 @@ function formatDuration(seconds: number | null): string {
     return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** Format a Unix timestamp string into a relative date (e.g. "3 days ago"). */
+/** Format an upload timestamp string into a relative date (e.g. "3 days ago"). */
 function formatUploadDate(timestamp: string | null): string {
     if (timestamp === null) return "";
-    const ts = Number(timestamp);
-    if (Number.isNaN(ts)) return "";
-    return formatDistanceToNow(fromUnixTime(ts), { addSuffix: true });
+    const date = parseUploadTimestamp(timestamp);
+    if (date === null) return "";
+    return formatDistanceToNow(date, { addSuffix: true });
 }
 
 /** Format a view count into a human-readable string (e.g. "1.2K views"). */

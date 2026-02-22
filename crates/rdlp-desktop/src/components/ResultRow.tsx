@@ -1,14 +1,14 @@
 // Single row in the dense list view. Shows thumbnail, title, metadata columns, and actions.
 
 import { useState, useRef, useEffect } from "react";
-import { formatDistanceToNowStrict, fromUnixTime } from "date-fns";
+import { formatDistanceToNowStrict } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { Download, LayoutGrid, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { cn } from "@/lib/utils";
+import { cn, parseUploadTimestamp } from "@/lib/utils";
 import type {
     DownloadOptions,
     SearchResultPreview,
@@ -33,10 +33,10 @@ function formatDuration(seconds: number | null): string {
 
 function formatCompactDate(timestamp: string | null): string {
     if (timestamp === null) return "";
-    const ts = Number(timestamp);
-    if (Number.isNaN(ts)) return "";
+    const date = parseUploadTimestamp(timestamp);
+    if (date === null) return "";
     try {
-        return formatDistanceToNowStrict(fromUnixTime(ts), { addSuffix: false })
+        return formatDistanceToNowStrict(date, { addSuffix: false })
             .replace(" seconds", "s").replace(" second", "s")
             .replace(" minutes", "m").replace(" minute", "m")
             .replace(" hours", "h").replace(" hour", "h")
