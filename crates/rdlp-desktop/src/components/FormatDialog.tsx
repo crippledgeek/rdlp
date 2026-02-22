@@ -57,6 +57,7 @@ import {
     Table,
     TableBody,
     TableCell,
+    TableFooter,
     TableHead,
     TableHeader,
     TableRow,
@@ -599,6 +600,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                             </TableRow>
                                         )}
                                     </TableBody>
+                                    <TableFooter className="sticky bottom-0 z-10 bg-card/95 backdrop-blur-sm">
+                                        <TableRow className="hover:bg-transparent">
+                                            <TableCell colSpan={columns.length} className="px-3 py-1.5 text-[10px] text-muted-foreground">
+                                                {filtered.length} format{filtered.length !== 1 ? "s" : ""}
+                                            </TableCell>
+                                        </TableRow>
+                                    </TableFooter>
                                 </Table>
                             </ScrollArea>
 
