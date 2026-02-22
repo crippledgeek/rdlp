@@ -66,7 +66,9 @@ pub(crate) struct ApiTag {
 ///
 /// The RedTube API returns `views` as a number (e.g. `571096`), but some
 /// responses may use a string. This accepts both and normalises to `Option<String>`.
-fn deserialize_views<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+pub(crate) fn deserialize_views<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -158,7 +160,7 @@ pub(crate) fn parse_duration_string(duration: &str) -> Option<u64> {
 }
 
 /// Parse a view count string that may contain commas (e.g. "1,234,567").
-fn parse_view_count(views: &str) -> Option<u64> {
+pub(crate) fn parse_view_count(views: &str) -> Option<u64> {
     let cleaned: String = views.chars().filter(|c| c.is_ascii_digit()).collect();
     cleaned.parse::<u64>().ok()
 }

@@ -98,6 +98,17 @@ pub(crate) fn build_api_search_url_page(base_url: &str, page: u32) -> String {
     format!("{base_url}&page={page}")
 }
 
+/// Build the API URL for fetching video info by ID.
+///
+/// Format: `https://api.redtube.com/?data=redtube.Videos.getVideoById
+///          &video_id={id}&output=json&thumbsize=all`
+pub(crate) fn build_api_video_url(video_id: &str) -> String {
+    format!(
+        "https://api.redtube.com/?data=redtube.Videos.getVideoById\
+         &video_id={video_id}&output=json&thumbsize=all"
+    )
+}
+
 /// Build the HTML search fallback URL.
 ///
 /// Format: `https://www.redtube.com/?search={query}`
@@ -517,5 +528,24 @@ mod tests {
         assert!(values.contains(&"amateur"));
         assert!(values.contains(&"homemade"));
         assert!(values.contains(&"compilation"));
+    }
+
+    #[test]
+    fn test_build_api_video_url() {
+        let url = build_api_video_url("123456");
+        assert!(url.starts_with("https://api.redtube.com/"));
+        assert!(url.contains("data=redtube.Videos.getVideoById"));
+        assert!(url.contains("video_id=123456"));
+        assert!(url.contains("output=json"));
+        assert!(url.contains("thumbsize=all"));
+    }
+
+    #[test]
+    fn test_build_api_video_url_different_ids() {
+        let url1 = build_api_video_url("1");
+        assert!(url1.contains("video_id=1"));
+
+        let url2 = build_api_video_url("99999999");
+        assert!(url2.contains("video_id=99999999"));
     }
 }
