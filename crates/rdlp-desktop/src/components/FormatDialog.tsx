@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+    useReactTable,
+    getCoreRowModel,
+    getSortedRowModel,
+    createColumnHelper,
+    flexRender,
+} from "@tanstack/react-table";
+import type { SortingState, Row } from "@tanstack/react-table";
+import {
     Loader2,
     AlertCircle,
     ChevronUp,
@@ -49,6 +57,7 @@ import {
     Table,
     TableBody,
     TableCell,
+    TableFooter,
     TableHead,
     TableHeader,
     TableRow,
@@ -66,9 +75,6 @@ import type {
 
 // -- Types ------------------------------------------------------------
 
-type SortKey = "height" | "ext" | "fps" | "tbr" | "vcodec" | "acodec" | "filesize";
-type SortDir = "asc" | "desc";
-
 interface FormatDialogProps {
     url: string;
     onConfirm: (options: DownloadOptions) => void;
@@ -76,16 +82,6 @@ interface FormatDialogProps {
 }
 
 // -- Constants --------------------------------------------------------
-
-const COLUMNS: Array<{ key: SortKey; label: string; align: "left" | "right"; pct: string }> = [
-    { key: "height", label: "Resolution", align: "left", pct: "17%" },
-    { key: "ext", label: "Ext", align: "left", pct: "9%" },
-    { key: "fps", label: "FPS", align: "right", pct: "9%" },
-    { key: "tbr", label: "Bitrate", align: "right", pct: "13%" },
-    { key: "vcodec", label: "Video", align: "left", pct: "12%" },
-    { key: "acodec", label: "Audio", align: "left", pct: "11%" },
-    { key: "filesize", label: "Size", align: "right", pct: "13%" },
-];
 
 const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
     { value: "mp4", label: "MP4" },
@@ -110,46 +106,53 @@ function formatBrief(f: FormatInfo): string {
     return `${res} ${f.ext}`.trim();
 }
 
-function cmpNullable(a: number | null, b: number | null, dir: SortDir): number {
-    if (a === null && b === null) return 0;
-    if (a === null) return 1;
-    if (b === null) return -1;
-    return dir === "asc" ? a - b : b - a;
+export function formatSize(bytes: number | null): string {
+    if (bytes === null) return "\u2014";
+    if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+    if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+    if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(0)} KB`;
+    return `${bytes} B`;
 }
 
-function sortFormats(formats: FormatInfo[], key: SortKey, dir: SortDir): FormatInfo[] {
-    const sorted = [...formats];
-    sorted.sort((a, b) => {
-        switch (key) {
-            case "height": return cmpNullable(a.height, b.height, dir);
-            case "ext": return dir === "asc" ? a.ext.localeCompare(b.ext) : b.ext.localeCompare(a.ext);
-            case "fps": return cmpNullable(a.fps, b.fps, dir);
-            case "tbr": return cmpNullable(a.tbr, b.tbr, dir);
-            case "vcodec": return dir === "asc" ? (a.vcodec ?? "").localeCompare(b.vcodec ?? "") : (b.vcodec ?? "").localeCompare(a.vcodec ?? "");
-            case "acodec": return dir === "asc" ? (a.acodec ?? "").localeCompare(b.acodec ?? "") : (b.acodec ?? "").localeCompare(a.acodec ?? "");
-            case "filesize": return cmpNullable(a.filesize, b.filesize, dir);
-            default: return 0;
-        }
-    });
-    return sorted;
+export function formatBitrate(kbps: number | null): string {
+    if (kbps === null) return "\u2014";
+    if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+    return `${Math.round(kbps)} kbps`;
 }
 
-/** Group sorted formats into Video+Audio, Video Only, Audio Only sections. */
-function groupFormats(formats: FormatInfo[]): FormatGroup[] {
-    const videoAudio: FormatInfo[] = [];
-    const videoOnly: FormatInfo[] = [];
-    const audioOnly: FormatInfo[] = [];
+export function formatResolution(f: FormatInfo): string {
+    if (f.height && f.width) return `${f.width}\u00d7${f.height}`;
+    if (f.height) return `${f.height}p`;
+    return f.format_note ?? "\u2014";
+}
 
-    for (const f of formats) {
-        if (f.has_video && f.has_audio) videoAudio.push(f);
-        else if (f.has_video) videoOnly.push(f);
-        else audioOnly.push(f);
+export function formatType(f: FormatInfo): { label: string; className: string } {
+    if (f.protocol.includes("m3u8"))
+        return { label: "HLS", className: "bg-yellow-500/10 text-yellow-500" };
+    if (f.has_video && f.has_audio)
+        return { label: "V+A", className: "bg-primary/10 text-primary" };
+    if (f.has_video)
+        return { label: "Video", className: "bg-blue-500/10 text-blue-400" };
+    return { label: "Audio", className: "bg-purple-500/10 text-purple-400" };
+}
+
+/** Group sorted TanStack rows into Video+Audio, Video Only, Audio Only sections. */
+function groupRows(rows: Row<FormatInfo>[]): FormatGroup[] {
+    const videoAudio: Row<FormatInfo>[] = [];
+    const videoOnly: Row<FormatInfo>[] = [];
+    const audioOnly: Row<FormatInfo>[] = [];
+
+    for (const row of rows) {
+        const f = row.original;
+        if (f.has_video && f.has_audio) videoAudio.push(row);
+        else if (f.has_video) videoOnly.push(row);
+        else audioOnly.push(row);
     }
 
     const groups: FormatGroup[] = [];
-    if (videoAudio.length > 0) groups.push({ label: "Video + Audio", formats: videoAudio });
-    if (videoOnly.length > 0) groups.push({ label: "Video Only", formats: videoOnly });
-    if (audioOnly.length > 0) groups.push({ label: "Audio Only", formats: audioOnly });
+    if (videoAudio.length > 0) groups.push({ label: "Video + Audio", rows: videoAudio });
+    if (videoOnly.length > 0) groups.push({ label: "Video Only", rows: videoOnly });
+    if (audioOnly.length > 0) groups.push({ label: "Audio Only", rows: audioOnly });
     return groups;
 }
 
@@ -163,6 +166,7 @@ function optionsSummary(opts: DownloadOptions): string {
     if (opts.embedThumbnail) parts.push("Thumbnail");
     return parts.length > 0 ? parts.join(" \u00b7 ") : "Default settings";
 }
+
 
 /** Full-screen modal for format selection with hero table, presets, and collapsed options. */
 export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
@@ -179,8 +183,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     // -- Local state --------------------------------------------------
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [mergeId, setMergeId] = useState<string | null>(null);
-    const [sortKey, setSortKey] = useState<SortKey>("height");
-    const [sortDir, setSortDir] = useState<SortDir>("desc");
+    const [sorting, setSorting] = useState<SortingState>([{ id: "height", desc: true }]);
     const [expertMode, setExpertMode] = useState(false);
     const [expr, setExpr] = useState("");
     const [exprError, setExprError] = useState<string | null>(null);
@@ -195,6 +198,105 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     const exprTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tableRef = useRef<HTMLDivElement>(null);
+
+    // -- Column definitions (must be stable per TanStack FAQ) ---------
+
+    const columnHelper = useMemo(() => createColumnHelper<FormatInfo>(), []);
+
+    const columns = useMemo(() => [
+        columnHelper.accessor((row) => row.height ?? undefined, {
+            id: "height",
+            header: "Resolution",
+            size: 170,
+            sortDescFirst: true,
+            sortUndefined: "last",
+            sortingFn: "basic",
+            cell: ({ row }) => (
+                <span className="font-mono">{formatResolution(row.original)}</span>
+            ),
+            meta: { align: "left" as const },
+        }),
+        columnHelper.accessor("ext", {
+            header: "Ext",
+            size: 90,
+            sortingFn: "text",
+            meta: { align: "left" as const },
+        }),
+        columnHelper.accessor((row) => row.fps ?? undefined, {
+            id: "fps",
+            header: "FPS",
+            size: 90,
+            sortDescFirst: true,
+            sortUndefined: "last",
+            sortingFn: "basic",
+            cell: ({ getValue }) => {
+                const fps = getValue();
+                return fps !== undefined ? Math.round(fps) : "\u2014";
+            },
+            meta: { align: "right" as const },
+        }),
+        columnHelper.accessor((row) => row.tbr ?? undefined, {
+            id: "tbr",
+            header: "Bitrate",
+            size: 130,
+            sortDescFirst: true,
+            sortUndefined: "last",
+            sortingFn: "basic",
+            cell: ({ row }) => formatBitrate(row.original.tbr),
+            meta: { align: "right" as const },
+        }),
+        columnHelper.accessor((row) => row.vcodec ?? undefined, {
+            id: "vcodec",
+            header: "Video",
+            size: 120,
+            sortUndefined: "last",
+            sortingFn: "text",
+            cell: ({ getValue }) => getValue() ?? "\u2014",
+            meta: { align: "left" as const },
+        }),
+        columnHelper.accessor((row) => row.acodec ?? undefined, {
+            id: "acodec",
+            header: "Audio",
+            size: 110,
+            sortUndefined: "last",
+            sortingFn: "text",
+            cell: ({ getValue }) => getValue() ?? "\u2014",
+            meta: { align: "left" as const },
+        }),
+        columnHelper.accessor((row) => row.filesize ?? undefined, {
+            id: "filesize",
+            header: "Size",
+            size: 130,
+            sortDescFirst: true,
+            sortUndefined: "last",
+            sortingFn: "basic",
+            cell: ({ row }) => formatSize(row.original.filesize),
+            meta: { align: "right" as const },
+        }),
+        columnHelper.display({
+            id: "type",
+            header: "Type",
+            size: 160,
+            enableSorting: false,
+            cell: ({ row }) => {
+                const type = formatType(row.original);
+                return (
+                    <span className={cn(
+                        "inline-block px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase",
+                        type.className,
+                    )}>
+                        {type.label}
+                    </span>
+                );
+            },
+            meta: { align: "center" as const },
+        }),
+    ], [columnHelper]);
+
+    const totalColumnSize = useMemo(
+        () => columns.reduce((sum, col) => sum + (col.size ?? 0), 0),
+        [columns],
+    );
 
     // -- Effects ------------------------------------------------------
 
@@ -216,7 +318,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     // Surface query errors in local state
     useEffect(() => {
         if (isQueryError && queryError) {
-            setError(queryError instanceof Error ? queryError.message : String(queryError));
+            setError(queryError.message);
         }
     }, [isQueryError, queryError]);
 
@@ -229,20 +331,29 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     // -- Derived data -------------------------------------------------
 
-    const sorted = useMemo(
-        () => (formatData ? sortFormats(formatData.formats, sortKey, sortDir) : []),
-        [formatData, sortKey, sortDir],
-    );
-
     const filtered = useMemo(() => {
-        if (!presetId || presetId === "best") return sorted;
-        if (presetId === "audio-only") return sorted.filter((f) => !f.has_video);
-        if (presetId === "1080p") return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
-        if (presetId === "720p") return sorted.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
-        return sorted;
-    }, [sorted, presetId]);
+        const all = formatData?.formats ?? [];
+        if (!presetId || presetId === "best") return all;
+        if (presetId === "audio-only") return all.filter((f) => !f.has_video);
+        if (presetId === "1080p") return all.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
+        if (presetId === "720p") return all.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
+        return all;
+    }, [formatData, presetId]);
 
-    const groups = useMemo(() => groupFormats(filtered), [filtered]);
+    // -- TanStack Table instance ----------------------------------------
+
+    const table = useReactTable({
+        data: filtered,
+        columns,
+        state: { sorting },
+        onSortingChange: setSorting,
+        getCoreRowModel: getCoreRowModel(),
+        getSortedRowModel: getSortedRowModel(),
+        enableSortingRemoval: false,
+        enableMultiSort: false,
+    });
+
+    const groups = groupRows(table.getSortedRowModel().rows);
 
     const subtitleLangs = useMemo(
         () => formatData?.subtitles.map((s) => s.lang) ?? [],
@@ -250,17 +361,6 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     );
 
     // -- Handlers -----------------------------------------------------
-
-    const handleSortClick = useCallback((key: SortKey) => {
-        setSortKey((prev) => {
-            if (prev === key) {
-                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                return prev;
-            }
-            setSortDir("desc");
-            return key;
-        });
-    }, []);
 
     const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
         if (e.shiftKey && selectedId !== null && selectedId !== id) {
@@ -447,32 +547,37 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                             <ScrollArea className="flex-1 min-h-0" viewportClassName="pr-3" type="auto" ref={tableRef}>
                                 <Table className="text-xs" style={{ tableLayout: "fixed" }}>
                                     <TableHeader className="sticky top-0 z-10">
-                                        <TableRow className="bg-foreground/[0.06] backdrop-blur-sm hover:bg-foreground/[0.06]">
-                                            {COLUMNS.map(({ key, label, align, pct }) => (
-                                                <TableHead
-                                                    key={key}
-                                                    style={{ width: pct }}
-                                                    className={cn(
-                                                        "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none cursor-pointer transition-colors hover:text-foreground",
-                                                        align === "right" && "text-right",
-                                                        sortKey === key ? "text-foreground" : "text-muted-foreground",
-                                                    )}
-                                                    onClick={() => handleSortClick(key)}
-                                                >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        {label}
-                                                        {sortKey === key && (
-                                                            sortDir === "asc"
-                                                                ? <ChevronUp className="size-3" />
-                                                                : <ChevronDown className="size-3" />
-                                                        )}
-                                                    </span>
-                                                </TableHead>
-                                            ))}
-                                            <TableHead style={{ width: "16%" }} className="h-8 px-3 text-[10px] font-bold tracking-wider uppercase text-muted-foreground select-none text-center">
-                                                Type
-                                            </TableHead>
-                                        </TableRow>
+                                        {table.getHeaderGroups().map((headerGroup) => (
+                                            <TableRow
+                                                key={headerGroup.id}
+                                                className="bg-foreground/[0.06] backdrop-blur-sm hover:bg-foreground/[0.06]"
+                                            >
+                                                {headerGroup.headers.map((header) => {
+                                                    const align = (header.column.columnDef.meta as { align?: string } | undefined)?.align;
+                                                    const isSorted = header.column.getIsSorted();
+                                                    return (
+                                                        <TableHead
+                                                            key={header.id}
+                                                            style={{ width: `${(header.getSize() / totalColumnSize * 100).toFixed(1)}%` }}
+                                                            className={cn(
+                                                                "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none transition-colors",
+                                                                header.column.getCanSort() && "cursor-pointer hover:text-foreground",
+                                                                align === "right" && "text-right",
+                                                                align === "center" && "text-center",
+                                                                isSorted ? "text-foreground" : "text-muted-foreground",
+                                                            )}
+                                                            onClick={header.column.getToggleSortingHandler()}
+                                                        >
+                                                            <span className="inline-flex items-center gap-1">
+                                                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                                                {isSorted === "asc" && <ChevronUp className="size-3" />}
+                                                                {isSorted === "desc" && <ChevronDown className="size-3" />}
+                                                            </span>
+                                                        </TableHead>
+                                                    );
+                                                })}
+                                            </TableRow>
+                                        ))}
                                     </TableHeader>
                                     <TableBody>
                                         {groups.length > 0 ? (
@@ -480,6 +585,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                                 <FormatGroupSection
                                                     key={group.label}
                                                     group={group}
+                                                    columnCount={columns.length}
                                                     selectedId={selectedId}
                                                     mergeId={mergeId}
                                                     exprMatches={exprMatches}
@@ -488,12 +594,19 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                             ))
                                         ) : (
                                             <TableRow className="hover:bg-transparent">
-                                                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                                                <TableCell colSpan={columns.length} className="text-center py-8 text-muted-foreground">
                                                     No formats match this filter. Try a different preset or click "Best Quality" to see all.
                                                 </TableCell>
                                             </TableRow>
                                         )}
                                     </TableBody>
+                                    <TableFooter className="sticky bottom-0 z-10 bg-card/95 backdrop-blur-sm">
+                                        <TableRow className="hover:bg-transparent">
+                                            <TableCell colSpan={columns.length} className="px-3 py-1.5 text-[10px] text-muted-foreground">
+                                                {filtered.length} format{filtered.length !== 1 ? "s" : ""}
+                                            </TableCell>
+                                        </TableRow>
+                                    </TableFooter>
                                 </Table>
                             </ScrollArea>
 
@@ -759,4 +872,3 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         </Dialog>
     );
 }
-
