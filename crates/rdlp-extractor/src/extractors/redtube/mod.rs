@@ -5,13 +5,14 @@
 //! - https://www.redtube.com.br/123456
 //! - https://embed.redtube.com/?id=123456
 //!
-//! RedTube embeds video sources in JavaScript objects rather than HTML `<source>` tags,
-//! so this extractor uses regex to extract JSON from the page source.
+//! Uses the RedTube public API (`api.redtube.com`) as the primary source for
+//! video metadata, with HTML scraping as a fallback. Video format URLs are
+//! always extracted from the webpage since the API does not expose them.
 //!
 //! ## Module Structure
 //!
-//! - `patterns` - URL and extraction regex patterns
-//! - `formats` - Format extraction from JavaScript sources and mediaDefinition
+//! - `patterns` - URL and extraction regex patterns, API URL builders
+//! - `formats` - Format extraction from JavaScript sources, mediaDefinition, and API
 //! - `search` - Search result parsing and filter validation
 
 mod formats;
@@ -52,6 +53,126 @@ impl RedTubeExtractor {
     fn extract_id(&self, url: &str) -> Option<String> {
         BaseExtractor::extract_id_from_url(url, &REDTUBE_URL_PATTERN, "id")
     }
+
+    /// Fetch video metadata from the RedTube API (`getVideoById`).
+    ///
+    /// Returns parsed metadata on success, or an error if the API is
+    /// unreachable or returns an unexpected response.
+    async fn fetch_api_video_info(
+        &self,
+        video_id: &str,
+        ctx: &ExtractionContext,
+    ) -> Result<formats::ApiVideoMetadata> {
+        let api_url = patterns::build_api_video_url(video_id);
+
+        debug!("[RedTube] Fetching API video info: {api_url}");
+
+        let response =
+            ctx.http_client.get(&api_url).send().await.map_err(|e| {
+                RdlpError::Network(format!("Failed to fetch RedTube video API: {e}"))
+            })?;
+
+        rdlp_core::check_http_response(&response)?;
+
+        let body = response.text().await.map_err(|e| {
+            RdlpError::Network(format!("Failed to read RedTube video API response: {e}"))
+        })?;
+
+        BaseExtractor::log_content_if_verbose(ctx, "RedTube", "API video response", &body, 500);
+
+        formats::parse_api_video_response(&body)
+    }
+
+    /// Build `InfoDict` using API metadata as the primary source.
+    ///
+    /// Falls back to HTML scraping for fields the API does not provide
+    /// (description, uploader, channel, like_count, average_rating, categories).
+    fn build_info_from_api(
+        &self,
+        video_id: &str,
+        url: &str,
+        api_meta: formats::ApiVideoMetadata,
+        webpage: &str,
+        formats: Vec<rdlp_core::Format>,
+        hls_flags: &crate::hls::HlsStreamFlags,
+    ) -> InfoDict {
+        let mut info = InfoDict::new(video_id, &api_meta.title, InfoExtractor::name(self), url);
+        info.thumbnail = api_meta.thumbnail;
+        info.thumbnails = api_meta.thumbnails;
+        info.duration = api_meta.duration;
+        info.upload_date = api_meta.upload_date;
+        info.view_count = api_meta.view_count;
+        info.tags = api_meta.tags;
+        info.age_limit = Some(18);
+        info.formats = formats;
+
+        // Supplement with HTML-scraped fields the API does not return
+        if let Ok(html_meta) = {
+            let html = Html::parse_document(webpage);
+            self.base.extract_metadata(&html)
+        } {
+            info.description = html_meta.description;
+            info.uploader = html_meta.uploader;
+            info.uploader_id = html_meta.uploader_id;
+            info.uploader_url = html_meta.uploader_url;
+            info.channel = html_meta.channel;
+            info.channel_id = html_meta.channel_id;
+            info.channel_url = html_meta.channel_url;
+            info.like_count = html_meta.like_count;
+            info.average_rating = html_meta.average_rating;
+            info.categories = html_meta.categories;
+        }
+
+        info.propagate_duration();
+
+        if hls_flags.is_live {
+            info.is_live = Some(true);
+        }
+
+        info
+    }
+
+    /// Build `InfoDict` entirely from HTML-scraped metadata (fallback path).
+    fn build_info_from_html(
+        &self,
+        video_id: &str,
+        url: &str,
+        webpage: &str,
+        formats: Vec<rdlp_core::Format>,
+        hls_flags: &crate::hls::HlsStreamFlags,
+    ) -> Result<InfoDict> {
+        let metadata = {
+            let html = Html::parse_document(webpage);
+            self.base.extract_metadata(&html)?
+        };
+
+        let mut info = InfoDict::new(video_id, metadata.title, InfoExtractor::name(self), url);
+        info.description = metadata.description;
+        info.uploader = metadata.uploader;
+        info.uploader_id = metadata.uploader_id;
+        info.uploader_url = metadata.uploader_url;
+        info.channel = metadata.channel;
+        info.channel_id = metadata.channel_id;
+        info.channel_url = metadata.channel_url;
+        info.thumbnail = metadata.thumbnail;
+        info.thumbnails = metadata.thumbnails;
+        info.duration = metadata.duration;
+        info.upload_date = metadata.upload_date;
+        info.view_count = metadata.view_count;
+        info.like_count = metadata.like_count;
+        info.average_rating = metadata.average_rating;
+        info.tags = metadata.tags;
+        info.categories = metadata.categories;
+        info.age_limit = Some(18);
+        info.formats = formats;
+        info.propagate_duration();
+
+        if hls_flags.is_live {
+            info.is_live = Some(true);
+        }
+
+        Ok(info)
+    }
 }
 
 impl Default for RedTubeExtractor {
@@ -71,19 +192,16 @@ impl InfoExtractor for RedTubeExtractor {
     }
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        // Fetch the webpage using BaseExtractor (handles errors, verbose logging)
-        let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
-
         // Get video ID using BaseExtractor
         let video_id = self.extract_id(url).ok_or_else(|| {
             RdlpError::Extraction(format!("Could not extract video ID from URL: {url}"))
         })?;
 
-        // Extract all data from HTML before any async operations
-        let metadata = {
-            let html = Html::parse_document(&webpage);
-            self.base.extract_metadata(&html)?
-        }; // html is dropped here
+        // Try API first for metadata
+        let api_metadata = self.fetch_api_video_info(&video_id, ctx).await;
+
+        // Always fetch webpage for format extraction (API does not return video URLs)
+        let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
         // Try to extract video formats from JavaScript sources
         let mut formats = formats::extract_from_sources(&webpage);
@@ -108,7 +226,8 @@ impl InfoExtractor for RedTubeExtractor {
         // Return error if still no sources found
         if formats.is_empty() {
             return Err(RdlpError::Extraction(format!(
-                "No video sources found in JavaScript or HTML. Video may be unavailable. URL: {url}"
+                "No video sources found in JavaScript or HTML. \
+                 Video may be unavailable. URL: {url}"
             )));
         }
 
@@ -123,32 +242,14 @@ impl InfoExtractor for RedTubeExtractor {
         let (formats, hls_flags) =
             detect_format_sizes(formats, ctx, InfoExtractor::name(self)).await;
 
-        // Build InfoDict with all extracted metadata
-        let mut info = InfoDict::new(video_id, metadata.title, InfoExtractor::name(self), url);
-        info.description = metadata.description;
-        info.uploader = metadata.uploader;
-        info.uploader_id = metadata.uploader_id;
-        info.uploader_url = metadata.uploader_url;
-        info.channel = metadata.channel;
-        info.channel_id = metadata.channel_id;
-        info.channel_url = metadata.channel_url;
-        info.thumbnail = metadata.thumbnail;
-        info.thumbnails = metadata.thumbnails;
-        info.duration = metadata.duration;
-        info.upload_date = metadata.upload_date;
-        info.view_count = metadata.view_count;
-        info.like_count = metadata.like_count;
-        info.average_rating = metadata.average_rating;
-        info.tags = metadata.tags;
-        info.categories = metadata.categories;
-        info.age_limit = Some(18); // RedTube is adult content
-        info.formats = formats;
-        info.propagate_duration();
-
-        // Set stream-level flags from HLS detection
-        if hls_flags.is_live {
-            info.is_live = Some(true);
-        }
+        // Build InfoDict — prefer API metadata, fall back to HTML scrape
+        let info = if let Ok(api_meta) = api_metadata {
+            debug!("[RedTube] Using API metadata for video {video_id}");
+            self.build_info_from_api(&video_id, url, api_meta, &webpage, formats, &hls_flags)
+        } else {
+            debug!("[RedTube] API unavailable, using HTML metadata for video {video_id}");
+            self.build_info_from_html(&video_id, url, &webpage, formats, &hls_flags)?
+        };
 
         Ok(info)
     }

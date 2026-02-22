@@ -1,10 +1,12 @@
 //! Format extraction for RedTube
 //!
-//! Extracts video formats from JavaScript sources and mediaDefinition arrays.
+//! Extracts video formats from JavaScript sources, mediaDefinition arrays,
+//! and the `getVideoById` JSON API response.
 
 use log::{debug, warn};
-use rdlp_core::{ExtractionContext, Format};
+use rdlp_core::{ExtractionContext, Format, RdlpError, Result, Thumbnail};
 use regex::Regex;
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::LazyLock;
 
@@ -12,6 +14,164 @@ use crate::base::common::BaseExtractor;
 use crate::utils::{extract_extension_from_url, make_absolute_url};
 
 use super::patterns::{MEDIA_DEF_PATTERN, SOURCES_PATTERN};
+use super::search::parse_duration_string;
+
+// ============================================================================
+// API Video Info response types (getVideoById)
+// ============================================================================
+
+/// Top-level API response from `redtube.Videos.getVideoById`.
+///
+/// The response wraps the video in a `video` object inside a one-element array.
+/// Example: `{"video": {"video_id": "123", "title": "...", ...}}`
+#[derive(Debug, Deserialize)]
+pub(crate) struct ApiVideoInfoResponse {
+    /// The nested video object.
+    pub video: ApiVideoInfo,
+}
+
+/// Video info returned by the `getVideoById` API endpoint.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ApiVideoInfo {
+    /// Video title.
+    pub title: String,
+    /// Duration string in "MM:SS" or "H:MM:SS" format.
+    #[serde(default)]
+    pub duration: Option<String>,
+    /// Publish date string.
+    #[serde(default)]
+    pub publish_date: Option<String>,
+    /// View count (may be number or string).
+    #[serde(default, deserialize_with = "super::search::deserialize_views")]
+    pub views: Option<String>,
+    /// Tag list.
+    #[serde(default)]
+    pub tags: Vec<ApiVideoTag>,
+    /// Thumbnail list (requested via `thumbsize=all`).
+    #[serde(default)]
+    pub thumbs: Vec<ApiThumb>,
+}
+
+/// A single tag entry from the video info API.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ApiVideoTag {
+    /// Tag display name.
+    pub tag_name: String,
+}
+
+/// A single thumbnail entry from the video info API.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ApiThumb {
+    /// Size descriptor (e.g. "small", "medium", "big", "all").
+    pub size: String,
+    /// Width in pixels as a string.
+    #[serde(default)]
+    pub width: Option<String>,
+    /// Height in pixels as a string.
+    #[serde(default)]
+    pub height: Option<String>,
+    /// Thumbnail image URL.
+    #[serde(default)]
+    pub src: Option<String>,
+}
+
+/// Parsed metadata extracted from the `getVideoById` API response.
+///
+/// Contains the fields needed to populate `InfoDict` metadata.
+#[derive(Debug)]
+pub(crate) struct ApiVideoMetadata {
+    /// Video title.
+    pub title: String,
+    /// Duration in seconds.
+    pub duration: Option<f64>,
+    /// Primary thumbnail URL (largest available).
+    pub thumbnail: Option<String>,
+    /// All available thumbnails with dimensions.
+    pub thumbnails: Option<Vec<Thumbnail>>,
+    /// Tag names.
+    pub tags: Option<Vec<String>>,
+    /// View count.
+    pub view_count: Option<u64>,
+    /// Publish date string.
+    pub upload_date: Option<String>,
+}
+
+/// Parse the `getVideoById` API JSON response into metadata.
+///
+/// # Arguments
+/// * `json` - Raw JSON response body from the API.
+///
+/// # Returns
+/// Parsed `ApiVideoMetadata` or an error if JSON parsing fails.
+pub(crate) fn parse_api_video_response(json: &str) -> Result<ApiVideoMetadata> {
+    let response: ApiVideoInfoResponse = serde_json::from_str(json).map_err(|e| {
+        RdlpError::Extraction(format!("Failed to parse RedTube video API response: {e}"))
+    })?;
+
+    let video = response.video;
+
+    let duration = video
+        .duration
+        .as_deref()
+        .and_then(parse_duration_string)
+        .map(|s| s as f64);
+
+    let view_count = video
+        .views
+        .as_deref()
+        .and_then(super::search::parse_view_count);
+
+    let tags = if video.tags.is_empty() {
+        None
+    } else {
+        Some(video.tags.into_iter().map(|t| t.tag_name).collect())
+    };
+
+    // Build thumbnail list — pick the largest as primary
+    let mut thumbnails = Vec::new();
+    let mut best_thumb: Option<String> = None;
+    let mut best_width: u32 = 0;
+
+    for thumb in &video.thumbs {
+        if let Some(src) = &thumb.src {
+            let width = thumb.width.as_deref().and_then(|w| w.parse::<u32>().ok());
+            let height = thumb.height.as_deref().and_then(|h| h.parse::<u32>().ok());
+
+            thumbnails.push(Thumbnail {
+                url: src.clone(),
+                id: Some(thumb.size.clone()),
+                width,
+                height,
+                preference: None,
+            });
+
+            let w = width.unwrap_or(0);
+            if w > best_width {
+                best_width = w;
+                best_thumb = Some(src.clone());
+            }
+        }
+    }
+
+    // If no thumb was selected by width, use the first available
+    if best_thumb.is_none() && !thumbnails.is_empty() {
+        best_thumb = Some(thumbnails[0].url.clone());
+    }
+
+    Ok(ApiVideoMetadata {
+        title: video.title,
+        duration,
+        thumbnail: best_thumb,
+        thumbnails: if thumbnails.is_empty() {
+            None
+        } else {
+            Some(thumbnails)
+        },
+        tags,
+        view_count,
+        upload_date: video.publish_date,
+    })
+}
 
 /// Extract quality string from JSON value (handles both string and number types)
 pub fn parse_quality(item: &Value) -> String {
@@ -452,5 +612,191 @@ mod tests {
         // vbr and abr not set - we only know total bitrate from URL
         assert_eq!(format.vbr, None);
         assert_eq!(format.abr, None);
+    }
+
+    // ====================================================================
+    // API video info (getVideoById) parsing tests
+    // ====================================================================
+
+    /// Sample API response matching the `getVideoById` endpoint shape.
+    fn sample_api_video_response() -> &'static str {
+        r#"{
+            "video": {
+                "video_id": "123456",
+                "title": "Test API Video",
+                "url": "https://www.redtube.com/123456",
+                "duration": "15:30",
+                "publish_date": "2024-03-10",
+                "views": 42000,
+                "tags": [
+                    {"tag_name": "amateur"},
+                    {"tag_name": "hd"}
+                ],
+                "thumbs": [
+                    {
+                        "size": "small",
+                        "width": "130",
+                        "height": "97",
+                        "src": "https://thumb-small.jpg"
+                    },
+                    {
+                        "size": "medium",
+                        "width": "320",
+                        "height": "240",
+                        "src": "https://thumb-medium.jpg"
+                    },
+                    {
+                        "size": "big",
+                        "width": "640",
+                        "height": "480",
+                        "src": "https://thumb-big.jpg"
+                    }
+                ]
+            }
+        }"#
+    }
+
+    #[test]
+    fn test_parse_api_video_response_full() {
+        let meta = parse_api_video_response(sample_api_video_response()).unwrap();
+        assert_eq!(meta.title, "Test API Video");
+        assert_eq!(meta.duration, Some(930.0)); // 15*60 + 30
+        assert_eq!(meta.view_count, Some(42000));
+        assert_eq!(meta.upload_date, Some("2024-03-10".to_string()));
+        assert_eq!(
+            meta.tags,
+            Some(vec!["amateur".to_string(), "hd".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_parse_api_video_response_thumbnails() {
+        let meta = parse_api_video_response(sample_api_video_response()).unwrap();
+        let thumbs = meta.thumbnails.as_ref().unwrap();
+        assert_eq!(thumbs.len(), 3);
+
+        // Primary thumbnail should be the largest (640px wide)
+        assert_eq!(meta.thumbnail, Some("https://thumb-big.jpg".to_string()));
+
+        // Check individual thumbnail entries
+        let small = thumbs.iter().find(|t| t.id == Some("small".to_string()));
+        assert!(small.is_some());
+        assert_eq!(small.unwrap().width, Some(130));
+        assert_eq!(small.unwrap().height, Some(97));
+    }
+
+    #[test]
+    fn test_parse_api_video_response_minimal() {
+        let json = r#"{
+            "video": {
+                "video_id": "999",
+                "title": "Minimal Video",
+                "tags": [],
+                "thumbs": []
+            }
+        }"#;
+        let meta = parse_api_video_response(json).unwrap();
+        assert_eq!(meta.title, "Minimal Video");
+        assert_eq!(meta.duration, None);
+        assert_eq!(meta.view_count, None);
+        assert_eq!(meta.upload_date, None);
+        assert_eq!(meta.thumbnail, None);
+        assert_eq!(meta.thumbnails, None);
+        assert_eq!(meta.tags, None); // empty vec becomes None
+    }
+
+    #[test]
+    fn test_parse_api_video_response_string_views() {
+        let json = r#"{
+            "video": {
+                "video_id": "111",
+                "title": "String Views",
+                "views": "1,234,567",
+                "tags": [],
+                "thumbs": []
+            }
+        }"#;
+        let meta = parse_api_video_response(json).unwrap();
+        assert_eq!(meta.view_count, Some(1234567));
+    }
+
+    #[test]
+    fn test_parse_api_video_response_invalid_json() {
+        let result = parse_api_video_response("not json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+    }
+
+    #[test]
+    fn test_parse_api_video_response_wrong_structure() {
+        // Valid JSON but wrong structure (missing video wrapper)
+        let json = r#"{"error": "Video not found"}"#;
+        let result = parse_api_video_response(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_api_video_response_hms_duration() {
+        let json = r#"{
+            "video": {
+                "video_id": "222",
+                "title": "Long Video",
+                "duration": "1:30:45",
+                "tags": [],
+                "thumbs": []
+            }
+        }"#;
+        let meta = parse_api_video_response(json).unwrap();
+        // 1*3600 + 30*60 + 45 = 5445
+        assert_eq!(meta.duration, Some(5445.0));
+    }
+
+    #[test]
+    fn test_parse_api_video_response_thumb_without_dimensions() {
+        let json = r#"{
+            "video": {
+                "video_id": "333",
+                "title": "No Dimensions",
+                "tags": [],
+                "thumbs": [
+                    {
+                        "size": "default",
+                        "src": "https://thumb-default.jpg"
+                    }
+                ]
+            }
+        }"#;
+        let meta = parse_api_video_response(json).unwrap();
+        let thumbs = meta.thumbnails.as_ref().unwrap();
+        assert_eq!(thumbs.len(), 1);
+        assert_eq!(thumbs[0].width, None);
+        assert_eq!(thumbs[0].height, None);
+        // Still selected as primary since it's the only one
+        assert_eq!(
+            meta.thumbnail,
+            Some("https://thumb-default.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_api_video_response_thumb_without_src() {
+        let json = r#"{
+            "video": {
+                "video_id": "444",
+                "title": "No Src",
+                "tags": [],
+                "thumbs": [
+                    {
+                        "size": "empty",
+                        "width": "100",
+                        "height": "75"
+                    }
+                ]
+            }
+        }"#;
+        let meta = parse_api_video_response(json).unwrap();
+        // Thumb without src is skipped
+        assert_eq!(meta.thumbnails, None);
+        assert_eq!(meta.thumbnail, None);
     }
 }
