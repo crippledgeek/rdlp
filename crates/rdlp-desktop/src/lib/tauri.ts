@@ -57,8 +57,9 @@ export async function getFormats(url: string): Promise<FormatListResponse> {
 export async function startDownload(
     url: string,
     options: DownloadOptions,
+    title?: string,
 ): Promise<string> {
-    return invoke<string>("start_download", { url, options });
+    return invoke<string>("start_download", { url, options, title: title ?? null });
 }
 
 /** Cancel an in-progress download by its job ID. */

@@ -27,7 +27,7 @@ import type { DownloadOptions } from "../types";
 
 interface FormatDialogProps {
     url: string;
-    onConfirm: (options: DownloadOptions) => void;
+    onConfirm: (options: DownloadOptions, title?: string) => void;
     onClose: () => void;
 }
 
@@ -203,8 +203,8 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     const handleConfirm = useCallback(() => {
         const format = buildFormatSelector();
-        onConfirm({ ...options, format });
-    }, [buildFormatSelector, onConfirm, options]);
+        onConfirm({ ...options, format }, formatData?.title);
+    }, [buildFormatSelector, onConfirm, options, formatData?.title]);
 
     const handleBrowseDir = useCallback(async () => {
         const dir = await pickDirectory();

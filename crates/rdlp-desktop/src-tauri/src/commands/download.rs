@@ -58,6 +58,7 @@ pub struct DownloadOptions {
 ///
 /// * `url` - Source URL to download.
 /// * `options` - Frontend-supplied download options.
+/// * `title` - Optional display title (e.g. from search results) to show immediately.
 /// * `state` - Managed application state.
 /// * `app` - Tauri application handle for emitting events.
 ///
@@ -72,6 +73,7 @@ pub struct DownloadOptions {
 pub async fn start_download(
     url: String,
     options: DownloadOptions,
+    title: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, AppError> {
@@ -103,7 +105,7 @@ pub async fn start_download(
     // Add job to queue as Pending
     {
         let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-        queue.add_job(&job_id, &url);
+        queue.add_job(&job_id, &url, title);
     }
 
     let request = DownloadRequest {

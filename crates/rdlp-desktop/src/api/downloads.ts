@@ -19,8 +19,13 @@ export function downloadsQueryOptions() {
 export async function startDownload(
     url: string,
     options: DownloadOptions,
+    title?: string,
 ): Promise<string> {
-    const jobId = await invokeTyped<string>("start_download", { url, options });
+    const jobId = await invokeTyped<string>("start_download", {
+        url,
+        options,
+        title: title ?? null,
+    });
     await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
     return jobId;
 }
