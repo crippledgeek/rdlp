@@ -3,12 +3,13 @@
 // Mirrors the formatColumns.tsx pattern: a hook returning stable column
 // definitions and the total column size for percentage-based layout.
 
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
-import type { ColumnDef } from "@tanstack/react-table";
+import type { ColumnDef, Row } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
+import { parseUploadTimestamp } from "@/lib/utils";
 import { ResultRowActions } from "../ResultRowActions";
-import { formatDuration, formatViews } from "./searchUtils";
+import { formatDuration, formatCompactDate, formatViews } from "./searchUtils";
 import type { DownloadOptions, SearchResultPreview } from "../../types";
 
 interface SearchColumnCallbacks {
@@ -28,6 +29,23 @@ interface SearchColumnsResult {
 export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumnsResult {
     const { onDownload, onDownloadWithOptions, onOpenFormatDialog, focusIndex } = callbacks;
     const columnHelper = useMemo(() => createColumnHelper<SearchResultPreview>(), []);
+
+    const ageSortFn = useCallback(
+        (rowA: Row<SearchResultPreview>, rowB: Row<SearchResultPreview>) => {
+            const a = rowA.original.upload_date;
+            const b = rowB.original.upload_date;
+            if (a === null && b === null) return 0;
+            if (a === null) return 1;
+            if (b === null) return -1;
+            const dateA = parseUploadTimestamp(a);
+            const dateB = parseUploadTimestamp(b);
+            if (dateA === null && dateB === null) return 0;
+            if (dateA === null) return 1;
+            if (dateB === null) return -1;
+            return dateA.getTime() - dateB.getTime();
+        },
+        [],
+    );
 
     const columns = useMemo(() => [
         columnHelper.display({
@@ -105,6 +123,19 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
             ),
             meta: { align: "right" as const },
         }),
+        columnHelper.accessor("upload_date", {
+            id: "age",
+            header: "Age",
+            size: 80,
+            sortingFn: ageSortFn,
+            enableResizing: true,
+            cell: ({ row }) => (
+                <span className="font-mono text-xs text-muted-foreground">
+                    {formatCompactDate(row.original.upload_date)}
+                </span>
+            ),
+            meta: { align: "right" as const },
+        }),
         columnHelper.display({
             id: "actions",
             header: "",
@@ -121,7 +152,7 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
                 />
             ),
         }),
-    ], [columnHelper, focusIndex, onDownload, onDownloadWithOptions, onOpenFormatDialog]);
+    ], [columnHelper, ageSortFn, focusIndex, onDownload, onDownloadWithOptions, onOpenFormatDialog]);
 
     const totalColumnSize = useMemo(
         () => columns.reduce((sum, col) => sum + (col.size ?? 0), 0),
