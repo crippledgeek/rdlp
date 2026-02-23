@@ -9,18 +9,30 @@
 //!
 //! - `patterns` - URL regex patterns for each site
 //! - `ajax` - AJAX/XML data fetching for EMPFlix and MovieFap
+//! - `search` - HTML search result parsing for TNAFlix
+//! - `search_patterns` - Search URL builders and filter descriptors
 
 mod ajax;
 mod patterns;
+mod search;
+mod search_patterns;
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
+use log::{debug, info, warn};
+use rdlp_core::{
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
+    SearchPageResponse,
+};
 use regex::Regex;
 use scraper::Html;
+use std::time::Duration;
 
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
 use patterns::{EMPFLIX_URL_PATTERN, MOVIEFAP_URL_PATTERN, TNAFLIX_URL_PATTERN};
+
+/// Rate limit delay between search page fetches (500 ms)
+const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// TNAFlix network extractor (supports TNAFlix, EMPFlix, MovieFap)
 ///
@@ -186,6 +198,139 @@ impl InfoExtractor for TNAFlixExtractor {
     }
 }
 
+/// TNAFlix search extractor
+///
+/// Provides keyword search across TNAFlix with optional ordering filters.
+/// Supports both single-page (`search_page`) and collect-all (`search`) modes.
+pub struct TNAFlixSearchExtractor;
+
+impl TNAFlixSearchExtractor {
+    /// Create a new TNAFlix search extractor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Fetch a single search results page and return `(results, max_page_number)`.
+    async fn fetch_single_search_page(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        page: usize,
+        ctx: &ExtractionContext,
+    ) -> Result<(Vec<rdlp_core::SearchResultPreview>, usize)> {
+        let page_url = search_patterns::build_search_url_page(query, page);
+        debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
+
+        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+        let page_results = search::parse_search_results(&webpage);
+        let max_pages = search::parse_pagination(&webpage).unwrap_or(1);
+
+        debug!(
+            count = page_results.len(),
+            max_pages;
+            "[TNAFlix] Search page {page} returned {} results",
+            page_results.len()
+        );
+
+        Ok((page_results, max_pages))
+    }
+
+    /// Collect all pages up to `MAX_PLAYLIST_SIZE` results.
+    async fn search_all_pages(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+        search::validate_search_filters(&query.filters)?;
+
+        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
+
+        let mut all_results = Vec::new();
+        let mut page = 1usize;
+
+        loop {
+            let (page_results, max_pages) = match self
+                .fetch_single_search_page(query, page, ctx)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(page; "[TNAFlix] Failed to fetch search page, returning partial results: {e}");
+                    break;
+                }
+            };
+
+            if page_results.is_empty() {
+                debug!(page; "[TNAFlix] No results on page, stopping pagination");
+                break;
+            }
+
+            all_results.extend(page_results);
+
+            if all_results.len() >= max_results {
+                all_results.truncate(max_results);
+                break;
+            }
+
+            if page >= max_pages {
+                break;
+            }
+
+            page += 1;
+            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
+        }
+
+        info!(count = all_results.len(), pages = page; "[TNAFlix] Search complete");
+
+        Ok(all_results)
+    }
+}
+
+impl Default for TNAFlixSearchExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for TNAFlixSearchExtractor {
+    fn name(&self) -> &str {
+        "TNAFlix"
+    }
+
+    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+        search_patterns::search_filter_descriptors()
+    }
+
+    async fn search(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        search::validate_search_filters(&query.filters)?;
+
+        let page = query.page.unwrap_or(1) as usize;
+        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+
+        let has_more = page < max_pages && !page_results.is_empty();
+
+        Ok(SearchPageResponse {
+            results: page_results,
+            page: page as u32,
+            has_more,
+            total_estimate: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +409,19 @@ mod tests {
         assert_eq!(TEST_TNAFLIX.priority(), 0);
         assert_eq!(TEST_EMPFLIX.priority(), 0);
         assert_eq!(TEST_MOVIEFAP.priority(), 0);
+    }
+
+    #[test]
+    fn test_search_extractor_name() {
+        let extractor = TNAFlixSearchExtractor::new();
+        assert_eq!(SearchExtractor::name(&extractor), "TNAFlix");
+    }
+
+    #[test]
+    fn test_search_extractor_supported_filters() {
+        let extractor = TNAFlixSearchExtractor::new();
+        let filters = extractor.supported_filters();
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].key, "ordering");
     }
 }

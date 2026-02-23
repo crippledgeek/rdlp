@@ -14,6 +14,6 @@ pub mod xtits;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
 pub use redtube::RedTubeExtractor;
-pub use tnaflix::TNAFlixExtractor;
+pub use tnaflix::{TNAFlixExtractor, TNAFlixSearchExtractor};
 pub use xhamster::XHamsterExtractor;
 pub use xtits::XTitsExtractor;
