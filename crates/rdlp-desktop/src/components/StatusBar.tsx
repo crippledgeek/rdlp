@@ -12,6 +12,7 @@ interface StatusBarProps {
     viewMode: ViewMode;
     onViewModeChange: (mode: ViewMode) => void;
     resultCount: number;
+    totalEstimate: number | null;
     searchDuration: number | null;
     onSwitchToQueue: () => void;
 }
@@ -20,6 +21,7 @@ export function StatusBar({
     viewMode,
     onViewModeChange,
     resultCount,
+    totalEstimate,
     searchDuration,
     onSwitchToQueue,
 }: StatusBarProps) {
@@ -30,13 +32,16 @@ export function StatusBar({
 
     // --- TanStack Query: server state ---
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, isError, isSuccess } = useInfiniteQuery(
+    const { isFetching, isFetchingNextPage, isError, isSuccess } = useInfiniteQuery(
         searchInfiniteQueryOptions(query, site, filters),
     );
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
+    // Initial loading vs. appending more pages
+    const isInitialLoading = isFetching && !isFetchingNextPage;
+
     // Derive status from query state (same pattern as SearchPage)
-    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isInitialLoading
         ? "loading"
         : isError
             ? "error"
@@ -55,10 +60,15 @@ export function StatusBar({
 
     let leftText = "Ready";
     if (status === "loading") {
-        leftText = "Searching\u2026";
+        // "Filtering..." when refining results already shown; "Searching..." for initial fetch
+        leftText = isSuccess ? "Filtering\u2026" : "Searching\u2026";
     } else if (status === "results") {
         const dur = searchDuration !== null ? ` \u00b7 ${(searchDuration / 1000).toFixed(1)}s` : "";
-        leftText = `${displaySite} \u00b7 ${resultCount} results${dur}`;
+        const countText =
+            totalEstimate !== null && totalEstimate > resultCount
+                ? `${resultCount} of ~${totalEstimate} results`
+                : `${resultCount} results`;
+        leftText = `${displaySite} \u00b7 ${countText}${dur}`;
     } else if (status === "empty") {
         leftText = `${displaySite} \u00b7 No results`;
     } else if (status === "error") {

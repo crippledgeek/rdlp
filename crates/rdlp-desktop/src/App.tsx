@@ -53,6 +53,8 @@ function AppContent() {
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
     const results = searchData?.pages.flatMap(p => p.results) ?? [];
+    const lastPage = searchData?.pages[searchData.pages.length - 1];
+    const totalEstimate = lastPage?.total_estimate ?? null;
 
     const activeCount = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
@@ -202,6 +204,7 @@ function AppContent() {
                 viewMode={viewMode}
                 onViewModeChange={handleViewModeChange}
                 resultCount={results.length}
+                totalEstimate={totalEstimate}
                 searchDuration={searchDuration}
                 onSwitchToQueue={() => setActiveTab("queue")}
             />
