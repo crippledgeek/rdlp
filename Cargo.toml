@@ -18,6 +18,23 @@ members = [
     "crates/rdlp-cli",
     "crates/rdlp-desktop/src-tauri",
 ]
+default-members = [
+    "crates/rdlp-types",
+    "crates/rdlp-core",
+    "crates/rdlp-api",
+    "crates/rdlp-http",
+    "crates/rdlp-security",
+    "crates/rdlp-crypto",
+    "crates/rdlp-extractor",
+    "crates/rdlp-downloader",
+    "crates/rdlp-jsinterp",
+    "crates/rdlp-ffmpeg",
+    "crates/rdlp-postprocess",
+    "crates/rdlp-cookies",
+    "crates/rdlp-ratelimit",
+    "crates/rdlp-table",
+    "crates/rdlp-plugin",
+]
 resolver = "2"
 
 [workspace.package]
