@@ -156,7 +156,7 @@ export function ResultsTableSection({
                                         "group h-[52px] border-b border-white/[0.03] border-l-2 border-l-transparent transition-colors",
                                         "hover:bg-card",
                                         row.index === focusIndex && "bg-card border-l-primary",
-                                        row.getIsSelected() && "bg-primary/10",
+                                        row.getIsSelected() && "bg-primary/15 border-l-primary",
                                     )}
                                     data-focused={row.index === focusIndex || undefined}
                                 >
