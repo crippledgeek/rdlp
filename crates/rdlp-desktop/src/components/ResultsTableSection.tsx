@@ -1,7 +1,7 @@
 // Search results table with TanStack Table: column visibility toggle, sortable
 // headers with resize handles, checkbox selection, and result count footer.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Table as TanStackTable, ColumnDef } from "@tanstack/react-table";
 import { flexRender } from "@tanstack/react-table";
 import { ChevronUp, ChevronDown, Columns3 } from "lucide-react";
@@ -46,6 +46,13 @@ export function ResultsTableSection({
     resultCount,
 }: ResultsTableSectionProps) {
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+
+    // Compute total size from visible columns only (so percentages stay correct when columns hide)
+    const visibleTotalSize = useMemo(
+        () => table.getVisibleFlatColumns().reduce((sum, col) => sum + col.getSize(), 0),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [table, totalColumnSize, table.getState().columnVisibility],
+    );
 
     // Scroll focused row into view
     useEffect(() => {
@@ -104,7 +111,7 @@ export function ResultsTableSection({
                                     return (
                                         <TableHead
                                             key={header.id}
-                                            style={{ width: `${(header.getSize() / totalColumnSize * 100).toFixed(1)}%` }}
+                                            style={{ width: `${(header.getSize() / visibleTotalSize * 100).toFixed(1)}%` }}
                                             className={cn(
                                                 "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none transition-colors relative",
                                                 header.column.getCanSort() && "cursor-pointer hover:text-foreground",
