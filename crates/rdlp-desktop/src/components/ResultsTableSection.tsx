@@ -158,6 +158,7 @@ export function ResultsTableSection({
                                         row.index === focusIndex && "bg-card border-l-primary",
                                         row.getIsSelected() && "bg-primary/15 border-l-primary",
                                     )}
+                                    onClick={() => row.toggleSelected()}
                                     data-focused={row.index === focusIndex || undefined}
                                 >
                                     {row.getVisibleCells().map((cell) => {
