@@ -224,6 +224,7 @@ mod tests {
             query: "test query".to_string(),
             filters: vec![],
             max_results: None,
+            page: None,
         };
         let url = build_search_url(&query);
         assert!(url.starts_with("https://xhamster.com/search/"));
@@ -245,6 +246,7 @@ mod tests {
                 },
             ],
             max_results: None,
+            page: None,
         };
         let url = build_search_url(&query);
         assert!(url.contains("quality=1080p"));
@@ -257,6 +259,7 @@ mod tests {
             query: "hello world".to_string(),
             filters: vec![],
             max_results: None,
+            page: None,
         };
         let url = build_search_url(&query);
         assert!(!url.contains(' '), "URL must not contain raw spaces");

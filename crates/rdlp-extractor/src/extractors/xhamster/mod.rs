@@ -27,7 +27,10 @@ mod utils;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_core::{
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
+    SearchPageResponse,
+};
 use std::time::Duration;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
@@ -187,6 +190,29 @@ impl XHamsterExtractor {
         )))
     }
 
+    /// Fetch a single search page, returning its results and the max page count.
+    async fn fetch_single_search_page(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        page: usize,
+        ctx: &ExtractionContext,
+    ) -> Result<(Vec<rdlp_core::SearchResultPreview>, usize)> {
+        let page_url = if page == 1 {
+            patterns::build_search_url(query)
+        } else {
+            patterns::build_search_url_page(query, page)
+        };
+
+        debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
+
+        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+        let initials = search::extract_initials_json(&webpage)?;
+        let page_results = search::parse_search_results_json(&initials)?;
+        let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
+
+        Ok((page_results, max_pages))
+    }
+
     /// Perform a paginated search, collecting results across all pages.
     async fn search_all_pages(
         &self,
@@ -200,32 +226,16 @@ impl XHamsterExtractor {
         let mut page = 1_usize;
 
         loop {
-            let page_url = if page == 1 {
-                patterns::build_search_url(query)
-            } else {
-                patterns::build_search_url_page(query, page)
-            };
-
-            debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
-
-            let webpage = match BaseExtractor::fetch_webpage(&page_url, ctx).await {
-                Ok(html) => html,
+            let (page_results, max_pages) = match self
+                .fetch_single_search_page(query, page, ctx)
+                .await
+            {
+                Ok(result) => result,
                 Err(e) => {
                     warn!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
                     break;
                 }
             };
-
-            let initials = match search::extract_initials_json(&webpage) {
-                Ok(json) => json,
-                Err(e) => {
-                    warn!(page; "[XHamster] Failed to parse search page JSON, returning partial results: {e}");
-                    break;
-                }
-            };
-
-            let page_results = search::parse_search_results_json(&initials)?;
-            let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
 
             if page_results.is_empty() {
                 debug!(page; "[XHamster] No results on page, stopping pagination");
@@ -310,6 +320,26 @@ impl SearchExtractor for XHamsterExtractor {
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
         self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        search::validate_search_filters(&query.filters)?;
+
+        let page = query.page.unwrap_or(1) as usize;
+        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+
+        let has_more = page < max_pages && !page_results.is_empty();
+
+        Ok(SearchPageResponse {
+            results: page_results,
+            page: page as u32,
+            has_more,
+            total_estimate: None,
+        })
     }
 }
 

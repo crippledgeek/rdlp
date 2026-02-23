@@ -2,7 +2,7 @@
 
 use super::{Orchestrator, errors::*};
 use log::info;
-use rdlp_core::{SearchFilterDescriptor, SearchQuery, SearchResultPreview};
+use rdlp_core::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
 impl Orchestrator {
@@ -196,6 +196,36 @@ impl Orchestrator {
         info!(site = extractor_name, count = results.len(); "Search complete");
 
         Ok(results)
+    }
+
+    /// Execute a paginated search query, returning a single page of results.
+    pub async fn search_page(
+        &self,
+        extractor_name: &str,
+        query: &SearchQuery,
+    ) -> Result<SearchPageResponse> {
+        let extractor = self
+            .extractor_registry
+            .find_search_extractor(extractor_name)
+            .ok_or_else(|| {
+                let available = self.extractor_registry.list_search_extractors();
+                OrchestratorError::Configuration(format!(
+                    "Unknown search site: '{}'. Available: {}",
+                    extractor_name,
+                    available.join(", ")
+                ))
+            })?;
+
+        info!(site = extractor_name, query = query.query.as_str(); "Starting paginated search");
+
+        let response = extractor
+            .search_page(query, &self.extraction_context)
+            .await
+            .map_err(OrchestratorError::ExtractionFailed)?;
+
+        info!(site = extractor_name, count = response.results.len(), page = response.page; "Search page complete");
+
+        Ok(response)
     }
 
     /// List names of all search-capable extractors.

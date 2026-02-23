@@ -174,6 +174,7 @@ async fn async_main() -> Result<()> {
             query: query_text.clone(),
             filters,
             max_results: None,
+            page: None,
         };
 
         match client.search(site, &search_query).await {

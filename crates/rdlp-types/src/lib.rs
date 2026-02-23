@@ -47,8 +47,8 @@ pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use parse_error::ParseEnumError;
 pub use protocol::DownloadProtocol;
 pub use search::{
-    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchQuery, SearchResultPreview,
-    SearchSiteInfo,
+    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
+    SearchResultPreview, SearchSiteInfo,
 };
 pub use subtitle_format::SubtitleFormat;
 pub use subtitle_kind::SubtitleKind;

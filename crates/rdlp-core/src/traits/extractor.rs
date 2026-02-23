@@ -3,7 +3,7 @@ use regex::Regex;
 use std::sync::Arc;
 
 use crate::{BrowserType, Config, InfoDict, Result};
-use rdlp_types::{SearchFilterDescriptor, SearchQuery, SearchResultPreview};
+use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 
 /// Core trait for all site extractors
 ///
@@ -145,6 +145,26 @@ pub trait SearchExtractor: Send + Sync {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>>;
+
+    /// Execute a search for a single page, returning pagination metadata.
+    ///
+    /// The default implementation delegates to [`search()`](Self::search)
+    /// and wraps the result with `has_more: false`. Extractors that support
+    /// native pagination should override this.
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        let results = self.search(query, ctx).await?;
+        let page = query.page.unwrap_or(1);
+        Ok(SearchPageResponse {
+            results,
+            page,
+            has_more: false,
+            total_estimate: None,
+        })
+    }
 }
 
 /// Context passed to extractors containing shared resources
