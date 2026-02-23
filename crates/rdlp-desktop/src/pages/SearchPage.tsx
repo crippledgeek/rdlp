@@ -98,22 +98,28 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     // --- TanStack Table state ---
     const [sorting, setSorting] = useState<SortingState>([]);
     const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-    const [columnVisibility, setColumnVisibility] = useState({});
+    const [userColumnVisibility, setUserColumnVisibility] = useState<Record<string, boolean>>({});
+
+    // Data-driven visibility: hide columns when no result has data for them
+    const dataColumnVisibility = useMemo(() => {
+        if (results.length === 0) return {} as Record<string, boolean>;
+        return {
+            age: results.some((r) => r.upload_date !== null),
+        } as Record<string, boolean>;
+    }, [results]);
+
+    // Merge: data defaults overridden by explicit user toggles
+    const columnVisibility = useMemo(
+        () => ({ ...dataColumnVisibility, ...userColumnVisibility }),
+        [dataColumnVisibility, userColumnVisibility],
+    );
 
     // Reset table state when query/site/filters change (not on Load More page appends)
     useEffect(() => {
         setSorting([]);
         setRowSelection({});
+        setUserColumnVisibility({});
     }, [query, site, filters]);
-
-    // Dynamic column visibility: hide columns when no result has data for them
-    useEffect(() => {
-        if (results.length === 0) return;
-        setColumnVisibility((prev) => ({
-            ...prev,
-            age: results.some((r) => r.upload_date !== null),
-        }));
-    }, [results]);
 
     // Focus "All results loaded" message when Load More button disappears (fix 8)
     useEffect(() => {
@@ -217,7 +223,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         },
         onSortingChange: setSorting,
         onRowSelectionChange: setRowSelection,
-        onColumnVisibilityChange: setColumnVisibility,
+        onColumnVisibilityChange: setUserColumnVisibility,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         columnResizeMode: COLUMN_RESIZE_MODE,
