@@ -2,6 +2,7 @@
 
 use super::*;
 use regex::Regex;
+use scraper::Html;
 
 // ========================================================================
 // URL ID Extraction Tests

@@ -15,6 +15,7 @@
 //! - `formats` - Format extraction from JavaScript sources, mediaDefinition, and API
 //! - `search` - Search result parsing and filter validation
 
+mod filters;
 mod formats;
 mod patterns;
 mod search;
