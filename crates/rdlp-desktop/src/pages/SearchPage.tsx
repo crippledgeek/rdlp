@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
     useReactTable,
     getCoreRowModel,
@@ -23,7 +23,7 @@ import {
 } from "../stores/searchParamsStore";
 import {
     providersQueryOptions,
-    searchQueryOptions,
+    searchInfiniteQueryOptions,
 } from "../api/search";
 import { settingsQueryOptions } from "../api/settings";
 import {
@@ -60,11 +60,14 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         isSuccess,
         error: queryError,
         refetch,
-    } = useQuery(searchQueryOptions(query, site, filters));
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+    } = useInfiniteQuery(searchInfiniteQueryOptions(query, site, filters));
     const { data: settings = null } = useQuery(settingsQueryOptions());
 
     // Derive results and status from query state
-    const results = searchData?.results ?? [];
+    const results = searchData?.pages.flatMap(p => p.results) ?? [];
     const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
         ? "loading"
         : isError
@@ -359,6 +362,20 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                             onOpenFormatDialog={handleOpenFormatDialog}
                         />
                     ))}
+                </div>
+            )}
+
+            {/* Load more */}
+            {status === "results" && hasNextPage && (
+                <div className="flex justify-center py-4">
+                    <Button
+                        variant="outline"
+                        onClick={() => fetchNextPage()}
+                        disabled={isFetchingNextPage}
+                        className="min-w-[200px]"
+                    >
+                        {isFetchingNextPage ? "Loading..." : "Load more results"}
+                    </Button>
                 </div>
             )}
 

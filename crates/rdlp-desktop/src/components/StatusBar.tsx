@@ -1,8 +1,8 @@
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { LayoutList, LayoutGrid } from "lucide-react";
 import { searchParamsAtom } from "../stores/searchParamsStore";
-import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { providersQueryOptions, searchInfiniteQueryOptions } from "../api/search";
 import { downloadsQueryOptions } from "../api/downloads";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -30,8 +30,8 @@ export function StatusBar({
 
     // --- TanStack Query: server state ---
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, isError, isSuccess } = useQuery(
-        searchQueryOptions(query, site, filters),
+    const { isFetching, isError, isSuccess } = useInfiniteQuery(
+        searchInfiniteQueryOptions(query, site, filters),
     );
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 

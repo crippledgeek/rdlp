@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Settings, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { searchParamsAtom } from "../stores/searchParamsStore";
-import { filtersQueryOptions, searchQueryOptions } from "../api/search";
+import { filtersQueryOptions, searchInfiniteQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
 
 /** Sentinel value for "no selection" since Radix Select does not support empty string values. */
@@ -40,8 +40,8 @@ export function FilterBar() {
     const hasUserFilters = useStore(searchParamsAtom, (s) => s.hasUserFilters);
 
     const { data: filterDescriptors = [] } = useQuery(filtersQueryOptions(site));
-    const { isFetching, data: searchData, refetch } = useQuery(
-        searchQueryOptions(query, site, filters),
+    const { isFetching, data: searchData, refetch } = useInfiniteQuery(
+        searchInfiniteQueryOptions(query, site, filters),
     );
 
     const [showAdvanced, setShowAdvanced] = useState(false);

@@ -3,10 +3,10 @@
 
 import { useEffect, useRef } from "react";
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Search, ArrowRight, Loader2, X } from "lucide-react";
 import { searchParamsAtom, setSearchParam, resetSearchParams } from "../stores/searchParamsStore";
-import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { providersQueryOptions, searchInfiniteQueryOptions } from "../api/search";
 import { Button } from "@/components/ui/button";
 import {
     Select,
@@ -29,7 +29,7 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
     const filters = useStore(searchParamsAtom, (s) => s.filters);
 
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, refetch } = useQuery(searchQueryOptions(query, site, filters));
+    const { isFetching, refetch } = useInfiniteQuery(searchInfiniteQueryOptions(query, site, filters));
 
     const formRef = useRef<HTMLFormElement>(null);
 

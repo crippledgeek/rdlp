@@ -44,9 +44,11 @@ export interface SearchResultPreview {
     upload_date: string | null;
 }
 
-/** Response wrapper for search results. */
-export interface SearchResponse {
+/** Response for a single search page with pagination metadata. */
+export interface SearchPageResponse {
     results: SearchResultPreview[];
+    page: number;
+    has_more: boolean;
     total_estimate: number | null;
 }
 

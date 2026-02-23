@@ -1,12 +1,12 @@
 // TanStack Query options for search-related Rust commands.
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import type {
     SearchFilter,
     SearchFilterDescriptor,
-    SearchResponse,
+    SearchPageResponse,
     SearchSiteInfo,
 } from "../types";
 
@@ -30,18 +30,23 @@ export function filtersQueryOptions(site: string) {
 }
 
 /**
- * Search query. `enabled: false` by default — must be triggered via `refetch()`.
+ * Infinite search query. `enabled: false` by default — must be triggered via `refetch()`.
  * The key includes query/site/filters so each unique combination gets its own cache entry.
+ * pageParam is managed internally by useInfiniteQuery.
  */
-export function searchQueryOptions(
+export function searchInfiniteQueryOptions(
     query: string,
     site: string,
     filters: SearchFilter[],
 ) {
-    return queryOptions({
+    return infiniteQueryOptions({
         queryKey: queryKeys.search(query, site, filters),
-        queryFn: () =>
-            invokeTyped<SearchResponse>("search_content", { query, site, filters }),
+        queryFn: ({ pageParam }) =>
+            invokeTyped<SearchPageResponse>("search_content", { query, site, filters, page: pageParam }),
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) =>
+            lastPage.has_more && lastPage.results.length > 0 ? lastPage.page + 1 : undefined,
         enabled: false,
+        maxPages: 5,
     });
 }

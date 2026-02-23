@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClientProvider, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import { Search, Download, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
@@ -13,7 +13,7 @@ import {
     searchParamsAtom,
     setSearchParam,
 } from "./stores/searchParamsStore";
-import { searchQueryOptions } from "./api/search";
+import { searchInfiniteQueryOptions } from "./api/search";
 import { queryKeys } from "./query/queryKeys";
 import { downloadsQueryOptions } from "./api/downloads";
 import { cn } from "@/lib/utils";
@@ -47,12 +47,12 @@ function AppContent() {
     const filters = useStore(searchParamsAtom, (s) => s.filters);
 
     // --- TanStack Query: server state ---
-    const { isFetching, data: searchData } = useQuery(
-        searchQueryOptions(query, site, filters),
+    const { isFetching, data: searchData } = useInfiniteQuery(
+        searchInfiniteQueryOptions(query, site, filters),
     );
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
-    const results = searchData?.results ?? [];
+    const results = searchData?.pages.flatMap(p => p.results) ?? [];
 
     const activeCount = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
