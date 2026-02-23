@@ -44,7 +44,7 @@ export function ResultRowActions({
     return (
         <>
             <div className={cn(
-                "flex gap-0.5 shrink-0 opacity-0 transition-opacity",
+                "flex gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity",
                 visible && "opacity-100",
             )}>
                 <Button
