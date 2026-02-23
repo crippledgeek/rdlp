@@ -3,24 +3,14 @@
 //! Provides content search, provider listing, and filter discovery
 //! exposed to the frontend via Tauri's command system.
 
-use serde::Serialize;
 use tauri::State;
 
 use rdlp_api::{
-    SearchFilter, SearchFilterDescriptor, SearchQuery, SearchResultPreview, SearchSiteInfo,
+    SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchSiteInfo,
 };
 
 use crate::error::AppError;
 use crate::state::AppState;
-
-/// Response wrapper for search results.
-#[derive(Debug, Serialize)]
-pub struct SearchResponse {
-    /// The search result items.
-    results: Vec<SearchResultPreview>,
-    /// Optional estimate of total matching results.
-    total_estimate: Option<u64>,
-}
 
 /// Sanitize a user-provided query string.
 ///
@@ -38,19 +28,21 @@ fn sanitize_query(input: &str) -> String {
 
 /// Search a supported site by query string.
 ///
-/// Sanitizes the query, builds a [`SearchQuery`] with up to 40 results,
-/// and delegates to the rdlp-api search engine.
+/// Sanitizes the query and delegates to the rdlp-api search engine.
+/// When `page` is `Some`, fetches a single page via `search_page()`.
+/// When `page` is `None`, collects all pages via `search()` (capped at 40).
 ///
 /// # Arguments
 ///
 /// * `query` - Raw search query from the frontend.
 /// * `site` - Site name as returned by [`get_search_providers`].
 /// * `filters` - Optional search filters for the chosen site.
+/// * `page` - Optional page number for paginated fetching.
 /// * `state` - Managed application state containing the API client.
 ///
 /// # Returns
 ///
-/// A [`SearchResponse`] with results and an optional total estimate.
+/// A [`SearchPageResponse`] with results and pagination metadata.
 ///
 /// # Errors
 ///
@@ -61,8 +53,9 @@ pub async fn search_content(
     query: String,
     site: String,
     filters: Vec<SearchFilter>,
+    page: Option<u32>,
     state: State<'_, AppState>,
-) -> Result<SearchResponse, AppError> {
+) -> Result<SearchPageResponse, AppError> {
     let sanitized = sanitize_query(&query);
     if sanitized.is_empty() {
         return Err(AppError::InvalidInput {
@@ -71,25 +64,48 @@ pub async fn search_content(
         });
     }
 
-    let search_query = SearchQuery {
-        query: sanitized,
-        filters,
-        max_results: Some(40),
-    };
+    if let Some(p) = page {
+        // Paginated mode: fetch a single page
+        let search_query = SearchQuery {
+            query: sanitized,
+            filters,
+            max_results: None,
+            page: Some(p),
+        };
 
-    let results = state
-        .client
-        .search(&site, &search_query)
-        .await
-        .map_err(|e| AppError::SearchFailed {
-            message: e.to_string(),
-            retryable: e.is_retryable(),
-        })?;
+        state
+            .client
+            .search_page(&site, &search_query)
+            .await
+            .map_err(|e| AppError::SearchFailed {
+                message: e.to_string(),
+                retryable: e.is_retryable(),
+            })
+    } else {
+        // Collect-all mode: existing behavior, capped at 40
+        let search_query = SearchQuery {
+            query: sanitized,
+            filters,
+            max_results: Some(40),
+            page: None,
+        };
 
-    Ok(SearchResponse {
-        total_estimate: None,
-        results,
-    })
+        let results = state
+            .client
+            .search(&site, &search_query)
+            .await
+            .map_err(|e| AppError::SearchFailed {
+                message: e.to_string(),
+                retryable: e.is_retryable(),
+            })?;
+
+        Ok(SearchPageResponse {
+            results,
+            page: 1,
+            has_more: false,
+            total_estimate: None,
+        })
+    }
 }
 
 /// List all sites that support search.

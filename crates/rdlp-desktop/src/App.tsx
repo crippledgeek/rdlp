@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { useStore } from "@tanstack/react-store";
 import { Search, Download, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
@@ -13,7 +12,6 @@ import {
     searchParamsAtom,
     setSearchParam,
 } from "./stores/searchParamsStore";
-import { searchQueryOptions } from "./api/search";
 import { queryKeys } from "./query/queryKeys";
 import { downloadsQueryOptions } from "./api/downloads";
 import { cn } from "@/lib/utils";
@@ -39,20 +37,8 @@ function AppContent() {
     const [viewMode, setViewMode] = useState<ViewMode>(() => {
         return (localStorage.getItem(VIEW_MODE_KEY) as ViewMode) || "list";
     });
-    const [searchDuration, setSearchDuration] = useState<number | null>(null);
-
-    // --- TanStack Store: search form state ---
-    const query = useStore(searchParamsAtom, (s) => s.query);
-    const site = useStore(searchParamsAtom, (s) => s.site);
-    const filters = useStore(searchParamsAtom, (s) => s.filters);
-
-    // --- TanStack Query: server state ---
-    const { isFetching, data: searchData } = useQuery(
-        searchQueryOptions(query, site, filters),
-    );
+    // --- TanStack Query: downloads only (search state lives in SearchPage + StatusBar) ---
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
-
-    const results = searchData?.results ?? [];
 
     const activeCount = jobs.filter(
         (j) => j.status === "pending" || j.status === "running",
@@ -89,24 +75,13 @@ function AppContent() {
             // Invalidate the search query to trigger a re-fetch after atom updates propagate
             setTimeout(() => {
                 void queryClient.invalidateQueries({
-                    queryKey: queryKeys.search(restoredQuery, restoredSite, restoredFilters),
+                    queryKey: queryKeys.search.params(restoredQuery, restoredSite, restoredFilters),
                     refetchType: "all",
                 });
             }, 0);
         },
         [],
     );
-
-    // Track search duration via isFetching transitions
-    const searchStartRef = useRef<number | null>(null);
-    useEffect(() => {
-        if (isFetching) {
-            searchStartRef.current = Date.now();
-        } else if (searchStartRef.current !== null) {
-            setSearchDuration(Date.now() - searchStartRef.current);
-            searchStartRef.current = null;
-        }
-    }, [isFetching]);
 
     // Register all Tauri download event listeners (single wiring point)
     useEffect(() => {
@@ -201,8 +176,6 @@ function AppContent() {
             <StatusBar
                 viewMode={viewMode}
                 onViewModeChange={handleViewModeChange}
-                resultCount={results.length}
-                searchDuration={searchDuration}
                 onSwitchToQueue={() => setActiveTab("queue")}
             />
         </div>

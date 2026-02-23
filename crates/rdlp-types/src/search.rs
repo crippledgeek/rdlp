@@ -11,6 +11,8 @@ pub struct SearchQuery {
     pub filters: Vec<SearchFilter>,
     /// Maximum number of results to return. `None` uses the site default / MAX_PLAYLIST_SIZE cap.
     pub max_results: Option<usize>,
+    /// Specific page to fetch. None = fetch all pages (CLI behavior).
+    pub page: Option<u32>,
 }
 
 /// A concrete filter key-value applied to a search.
@@ -73,6 +75,19 @@ pub struct SearchSiteInfo {
     pub display_name: String,
 }
 
+/// Response for a single search page (used for paginated frontends).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchPageResponse {
+    /// Results on this page.
+    pub results: Vec<SearchResultPreview>,
+    /// The page number that was fetched.
+    pub page: u32,
+    /// Whether more pages exist after this one.
+    pub has_more: bool,
+    /// Optional estimate of total results across all pages.
+    pub total_estimate: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,10 +98,12 @@ mod tests {
             query: "test".to_string(),
             filters: vec![],
             max_results: None,
+            page: None,
         };
         assert_eq!(q.query, "test");
         assert!(q.filters.is_empty());
         assert_eq!(q.max_results, None);
+        assert_eq!(q.page, None);
     }
 
     #[test]

@@ -17,7 +17,7 @@ import type {
     FormatSelectedPayload,
     SearchFilter,
     SearchFilterDescriptor,
-    SearchResponse,
+    SearchPageResponse,
     SearchSiteInfo,
 } from "../types";
 
@@ -28,8 +28,9 @@ export async function searchContent(
     query: string,
     site: string,
     filters: SearchFilter[] = [],
-): Promise<SearchResponse> {
-    return invoke<SearchResponse>("search_content", { query, site, filters });
+    page?: number,
+): Promise<SearchPageResponse> {
+    return invoke<SearchPageResponse>("search_content", { query, site, filters, page });
 }
 
 /** List all sites that support search. */

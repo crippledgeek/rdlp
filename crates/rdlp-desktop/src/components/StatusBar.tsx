@@ -1,8 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { LayoutList, LayoutGrid } from "lucide-react";
 import { searchParamsAtom } from "../stores/searchParamsStore";
-import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { providersQueryOptions, searchInfiniteQueryOptions } from "../api/search";
 import { downloadsQueryOptions } from "../api/downloads";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,32 +12,48 @@ import type { ViewMode } from "../types";
 interface StatusBarProps {
     viewMode: ViewMode;
     onViewModeChange: (mode: ViewMode) => void;
-    resultCount: number;
-    searchDuration: number | null;
     onSwitchToQueue: () => void;
 }
 
 export function StatusBar({
     viewMode,
     onViewModeChange,
-    resultCount,
-    searchDuration,
     onSwitchToQueue,
 }: StatusBarProps) {
-    // --- TanStack Store: search form state ---
+    // --- TanStack Store: search form state (for query key) ---
     const query = useStore(searchParamsAtom, (s) => s.query);
     const site = useStore(searchParamsAtom, (s) => s.site);
     const filters = useStore(searchParamsAtom, (s) => s.filters);
 
-    // --- TanStack Query: server state ---
+    // --- TanStack Query: search + downloads state ---
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, isError, isSuccess } = useQuery(
-        searchQueryOptions(query, site, filters),
+    const { isFetching, isFetchingNextPage, isError, isSuccess, data: searchData } = useInfiniteQuery(
+        searchInfiniteQueryOptions(query, site, filters),
     );
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
+    const results = searchData?.pages.flatMap(p => p.results) ?? [];
+    const resultCount = results.length;
+    const lastPage = searchData?.pages[searchData.pages.length - 1];
+    const totalEstimate = lastPage?.total_estimate ?? null;
+
+    // Track search duration via isFetching transitions
+    const [searchDuration, setSearchDuration] = useState<number | null>(null);
+    const searchStartRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (isFetching) {
+            searchStartRef.current = Date.now();
+        } else if (searchStartRef.current !== null) {
+            setSearchDuration(Date.now() - searchStartRef.current);
+            searchStartRef.current = null;
+        }
+    }, [isFetching]);
+
+    // Initial loading vs. appending more pages
+    const isInitialLoading = isFetching && !isFetchingNextPage;
+
     // Derive status from query state (same pattern as SearchPage)
-    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isInitialLoading
         ? "loading"
         : isError
             ? "error"
@@ -55,10 +72,15 @@ export function StatusBar({
 
     let leftText = "Ready";
     if (status === "loading") {
-        leftText = "Searching\u2026";
+        // "Filtering..." when refining results already shown; "Searching..." for initial fetch
+        leftText = isSuccess ? "Filtering\u2026" : "Searching\u2026";
     } else if (status === "results") {
         const dur = searchDuration !== null ? ` \u00b7 ${(searchDuration / 1000).toFixed(1)}s` : "";
-        leftText = `${displaySite} \u00b7 ${resultCount} results${dur}`;
+        const countText =
+            totalEstimate !== null && totalEstimate > resultCount
+                ? `${resultCount} of ~${totalEstimate} results`
+                : `${resultCount} results`;
+        leftText = `${displaySite} \u00b7 ${countText}${dur}`;
     } else if (status === "empty") {
         leftText = `${displaySite} \u00b7 No results`;
     } else if (status === "error") {

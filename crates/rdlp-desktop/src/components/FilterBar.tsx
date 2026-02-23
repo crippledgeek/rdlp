@@ -15,7 +15,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { searchParamsAtom } from "../stores/searchParamsStore";
-import { filtersQueryOptions, searchQueryOptions } from "../api/search";
+import { filtersQueryOptions } from "../api/search";
 import type { SearchFilter } from "../types";
 
 /** Sentinel value for "no selection" since Radix Select does not support empty string values. */
@@ -32,17 +32,20 @@ function isFilterActive(value: string, defaultValue: string | null): boolean {
     return value !== (defaultValue ?? "");
 }
 
+interface FilterBarProps {
+    isFetching: boolean;
+    hasSearchData: boolean;
+    onSearch: () => void;
+}
+
 /** Compact chip-styled filter bar with default + advanced filters. */
-export function FilterBar() {
+export function FilterBar({ isFetching, hasSearchData, onSearch }: FilterBarProps) {
     const filters = useStore(searchParamsAtom, (s) => s.filters);
     const site = useStore(searchParamsAtom, (s) => s.site);
     const query = useStore(searchParamsAtom, (s) => s.query);
     const hasUserFilters = useStore(searchParamsAtom, (s) => s.hasUserFilters);
 
     const { data: filterDescriptors = [] } = useQuery(filtersQueryOptions(site));
-    const { isFetching, data: searchData, refetch } = useQuery(
-        searchQueryOptions(query, site, filters),
-    );
 
     const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -71,9 +74,9 @@ export function FilterBar() {
     useEffect(() => {
         if (!hasUserFilters) return;
         // Only auto-search if a search has already been performed
-        if (searchData === undefined) return;
+        if (!hasSearchData) return;
         if (query.trim() === "" || site === "") return;
-        refetch().catch((e) => console.error("Refetch failed:", e));
+        onSearch();
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFilterChange = (key: string, rawValue: string) => {

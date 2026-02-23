@@ -6,7 +6,7 @@ import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { Search, ArrowRight, Loader2, X } from "lucide-react";
 import { searchParamsAtom, setSearchParam, resetSearchParams } from "../stores/searchParamsStore";
-import { providersQueryOptions, searchQueryOptions } from "../api/search";
+import { providersQueryOptions } from "../api/search";
 import { Button } from "@/components/ui/button";
 import {
     Select,
@@ -20,16 +20,16 @@ interface CommandBarProps {
     /** Ref exposed so keyboard nav can focus the input externally. */
     inputRef: React.RefObject<HTMLInputElement>;
     activeTab: string;
+    isFetching: boolean;
+    onSearch: () => void;
 }
 
 /** Compact 36px command bar: site selector, search input, submit icon. */
-export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
+export function CommandBar({ inputRef, activeTab, isFetching, onSearch }: CommandBarProps) {
     const query = useStore(searchParamsAtom, (s) => s.query);
     const site = useStore(searchParamsAtom, (s) => s.site);
-    const filters = useStore(searchParamsAtom, (s) => s.filters);
 
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, refetch } = useQuery(searchQueryOptions(query, site, filters));
 
     const formRef = useRef<HTMLFormElement>(null);
 
@@ -66,7 +66,7 @@ export function CommandBar({ inputRef, activeTab }: CommandBarProps) {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!isDisabled) {
-            refetch().catch((e) => console.error("Refetch failed:", e));
+            onSearch();
         }
     };
 

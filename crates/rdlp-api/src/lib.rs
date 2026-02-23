@@ -40,8 +40,8 @@ pub use events::Event;
 pub use handle::{DownloadHandle, DownloadId};
 pub use orchestrator::InteractiveCallback;
 pub use rdlp_core::{
-    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchQuery, SearchResultPreview,
-    SearchSiteInfo,
+    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
+    SearchResultPreview, SearchSiteInfo,
 };
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

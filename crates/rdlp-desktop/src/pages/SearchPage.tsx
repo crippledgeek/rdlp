@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
     useReactTable,
     getCoreRowModel,
     getSortedRowModel,
 } from "@tanstack/react-table";
 import type { ColumnResizeMode, RowSelectionState, SortingState, Table } from "@tanstack/react-table";
-import { WifiOff, AlertCircle } from "lucide-react";
+import { WifiOff, AlertCircle, Loader2 } from "lucide-react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
 import { ResultsTableSection } from "../components/ResultsTableSection";
@@ -23,7 +23,7 @@ import {
 } from "../stores/searchParamsStore";
 import {
     providersQueryOptions,
-    searchQueryOptions,
+    searchInfiniteQueryOptions,
 } from "../api/search";
 import { settingsQueryOptions } from "../api/settings";
 import {
@@ -60,12 +60,20 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         isSuccess,
         error: queryError,
         refetch,
-    } = useQuery(searchQueryOptions(query, site, filters));
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+    } = useInfiniteQuery(searchInfiniteQueryOptions(query, site, filters));
     const { data: settings = null } = useQuery(settingsQueryOptions());
 
-    // Derive results and status from query state
-    const results = searchData?.results ?? [];
-    const status: "idle" | "loading" | "results" | "empty" | "error" = isFetching
+    // Derive results — memoized so TanStack Table doesn't reprocess rows on unrelated renders
+    const results = useMemo(
+        () => searchData?.pages.flatMap(p => p.results) ?? [],
+        [searchData],
+    );
+    // Do not show the initial loading bar when only fetching additional pages
+    const isInitialLoading = isFetching && !isFetchingNextPage;
+    const status: "idle" | "loading" | "results" | "empty" | "error" = isInitialLoading
         ? "loading"
         : isError
             ? "error"
@@ -85,21 +93,25 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const [formatDialogUrl, setFormatDialogUrl] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const tableRef = useRef<Table<SearchResultPreview> | null>(null);
+    const allResultsLoadedRef = useRef<HTMLParagraphElement>(null);
 
     // --- TanStack Table state ---
     const [sorting, setSorting] = useState<SortingState>([]);
     const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
     const [columnVisibility, setColumnVisibility] = useState({});
 
-    // Reset table state when results change
-    const prevResultsRef = useRef(results);
+    // Reset table state when query/site/filters change (not on Load More page appends)
     useEffect(() => {
-        if (prevResultsRef.current !== results) {
-            prevResultsRef.current = results;
-            setSorting([]);
-            setRowSelection({});
+        setSorting([]);
+        setRowSelection({});
+    }, [query, site, filters]);
+
+    // Focus "All results loaded" message when Load More button disappears (fix 8)
+    useEffect(() => {
+        if (!hasNextPage && !isFetchingNextPage && isSuccess && results.length > 0) {
+            allResultsLoadedRef.current?.focus();
         }
-    }, [results]);
+    }, [hasNextPage, isFetchingNextPage, isSuccess, results.length]);
 
     // Record search history when results arrive
     useEffect(() => {
@@ -109,6 +121,10 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             addEntry({ query, site, siteDisplayName: displayName, filters: [] });
         }
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleSearch = useCallback(() => {
+        refetch().catch((e) => console.error("Refetch failed:", e));
+    }, [refetch]);
 
     const handleDownload = useCallback(
         (url: string, title?: string) => {
@@ -269,8 +285,8 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     return (
         <div className="flex flex-col h-full">
             <div className="shrink-0 pb-2.5 border-b border-border mb-1.5">
-                <CommandBar inputRef={inputRef} activeTab={activeTab} />
-                <FilterBar />
+                <CommandBar inputRef={inputRef} activeTab={activeTab} isFetching={isFetching} onSearch={handleSearch} />
+                <FilterBar isFetching={isFetching} hasSearchData={!!searchData} onSearch={handleSearch} />
             </div>
 
             {/* Loading bar */}
@@ -336,6 +352,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                 </div>
             )}
 
+            {/* aria-live region: announces result count to screen readers when pages are appended */}
+            <div className="sr-only" aria-live="polite" role="status">
+                {results.length > 0 ? `${results.length} results loaded` : ""}
+            </div>
+
             {/* Results: table view */}
             {status === "results" && viewMode === "list" && (
                 <ResultsTableSection
@@ -350,9 +371,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             {/* Results: grid view */}
             {status === "results" && viewMode === "grid" && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-                    {results.map((result, idx) => (
+                    {results.map((result) => (
                         <ResultCard
-                            key={`${idx}-${result.video_url}`}
+                            key={result.video_url}
                             result={result}
                             onDownload={handleDownload}
                             onDownloadWithOptions={handleDownloadWithOptions}
@@ -360,6 +381,37 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                         />
                     ))}
                 </div>
+            )}
+
+            {/* Load more */}
+            {status === "results" && hasNextPage && (
+                <div className="flex justify-center py-4">
+                    <Button
+                        variant="outline"
+                        onClick={() => fetchNextPage()}
+                        disabled={isFetchingNextPage}
+                        aria-busy={isFetchingNextPage}
+                        className="min-w-[200px] gap-1.5"
+                    >
+                        {isFetchingNextPage ? (
+                            <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                Loading...
+                            </>
+                        ) : "Load more results"}
+                    </Button>
+                </div>
+            )}
+
+            {/* All results loaded */}
+            {status === "results" && !hasNextPage && !isFetchingNextPage && (
+                <p
+                    ref={allResultsLoadedRef}
+                    className="text-center text-muted-foreground text-xs py-3"
+                    tabIndex={-1}
+                >
+                    All results loaded
+                </p>
             )}
 
             {/* Batch action bar */}

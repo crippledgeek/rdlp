@@ -324,6 +324,33 @@ impl RdlpClient {
         orchestrator.search(site, query).await.map_err(Into::into)
     }
 
+    /// Execute a paginated search on a site, returning a single page.
+    ///
+    /// # Arguments
+    /// * `site` - Site name (e.g., "xhamster").
+    /// * `query` - Search query with page number set.
+    ///
+    /// # Returns
+    /// A single page of results with pagination metadata.
+    ///
+    /// # Errors
+    /// Returns error if site unknown, filters invalid, or network fails.
+    pub async fn search_page(
+        &self,
+        site: &str,
+        query: &rdlp_core::SearchQuery,
+    ) -> Result<rdlp_core::SearchPageResponse, RdlpApiError> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(16);
+        let cancel_token = CancellationToken::new();
+
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        orchestrator
+            .search_page(site, query)
+            .await
+            .map_err(Into::into)
+    }
+
     /// Execute a search and return results as lightweight previews.
     ///
     /// Alias for [`search()`](Self::search) — only scrapes search result

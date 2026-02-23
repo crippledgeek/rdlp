@@ -22,7 +22,10 @@ mod search;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_core::{
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
+    SearchPageResponse,
+};
 use regex::Regex;
 use scraper::Html;
 use std::time::Duration;
@@ -405,6 +408,52 @@ impl SearchExtractor for RedTubeExtractor {
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
         self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &rdlp_core::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        let descriptors = patterns::search_filter_descriptors();
+        search::validate_search_filters(&query.filters, &descriptors)?;
+
+        let page = query.page.unwrap_or(1);
+        let base_url = patterns::build_api_search_url(&query.query, &query.filters);
+
+        let page_url = if page == 1 {
+            base_url
+        } else {
+            patterns::build_api_search_url_page(&base_url, page)
+        };
+
+        let (page_results, total_count) = match self.fetch_api_search_page(&page_url, ctx).await {
+            Ok(result) => result,
+            Err(e) => {
+                if page == 1 {
+                    warn!("[RedTube] API search failed, falling back to HTML: {e}");
+                    let html_url = patterns::build_html_search_url(&query.query);
+                    let results = self.fetch_html_search_page(&html_url, ctx).await?;
+                    (results, None)
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
+        let has_more = if let Some(total) = total_count {
+            let fetched_through = u64::from(page) * u64::from(patterns::API_RESULTS_PER_PAGE);
+            fetched_through < total && !page_results.is_empty()
+        } else {
+            false
+        };
+
+        Ok(SearchPageResponse {
+            results: page_results,
+            page,
+            has_more,
+            total_estimate: total_count,
+        })
     }
 }
 
