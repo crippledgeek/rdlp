@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useOnClickOutside } from "usehooks-ts";
 import { Download, LayoutGrid, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
@@ -38,16 +39,7 @@ export function ResultRowActions({
         }
     }, [settings, showOptions]);
 
-    useEffect(() => {
-        if (!showOptions) return;
-        const handler = (e: MouseEvent) => {
-            if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-                setShowOptions(false);
-            }
-        };
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, [showOptions]);
+    useOnClickOutside(popoverRef, () => setShowOptions(false));
 
     return (
         <>
