@@ -252,7 +252,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleBatchDownload = useCallback(() => {
         const selectedRows = table.getSelectedRowModel().rows;
         for (const row of selectedRows) {
-            handleDownload(row.original.video_url);
+            handleDownload(row.original.video_url, row.original.title);
         }
         setRowSelection({});
     }, [table, handleDownload]);
