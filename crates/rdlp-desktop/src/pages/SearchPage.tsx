@@ -106,6 +106,15 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         setRowSelection({});
     }, [query, site, filters]);
 
+    // Dynamic column visibility: hide columns when no result has data for them
+    useEffect(() => {
+        if (results.length === 0) return;
+        setColumnVisibility((prev) => ({
+            ...prev,
+            age: results.some((r) => r.upload_date !== null),
+        }));
+    }, [results]);
+
     // Focus "All results loaded" message when Load More button disappears (fix 8)
     useEffect(() => {
         if (!hasNextPage && !isFetchingNextPage && isSuccess && results.length > 0) {
