@@ -1,61 +1,34 @@
-// Virtual focus + selection keyboard navigation for the results list.
-// Manages focusIndex and selectedIndices without using DOM focus.
+// Virtual focus keyboard navigation for the search results table.
+// Manages focusIndex; selection is delegated to the TanStack Table instance.
 
-import { useCallback, useEffect, useState } from "react";
-
-export interface KeyboardNavState {
-    focusIndex: number;
-    selectedIndices: Set<number>;
-}
+import { useEffect, useState } from "react";
+import type { Table } from "@tanstack/react-table";
+import type { SearchResultPreview } from "../types";
 
 interface UseKeyboardNavigationOptions {
     resultCount: number;
     enabled: boolean;
+    table: Table<SearchResultPreview> | null;
     onDownload: (index: number) => void;
     onOpenFormatDialog: (index: number) => void;
     onOpenInBrowser: (index: number) => void;
 }
 
-/** Hook providing virtual focus + selection for the results list. */
+/** Hook providing virtual focus for the results table. Selection is owned by TanStack Table. */
 export function useKeyboardNavigation({
     resultCount,
     enabled,
+    table,
     onDownload,
     onOpenFormatDialog,
     onOpenInBrowser,
 }: UseKeyboardNavigationOptions) {
     const [focusIndex, setFocusIndex] = useState(-1);
-    const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
-        () => new Set(),
-    );
 
     // Reset when results change
     useEffect(() => {
         setFocusIndex(-1);
-        setSelectedIndices(new Set());
     }, [resultCount]);
-
-    const toggleSelect = useCallback((index: number) => {
-        setSelectedIndices((prev) => {
-            const next = new Set(prev);
-            if (next.has(index)) {
-                next.delete(index);
-            } else {
-                next.add(index);
-            }
-            return next;
-        });
-    }, []);
-
-    const selectAll = useCallback(() => {
-        const all = new Set<number>();
-        for (let i = 0; i < resultCount; i++) all.add(i);
-        setSelectedIndices(all);
-    }, [resultCount]);
-
-    const clearSelection = useCallback(() => {
-        setSelectedIndices(new Set());
-    }, []);
 
     useEffect(() => {
         if (!enabled || resultCount === 0) return;
@@ -105,7 +78,10 @@ export function useKeyboardNavigation({
                 }
                 case " ": {
                     e.preventDefault();
-                    if (focusIndex >= 0) toggleSelect(focusIndex);
+                    if (focusIndex >= 0 && table) {
+                        const row = table.getRowModel().rows[focusIndex];
+                        row?.toggleSelected();
+                    }
                     break;
                 }
                 case "Enter": {
@@ -130,8 +106,8 @@ export function useKeyboardNavigation({
                     break;
                 }
                 case "Escape": {
-                    if (selectedIndices.size > 0) {
-                        clearSelection();
+                    if (table && table.getSelectedRowModel().rows.length > 0) {
+                        table.toggleAllRowsSelected(false);
                     } else {
                         setFocusIndex(-1);
                     }
@@ -140,7 +116,7 @@ export function useKeyboardNavigation({
                 case "a": {
                     if (e.ctrlKey || e.metaKey) {
                         e.preventDefault();
-                        selectAll();
+                        table?.toggleAllRowsSelected(true);
                     }
                     break;
                 }
@@ -153,21 +129,14 @@ export function useKeyboardNavigation({
         enabled,
         resultCount,
         focusIndex,
-        selectedIndices.size,
+        table,
         onDownload,
         onOpenFormatDialog,
         onOpenInBrowser,
-        toggleSelect,
-        selectAll,
-        clearSelection,
     ]);
 
     return {
         focusIndex,
-        selectedIndices,
-        toggleSelect,
-        selectAll,
-        clearSelection,
         setFocusIndex,
     };
 }

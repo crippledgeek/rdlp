@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
+import {
+    useReactTable,
+    getCoreRowModel,
+    getSortedRowModel,
+} from "@tanstack/react-table";
+import type { ColumnResizeMode, RowSelectionState, SortingState, Table } from "@tanstack/react-table";
 import { WifiOff, AlertCircle } from "lucide-react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
-import { ResultsList } from "../components/ResultsList";
+import { ResultsTableSection } from "../components/ResultsTableSection";
 import { ResultCard } from "../components/ResultCard";
 import { SearchIdleState } from "../components/SearchIdleState";
 import { BatchActionBar } from "../components/BatchActionBar";
@@ -27,12 +33,15 @@ import {
 import { useSearchHistory } from "../hooks/useSearchHistory";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useKeyboardNavigation } from "../hooks/useKeyboardNavigation";
-import type { DownloadOptions, ViewMode } from "../types";
+import { useSearchColumns } from "../components/utils/searchColumns";
+import type { DownloadOptions, SearchResultPreview, ViewMode } from "../types";
 
 interface SearchPageProps {
     activeTab: string;
     viewMode: ViewMode;
 }
+
+const COLUMN_RESIZE_MODE: ColumnResizeMode = "onChange";
 
 /** Main search page composing command bar, filters, results, and dialogs. */
 export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
@@ -75,6 +84,22 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
     const [formatDialogUrl, setFormatDialogUrl] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const tableRef = useRef<Table<SearchResultPreview> | null>(null);
+
+    // --- TanStack Table state ---
+    const [sorting, setSorting] = useState<SortingState>([]);
+    const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+    const [columnVisibility, setColumnVisibility] = useState({});
+
+    // Reset table state when results change
+    const prevResultsRef = useRef(results);
+    useEffect(() => {
+        if (prevResultsRef.current !== results) {
+            prevResultsRef.current = results;
+            setSorting([]);
+            setRowSelection({});
+        }
+    }, [results]);
 
     // Record search history when results arrive
     useEffect(() => {
@@ -122,49 +147,88 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         [formatDialogUrl],
     );
 
-    // Keyboard nav callbacks (by index)
+    // Keyboard nav callbacks (by index, resolved through table rows via ref)
     const handleDownloadByIndex = useCallback(
         (index: number) => {
-            if (results[index]) handleDownload(results[index].video_url, results[index].title);
+            const row = tableRef.current?.getRowModel().rows[index];
+            if (row) handleDownload(row.original.video_url, row.original.title);
         },
-        [results, handleDownload],
+        [handleDownload],
     );
 
     const handleFormatByIndex = useCallback(
         (index: number) => {
-            if (results[index]) handleOpenFormatDialog(results[index].video_url);
+            const row = tableRef.current?.getRowModel().rows[index];
+            if (row) handleOpenFormatDialog(row.original.video_url);
         },
-        [results, handleOpenFormatDialog],
+        [handleOpenFormatDialog],
     );
 
     const handleOpenInBrowser = useCallback(
         (index: number) => {
-            if (results[index]) {
-                window.open(results[index].video_url, "_blank");
-            }
+            const row = tableRef.current?.getRowModel().rows[index];
+            if (row) window.open(row.original.video_url, "_blank");
         },
-        [results],
+        [],
     );
 
-    const {
+    // focusIndex is managed by keyboard nav; initialized to -1
+    const [focusIndex, setFocusIndex] = useState(-1);
+
+    const { columns, totalColumnSize } = useSearchColumns({
+        onDownload: handleDownload,
+        onDownloadWithOptions: handleDownloadWithOptions,
+        onOpenFormatDialog: handleOpenFormatDialog,
         focusIndex,
-        selectedIndices,
-        toggleSelect,
-        clearSelection,
-    } = useKeyboardNavigation({
+    });
+
+    const table = useReactTable({
+        data: results,
+        columns,
+        state: {
+            sorting,
+            rowSelection,
+            columnVisibility,
+        },
+        onSortingChange: setSorting,
+        onRowSelectionChange: setRowSelection,
+        onColumnVisibilityChange: setColumnVisibility,
+        getCoreRowModel: getCoreRowModel(),
+        getSortedRowModel: getSortedRowModel(),
+        columnResizeMode: COLUMN_RESIZE_MODE,
+        enableRowSelection: true,
+    });
+
+    // Keep ref current for index-based callbacks
+    tableRef.current = table;
+
+    const kbNav = useKeyboardNavigation({
         resultCount: results.length,
         enabled: status === "results" && activeTab === "search",
+        table,
         onDownload: handleDownloadByIndex,
         onOpenFormatDialog: handleFormatByIndex,
         onOpenInBrowser: handleOpenInBrowser,
     });
 
+    // Sync focusIndex from keyboard nav hook
+    useEffect(() => {
+        setFocusIndex(kbNav.focusIndex);
+    }, [kbNav.focusIndex]);
+
+    const selectedCount = Object.keys(rowSelection).length;
+
     const handleBatchDownload = useCallback(() => {
-        for (const idx of selectedIndices) {
-            if (results[idx]) handleDownload(results[idx].video_url);
+        const selectedRows = table.getSelectedRowModel().rows;
+        for (const row of selectedRows) {
+            handleDownload(row.original.video_url);
         }
-        clearSelection();
-    }, [selectedIndices, results, handleDownload, clearSelection]);
+        setRowSelection({});
+    }, [table, handleDownload]);
+
+    const handleClearSelection = useCallback(() => {
+        setRowSelection({});
+    }, []);
 
     const handleRestoreSearch = useCallback(
         (q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
@@ -194,10 +258,6 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
     /** Reset filters to descriptor defaults then re-search. */
     const handleResetFiltersAndSearch = useCallback(() => {
-        // FilterBar owns the filter descriptors and resets via its own
-        // resetFiltersToDefaults. Here we just clear hasUserFilters and
-        // set filters to empty (the FilterBar effect will re-apply
-        // defaults from filter descriptors).
         searchParamsAtom.setState((prev) => ({
             ...prev,
             filters: [],
@@ -276,19 +336,18 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                 </div>
             )}
 
-            {/* Results */}
+            {/* Results: table view */}
             {status === "results" && viewMode === "list" && (
-                <ResultsList
-                    results={results}
+                <ResultsTableSection
+                    table={table}
+                    columns={columns}
+                    totalColumnSize={totalColumnSize}
                     focusIndex={focusIndex}
-                    selectedIndices={selectedIndices}
-                    onDownload={handleDownload}
-                    onDownloadWithOptions={handleDownloadWithOptions}
-                    onOpenFormatDialog={handleOpenFormatDialog}
-                    onToggleSelect={toggleSelect}
+                    resultCount={results.length}
                 />
             )}
 
+            {/* Results: grid view */}
             {status === "results" && viewMode === "grid" && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
                     {results.map((result, idx) => (
@@ -304,11 +363,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             )}
 
             {/* Batch action bar */}
-            {selectedIndices.size > 0 && (
+            {selectedCount > 0 && (
                 <BatchActionBar
-                    count={selectedIndices.size}
+                    count={selectedCount}
                     onDownloadAll={handleBatchDownload}
-                    onClearSelection={clearSelection}
+                    onClearSelection={handleClearSelection}
                 />
             )}
 

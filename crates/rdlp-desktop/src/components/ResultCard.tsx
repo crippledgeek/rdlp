@@ -94,7 +94,7 @@ export function ResultCard({
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
                         src={result.thumbnail_url}
                         alt={result.title}
-                        loading="lazy"
+                        decoding="async"
                     />
                 ) : (
                     <div className="flex items-center justify-center h-full text-muted-foreground text-xs uppercase tracking-wider">
