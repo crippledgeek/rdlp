@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -66,8 +66,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     } = useInfiniteQuery(searchInfiniteQueryOptions(query, site, filters));
     const { data: settings = null } = useQuery(settingsQueryOptions());
 
-    // Derive results and status from query state
-    const results = searchData?.pages.flatMap(p => p.results) ?? [];
+    // Derive results — memoized so TanStack Table doesn't reprocess rows on unrelated renders
+    const results = useMemo(
+        () => searchData?.pages.flatMap(p => p.results) ?? [],
+        [searchData],
+    );
     // Do not show the initial loading bar when only fetching additional pages
     const isInitialLoading = isFetching && !isFetchingNextPage;
     const status: "idle" | "loading" | "results" | "empty" | "error" = isInitialLoading
@@ -118,6 +121,10 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             addEntry({ query, site, siteDisplayName: displayName, filters: [] });
         }
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleSearch = useCallback(() => {
+        refetch().catch((e) => console.error("Refetch failed:", e));
+    }, [refetch]);
 
     const handleDownload = useCallback(
         (url: string, title?: string) => {
@@ -278,8 +285,8 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     return (
         <div className="flex flex-col h-full">
             <div className="shrink-0 pb-2.5 border-b border-border mb-1.5">
-                <CommandBar inputRef={inputRef} activeTab={activeTab} />
-                <FilterBar />
+                <CommandBar inputRef={inputRef} activeTab={activeTab} isFetching={isFetching} onSearch={handleSearch} />
+                <FilterBar isFetching={isFetching} hasSearchData={!!searchData} onSearch={handleSearch} />
             </div>
 
             {/* Loading bar */}

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { LayoutList, LayoutGrid } from "lucide-react";
@@ -11,31 +12,42 @@ import type { ViewMode } from "../types";
 interface StatusBarProps {
     viewMode: ViewMode;
     onViewModeChange: (mode: ViewMode) => void;
-    resultCount: number;
-    totalEstimate: number | null;
-    searchDuration: number | null;
     onSwitchToQueue: () => void;
 }
 
 export function StatusBar({
     viewMode,
     onViewModeChange,
-    resultCount,
-    totalEstimate,
-    searchDuration,
     onSwitchToQueue,
 }: StatusBarProps) {
-    // --- TanStack Store: search form state ---
+    // --- TanStack Store: search form state (for query key) ---
     const query = useStore(searchParamsAtom, (s) => s.query);
     const site = useStore(searchParamsAtom, (s) => s.site);
     const filters = useStore(searchParamsAtom, (s) => s.filters);
 
-    // --- TanStack Query: server state ---
+    // --- TanStack Query: search + downloads state ---
     const { data: providers = [] } = useQuery(providersQueryOptions());
-    const { isFetching, isFetchingNextPage, isError, isSuccess } = useInfiniteQuery(
+    const { isFetching, isFetchingNextPage, isError, isSuccess, data: searchData } = useInfiniteQuery(
         searchInfiniteQueryOptions(query, site, filters),
     );
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
+
+    const results = searchData?.pages.flatMap(p => p.results) ?? [];
+    const resultCount = results.length;
+    const lastPage = searchData?.pages[searchData.pages.length - 1];
+    const totalEstimate = lastPage?.total_estimate ?? null;
+
+    // Track search duration via isFetching transitions
+    const [searchDuration, setSearchDuration] = useState<number | null>(null);
+    const searchStartRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (isFetching) {
+            searchStartRef.current = Date.now();
+        } else if (searchStartRef.current !== null) {
+            setSearchDuration(Date.now() - searchStartRef.current);
+            searchStartRef.current = null;
+        }
+    }, [isFetching]);
 
     // Initial loading vs. appending more pages
     const isInitialLoading = isFetching && !isFetchingNextPage;

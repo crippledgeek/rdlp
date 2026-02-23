@@ -40,7 +40,7 @@ export function searchInfiniteQueryOptions(
     filters: SearchFilter[],
 ) {
     return infiniteQueryOptions({
-        queryKey: queryKeys.search(query, site, filters),
+        queryKey: queryKeys.search.params(query, site, filters),
         queryFn: ({ pageParam }) =>
             invokeTyped<SearchPageResponse>("search_content", { query, site, filters, page: pageParam }),
         initialPageParam: 1,
