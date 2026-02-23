@@ -86,9 +86,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleDownload = useCallback(
-        (url: string) => {
+        (url: string, title?: string) => {
             const opts = buildDefaultOptions(settings);
-            apiStartDownload(url, opts).catch((e) =>
+            apiStartDownload(url, opts, title).catch((e) =>
                 console.error("Download failed:", e),
             );
         },
@@ -96,9 +96,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     );
 
     const handleDownloadWithOptions = useCallback(
-        (url: string, options: Partial<DownloadOptions>) => {
+        (url: string, title: string, options: Partial<DownloadOptions>) => {
             const defaults = buildDefaultOptions(settings);
-            apiStartDownload(url, { ...defaults, ...options }).catch((e) =>
+            apiStartDownload(url, { ...defaults, ...options }, title).catch((e) =>
                 console.error("Download failed:", e),
             );
         },
@@ -111,9 +111,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     );
 
     const handleFormatDialogConfirm = useCallback(
-        (options: DownloadOptions) => {
+        (options: DownloadOptions, title?: string) => {
             if (formatDialogUrl) {
-                apiStartDownload(formatDialogUrl, options).catch((e) =>
+                apiStartDownload(formatDialogUrl, options, title).catch((e) =>
                     console.error("Download failed:", e),
                 );
             }
@@ -125,7 +125,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     // Keyboard nav callbacks (by index)
     const handleDownloadByIndex = useCallback(
         (index: number) => {
-            if (results[index]) handleDownload(results[index].video_url);
+            if (results[index]) handleDownload(results[index].video_url, results[index].title);
         },
         [results, handleDownload],
     );

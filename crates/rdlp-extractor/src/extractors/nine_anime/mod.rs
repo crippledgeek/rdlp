@@ -28,6 +28,7 @@
 //! - `https://9animetv.to/watch/{slug}-{id}` — all episodes (season)
 
 pub mod api;
+pub mod episodes;
 pub mod megacloud;
 pub mod metadata;
 pub mod patterns;
@@ -316,7 +317,7 @@ impl InfoExtractor for NineAnimeExtractor {
         // and doesn't overlap with server resolution.
         let (formats_result, episode_info) = tokio::join!(
             resolve_episode_formats(&episode_id, ctx),
-            api::fetch_episode_info(&anime_id, &episode_id, ctx),
+            episodes::fetch_episode_info(&anime_id, &episode_id, ctx),
         );
 
         let (all_formats, hls_flags, subtitle_tracks) = formats_result?;

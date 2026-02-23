@@ -1,6 +1,7 @@
 //! Tests for HTTP downloader module
 
 use super::*;
+use rdlp_core::Downloader;
 use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]

@@ -18,8 +18,8 @@ interface ResultRowProps {
     result: SearchResultPreview;
     focused: boolean;
     selected: boolean;
-    onDownload: (url: string) => void;
-    onDownloadWithOptions: (url: string, options: Partial<DownloadOptions>) => void;
+    onDownload: (url: string, title: string) => void;
+    onDownloadWithOptions: (url: string, title: string, options: Partial<DownloadOptions>) => void;
     onOpenFormatDialog: (url: string) => void;
     onToggleSelect: () => void;
 }
@@ -150,7 +150,7 @@ export function ResultRow({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7 hover:text-primary hover:bg-primary/10"
-                    onClick={(e) => { e.stopPropagation(); onDownload(result.video_url); }}
+                    onClick={(e) => { e.stopPropagation(); onDownload(result.video_url, result.title); }}
                     title="Download"
                     aria-label="Download"
                 >
@@ -188,7 +188,7 @@ export function ResultRow({
                     <Button
                         className="w-full mt-2.5 bg-primary text-primary-foreground hover:bg-primary/90"
                         onClick={() => {
-                            onDownloadWithOptions(result.video_url, panelOptions);
+                            onDownloadWithOptions(result.video_url, result.title, panelOptions);
                             setShowOptions(false);
                         }}
                     >

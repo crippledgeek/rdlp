@@ -7,8 +7,8 @@ interface ResultsListProps {
     results: SearchResultPreview[];
     focusIndex: number;
     selectedIndices: Set<number>;
-    onDownload: (url: string) => void;
-    onDownloadWithOptions: (url: string, options: Partial<DownloadOptions>) => void;
+    onDownload: (url: string, title: string) => void;
+    onDownloadWithOptions: (url: string, title: string, options: Partial<DownloadOptions>) => void;
     onOpenFormatDialog: (url: string) => void;
     onToggleSelect: (index: number) => void;
 }

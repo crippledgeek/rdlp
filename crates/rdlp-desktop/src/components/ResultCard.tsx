@@ -13,8 +13,8 @@ import type {
 
 interface ResultCardProps {
     result: SearchResultPreview;
-    onDownload: (url: string) => void;
-    onDownloadWithOptions: (url: string, options: Partial<DownloadOptions>) => void;
+    onDownload: (url: string, title: string) => void;
+    onDownloadWithOptions: (url: string, title: string, options: Partial<DownloadOptions>) => void;
     onOpenFormatDialog: (url: string) => void;
 }
 
@@ -114,7 +114,7 @@ export function ResultCard({
                                 className="bg-primary/10 text-primary hover:bg-primary hover:text-background"
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    onDownload(result.video_url);
+                                    onDownload(result.video_url, result.title);
                                 }}
                             >
                                 <Download className="h-3.5 w-3.5" />
@@ -158,6 +158,7 @@ export function ResultCard({
                                 onClick={() => {
                                     onDownloadWithOptions(
                                         result.video_url,
+                                        result.title,
                                         panelOptions,
                                     );
                                     setShowOptions(false);

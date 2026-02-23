@@ -17,7 +17,7 @@ use log::{debug, info, warn};
 use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result};
 use scraper::Html;
 
-use super::{api, build_subtitle_map, metadata, patterns, resolve_episode_formats};
+use super::{build_subtitle_map, episodes, metadata, patterns, resolve_episode_formats};
 use crate::base::common::BaseExtractor;
 
 /// Extract all episodes of an anime as a playlist.
@@ -55,7 +55,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     info!(title:% = anime_title; "Anime metadata resolved");
 
     // Fetch full episode list
-    let episodes = api::fetch_all_episodes(&anime_id, ctx).await?;
+    let episodes = episodes::fetch_all_episodes(&anime_id, ctx).await?;
 
     if episodes.is_empty() {
         return Err(RdlpError::Extraction(format!(

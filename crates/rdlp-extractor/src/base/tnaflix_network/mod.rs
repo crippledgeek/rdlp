@@ -7,7 +7,11 @@ mod formats;
 mod json_ld;
 
 #[cfg(test)]
-mod tests;
+mod tests_basic;
+#[cfg(test)]
+mod tests_json_ld;
+#[cfg(test)]
+mod tests_metadata;
 
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
 use scraper::{Html, Selector};
