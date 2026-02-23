@@ -29,8 +29,14 @@ Requires Rust 1.85+ and FFmpeg shared libraries.
 ```
 git clone https://github.com/crippledgeek/rdlp.git
 cd rdlp
-cargo build --release
+cargo build --release                    # library crates only
+cargo build --release -p rdlp-cli        # CLI binary
+cargo build --release -p rdlp-desktop    # Tauri desktop app
+cargo build --release --workspace        # everything
 ```
+
+The workspace uses `default-members` so `cargo build` compiles only library
+crates. Use `-p` to target a specific binary.
 
 See [BUILDING.md](BUILDING.md) for platform-specific FFmpeg setup and troubleshooting.
 
