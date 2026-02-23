@@ -3,7 +3,8 @@
 // Stores the last 30 searches grouped by site. Supports add, remove,
 // clear, and restore operations. Deduplicates by query+site.
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo } from "react";
+import { useLocalStorage } from "usehooks-ts";
 
 const STORAGE_KEY = "rdlp-search-history";
 const MAX_ENTRIES = 30;
@@ -14,44 +15,6 @@ export interface SearchHistoryEntry {
     siteDisplayName: string;
     filters: Array<{ key: string; value: string }>;
     timestamp: number;
-}
-
-type Listener = () => void;
-const listeners = new Set<Listener>();
-
-function emitChange() {
-    for (const listener of listeners) {
-        listener();
-    }
-}
-
-// Cached snapshot to avoid infinite re-renders from useSyncExternalStore.
-// JSON.parse() returns a new reference each call; we cache by raw string.
-const EMPTY: SearchHistoryEntry[] = [];
-let cachedRaw: string | null = null;
-let cachedEntries: SearchHistoryEntry[] = EMPTY;
-
-function getSnapshot(): SearchHistoryEntry[] {
-    try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return EMPTY;
-        if (raw === cachedRaw) return cachedEntries;
-        cachedRaw = raw;
-        cachedEntries = JSON.parse(raw) as SearchHistoryEntry[];
-        return cachedEntries;
-    } catch {
-        return EMPTY;
-    }
-}
-
-function save(entries: SearchHistoryEntry[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-    emitChange();
-}
-
-function subscribe(listener: Listener): () => void {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
 }
 
 export interface SiteGroup {
@@ -79,32 +42,33 @@ function groupBySite(entries: SearchHistoryEntry[]): SiteGroup[] {
 
 /** Hook providing search history with add/remove/clear operations. */
 export function useSearchHistory() {
-    const entries = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const [entries, setEntries] = useLocalStorage<SearchHistoryEntry[]>(STORAGE_KEY, []);
 
     const addEntry = useCallback(
         (entry: Omit<SearchHistoryEntry, "timestamp">) => {
-            const current = getSnapshot();
-            const filtered = current.filter(
-                (e) => !(e.query === entry.query && e.site === entry.site),
-            );
-            const newEntry: SearchHistoryEntry = {
-                ...entry,
-                timestamp: Date.now(),
-            };
-            const updated = [newEntry, ...filtered].slice(0, MAX_ENTRIES);
-            save(updated);
+            setEntries((current) => {
+                const filtered = current.filter(
+                    (e) => !(e.query === entry.query && e.site === entry.site),
+                );
+                const newEntry: SearchHistoryEntry = {
+                    ...entry,
+                    timestamp: Date.now(),
+                };
+                return [newEntry, ...filtered].slice(0, MAX_ENTRIES);
+            });
         },
-        [],
+        [setEntries],
     );
 
     const removeEntry = useCallback((query: string, site: string) => {
-        const current = getSnapshot();
-        save(current.filter((e) => !(e.query === query && e.site === site)));
-    }, []);
+        setEntries((current) =>
+            current.filter((e) => !(e.query === query && e.site === site)),
+        );
+    }, [setEntries]);
 
     const clearAll = useCallback(() => {
-        save([]);
-    }, []);
+        setEntries([]);
+    }, [setEntries]);
 
     const grouped = useMemo(() => groupBySite(entries), [entries]);
 

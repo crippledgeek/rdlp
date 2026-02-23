@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
+import { useOnClickOutside } from "usehooks-ts";
 import { Download, ChevronDown } from "lucide-react";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
@@ -68,20 +69,7 @@ export function ResultCard({
         }
     }, [settings, showOptions]);
 
-    // Dismiss popover on outside click
-    useEffect(() => {
-        if (!showOptions) return;
-        const handler = (e: MouseEvent) => {
-            if (
-                popoverRef.current &&
-                !popoverRef.current.contains(e.target as Node)
-            ) {
-                setShowOptions(false);
-            }
-        };
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, [showOptions]);
+    useOnClickOutside(popoverRef, () => setShowOptions(false));
 
     return (
         <div className={cn(
