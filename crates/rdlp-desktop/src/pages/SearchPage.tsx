@@ -233,7 +233,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     // Keep ref current for index-based callbacks
     tableRef.current = table;
 
-    const kbNav = useKeyboardNavigation({
+    useKeyboardNavigation({
+        focusIndex,
+        setFocusIndex,
         resultCount: results.length,
         enabled: status === "results" && activeTab === "search",
         table,
@@ -241,11 +243,6 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         onOpenFormatDialog: handleFormatByIndex,
         onOpenInBrowser: handleOpenInBrowser,
     });
-
-    // Sync focusIndex from keyboard nav hook
-    useEffect(() => {
-        setFocusIndex(kbNav.focusIndex);
-    }, [kbNav.focusIndex]);
 
     const selectedCount = Object.keys(rowSelection).length;
 

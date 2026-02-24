@@ -39,6 +39,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         isPending: isLoading,
         isError: isQueryError,
         error: queryError,
+        isFetching,
         refetch,
     } = useQuery(formatsQueryOptions(url));
     const { data: settings = null } = useQuery(settingsQueryOptions());
@@ -51,7 +52,6 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
     const [expr, setExpr] = useState("");
     const [exprError, setExprError] = useState<string | null>(null);
     const [exprMatches, setExprMatches] = useState<Set<string>>(new Set());
-    const [error, setError] = useState<string | null>(null);
     const [settingsApplied, setSettingsApplied] = useState(false);
     const [showOptions, setShowOptions] = useState(false);
     const [presetId, setPresetId] = useState<string | null>(null);
@@ -82,12 +82,8 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         }
     }, [settings, settingsApplied]);
 
-    // Surface query errors in local state
-    useEffect(() => {
-        if (isQueryError && queryError) {
-            setError(queryError.message);
-        }
-    }, [isQueryError, queryError]);
+    // Derived error: show query error when not retrying
+    const error = isQueryError && !isFetching && queryError ? queryError.message : null;
 
     // Cleanup debounce timer
     useEffect(() => {
@@ -262,7 +258,6 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                                         size="sm"
                                         className="ml-auto h-6 text-[11px]"
                                         onClick={() => {
-                                            setError(null);
                                             refetch().catch((e) => console.error("Refetch failed:", e));
                                         }}
                                     >

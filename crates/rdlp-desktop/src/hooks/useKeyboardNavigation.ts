@@ -1,11 +1,13 @@
 // Virtual focus keyboard navigation for the search results table.
 // Manages focusIndex; selection is delegated to the TanStack Table instance.
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import type { Table } from "@tanstack/react-table";
 import type { SearchResultPreview } from "../types";
 
 interface UseKeyboardNavigationOptions {
+    focusIndex: number;
+    setFocusIndex: React.Dispatch<React.SetStateAction<number>>;
     resultCount: number;
     enabled: boolean;
     table: Table<SearchResultPreview> | null;
@@ -16,6 +18,8 @@ interface UseKeyboardNavigationOptions {
 
 /** Hook providing virtual focus for the results table. Selection is owned by TanStack Table. */
 export function useKeyboardNavigation({
+    focusIndex,
+    setFocusIndex,
     resultCount,
     enabled,
     table,
@@ -23,12 +27,10 @@ export function useKeyboardNavigation({
     onOpenFormatDialog,
     onOpenInBrowser,
 }: UseKeyboardNavigationOptions) {
-    const [focusIndex, setFocusIndex] = useState(-1);
-
     // Reset when results change
     useEffect(() => {
         setFocusIndex(-1);
-    }, [resultCount]);
+    }, [resultCount, setFocusIndex]);
 
     useEffect(() => {
         if (!enabled || resultCount === 0) return;
@@ -135,8 +137,4 @@ export function useKeyboardNavigation({
         onOpenInBrowser,
     ]);
 
-    return {
-        focusIndex,
-        setFocusIndex,
-    };
 }
