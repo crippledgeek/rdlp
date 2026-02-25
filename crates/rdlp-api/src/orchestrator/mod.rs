@@ -375,10 +375,10 @@ impl Orchestrator {
 
     /// Record a completed download in the archive (no-op if not configured).
     fn record_in_archive(&self, extractor: &str, id: &str) {
-        if let Some(ref path) = self.config.download_archive {
-            if let Err(e) = archive::record_in_archive(path, extractor, id) {
-                warn!("Failed to write to download archive: {e}");
-            }
+        if let Some(ref path) = self.config.download_archive
+            && let Err(e) = archive::record_in_archive(path, extractor, id)
+        {
+            warn!("Failed to write to download archive: {e}");
         }
     }
 }

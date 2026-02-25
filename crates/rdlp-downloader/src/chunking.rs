@@ -8,9 +8,10 @@
 use std::fmt;
 
 /// Strategy for determining chunk size
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChunkSizeStrategy {
     /// Automatically calculate based on file size (recommended)
+    #[default]
     Auto,
     /// Fixed chunk size in bytes (must be power of two)
     ///
@@ -26,12 +27,6 @@ pub enum ChunkSizeStrategy {
         /// Number of chunks to divide the file into
         chunk_count: usize,
     },
-}
-
-impl Default for ChunkSizeStrategy {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl fmt::Display for ChunkSizeStrategy {

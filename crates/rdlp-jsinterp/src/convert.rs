@@ -26,10 +26,10 @@ pub fn js_to_json(value: &JsValue, ctx: &mut Context) -> JsResult<JsonValue> {
             .unwrap_or(JsonValue::Null));
     }
 
-    if value.is_string() {
-        if let Ok(s) = value.to_string(ctx) {
-            return Ok(JsonValue::String(s.to_std_string_escaped()));
-        }
+    if value.is_string()
+        && let Ok(s) = value.to_string(ctx)
+    {
+        return Ok(JsonValue::String(s.to_std_string_escaped()));
     }
 
     if let Some(obj) = value.as_object() {
@@ -49,7 +49,8 @@ pub fn js_to_json(value: &JsValue, ctx: &mut Context) -> JsResult<JsonValue> {
         if let Some(json_obj) = json_global.as_object() {
             let stringify = json_obj.get(JsString::from("stringify"), ctx)?;
             if let Some(stringify_fn) = stringify.as_callable() {
-                let result = stringify_fn.call(&JsValue::undefined(), &[value.clone()], ctx)?;
+                let result =
+                    stringify_fn.call(&JsValue::undefined(), std::slice::from_ref(value), ctx)?;
                 if let Ok(s) = result.to_string(ctx) {
                     let json_str = s.to_std_string_escaped();
                     if let Ok(parsed) = serde_json::from_str(&json_str) {

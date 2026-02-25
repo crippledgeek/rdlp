@@ -9,6 +9,21 @@ use std::sync::Mutex;
 
 use crate::error::PostProcessError;
 
+/// Platform-specific `va_list` parameter type for FFmpeg log callbacks.
+///
+/// On Linux x86_64, `va_list` is `[__va_list_tag; 1]` (a fixed-size array),
+/// but FFmpeg 7+ bindgen generates callback function pointer signatures with
+/// `*mut __va_list_tag` (pointer to first element). These are ABI-compatible
+/// in C (array decays to pointer) but Rust treats them as distinct types.
+///
+/// On Windows and macOS, `va_list` is already a pointer type that matches
+/// the callback signature directly.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+type VaListParam = *mut ffmpeg_the_third::ffi::__va_list_tag;
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+type VaListParam = ffmpeg_the_third::ffi::va_list;
+
 /// RAII guard that suppresses FFmpeg's internal C log messages.
 ///
 /// Saves the current log level on creation, sets the requested suppression
@@ -138,11 +153,14 @@ impl Drop for LogCaptureGuard {
 /// Called by FFmpeg's internal logging system. All pointer parameters are
 /// guaranteed valid by FFmpeg for the duration of the call. Uses
 /// `av_log_format_line2` to safely format the `va_list` arguments.
+///
+/// The `vl` parameter uses `VaListParam` to handle platform differences
+/// in `va_list` representation (see type alias documentation above).
 unsafe extern "C" fn capture_callback(
     avcl: *mut c_void,
     level: c_int,
     fmt: *const c_char,
-    vl: ffmpeg_the_third::ffi::va_list,
+    vl: VaListParam,
 ) {
     // Only capture AV_LOG_INFO (32) and more important (lower values)
     if level > ffmpeg_the_third::ffi::AV_LOG_INFO {
@@ -170,10 +188,10 @@ unsafe extern "C" fn capture_callback(
         let msg = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
             .to_string_lossy()
             .to_string();
-        if let Ok(mut guard) = LOG_BUFFER.lock() {
-            if let Some(v) = guard.as_mut() {
-                v.push(msg);
-            }
+        if let Ok(mut guard) = LOG_BUFFER.lock()
+            && let Some(v) = guard.as_mut()
+        {
+            v.push(msg);
         }
     }
 }

@@ -94,11 +94,11 @@ pub fn select_subtitles(
         for requested in langs {
             // Try manual subtitles first
             let manual = find_lang(subtitles, requested);
-            if let Some((lang, subs)) = manual {
-                if let Some(sub) = pick_subtitle(subs, preferred_format) {
-                    result.push((lang.to_owned(), sub));
-                    continue;
-                }
+            if let Some((lang, subs)) = manual
+                && let Some(sub) = pick_subtitle(subs, preferred_format)
+            {
+                result.push((lang.to_owned(), sub));
+                continue;
             }
 
             // Fallback to auto-captions if enabled

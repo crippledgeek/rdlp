@@ -147,10 +147,10 @@ impl HlsSizeDetector {
         // Try HEAD request first (fast, no download)
         match self.http_client.head(segment_url).send().await {
             Ok(response) if response.status().is_success() => {
-                if let Some(size) = response.content_length() {
-                    if size > 0 {
-                        return Ok(size);
-                    }
+                if let Some(size) = response.content_length()
+                    && size > 0
+                {
+                    return Ok(size);
                 }
             }
             Ok(response) => {

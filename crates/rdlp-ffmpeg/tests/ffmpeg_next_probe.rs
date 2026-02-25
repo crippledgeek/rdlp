@@ -137,18 +137,36 @@ fn generate_test_video(path: &Path) {
     let mut samples_written = 0u64;
 
     while samples_written < u64::from(total_samples) {
-        let mut frame = ffmpeg_the_third::frame::Audio::new(
-            ffmpeg_the_third::format::Sample::F32(ffmpeg_the_third::format::sample::Type::Planar),
-            audio_frame_size as usize,
-            ffmpeg_the_third::util::channel_layout::ChannelLayoutMask::STEREO,
-        );
-        frame.set_pts(Some(samples_written as i64));
-        frame.set_rate(44100);
+        // Use raw FFI for audio frames to ensure ch_layout is set BEFORE
+        // buffer allocation (FFmpeg 7+ requires ch_layout on frames; setting
+        // it after Audio::new() corrupts already-allocated data planes).
+        unsafe {
+            let raw = ffi::av_frame_alloc();
+            assert!(!raw.is_null(), "av_frame_alloc failed");
+            (*raw).format = ffi::AVSampleFormat::AV_SAMPLE_FMT_FLTP as i32;
+            (*raw).nb_samples = audio_frame_size as i32;
+            (*raw).sample_rate = 44100;
+            ffi::av_channel_layout_default(&mut (*raw).ch_layout, 2);
 
-        // Silence: zero-filled by default
-        a_enc
-            .send_frame(&frame)
-            .expect("failed to send audio frame");
+            let ret = ffi::av_frame_get_buffer(raw, 0);
+            assert!(ret >= 0, "av_frame_get_buffer failed: {ret}");
+
+            // Zero-fill data planes (silence) — av_frame_get_buffer does not
+            // guarantee zeroed memory.
+            for plane in 0..2 {
+                std::ptr::write_bytes(
+                    (*raw).data[plane],
+                    0,
+                    audio_frame_size as usize * std::mem::size_of::<f32>(),
+                );
+            }
+
+            (*raw).pts = samples_written as i64;
+
+            let ret = ffi::avcodec_send_frame(a_enc.as_mut_ptr(), raw);
+            ffi::av_frame_free(&mut (raw as *mut _));
+            assert!(ret >= 0, "avcodec_send_frame failed: {ret}");
+        }
         drain_audio_packets(&mut a_enc, &mut octx, a_ost_idx);
         samples_written += u64::from(audio_frame_size);
     }

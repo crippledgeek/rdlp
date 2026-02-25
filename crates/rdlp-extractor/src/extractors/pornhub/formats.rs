@@ -191,20 +191,19 @@ fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
 
     // Strategy 1: qualityItems_* JSON arrays
     for caps in QUALITY_ITEMS_PATTERN.captures_iter(webpage) {
-        if let Some(json_str) = caps.get(1) {
-            if let Ok(items) = serde_json::from_str::<Value>(json_str.as_str()) {
-                if let Some(array) = items.as_array() {
-                    for item in array {
-                        if let (Some(url), Some(quality)) = (
-                            item.get("url").and_then(|v| v.as_str()),
-                            item.get("quality").and_then(|v| v.as_str()),
-                        ) {
-                            let format = build_format(url, quality.parse().ok(), 0);
-                            formats.push(format);
+        if let Some(json_str) = caps.get(1)
+            && let Ok(items) = serde_json::from_str::<Value>(json_str.as_str())
+            && let Some(array) = items.as_array()
+        {
+            for item in array {
+                if let (Some(url), Some(quality)) = (
+                    item.get("url").and_then(|v| v.as_str()),
+                    item.get("quality").and_then(|v| v.as_str()),
+                ) {
+                    let format = build_format(url, quality.parse().ok(), 0);
+                    formats.push(format);
 
-                            debug!(quality; "[PornHub] Found format from qualityItems");
-                        }
-                    }
+                    debug!(quality; "[PornHub] Found format from qualityItems");
                 }
             }
         }

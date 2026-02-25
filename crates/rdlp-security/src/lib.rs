@@ -138,10 +138,10 @@ pub fn validate_url_security(url: &str) -> Result<()> {
     }
 
     // Host check for private IPs (SSRF protection)
-    if let Some(host) = parsed.host_str() {
-        if is_private_host(host) {
-            return Err(SecurityError::PrivateHost(host.to_string()));
-        }
+    if let Some(host) = parsed.host_str()
+        && is_private_host(host)
+    {
+        return Err(SecurityError::PrivateHost(host.to_string()));
     }
 
     Ok(())

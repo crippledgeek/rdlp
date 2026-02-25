@@ -244,38 +244,37 @@ fn get_format_type_from_url(url_str: &str) -> &'static str {
 pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
-    if let Some(caps) = SOURCES_PATTERN.captures(webpage) {
-        if let Some(sources_str) = caps.get(1) {
-            debug!(sources:? = sources_str.as_str(); "[RedTube] Found sources object");
+    if let Some(caps) = SOURCES_PATTERN.captures(webpage)
+        && let Some(sources_str) = caps.get(1)
+    {
+        debug!(sources:? = sources_str.as_str(); "[RedTube] Found sources object");
 
-            // Try to parse as JSON
-            match serde_json::from_str::<Value>(sources_str.as_str()) {
-                Ok(sources) => {
-                    if let Some(obj) = sources.as_object() {
-                        for (quality, url) in obj {
-                            if let Some(url_str) = url.as_str() {
-                                let format_type = get_format_type_from_url(url_str);
-                                let format =
-                                    build_format(quality, url_str.to_string(), format_type);
+        // Try to parse as JSON
+        match serde_json::from_str::<Value>(sources_str.as_str()) {
+            Ok(sources) => {
+                if let Some(obj) = sources.as_object() {
+                    for (quality, url) in obj {
+                        if let Some(url_str) = url.as_str() {
+                            let format_type = get_format_type_from_url(url_str);
+                            let format = build_format(quality, url_str.to_string(), format_type);
 
-                                debug!(
-                                    format_id:? = format.format_id,
-                                    note:? = format.format_note.as_deref().unwrap_or("unknown");
-                                    "[RedTube] Extracted format"
-                                );
+                            debug!(
+                                format_id:? = format.format_id,
+                                note:? = format.format_note.as_deref().unwrap_or("unknown");
+                                "[RedTube] Extracted format"
+                            );
 
-                                formats.push(format);
-                            }
+                            formats.push(format);
                         }
                     }
                 }
-                Err(e) => {
-                    debug!(
-                        line = e.line(),
-                        column = e.column();
-                        "[RedTube] Failed to parse sources JSON: {e}"
-                    );
-                }
+            }
+            Err(e) => {
+                debug!(
+                    line = e.line(),
+                    column = e.column();
+                    "[RedTube] Failed to parse sources JSON: {e}"
+                );
             }
         }
     }
@@ -292,89 +291,88 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
 pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContext) -> Vec<Format> {
     let mut formats = Vec::new();
 
-    if let Some(caps) = MEDIA_DEF_PATTERN.captures(webpage) {
-        if let Some(media_def_str) = caps.get(1) {
-            BaseExtractor::log_if_verbose(
-                ctx,
-                "RedTube",
-                &format!(
-                    "Found mediaDefinition array: {}",
-                    &media_def_str.as_str().chars().take(200).collect::<String>()
-                ),
-            );
+    if let Some(caps) = MEDIA_DEF_PATTERN.captures(webpage)
+        && let Some(media_def_str) = caps.get(1)
+    {
+        BaseExtractor::log_if_verbose(
+            ctx,
+            "RedTube",
+            &format!(
+                "Found mediaDefinition array: {}",
+                &media_def_str.as_str().chars().take(200).collect::<String>()
+            ),
+        );
 
-            // Try to parse as JSON
-            match serde_json::from_str::<Value>(media_def_str.as_str()) {
-                Ok(media_def) => {
-                    let Some(arr) = media_def.as_array() else {
-                        BaseExtractor::log_if_verbose(
-                            ctx,
-                            "RedTube",
-                            "mediaDefinition is not an array",
-                        );
-                        return formats;
-                    };
+        // Try to parse as JSON
+        match serde_json::from_str::<Value>(media_def_str.as_str()) {
+            Ok(media_def) => {
+                let Some(arr) = media_def.as_array() else {
                     BaseExtractor::log_if_verbose(
                         ctx,
                         "RedTube",
-                        &format!("Found {} media items", arr.len()),
+                        "mediaDefinition is not an array",
+                    );
+                    return formats;
+                };
+                BaseExtractor::log_if_verbose(
+                    ctx,
+                    "RedTube",
+                    &format!("Found {} media items", arr.len()),
+                );
+
+                for (idx, item) in arr.iter().enumerate() {
+                    BaseExtractor::log_if_verbose(
+                        ctx,
+                        "RedTube",
+                        &format!("Processing item {idx}: {item:?}"),
                     );
 
-                    for (idx, item) in arr.iter().enumerate() {
-                        BaseExtractor::log_if_verbose(
-                            ctx,
-                            "RedTube",
-                            &format!("Processing item {idx}: {item:?}"),
-                        );
+                    if let Some(video_url) = item.get("videoUrl").and_then(|v| v.as_str()) {
+                        let format_type =
+                            item.get("format").and_then(|v| v.as_str()).unwrap_or("mp4");
 
-                        if let Some(video_url) = item.get("videoUrl").and_then(|v| v.as_str()) {
-                            let format_type =
-                                item.get("format").and_then(|v| v.as_str()).unwrap_or("mp4");
+                        let has_quality = item.get("quality").is_some();
 
-                            let has_quality = item.get("quality").is_some();
-
-                            // If format is mp4/hls without quality, fetch JSON to get actual formats
-                            if matches!(format_type, "mp4" | "hls") && !has_quality {
-                                if let Some(fetched) =
-                                    fetch_formats_from_endpoint(video_url, ctx).await
-                                {
-                                    formats.extend(fetched);
-                                }
-                            } else {
-                                // Has quality field, process directly
-                                let quality_str = parse_quality(item);
-                                let format =
-                                    build_format(&quality_str, video_url.to_string(), format_type);
-
-                                BaseExtractor::log_if_verbose(
-                                    ctx,
-                                    "RedTube",
-                                    &format!(
-                                        "Extracted format: {} - {} ({}x{})",
-                                        format.format_id,
-                                        format.format_note.as_deref().unwrap_or("unknown"),
-                                        format.width.unwrap_or(0),
-                                        format.height.unwrap_or(0)
-                                    ),
-                                );
-
-                                formats.push(format);
+                        // If format is mp4/hls without quality, fetch JSON to get actual formats
+                        if matches!(format_type, "mp4" | "hls") && !has_quality {
+                            if let Some(fetched) = fetch_formats_from_endpoint(video_url, ctx).await
+                            {
+                                formats.extend(fetched);
                             }
+                        } else {
+                            // Has quality field, process directly
+                            let quality_str = parse_quality(item);
+                            let format =
+                                build_format(&quality_str, video_url.to_string(), format_type);
+
+                            BaseExtractor::log_if_verbose(
+                                ctx,
+                                "RedTube",
+                                &format!(
+                                    "Extracted format: {} - {} ({}x{})",
+                                    format.format_id,
+                                    format.format_note.as_deref().unwrap_or("unknown"),
+                                    format.width.unwrap_or(0),
+                                    format.height.unwrap_or(0)
+                                ),
+                            );
+
+                            formats.push(format);
                         }
                     }
                 }
-                Err(e) => {
-                    BaseExtractor::log_if_verbose(
-                        ctx,
-                        "RedTube",
-                        &format!(
-                            "Failed to parse mediaDefinition JSON at {}:{}: {}",
-                            e.line(),
-                            e.column(),
-                            e
-                        ),
-                    );
-                }
+            }
+            Err(e) => {
+                BaseExtractor::log_if_verbose(
+                    ctx,
+                    "RedTube",
+                    &format!(
+                        "Failed to parse mediaDefinition JSON at {}:{}: {}",
+                        e.line(),
+                        e.column(),
+                        e
+                    ),
+                );
             }
         }
     }

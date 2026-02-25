@@ -346,10 +346,10 @@ impl DownloadPhase {
                             .await?;
 
                         // Check if file is already complete
-                        if let Some(expected_size) = format.filesize {
-                            if resume_offset == expected_size {
-                                return Ok(Self::Complete { path: output_path });
-                            }
+                        if let Some(expected_size) = format.filesize
+                            && resume_offset == expected_size
+                        {
+                            return Ok(Self::Complete { path: output_path });
                         }
 
                         if resume_offset > 0 {

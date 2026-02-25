@@ -79,17 +79,17 @@ pub(crate) fn fix_audio_timestamps(
         return (dts, pts, dur, timing.last_dts);
     };
 
-    if let Some(prev) = timing.last_dts {
-        if d <= prev {
-            let step = if timing.expected_duration > 0 {
-                timing.expected_duration
-            } else {
-                dur.max(1)
-            };
-            let corrected = prev + step;
-            let p = pts.map(|p| p.max(corrected)).or(Some(corrected));
-            return (Some(corrected), p, dur, Some(corrected));
-        }
+    if let Some(prev) = timing.last_dts
+        && d <= prev
+    {
+        let step = if timing.expected_duration > 0 {
+            timing.expected_duration
+        } else {
+            dur.max(1)
+        };
+        let corrected = prev + step;
+        let p = pts.map(|p| p.max(corrected)).or(Some(corrected));
+        return (Some(corrected), p, dur, Some(corrected));
     }
 
     // 3. Ensure pts >= dts even without correction (pts must be Some when dts is Some)

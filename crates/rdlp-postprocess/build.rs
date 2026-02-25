@@ -40,11 +40,11 @@ fn detect_ffmpeg() -> Option<PathBuf> {
     }
 
     // 2. Search common installation paths (Windows)
-    if cfg!(target_os = "windows") {
-        if let Some(dir) = search_windows_paths() {
-            println!("cargo:warning=Auto-detected FFmpeg at: {}", dir.display());
-            return Some(dir);
-        }
+    if cfg!(target_os = "windows")
+        && let Some(dir) = search_windows_paths()
+    {
+        println!("cargo:warning=Auto-detected FFmpeg at: {}", dir.display());
+        return Some(dir);
     }
 
     // 3. Derive from ffmpeg.exe in PATH
@@ -77,30 +77,30 @@ fn search_windows_paths() -> Option<PathBuf> {
         .join("WinGet")
         .join("Packages");
 
-    if winget_base.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&winget_base) {
-            // Look for Gyan.FFmpeg.Shared_* directories
-            let mut ffmpeg_dirs: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("Gyan.FFmpeg.Shared"))
-                })
-                .collect();
+    if winget_base.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&winget_base)
+    {
+        // Look for Gyan.FFmpeg.Shared_* directories
+        let mut ffmpeg_dirs: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("Gyan.FFmpeg.Shared"))
+            })
+            .collect();
 
-            // Sort to get newest version last
-            ffmpeg_dirs.sort();
+        // Sort to get newest version last
+        ffmpeg_dirs.sort();
 
-            for winget_dir in ffmpeg_dirs.iter().rev() {
-                // Inside WinGet dir, find the ffmpeg-*-shared subdirectory
-                if let Ok(inner) = std::fs::read_dir(winget_dir) {
-                    for entry in inner.filter_map(|e| e.ok()) {
-                        let path = entry.path();
-                        if path.is_dir() && is_valid_ffmpeg_dir(&path) {
-                            return Some(path);
-                        }
+        for winget_dir in ffmpeg_dirs.iter().rev() {
+            // Inside WinGet dir, find the ffmpeg-*-shared subdirectory
+            if let Ok(inner) = std::fs::read_dir(winget_dir) {
+                for entry in inner.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.is_dir() && is_valid_ffmpeg_dir(&path) {
+                        return Some(path);
                     }
                 }
             }
@@ -156,12 +156,11 @@ fn derive_from_path() -> Option<PathBuf> {
 
         if ffmpeg_exe.is_file() {
             // Go from .../bin/ffmpeg.exe -> .../
-            if let Some(bin_dir) = ffmpeg_exe.parent() {
-                if let Some(parent) = bin_dir.parent() {
-                    if is_valid_ffmpeg_dir(parent) {
-                        return Some(parent.to_path_buf());
-                    }
-                }
+            if let Some(bin_dir) = ffmpeg_exe.parent()
+                && let Some(parent) = bin_dir.parent()
+                && is_valid_ffmpeg_dir(parent)
+            {
+                return Some(parent.to_path_buf());
             }
         }
     }

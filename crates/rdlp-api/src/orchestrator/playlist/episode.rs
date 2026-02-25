@@ -175,11 +175,11 @@ impl Orchestrator {
                     let resume_offset = self.detect_resume_point(path, format.filesize).await?;
 
                     // Check if file is already complete
-                    if let Some(expected_size) = format.filesize {
-                        if resume_offset == expected_size {
-                            info!("File already complete, skipping");
-                            return Ok(Some(path.clone()));
-                        }
+                    if let Some(expected_size) = format.filesize
+                        && resume_offset == expected_size
+                    {
+                        info!("File already complete, skipping");
+                        return Ok(Some(path.clone()));
                     }
 
                     // Download with CDN fallback

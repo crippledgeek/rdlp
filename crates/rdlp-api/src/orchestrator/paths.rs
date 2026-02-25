@@ -40,15 +40,15 @@ impl Orchestrator {
         };
 
         // Create parent directories if the template produced subdirectories
-        if let Some(parent) = full_path.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    super::OrchestratorError::Configuration(format!(
-                        "Failed to create output directory {}: {e}",
-                        parent.display()
-                    ))
-                })?;
-            }
+        if let Some(parent) = full_path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                super::OrchestratorError::Configuration(format!(
+                    "Failed to create output directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
         }
 
         Ok(full_path)

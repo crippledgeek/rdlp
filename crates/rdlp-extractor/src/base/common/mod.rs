@@ -334,13 +334,13 @@ impl BaseExtractor {
         log_prefix: Option<&str>,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
-        if let Ok(response) = http_client.head(url).send().await {
-            if let Some(size) = response.content_length().filter(|&s| s > 0) {
-                if let Some(prefix) = log_prefix {
-                    debug!(size, method = "HEAD"; "[{prefix}] Detected Content-Length");
-                }
-                return Some(size);
+        if let Ok(response) = http_client.head(url).send().await
+            && let Some(size) = response.content_length().filter(|&s| s > 0)
+        {
+            if let Some(prefix) = log_prefix {
+                debug!(size, method = "HEAD"; "[{prefix}] Detected Content-Length");
             }
+            return Some(size);
         }
 
         // Strategy 2: Range request fallback
@@ -349,13 +349,12 @@ impl BaseExtractor {
             .header("Range", "bytes=0-0")
             .send()
             .await
+            && let Some(size) = Self::parse_content_range_total(response.headers())
         {
-            if let Some(size) = Self::parse_content_range_total(response.headers()) {
-                if let Some(prefix) = log_prefix {
-                    debug!(size, method = "Range"; "[{prefix}] Detected Content-Range");
-                }
-                return Some(size);
+            if let Some(prefix) = log_prefix {
+                debug!(size, method = "Range"; "[{prefix}] Detected Content-Range");
             }
+            return Some(size);
         }
 
         None

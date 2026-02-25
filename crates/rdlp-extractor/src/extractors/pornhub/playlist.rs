@@ -213,25 +213,24 @@ pub async fn extract_playlist(
 /// Extract playlist title from HTML
 fn extract_playlist_title(html: &Html, playlist_id: &str) -> String {
     // Try h1 element
-    if let Ok(selector) = Selector::parse("h1") {
-        if let Some(element) = html.select(&selector).next() {
-            let text: String = element.text().collect();
-            let text = text.trim();
-            if !text.is_empty() && !text.eq_ignore_ascii_case("pornhub") {
-                return text.to_string();
-            }
+    if let Ok(selector) = Selector::parse("h1")
+        && let Some(element) = html.select(&selector).next()
+    {
+        let text: String = element.text().collect();
+        let text = text.trim();
+        if !text.is_empty() && !text.eq_ignore_ascii_case("pornhub") {
+            return text.to_string();
         }
     }
 
     // Try og:title meta tag
-    if let Ok(selector) = Selector::parse("meta[property='og:title']") {
-        if let Some(element) = html.select(&selector).next() {
-            if let Some(content) = element.value().attr("content") {
-                if !content.is_empty() && !content.eq_ignore_ascii_case("pornhub") {
-                    return content.to_string();
-                }
-            }
-        }
+    if let Ok(selector) = Selector::parse("meta[property='og:title']")
+        && let Some(element) = html.select(&selector).next()
+        && let Some(content) = element.value().attr("content")
+        && !content.is_empty()
+        && !content.eq_ignore_ascii_case("pornhub")
+    {
+        return content.to_string();
     }
 
     format!("Playlist {playlist_id}")

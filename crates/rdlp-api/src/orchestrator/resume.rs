@@ -199,39 +199,39 @@ impl Orchestrator {
         expected_size: Option<u64>,
     ) -> Result<u64> {
         // 1. Check for existing complete or partial download file
-        if output_path.exists() {
-            if let Ok(metadata) = tokio::fs::metadata(output_path).await {
-                let size = metadata.len();
-                if size > 0 {
-                    // Check if file is already complete
-                    if let Some(expected) = expected_size {
-                        if size == expected {
-                            info!(
-                                "File already downloaded ({:.1} MB), skipping...",
-                                size as f64 / (1024.0 * 1024.0)
-                            );
-                            // Clean up any orphaned chunks
-                            cleanup_old_chunks(output_path).await;
-                            return Ok(size);
-                        } else if size > expected {
-                            warn!(
-                                "Partial file is larger than expected ({:.1} MB > {:.1} MB), starting fresh...",
-                                size as f64 / (1024.0 * 1024.0),
-                                expected as f64 / (1024.0 * 1024.0)
-                            );
-                            tokio::fs::remove_file(output_path).await.ok();
-                            cleanup_old_chunks(output_path).await;
-                            return Ok(0);
-                        }
+        if output_path.exists()
+            && let Ok(metadata) = tokio::fs::metadata(output_path).await
+        {
+            let size = metadata.len();
+            if size > 0 {
+                // Check if file is already complete
+                if let Some(expected) = expected_size {
+                    if size == expected {
+                        info!(
+                            "File already downloaded ({:.1} MB), skipping...",
+                            size as f64 / (1024.0 * 1024.0)
+                        );
+                        // Clean up any orphaned chunks
+                        cleanup_old_chunks(output_path).await;
+                        return Ok(size);
+                    } else if size > expected {
+                        warn!(
+                            "Partial file is larger than expected ({:.1} MB > {:.1} MB), starting fresh...",
+                            size as f64 / (1024.0 * 1024.0),
+                            expected as f64 / (1024.0 * 1024.0)
+                        );
+                        tokio::fs::remove_file(output_path).await.ok();
+                        cleanup_old_chunks(output_path).await;
+                        return Ok(0);
                     }
-                    info!(
-                        "Found partial download ({:.1} MB), resuming...",
-                        size as f64 / (1024.0 * 1024.0)
-                    );
-                    // Clean up any orphaned chunks from failed parallel attempts
-                    cleanup_old_chunks(output_path).await;
-                    return Ok(size);
                 }
+                info!(
+                    "Found partial download ({:.1} MB), resuming...",
+                    size as f64 / (1024.0 * 1024.0)
+                );
+                // Clean up any orphaned chunks from failed parallel attempts
+                cleanup_old_chunks(output_path).await;
+                return Ok(size);
             }
         }
 

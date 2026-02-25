@@ -60,7 +60,7 @@ impl FFmpegRunner {
             let ret = ffi::avformat_open_input(
                 &mut ifmt_video,
                 video_cstr.as_ptr(),
-                ptr::null(),
+                ptr::null_mut(),
                 ptr::null_mut(),
             );
             if ret < 0 {
@@ -82,7 +82,7 @@ impl FFmpegRunner {
             let ret = ffi::avformat_open_input(
                 &mut ifmt_audio,
                 audio_cstr.as_ptr(),
-                ptr::null(),
+                ptr::null_mut(),
                 ptr::null_mut(),
             );
             if ret < 0 {
@@ -138,7 +138,7 @@ impl FFmpegRunner {
             let matroska_name = CString::new("matroska").expect("static string has no null bytes");
             let ret = ffi::avformat_alloc_output_context2(
                 &mut ofmt_ctx,
-                ptr::null(),
+                ptr::null_mut(),
                 matroska_name.as_ptr(),
                 output_cstr.as_ptr(),
             );

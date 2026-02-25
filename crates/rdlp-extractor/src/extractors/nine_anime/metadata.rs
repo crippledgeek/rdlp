@@ -37,13 +37,13 @@ pub fn extract_metadata(html: &Html, webpage: &str) -> AnimeMetadata {
 fn extract_title(html: &Html, _webpage: &str) -> String {
     // Strategy 1: h2 element — 9anime puts the clean title here
     for selector_str in &["h2.film-name", "h2"] {
-        if let Ok(sel) = Selector::parse(selector_str) {
-            if let Some(elem) = html.select(&sel).next() {
-                let text: String = elem.text().collect();
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return trimmed.to_string();
-                }
+        if let Ok(sel) = Selector::parse(selector_str)
+            && let Some(elem) = html.select(&sel).next()
+        {
+            let text: String = elem.text().collect();
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
             }
         }
     }
@@ -57,13 +57,13 @@ fn extract_title(html: &Html, _webpage: &str) -> String {
     }
 
     // Strategy 3: breadcrumb — "Watching Sword Art Online"
-    if let Ok(sel) = Selector::parse("ol li:last-child") {
-        if let Some(elem) = html.select(&sel).next() {
-            let text: String = elem.text().collect();
-            let trimmed = text.trim().trim_start_matches("Watching ").trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
+    if let Ok(sel) = Selector::parse("ol li:last-child")
+        && let Some(elem) = html.select(&sel).next()
+    {
+        let text: String = elem.text().collect();
+        let trimmed = text.trim().trim_start_matches("Watching ").trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
         }
     }
 

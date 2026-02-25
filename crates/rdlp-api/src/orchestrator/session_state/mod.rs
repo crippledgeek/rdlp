@@ -211,13 +211,12 @@ impl SessionState {
         let temp_path = path.with_extension("json.tmp");
 
         // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    warn!("Failed to create directory for session state: {e}");
-                    return;
-                }
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            warn!("Failed to create directory for session state: {e}");
+            return;
         }
 
         if let Err(e) = tokio::fs::write(&temp_path, json.as_bytes()).await {

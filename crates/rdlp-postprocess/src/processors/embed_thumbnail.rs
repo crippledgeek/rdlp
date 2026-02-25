@@ -74,13 +74,13 @@ impl EmbedThumbnail {
         loop {
             let mut stripped = false;
             for suffix in PIPELINE_SUFFIXES {
-                if let Some(base) = current.strip_suffix(suffix) {
-                    if !base.is_empty() {
-                        candidates.push(base);
-                        current = base;
-                        stripped = true;
-                        break;
-                    }
+                if let Some(base) = current.strip_suffix(suffix)
+                    && !base.is_empty()
+                {
+                    candidates.push(base);
+                    current = base;
+                    stripped = true;
+                    break;
                 }
             }
             if !stripped {

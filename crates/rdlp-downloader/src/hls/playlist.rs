@@ -133,18 +133,17 @@ fn parse_media_playlist(
 
     // Check for potentially incomplete playlists (XHamster CDN bug: first segment > 1)
     // Pattern: seg-N-... where N should be 1 for first segment
-    if let Some(first_seg) = segments.first() {
-        if let Some(first_seg_num) = extract_segment_number(&first_seg.url) {
-            if first_seg_num > 1 {
-                let missing = first_seg_num - 1;
-                warn!(
-                    "Playlist may be incomplete: first segment is #{first_seg_num}, \
+    if let Some(first_seg) = segments.first()
+        && let Some(first_seg_num) = extract_segment_number(&first_seg.url)
+        && first_seg_num > 1
+    {
+        let missing = first_seg_num - 1;
+        warn!(
+            "Playlist may be incomplete: first segment is #{first_seg_num}, \
                      missing {missing} segment(s) from the beginning (~{} seconds). \
                      Consider trying a different format (AV1, MP4) or the fallback URL.",
-                    missing * 4 // Typical ~4s per segment
-                );
-            }
-        }
+            missing * 4 // Typical ~4s per segment
+        );
     }
 
     Ok(PlaylistParseResult { segments })
@@ -198,10 +197,10 @@ fn extract_segment_number(url: &str) -> Option<u32> {
     let filename = path.rsplit('/').next().unwrap_or(path);
 
     // Pattern 1: seg-N-... (XHamster style)
-    if let Some(num_part) = filename.strip_prefix("seg-") {
-        if let Some(end) = num_part.find('-') {
-            return num_part[..end].parse().ok();
-        }
+    if let Some(num_part) = filename.strip_prefix("seg-")
+        && let Some(end) = num_part.find('-')
+    {
+        return num_part[..end].parse().ok();
     }
 
     // Pattern 2: segmentN or segment-N or segment_N

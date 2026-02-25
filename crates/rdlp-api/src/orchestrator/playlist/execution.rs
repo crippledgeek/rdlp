@@ -40,10 +40,10 @@ impl Orchestrator {
                 if exists {
                     return None;
                 }
-                if let Some(archive_set) = archive {
-                    if archive::is_in_archive(archive_set, &ep.extractor, &ep.id) {
-                        return None;
-                    }
+                if let Some(archive_set) = archive
+                    && archive::is_in_archive(archive_set, &ep.extractor, &ep.id)
+                {
+                    return None;
                 }
                 Some((i, ep.clone()))
             })

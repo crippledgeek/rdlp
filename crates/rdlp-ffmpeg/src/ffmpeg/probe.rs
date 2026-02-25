@@ -157,11 +157,10 @@ impl FFmpegRunner {
 
                     if let Ok(codec_ctx) =
                         ffmpeg_the_third::codec::context::Context::from_parameters(params)
+                        && let Ok(video) = codec_ctx.decoder().video()
                     {
-                        if let Ok(video) = codec_ctx.decoder().video() {
-                            info.width = Some(video.width());
-                            info.height = Some(video.height());
-                        }
+                        info.width = Some(video.width());
+                        info.height = Some(video.height());
                     }
 
                     // Frame rate from avg_frame_rate
@@ -174,10 +173,10 @@ impl FFmpegRunner {
                     }
 
                     // Video bitrate from stream metadata
-                    if let Some(br_str) = stream_info.metadata.get("bps") {
-                        if let Ok(bps) = br_str.parse::<u64>() {
-                            info.video_bitrate = Some((bps / 1000) as u32);
-                        }
+                    if let Some(br_str) = stream_info.metadata.get("bps")
+                        && let Ok(bps) = br_str.parse::<u64>()
+                    {
+                        info.video_bitrate = Some((bps / 1000) as u32);
                     }
                 }
                 ffmpeg_the_third::media::Type::Audio => {
@@ -188,20 +187,18 @@ impl FFmpegRunner {
 
                     if let Ok(codec_ctx) =
                         ffmpeg_the_third::codec::context::Context::from_parameters(params)
+                        && let Ok(audio) = codec_ctx.decoder().audio()
                     {
-                        if let Ok(audio) = codec_ctx.decoder().audio() {
-                            info.sample_rate = Some(audio.rate());
-                            info.channels = Some(audio.ch_layout().channels() as u8);
-                        }
+                        info.sample_rate = Some(audio.rate());
+                        info.channels = Some(audio.ch_layout().channels() as u8);
                     }
 
                     // Audio bitrate from stream metadata
-                    if info.audio_bitrate.is_none() {
-                        if let Some(br_str) = stream_info.metadata.get("bps") {
-                            if let Ok(bps) = br_str.parse::<u64>() {
-                                info.audio_bitrate = Some((bps / 1000) as u32);
-                            }
-                        }
+                    if info.audio_bitrate.is_none()
+                        && let Some(br_str) = stream_info.metadata.get("bps")
+                        && let Ok(bps) = br_str.parse::<u64>()
+                    {
+                        info.audio_bitrate = Some((bps / 1000) as u32);
                     }
                 }
                 _ => {}

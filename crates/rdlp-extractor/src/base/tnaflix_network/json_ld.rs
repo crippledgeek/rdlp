@@ -139,10 +139,10 @@ pub(crate) fn extract_json_ld(html: &Html) -> Option<JsonLdVideo> {
     for script_elem in html.select(&JSONLD_SELECTOR) {
         let json_text = script_elem.text().collect::<String>();
 
-        if let Ok(json_ld) = serde_json::from_str::<JsonLdVideo>(&json_text) {
-            if json_ld.json_type == "VideoObject" {
-                return Some(json_ld);
-            }
+        if let Ok(json_ld) = serde_json::from_str::<JsonLdVideo>(&json_text)
+            && json_ld.json_type == "VideoObject"
+        {
+            return Some(json_ld);
         }
     }
     None
