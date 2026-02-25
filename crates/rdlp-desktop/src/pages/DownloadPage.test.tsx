@@ -26,10 +26,10 @@ afterEach(() => {
 });
 
 describe("DownloadPage", () => {
-    it("renders the URL input and Go button", async () => {
+    it("renders the URL input and Download button", async () => {
         render(<DownloadPage />);
         expect(screen.getByPlaceholderText(/paste a video url/i)).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: /go/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
     });
 
     it("renders the Choose Format button", () => {
@@ -42,7 +42,7 @@ describe("DownloadPage", () => {
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
         await user.type(input, "not a url");
-        await user.click(screen.getByRole("button", { name: /go/i }));
+        await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/enter a valid url/i)).toBeInTheDocument();
         });
@@ -55,7 +55,7 @@ describe("DownloadPage", () => {
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
         await user.type(input, "https://example.com/video");
-        await user.click(screen.getByRole("button", { name: /go/i }));
+        await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(startHandler).toHaveBeenCalled();
         });
@@ -67,7 +67,7 @@ describe("DownloadPage", () => {
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
         await user.type(input, "https://example.com/video");
-        await user.click(screen.getByRole("button", { name: /go/i }));
+        await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(input).toHaveValue("");
         });
@@ -81,14 +81,14 @@ describe("DownloadPage", () => {
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
         await user.type(input, "https://evil.local/video");
-        await user.click(screen.getByRole("button", { name: /go/i }));
+        await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/failed to start download/i)).toBeInTheDocument();
         });
     });
 
-    it("disables Go button when input is empty", () => {
+    it("disables Download button when input is empty", () => {
         render(<DownloadPage />);
-        expect(screen.getByRole("button", { name: /go/i })).toBeDisabled();
+        expect(screen.getByRole("button", { name: /download/i })).toBeDisabled();
     });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, ArrowDown, Loader2 } from "lucide-react";
+import { ArrowDownToLine, ArrowDown, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -115,7 +115,7 @@ export function DownloadPage() {
         <div className="max-w-2xl mx-auto">
             {/* Hero section */}
             <div className="flex flex-col items-center gap-4 pt-8 pb-6">
-                <Link className="h-10 w-10 text-muted-foreground opacity-50" />
+                <ArrowDownToLine className="h-10 w-10 text-muted-foreground opacity-50" aria-hidden="true" />
                 <h2 className="text-lg font-semibold text-foreground">
                     Download a Video
                 </h2>
@@ -140,16 +140,23 @@ export function DownloadPage() {
                     onClick={() => void handleQuickDownload()}
                     disabled={!trimmedUrl || isStarting}
                     className="shrink-0"
-                    aria-label="Go"
+                    title={!trimmedUrl ? "Enter a URL first" : undefined}
                 >
                     {isStarting ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                         <ArrowDown className="h-4 w-4" />
                     )}
-                    <span className="ml-1.5">Go</span>
+                    <span className="ml-1.5">Download</span>
                 </Button>
             </div>
+
+            {/* Error message */}
+            {error && (
+                <Alert variant="destructive" className="mb-2">
+                    <AlertDescription>{error}</AlertDescription>
+                </Alert>
+            )}
 
             {/* Choose Format button */}
             <div className="flex justify-center mb-4">
@@ -159,17 +166,11 @@ export function DownloadPage() {
                     onClick={handleChooseFormat}
                     disabled={!trimmedUrl || isStarting}
                     className="text-muted-foreground text-xs"
+                    title={!trimmedUrl ? "Enter a URL first" : undefined}
                 >
                     Choose Format...
                 </Button>
             </div>
-
-            {/* Error message */}
-            {error && (
-                <Alert variant="destructive" className="mb-4">
-                    <AlertDescription>{error}</AlertDescription>
-                </Alert>
-            )}
 
             {/* Recent downloads */}
             {recentJobs.length > 0 && (

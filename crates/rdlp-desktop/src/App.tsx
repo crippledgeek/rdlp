@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Search, Download, Link, Settings } from "lucide-react";
+import { Search, Download, ArrowDownToLine, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -26,7 +26,7 @@ const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
 const TAB_CONFIG = [
     { id: "search" as const, label: "Search", icon: Search },
     { id: "queue" as const, label: "Queue", icon: Download },
-    { id: "download" as const, label: "Download", icon: Link },
+    { id: "download" as const, label: "Download", icon: ArrowDownToLine },
     { id: "settings" as const, label: "Settings", icon: Settings },
 ] as const;
 
