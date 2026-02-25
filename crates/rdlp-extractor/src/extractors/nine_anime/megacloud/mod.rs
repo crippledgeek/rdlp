@@ -79,8 +79,12 @@ static EMBED_BASE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 const MEGACLOUD_API: &str = "https://megacloud.blog";
 
 /// URL for the externally-maintained decryption keys.
-const KEYS_URL: &str =
-    "https://raw.githubusercontent.com/yogesh-hacker/MegacloudKeys/refs/heads/main/keys.json";
+///
+/// Pinned to a specific commit SHA to prevent supply-chain attacks via
+/// branch-head updates. To update: fetch the latest commit SHA with
+/// `curl -s https://api.github.com/repos/yogesh-hacker/MegacloudKeys/commits/main | jq -r .sha`
+/// and replace the SHA in the URL below.
+const KEYS_URL: &str = "https://raw.githubusercontent.com/yogesh-hacker/MegacloudKeys/514f571a035d8700f6b3ee3531897c9706fbc5cb/keys.json";
 
 /// Extract video sources from a Megacloud embed URL.
 ///
@@ -179,9 +183,27 @@ async fn fetch_megacloud_key(ctx: &ExtractionContext) -> Result<String> {
         .await
         .map_err(|e| RdlpError::Extraction(format!("Failed to parse megacloud keys: {e}")))?;
 
-    json["mega"].as_str().map(|s| s.to_string()).ok_or_else(|| {
+    let key = json["mega"].as_str().ok_or_else(|| {
         RdlpError::Extraction("No 'mega' field in megacloud keys response".to_string())
-    })
+    })?;
+
+    // Validate key: non-empty, ASCII-only printable characters, reasonable length
+    if key.is_empty() {
+        return Err(RdlpError::Extraction("Megacloud key is empty".to_string()));
+    }
+    if !key.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return Err(RdlpError::Extraction(
+            "Megacloud key contains non-ASCII or non-printable characters".to_string(),
+        ));
+    }
+    if key.len() > 512 {
+        return Err(RdlpError::Extraction(format!(
+            "Megacloud key length {} exceeds maximum of 512 bytes",
+            key.len()
+        )));
+    }
+
+    Ok(key.to_string())
 }
 
 // ── getSources API ───────────────────────────────────────────────────
