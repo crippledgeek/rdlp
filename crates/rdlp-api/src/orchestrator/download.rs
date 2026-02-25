@@ -5,7 +5,8 @@
 
 use super::{Orchestrator, errors::*};
 use log::{info, warn};
-use rdlp_core::{DownloadStats, Format};
+use rdlp_core::{DownloadStats, Format, RdlpError};
+use rdlp_security::validate_url_security;
 use std::path::Path;
 
 /// Result of a successful download with CDN fallback
@@ -51,6 +52,13 @@ impl Orchestrator {
             format.filesize.or(format.filesize_approx)
         };
 
+        // SSRF protection: validate primary URL before passing to downloader
+        validate_url_security(&format.url).map_err(|e| {
+            OrchestratorError::DownloadFailed(RdlpError::Network(format!(
+                "Security validation failed for format URL: {e}"
+            )))
+        })?;
+
         // Find downloader (with extra HTTP headers if the format specifies them)
         let downloader = self
             .downloader_registry
@@ -62,7 +70,7 @@ impl Orchestrator {
         // Validate CDN token expiry
         self.check_cdn_token_expiry(&format.url)?;
 
-        // Build URL chain: primary + fallbacks
+        // Build URL chain: primary + fallbacks (validate each fallback before use)
         let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
             .chain(format.fallback_urls.iter().flatten().map(String::as_str))
             .collect();
@@ -71,6 +79,14 @@ impl Orchestrator {
         let mut last_err = None;
         for (i, download_url) in download_urls.iter().enumerate() {
             if i > 0 {
+                // SSRF protection: validate each fallback URL before use
+                if let Err(e) = validate_url_security(download_url) {
+                    warn!(fallback = i; "Skipping fallback URL that failed security validation: {e}");
+                    last_err = Some(OrchestratorError::DownloadFailed(RdlpError::Network(
+                        format!("Security validation failed for fallback URL: {e}"),
+                    )));
+                    continue;
+                }
                 warn!(
                     fallback = i,
                     url:? = download_url;
@@ -154,6 +170,13 @@ impl Orchestrator {
             }
         }
 
+        // SSRF protection: validate URL before passing to downloader
+        validate_url_security(&format.url).map_err(|e| {
+            OrchestratorError::DownloadFailed(RdlpError::Network(format!(
+                "Security validation failed for format URL: {e}"
+            )))
+        })?;
+
         let downloader = self
             .downloader_registry
             .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
@@ -192,12 +215,12 @@ impl Orchestrator {
                 .unwrap_or_default()
                 .as_secs();
             if now >= expires {
-                return Err(OrchestratorError::DownloadFailed(
-                    rdlp_core::RdlpError::Network(format!(
+                return Err(OrchestratorError::DownloadFailed(RdlpError::Network(
+                    format!(
                         "CDN token expired {}s ago — re-run the command to get a fresh URL",
                         now - expires
-                    )),
-                ));
+                    ),
+                )));
             } else if expires - now < 60 {
                 warn!("CDN token expires in less than 60 seconds — download may fail");
             }
@@ -242,5 +265,42 @@ mod tests {
     fn test_parse_url_expiry_none() {
         let url = "https://cdn.example.com/video.mp4?token=abc";
         assert_eq!(parse_url_expiry(url), None);
+    }
+
+    /// Verify that private-network format URLs are rejected by `validate_url_security`
+    /// before they can reach the downloader (SSRF protection).
+    #[test]
+    fn test_private_network_format_url_rejected() {
+        // SSRF targets that must never reach the downloader
+        let private_urls = [
+            "http://169.254.169.254/latest/meta-data/", // AWS instance metadata
+            "http://192.168.1.1/video.mp4",             // RFC-1918 LAN
+            "http://10.0.0.1/video.mp4",                // RFC-1918 LAN
+            "http://172.16.0.1/video.mp4",              // RFC-1918 LAN
+            "http://localhost/video.mp4",               // loopback
+            "http://127.0.0.1/video.mp4",               // loopback
+        ];
+        for url in &private_urls {
+            assert!(
+                validate_url_security(url).is_err(),
+                "Expected security rejection for private URL: {url}"
+            );
+        }
+    }
+
+    /// Verify that legitimate public CDN URLs pass `validate_url_security`.
+    #[test]
+    fn test_public_format_url_accepted() {
+        let public_urls = [
+            "https://cdn.example.com/video.mp4",
+            "https://ev-h-ph.rdtcdn.com/hls/videos/123/master.m3u8",
+            "http://media.example.com/file.ts",
+        ];
+        for url in &public_urls {
+            assert!(
+                validate_url_security(url).is_ok(),
+                "Expected security pass for public URL: {url}"
+            );
+        }
     }
 }
