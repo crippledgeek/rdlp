@@ -191,6 +191,7 @@ impl FFmpegRunner {
                 let strerr = av_strerror_string(ret);
                 let io_diag = unsafe { diagnose_mux_io(octx.as_mut_ptr()) };
                 return Err(PostProcessError::MuxWriteError {
+                    code: ret,
                     message: format!("ret={ret} ({strerr}), {io_diag}"),
                     operation: "av_interleaved_write_frame (video)".into(),
                     stream_index: ost_index,

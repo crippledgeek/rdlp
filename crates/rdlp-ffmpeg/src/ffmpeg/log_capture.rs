@@ -11,20 +11,23 @@ use crate::error::PostProcessError;
 
 /// RAII guard that suppresses FFmpeg's internal C log messages.
 ///
-/// Sets `av_log_set_level` to `AV_LOG_FATAL` on creation, restoring
-/// `AV_LOG_ERROR` on drop. Used during audio normalization decode loops
-/// to prevent the AAC decoder from spamming stderr with per-packet
-/// `get_buffer() failed` lines — we handle those errors at the Rust level.
+/// Saves the current log level on creation, sets the requested suppression
+/// level, then restores the saved level on drop. Used during audio
+/// normalization decode loops to prevent the AAC decoder from spamming
+/// stderr with per-packet `get_buffer() failed` lines — we handle those
+/// errors at the Rust level.
 pub(crate) struct LogSuppressGuard {
-    _private: (),
+    /// Log level that was active before this guard was created; restored on drop.
+    saved_level: std::ffi::c_int,
 }
 
 impl LogSuppressGuard {
     pub(crate) fn new() -> Self {
+        let saved_level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
         unsafe {
             ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_FATAL);
         }
-        Self { _private: () }
+        Self { saved_level }
     }
 
     /// Suppress decoder WARNING spam while keeping muxer ERROR messages visible.
@@ -33,17 +36,18 @@ impl LogSuppressGuard {
     /// Use this during encode loops where muxer errors must remain diagnosable
     /// but decoder `get_buffer() failed` spam should be suppressed.
     pub(crate) fn error_level() -> Self {
+        let saved_level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
         unsafe {
             ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR);
         }
-        Self { _private: () }
+        Self { saved_level }
     }
 }
 
 impl Drop for LogSuppressGuard {
     fn drop(&mut self) {
         unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR);
+            ffmpeg_the_third::ffi::av_log_set_level(self.saved_level);
         }
     }
 }
@@ -51,6 +55,14 @@ impl Drop for LogSuppressGuard {
 /// Global buffer for captured FFmpeg log messages.
 ///
 /// Protected by a Mutex. Only populated when a `LogCaptureGuard` is active.
+///
+/// # Single-session invariant
+///
+/// At most **one** `LogCaptureGuard` may be active at any time. Nested or
+/// concurrent `begin()` calls would silently overwrite the in-progress buffer,
+/// corrupting the capture results. The invariant is enforced by:
+/// - Callers using `spawn_blocking` serialization (primary guarantee).
+/// - A `debug_assert!` in `begin()` that fires in debug builds if violated.
 static LOG_BUFFER: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 /// RAII guard for FFmpeg log capture.
@@ -75,6 +87,9 @@ impl LogCaptureGuard {
             .map_err(|e| PostProcessError::LogCaptureFailed {
                 message: format!("failed to lock log buffer: {e}"),
             })?;
+        // Single-session invariant: nested capture overwrites the active buffer.
+        // This fires in debug builds to catch misuse early.
+        debug_assert!(buf.is_none(), "LogCaptureGuard: nested capture detected");
         *buf = Some(Vec::new());
         drop(buf);
 
@@ -201,23 +216,31 @@ mod tests {
 
     #[test]
     fn test_log_suppress_guard_error_level() {
-        // error_level() sets AV_LOG_ERROR; drop restores AV_LOG_ERROR (no-op restore)
+        // error_level() sets AV_LOG_ERROR; drop restores the saved level
+        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
         let guard = LogSuppressGuard::error_level();
         let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
         assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_ERROR);
         drop(guard);
+        // Must restore the level that was active before construction
         let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_ERROR);
+        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_WARNING);
+        // Restore process-wide level to a clean state
+        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR) };
     }
 
     #[test]
     fn test_log_suppress_guard_fatal_level() {
-        // new() sets AV_LOG_FATAL; drop restores AV_LOG_ERROR
+        // new() sets AV_LOG_FATAL; drop restores the saved level
+        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
         let guard = LogSuppressGuard::new();
         let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
         assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_FATAL);
         drop(guard);
+        // Must restore the level that was active before construction
         let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_ERROR);
+        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_WARNING);
+        // Restore process-wide level to a clean state
+        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR) };
     }
 }
