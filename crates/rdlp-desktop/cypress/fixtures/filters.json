@@ -1,0 +1,22 @@
+[
+    {
+        "key": "ordering",
+        "display_name": "Sort",
+        "allowed_values": [
+            { "value": "relevance", "label": "Relevance" },
+            { "value": "newest", "label": "Newest" },
+            { "value": "mostviewed", "label": "Most Viewed" }
+        ],
+        "default": "relevance"
+    },
+    {
+        "key": "period",
+        "display_name": "Period",
+        "allowed_values": [
+            { "value": "alltime", "label": "All Time" },
+            { "value": "weekly", "label": "This Week" },
+            { "value": "monthly", "label": "This Month" }
+        ],
+        "default": "alltime"
+    }
+]
