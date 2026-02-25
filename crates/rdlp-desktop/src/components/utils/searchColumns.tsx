@@ -97,15 +97,8 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
             sortingFn: "text",
             enableResizing: true,
             cell: ({ row }) => (
-                <div className="flex flex-col gap-px min-w-0">
-                    <div className="text-[13px] font-medium text-foreground truncate" title={row.original.title}>
-                        {row.original.title}
-                    </div>
-                    {row.original.view_count !== null && (
-                        <div className="text-[11px] text-muted-foreground">
-                            {formatViews(row.original.view_count)}
-                        </div>
-                    )}
+                <div className="text-[13px] font-medium text-foreground truncate" title={row.original.title}>
+                    {row.original.title}
                 </div>
             ),
         }),
@@ -119,6 +112,21 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
             cell: ({ row }) => (
                 <span className="font-mono text-xs text-muted-foreground">
                     {formatDuration(row.original.duration)}
+                </span>
+            ),
+            meta: { align: "right" as const },
+        }),
+        columnHelper.accessor("view_count", {
+            id: "views",
+            header: "Views",
+            size: 90,
+            sortDescFirst: true,
+            sortUndefined: "last",
+            sortingFn: "basic",
+            enableResizing: true,
+            cell: ({ row }) => (
+                <span className="font-mono text-xs text-muted-foreground">
+                    {formatViews(row.original.view_count)}
                 </span>
             ),
             meta: { align: "right" as const },

@@ -108,6 +108,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const dataColumnVisibility = useMemo(() => {
         if (results.length === 0) return {} as Record<string, boolean>;
         return {
+            views: results.some((r) => r.view_count !== null),
             age: results.some((r) => r.upload_date !== null),
         } as Record<string, boolean>;
     }, [results]);

@@ -23,6 +23,7 @@
 
 use rdlp_core::{RdlpError, Result, SearchFilter, SearchResultPreview};
 use scraper::{Html, Selector};
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use super::search_patterns;
@@ -64,6 +65,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let img_selector = Selector::parse("img").expect("img");
 
     let mut results = Vec::new();
+    let mut seen_urls = HashSet::new();
 
     for item in document.select(&VIDEO_ITEM_SELECTOR) {
         // Video URL from the thumbnail anchor (<a class="video-thumb">)
@@ -77,6 +79,12 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         let Some(video_url) = video_url else {
             continue;
         };
+
+        // Category pages repeat the same videos in multiple page sections;
+        // deduplicate by URL so each video appears only once.
+        if !seen_urls.insert(video_url.clone()) {
+            continue;
+        }
 
         // Title from the separate title anchor (<a class="video-title">)
         // Falls back to the img alt attribute or thumbnail anchor title
@@ -336,6 +344,21 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].title, "Title 1");
         assert_eq!(results[1].title, "Title 2");
+    }
+
+    #[test]
+    fn test_parse_search_results_deduplicates_by_url() {
+        let item = sample_item(
+            "https://www.tnaflix.com/a/b/video1",
+            "Same Video",
+            "01:00",
+            "100",
+        );
+        // Simulate category pages that repeat the same items in multiple sections
+        let html = make_search_html(&[&item, &item, &item], false);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Same Video");
     }
 
     #[test]
