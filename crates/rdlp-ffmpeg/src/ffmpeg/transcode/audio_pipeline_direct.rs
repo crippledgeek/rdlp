@@ -259,6 +259,7 @@ impl FFmpegRunner {
                 // SAFETY: octx owns a valid format context
                 let io_diag = unsafe { diagnose_mux_io(octx.as_mut_ptr()) };
                 return Err(PostProcessError::MuxWriteError {
+                    code: ret,
                     message: format!("ret={ret} ({strerr}), dur={dur}, {io_diag}"),
                     operation: "av_write_frame".into(),
                     stream_index: ost_index,
@@ -342,6 +343,7 @@ impl FFmpegRunner {
                         }
                         let io_diag = unsafe { diagnose_mux_io(octx.as_mut_ptr()) };
                         return Err(PostProcessError::MuxWriteError {
+                            code: 0,
                             message: format!(
                                 "mux stall detected: pb->pos={current_pos}, file_size={file_size} unchanged for {} packets, {io_diag}",
                                 timing.stall_count * 256

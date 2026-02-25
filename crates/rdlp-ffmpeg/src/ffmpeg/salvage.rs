@@ -171,7 +171,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
             let mut attempt = 1u32;
             loop {
                 let candidate = input.with_file_name(format!("{stem}.salvage{attempt}.{ext}"));
-                if !candidate.exists() || attempt > 99 {
+                if !candidate.exists() || attempt >= 99 {
                     break candidate;
                 }
                 attempt += 1;

@@ -93,9 +93,11 @@ pub enum PostProcessError {
 
     /// Mux/write operation failed with diagnostic packet context
     #[error(
-        "Mux write failed ({operation}): {message} [stream={stream_index}, pts={pts:?}, dts={dts:?}, size={packet_size}, tb={time_base_num}/{time_base_den}]"
+        "Mux write failed ({operation}): {message} [stream={stream_index}, pts={pts:?}, dts={dts:?}, size={packet_size}, tb={time_base_num}/{time_base_den}, code={code}]"
     )]
     MuxWriteError {
+        /// Raw FFmpeg/AVERROR return code (e.g. -12 for ENOMEM, -5 for EIO).
+        code: i32,
         message: String,
         operation: String,
         stream_index: usize,
@@ -178,13 +180,13 @@ impl PostProcessError {
     /// True if this error indicates memory exhaustion (ENOMEM/-12).
     #[must_use]
     pub fn is_enomem(&self) -> bool {
-        matches!(self, Self::MuxWriteError { message, .. } if message.contains("ret=-12"))
+        matches!(self, Self::MuxWriteError { code, .. } if *code == -12)
     }
 
     /// True if this error indicates an I/O error (EIO/-5).
     #[must_use]
     pub fn is_eio(&self) -> bool {
-        matches!(self, Self::MuxWriteError { message, .. } if message.contains("ret=-5"))
+        matches!(self, Self::MuxWriteError { code, .. } if *code == -5)
     }
 
     /// True if this error indicates a mux stall (watchdog abort).
@@ -236,6 +238,7 @@ mod tests {
     #[test]
     fn test_mux_write_error_display() {
         let err = PostProcessError::MuxWriteError {
+            code: -28,
             message: "Not enough space".into(),
             operation: "av_interleaved_write_frame".into(),
             stream_index: 0,
@@ -258,6 +261,7 @@ mod tests {
     #[test]
     fn test_mux_write_error_display_none_timestamps() {
         let err = PostProcessError::MuxWriteError {
+            code: -5,
             message: "write failed".into(),
             operation: "av_write_frame".into(),
             stream_index: 1,
@@ -277,6 +281,7 @@ mod tests {
     #[test]
     fn test_mux_write_error_direct_write_display() {
         let err = PostProcessError::MuxWriteError {
+            code: -12,
             message: "ret=-12 (Cannot allocate memory), dur=1024".into(),
             operation: "av_write_frame".into(),
             stream_index: 0,
@@ -296,6 +301,7 @@ mod tests {
     #[test]
     fn test_mux_write_error_converts_to_rdlp_ffmpeg() {
         let err = PostProcessError::MuxWriteError {
+            code: 0,
             message: "test".into(),
             operation: "av_interleaved_write_frame".into(),
             stream_index: 0,
@@ -315,6 +321,7 @@ mod tests {
     #[test]
     fn test_is_mux_write_error() {
         let mux_err = PostProcessError::MuxWriteError {
+            code: -12,
             message: "ENOMEM".into(),
             operation: "av_write_frame".into(),
             stream_index: 0,
@@ -335,6 +342,7 @@ mod tests {
     #[test]
     fn test_is_enomem() {
         let err = PostProcessError::MuxWriteError {
+            code: -12,
             message: "ret=-12 (Cannot allocate memory), dur=23, pb->pos=1024".into(),
             operation: "av_write_frame".into(),
             stream_index: 0,
@@ -349,6 +357,7 @@ mod tests {
         assert!(err.is_salvage_retryable());
 
         let non_enomem = PostProcessError::MuxWriteError {
+            code: -28,
             message: "ret=-28 (No space left on device)".into(),
             operation: "av_write_frame".into(),
             stream_index: 0,
@@ -369,6 +378,7 @@ mod tests {
     #[test]
     fn test_is_salvage_retryable() {
         let mux_err = PostProcessError::MuxWriteError {
+            code: -12,
             message: "ENOMEM".into(),
             operation: "av_write_frame".into(),
             stream_index: 0,

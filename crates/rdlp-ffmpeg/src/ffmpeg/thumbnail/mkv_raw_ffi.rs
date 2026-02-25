@@ -141,7 +141,17 @@ impl FFmpegRunner {
                 }
 
                 // Copy codec parameters
-                ffi::avcodec_parameters_copy((*out_stream).codecpar, codecpar);
+                let ret = ffi::avcodec_parameters_copy((*out_stream).codecpar, codecpar);
+                if ret < 0 {
+                    ffi::avformat_close_input(&mut media_ctx);
+                    ffi::avformat_close_input(&mut thumb_ctx);
+                    ffi::avformat_free_context(ofmt_ctx);
+                    return Err(PostProcessError::FFmpegLibraryError {
+                        message: format!(
+                            "Failed to copy codec params for stream {i}: error code {ret}"
+                        ),
+                    });
+                }
                 (*(*out_stream).codecpar).codec_tag = 0;
 
                 // Copy stream properties (critical for VLC)
@@ -290,79 +300,85 @@ impl FFmpegRunner {
             // 9. Thumbnail data is in attachment extradata — no packets to write
 
             // 10. Copy media packets
-            let mut pkt = ffi::AVPacket {
-                buf: ptr::null_mut(),
-                pts: ffi::AV_NOPTS_VALUE,
-                dts: ffi::AV_NOPTS_VALUE,
-                data: ptr::null_mut(),
-                size: 0,
-                stream_index: 0,
-                flags: 0,
-                side_data: ptr::null_mut(),
-                side_data_elems: 0,
-                duration: 0,
-                pos: -1,
-                opaque: ptr::null_mut(),
-                opaque_ref: ptr::null_mut(),
-                time_base: ffi::AVRational { num: 0, den: 1 },
-            };
+            // Errors are captured and propagated after cleanup.
+            let copy_result: Result<()> = (|| {
+                let mut pkt = ffi::AVPacket {
+                    buf: ptr::null_mut(),
+                    pts: ffi::AV_NOPTS_VALUE,
+                    dts: ffi::AV_NOPTS_VALUE,
+                    data: ptr::null_mut(),
+                    size: 0,
+                    stream_index: 0,
+                    flags: 0,
+                    side_data: ptr::null_mut(),
+                    side_data_elems: 0,
+                    duration: 0,
+                    pos: -1,
+                    opaque: ptr::null_mut(),
+                    opaque_ref: ptr::null_mut(),
+                    time_base: ffi::AVRational { num: 0, den: 1 },
+                };
 
-            loop {
-                let ret = ffi::av_read_frame(media_ctx, &mut pkt);
-                if ret < 0 {
-                    break;
-                }
+                loop {
+                    let ret = ffi::av_read_frame(media_ctx, &mut pkt);
+                    if ret < 0 {
+                        break;
+                    }
 
-                let in_stream_idx = pkt.stream_index as usize;
-                if in_stream_idx >= nb_media_streams || stream_mapping[in_stream_idx] < 0 {
+                    let in_stream_idx = pkt.stream_index as usize;
+                    if in_stream_idx >= nb_media_streams || stream_mapping[in_stream_idx] < 0 {
+                        ffi::av_packet_unref(&mut pkt);
+                        continue;
+                    }
+
+                    let out_stream_idx = stream_mapping[in_stream_idx];
+                    pkt.stream_index = out_stream_idx;
+
+                    let in_stream = *(*media_ctx).streams.add(in_stream_idx);
+                    let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
+
+                    // Guard against AV_NOPTS_VALUE before rescaling (MKV demuxer may
+                    // not infer DTS for B-frame content, leaving it as AV_NOPTS_VALUE;
+                    // rescaling INT64_MIN overflows and causes the muxer to reject packets)
+                    if pkt.pts != ffi::AV_NOPTS_VALUE {
+                        pkt.pts = ffi::av_rescale_q_rnd(
+                            pkt.pts,
+                            (*in_stream).time_base,
+                            (*out_stream).time_base,
+                            ffi::AVRounding::AV_ROUND_NEAR_INF,
+                        );
+                    }
+                    if pkt.dts != ffi::AV_NOPTS_VALUE {
+                        pkt.dts = ffi::av_rescale_q_rnd(
+                            pkt.dts,
+                            (*in_stream).time_base,
+                            (*out_stream).time_base,
+                            ffi::AVRounding::AV_ROUND_NEAR_INF,
+                        );
+                    }
+                    if pkt.duration > 0 {
+                        pkt.duration = ffi::av_rescale_q(
+                            pkt.duration,
+                            (*in_stream).time_base,
+                            (*out_stream).time_base,
+                        );
+                    }
+                    pkt.pos = -1;
+
+                    let ret = ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
                     ffi::av_packet_unref(&mut pkt);
-                    continue;
+
+                    if ret < 0 {
+                        return Err(PostProcessError::FFmpegLibraryError {
+                            message: format!("av_interleaved_write_frame failed: error code {ret}"),
+                        });
+                    }
                 }
 
-                let out_stream_idx = stream_mapping[in_stream_idx];
-                pkt.stream_index = out_stream_idx;
+                Ok(())
+            })();
 
-                let in_stream = *(*media_ctx).streams.add(in_stream_idx);
-                let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
-
-                // Guard against AV_NOPTS_VALUE before rescaling (MKV demuxer may
-                // not infer DTS for B-frame content, leaving it as AV_NOPTS_VALUE;
-                // rescaling INT64_MIN overflows and causes the muxer to reject packets)
-                if pkt.pts != ffi::AV_NOPTS_VALUE {
-                    pkt.pts = ffi::av_rescale_q_rnd(
-                        pkt.pts,
-                        (*in_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.dts != ffi::AV_NOPTS_VALUE {
-                    pkt.dts = ffi::av_rescale_q_rnd(
-                        pkt.dts,
-                        (*in_stream).time_base,
-                        (*out_stream).time_base,
-                        ffi::AVRounding::AV_ROUND_NEAR_INF,
-                    );
-                }
-                if pkt.duration > 0 {
-                    pkt.duration = ffi::av_rescale_q(
-                        pkt.duration,
-                        (*in_stream).time_base,
-                        (*out_stream).time_base,
-                    );
-                }
-                pkt.pos = -1;
-
-                let ret = ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
-                ffi::av_packet_unref(&mut pkt);
-
-                if ret < 0 {
-                    log::error!("Error writing packet: {ret}");
-                    break;
-                }
-            }
-
-            // 11. Cleanup
+            // 11. Cleanup (always runs, even on copy error)
             ffi::av_write_trailer(ofmt_ctx);
 
             if !(*ofmt_ctx).pb.is_null() {
@@ -371,6 +387,9 @@ impl FFmpegRunner {
             ffi::avformat_close_input(&mut media_ctx);
             ffi::avformat_close_input(&mut thumb_ctx);
             ffi::avformat_free_context(ofmt_ctx);
+
+            // Propagate copy errors after cleanup
+            copy_result?;
         }
 
         Ok(())

@@ -151,6 +151,12 @@ impl FFmpegRunner {
             }
 
             // 6. Add video output stream with full property copying
+            // Safety: avformat_find_stream_info guarantees streams is non-null and
+            // has at least nb_streams valid entries.
+            assert!(
+                !(*ifmt_video).streams.is_null(),
+                "streams must be non-null after avformat_find_stream_info"
+            );
             let in_video_stream = *(*ifmt_video).streams.add(video_stream_idx);
 
             let out_video_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
@@ -196,6 +202,12 @@ impl FFmpegRunner {
             );
 
             // 7. Add audio output stream with full property copying
+            // Safety: avformat_find_stream_info guarantees streams is non-null and
+            // has at least nb_streams valid entries.
+            assert!(
+                !(*ifmt_audio).streams.is_null(),
+                "streams must be non-null after avformat_find_stream_info"
+            );
             let in_audio_stream = *(*ifmt_audio).streams.add(audio_stream_idx);
 
             let out_audio_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
