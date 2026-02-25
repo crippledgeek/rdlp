@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="gChip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#233241"/>
+      <stop offset="100%" stop-color="#0f1a24"/>
+    </linearGradient>
+
+    <linearGradient id="gStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9fb6c9"/>
+      <stop offset="100%" stop-color="#4f687f"/>
+    </linearGradient>
+
+    <filter id="glowOrange" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feColorMatrix in="b" type="matrix"
+        values="1 0 0 0 0
+                0 0.5 0 0 0
+                0 0 0 0 0
+                0 0 0.8 0 0" result="c"/>
+      <feMerge>
+        <feMergeNode in="c"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Square chip body, centered in canvas -->
+  <rect x="172" y="172" width="680" height="680" rx="64" fill="url(#gChip)" stroke="url(#gStroke)" stroke-width="14"/>
+
+  <!-- Chip pins (left/right) - short, beyond chip edge -->
+  <g stroke="#ff6a00" stroke-width="18" stroke-linecap="round" filter="url(#glowOrange)">
+    <!-- Left pins -->
+    <path d="M172 320 L90 320"/>
+    <path d="M172 420 L76 420"/>
+    <path d="M172 512 L90 512"/>
+    <path d="M172 604 L76 604"/>
+    <path d="M172 704 L90 704"/>
+    <!-- Right pins -->
+    <path d="M852 320 L934 320"/>
+    <path d="M852 420 L948 420"/>
+    <path d="M852 512 L934 512"/>
+    <path d="M852 604 L948 604"/>
+    <path d="M852 704 L934 704"/>
+    <!-- Pin dots -->
+    <g fill="#ff6a00" stroke="none">
+      <circle cx="76" cy="320" r="14"/>
+      <circle cx="62" cy="420" r="14"/>
+      <circle cx="76" cy="512" r="14"/>
+      <circle cx="62" cy="604" r="14"/>
+      <circle cx="76" cy="704" r="14"/>
+      <circle cx="948" cy="320" r="14"/>
+      <circle cx="962" cy="420" r="14"/>
+      <circle cx="948" cy="512" r="14"/>
+      <circle cx="962" cy="604" r="14"/>
+      <circle cx="948" cy="704" r="14"/>
+    </g>
+  </g>
+
+  <!-- Audio waveform inside chip (centered) -->
+  <g filter="url(#glowOrange)">
+    <path d="M260 512
+             L 330 512
+             L 365 420
+             L 410 620
+             L 460 360
+             L 512 660
+             L 564 380
+             L 614 620
+             L 659 440
+             L 694 512
+             L 764 512"
+          fill="none" stroke="#ffb000" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

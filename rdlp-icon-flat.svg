@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="gText" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ff6a00"/>
+      <stop offset="55%" stop-color="#ff8a00"/>
+      <stop offset="60%" stop-color="#1e88ff"/>
+      <stop offset="100%" stop-color="#0b3d91"/>
+    </linearGradient>
+
+    <linearGradient id="gChip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#233241"/>
+      <stop offset="100%" stop-color="#0f1a24"/>
+    </linearGradient>
+
+    <linearGradient id="gStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9fb6c9"/>
+      <stop offset="100%" stop-color="#4f687f"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+
+    <filter id="glowBlue" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowOrange" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feColorMatrix in="b" type="matrix"
+        values="1 0 0 0 0
+                0 0.5 0 0 0
+                0 0 0 0 0
+                0 0 0.8 0 0" result="c"/>
+      <feMerge>
+        <feMergeNode in="c"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Transparent background by default -->
+
+  <!-- Top waveform -->
+  <g filter="url(#glowBlue)" opacity="0.95">
+    <path d="M320 255
+             C 350 255, 350 230, 380 230
+             C 410 230, 420 285, 450 285
+             C 480 285, 485 205, 512 205
+             C 540 205, 545 305, 572 305
+             C 600 305, 608 240, 636 240
+             C 664 240, 675 275, 704 275"
+          fill="none" stroke="#51c8ff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M300 255 L320 255 M704 275 L724 275"
+          fill="none" stroke="#51c8ff" stroke-width="14" stroke-linecap="round"/>
+  </g>
+
+  <!-- Chip body -->
+  <g filter="url(#softShadow)">
+    <rect x="282" y="290" width="460" height="320" rx="44" fill="url(#gChip)" stroke="url(#gStroke)" stroke-width="10"/>
+    <rect x="306" y="314" width="412" height="272" rx="32" fill="none" stroke="#0b131b" stroke-width="6" opacity="0.55"/>
+  </g>
+
+  <!-- Chip pins (left/right) -->
+  <g stroke="#ff6a00" stroke-width="14" stroke-linecap="round" filter="url(#glowOrange)">
+    <!-- Left pins -->
+    <path d="M282 350 L210 350"/>
+    <path d="M282 395 L200 395"/>
+    <path d="M282 440 L210 440"/>
+    <path d="M282 485 L200 485"/>
+    <path d="M282 530 L210 530"/>
+    <!-- Right pins -->
+    <path d="M742 350 L814 350"/>
+    <path d="M742 395 L824 395"/>
+    <path d="M742 440 L814 440"/>
+    <path d="M742 485 L824 485"/>
+    <path d="M742 530 L814 530"/>
+    <!-- Pin dots -->
+    <g fill="#ff6a00" stroke="none">
+      <circle cx="190" cy="395" r="10"/>
+      <circle cx="190" cy="485" r="10"/>
+      <circle cx="200" cy="350" r="10"/>
+      <circle cx="200" cy="440" r="10"/>
+      <circle cx="200" cy="530" r="10"/>
+      <circle cx="834" cy="395" r="10"/>
+      <circle cx="834" cy="485" r="10"/>
+      <circle cx="824" cy="350" r="10"/>
+      <circle cx="824" cy="440" r="10"/>
+      <circle cx="824" cy="530" r="10"/>
+    </g>
+  </g>
+
+  <!-- Small "pads" top-right (decor) -->
+  <g opacity="0.7">
+    <rect x="610" y="338" width="22" height="22" rx="4" fill="#cfe2f3"/>
+    <rect x="644" y="338" width="22" height="22" rx="4" fill="#cfe2f3"/>
+    <rect x="678" y="338" width="22" height="22" rx="4" fill="#cfe2f3"/>
+  </g>
+
+  <!-- Film reel (simplified) -->
+  <g transform="translate(0,0)">
+    <!-- Reel outer -->
+    <circle cx="420" cy="445" r="88" fill="#d9e2ea" stroke="#7e95a8" stroke-width="10"/>
+    <circle cx="420" cy="445" r="22" fill="#0f1a24" opacity="0.9"/>
+    <!-- Holes -->
+    <g fill="#0f1a24" opacity="0.9">
+      <circle cx="420" cy="390" r="14"/>
+      <circle cx="382" cy="432" r="14"/>
+      <circle cx="458" cy="432" r="14"/>
+      <circle cx="392" cy="492" r="14"/>
+      <circle cx="448" cy="492" r="14"/>
+    </g>
+
+    <!-- Film strip -->
+    <path d="M445 505
+             C 470 545, 510 580, 520 615
+             C 532 655, 510 700, 474 716
+             C 438 732, 398 715, 382 688
+             C 368 664, 370 635, 392 616
+             C 413 598, 432 586, 442 568
+             C 454 546, 438 526, 430 512 Z"
+          fill="#b7c5d1" stroke="#6e8597" stroke-width="8"/>
+    <!-- Film perforations -->
+    <g fill="#0f1a24" opacity="0.7">
+      <circle cx="452" cy="544" r="6"/>
+      <circle cx="468" cy="570" r="6"/>
+      <circle cx="482" cy="598" r="6"/>
+      <circle cx="492" cy="628" r="6"/>
+      <circle cx="494" cy="660" r="6"/>
+      <circle cx="488" cy="690" r="6"/>
+    </g>
+  </g>
+
+  <!-- Audio waveform inside chip -->
+  <g filter="url(#glowOrange)">
+    <path d="M520 458
+             L 548 458
+             L 556 430
+             L 570 492
+             L 582 410
+             L 596 520
+             L 610 430
+             L 622 492
+             L 634 442
+             L 650 458
+             L 676 458"
+          fill="none" stroke="#ffb000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- rdlp text (simple, bold) -->
+  <g aria-label="rdlp">
+    <text x="512" y="860"
+          text-anchor="middle"
+          font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial"
+          font-size="170"
+          font-weight="800"
+          fill="url(#gText)"
+          letter-spacing="-6">rdlp</text>
+  </g>
+</svg>
