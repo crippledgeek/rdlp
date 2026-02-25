@@ -23,7 +23,7 @@ const NONE_SENTINEL = "none";
 
 const DEFAULT_FILTER_KEYS = new Set([
     "sort", "quality", "orientations", "date", "min-duration", "max-duration",
-    "ordering", "period",
+    "ordering", "period", "category",
 ]);
 
 /** Check if a filter value differs from its descriptor default. */
@@ -75,7 +75,8 @@ export function FilterBar({ isFetching, hasSearchData, onSearch }: FilterBarProp
         if (!hasUserFilters) return;
         // Only auto-search if a search has already been performed
         if (!hasSearchData) return;
-        if (query.trim() === "" || site === "") return;
+        const hasCategory = filters.some((f) => f.key === "category" && f.value !== "");
+        if ((query.trim() === "" && !hasCategory) || site === "") return;
         onSearch();
     }, [filters, hasUserFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 

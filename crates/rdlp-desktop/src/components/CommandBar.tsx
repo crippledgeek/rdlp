@@ -61,7 +61,9 @@ export function CommandBar({ inputRef, activeTab, isFetching, onSearch }: Comman
         inputRef.current?.focus();
     };
 
-    const isDisabled = isFetching || query.trim() === "";
+    const filters = useStore(searchParamsAtom, (s) => s.filters);
+    const hasCategoryFilter = filters.some((f) => f.key === "category" && f.value !== "");
+    const isDisabled = isFetching || (query.trim() === "" && !hasCategoryFilter);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();

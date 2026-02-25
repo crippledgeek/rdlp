@@ -40,8 +40,8 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, XHamsterExtractor,
-    XTitsExtractor,
+    NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor,
+    TNAFlixSearchExtractor, XHamsterExtractor, XTitsExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -112,6 +112,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(RedTubeExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(TNAFlixSearchExtractor::new()));
 
         registry
     }
@@ -241,6 +244,14 @@ mod tests {
         let registry = ExtractorRegistry::new();
         assert!(registry.find_search_extractor("XHamster").is_some());
         assert!(registry.find_search_extractor("XHAMSTER").is_some());
+    }
+
+    #[test]
+    fn test_find_search_extractor_tnaflix() {
+        let registry = ExtractorRegistry::new();
+        let extractor = registry.find_search_extractor("tnaflix");
+        assert!(extractor.is_some());
+        assert_eq!(extractor.unwrap().name(), "TNAFlix");
     }
 
     #[test]

@@ -84,7 +84,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                     : "idle";
 
     const error = isError
-        ? (queryError instanceof Error ? queryError.message : String(queryError))
+        ? (queryError instanceof Error
+            ? queryError.message
+            : (typeof queryError === "object" && queryError !== null && "message" in queryError)
+                ? String((queryError as Record<string, unknown>).message)
+                : String(queryError))
         : null;
 
     const { addEntry } = useSearchHistory();
@@ -98,12 +102,28 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     // --- TanStack Table state ---
     const [sorting, setSorting] = useState<SortingState>([]);
     const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-    const [columnVisibility, setColumnVisibility] = useState({});
+    const [userColumnVisibility, setUserColumnVisibility] = useState<Record<string, boolean>>({});
+
+    // Data-driven visibility: hide columns when no result has data for them
+    const dataColumnVisibility = useMemo(() => {
+        if (results.length === 0) return {} as Record<string, boolean>;
+        return {
+            views: results.some((r) => r.view_count !== null),
+            age: results.some((r) => r.upload_date !== null),
+        } as Record<string, boolean>;
+    }, [results]);
+
+    // Merge: data defaults overridden by explicit user toggles
+    const columnVisibility = useMemo(
+        () => ({ ...dataColumnVisibility, ...userColumnVisibility }),
+        [dataColumnVisibility, userColumnVisibility],
+    );
 
     // Reset table state when query/site/filters change (not on Load More page appends)
     useEffect(() => {
         setSorting([]);
         setRowSelection({});
+        setUserColumnVisibility({});
     }, [query, site, filters]);
 
     // Focus "All results loaded" message when Load More button disappears (fix 8)
@@ -115,7 +135,8 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
     // Record search history when results arrive
     useEffect(() => {
-        if (status === "results" && query.trim() !== "" && site !== "") {
+        const hasCategoryFilter = filters.some((f) => f.key === "category" && f.value !== "");
+        if (status === "results" && (query.trim() !== "" || hasCategoryFilter) && site !== "") {
             const displayName =
                 providers.find((p) => p.name === site)?.display_name ?? site;
             addEntry({ query, site, siteDisplayName: displayName, filters: [] });
@@ -208,7 +229,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         },
         onSortingChange: setSorting,
         onRowSelectionChange: setRowSelection,
-        onColumnVisibilityChange: setColumnVisibility,
+        onColumnVisibilityChange: setUserColumnVisibility,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         columnResizeMode: COLUMN_RESIZE_MODE,
@@ -218,7 +239,9 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     // Keep ref current for index-based callbacks
     tableRef.current = table;
 
-    const kbNav = useKeyboardNavigation({
+    useKeyboardNavigation({
+        focusIndex,
+        setFocusIndex,
         resultCount: results.length,
         enabled: status === "results" && activeTab === "search",
         table,
@@ -227,17 +250,12 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         onOpenInBrowser: handleOpenInBrowser,
     });
 
-    // Sync focusIndex from keyboard nav hook
-    useEffect(() => {
-        setFocusIndex(kbNav.focusIndex);
-    }, [kbNav.focusIndex]);
-
     const selectedCount = Object.keys(rowSelection).length;
 
     const handleBatchDownload = useCallback(() => {
         const selectedRows = table.getSelectedRowModel().rows;
         for (const row of selectedRows) {
-            handleDownload(row.original.video_url);
+            handleDownload(row.original.video_url, row.original.title);
         }
         setRowSelection({});
     }, [table, handleDownload]);

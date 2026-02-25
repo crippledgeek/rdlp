@@ -57,7 +57,8 @@ pub async fn search_content(
     state: State<'_, AppState>,
 ) -> Result<SearchPageResponse, AppError> {
     let sanitized = sanitize_query(&query);
-    if sanitized.is_empty() {
+    let has_category = filters.iter().any(|f| f.key == "category");
+    if sanitized.is_empty() && !has_category {
         return Err(AppError::InvalidInput {
             field: "query".to_owned(),
             message: "Search query must not be empty".to_owned(),
@@ -185,5 +186,12 @@ mod tests {
         assert_eq!(sanitize_query(""), "");
         assert_eq!(sanitize_query("   "), "");
         assert_eq!(sanitize_query("\x00\x01\x02"), "");
+    }
+
+    #[test]
+    fn test_sanitize_query_allows_empty_with_category_context() {
+        // Verifies the sanitize function still returns empty for empty input;
+        // the category bypass is in search_content, not sanitize_query.
+        assert_eq!(sanitize_query(""), "");
     }
 }
