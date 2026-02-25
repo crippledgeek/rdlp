@@ -1,0 +1,129 @@
+import { render, screen } from "@/test/test-utils";
+import userEvent from "@testing-library/user-event";
+import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
+import { ResultCard } from "./ResultCard";
+import type { SearchResultPreview } from "../types";
+
+const baseResult: SearchResultPreview = {
+    video_url: "https://example.com/video.mp4",
+    title: "Sample Video Title",
+    thumbnail_url: "https://example.com/thumb.jpg",
+    duration: 185,
+    view_count: 12500,
+    upload_date: null,
+};
+
+beforeEach(() => {
+    setInvokeHandler("get_settings", () => null);
+});
+
+afterEach(() => {
+    clearInvokeHandlers();
+});
+
+describe("ResultCard", () => {
+    it("renders the video title", () => {
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        expect(screen.getByRole("heading", { name: "Sample Video Title" })).toBeInTheDocument();
+    });
+
+    it("renders thumbnail image with alt text", () => {
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        const img = screen.getByRole("img", { name: "Sample Video Title" });
+        expect(img).toHaveAttribute("src", "https://example.com/thumb.jpg");
+    });
+
+    it("shows 'No thumbnail' placeholder when thumbnail_url is null", () => {
+        render(
+            <ResultCard
+                result={{ ...baseResult, thumbnail_url: null }}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        expect(screen.getByText(/no thumbnail/i)).toBeInTheDocument();
+    });
+
+    it("displays formatted duration", () => {
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        // 185s = 3:05
+        expect(screen.getByText("3:05")).toBeInTheDocument();
+    });
+
+    it("displays formatted view count", () => {
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        expect(screen.getByText("12.5K views")).toBeInTheDocument();
+    });
+
+    it("calls onDownload with video_url and title when Download button is clicked", async () => {
+        const onDownload = vi.fn();
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={onDownload}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        await userEvent.click(screen.getByRole("button", { name: /^download$/i }));
+        expect(onDownload).toHaveBeenCalledWith(
+            "https://example.com/video.mp4",
+            "Sample Video Title",
+        );
+    });
+
+    it("calls onOpenFormatDialog when Choose Format is clicked", async () => {
+        const onOpenFormatDialog = vi.fn();
+        render(
+            <ResultCard
+                result={baseResult}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={onOpenFormatDialog}
+            />,
+        );
+        await userEvent.click(screen.getByRole("button", { name: /choose format/i }));
+        expect(onOpenFormatDialog).toHaveBeenCalledWith("https://example.com/video.mp4");
+    });
+
+    it("does not display view count when view_count is null", () => {
+        render(
+            <ResultCard
+                result={{ ...baseResult, view_count: null }}
+                onDownload={vi.fn()}
+                onDownloadWithOptions={vi.fn()}
+                onOpenFormatDialog={vi.fn()}
+            />,
+        );
+        expect(screen.queryByText(/views/i)).not.toBeInTheDocument();
+    });
+});

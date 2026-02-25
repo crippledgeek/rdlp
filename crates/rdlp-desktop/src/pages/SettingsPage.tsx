@@ -45,7 +45,12 @@ export function SettingsPage() {
             setSaveError(null);
             await updateSettings(draft);
         } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg =
+                err instanceof Error
+                    ? err.message
+                    : typeof err === "object" && err !== null && "message" in err && typeof (err as Record<string, unknown>).message === "string"
+                      ? (err as Record<string, string>).message
+                      : String(err);
             setSaveError(msg);
         }
     };
