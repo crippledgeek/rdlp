@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Search, Download, Settings } from "lucide-react";
+import { Search, Download, Link, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { DownloadPage } from "./pages/DownloadPage";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { queryClient } from "./query/queryClient";
@@ -17,7 +18,7 @@ import { downloadsQueryOptions } from "./api/downloads";
 import { cn } from "@/lib/utils";
 import type { SearchFilter, ViewMode } from "./types";
 
-type Tab = "search" | "queue" | "settings";
+type Tab = "search" | "queue" | "download" | "settings";
 
 const VIEW_MODE_KEY = "rdlp-view-mode";
 const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
@@ -25,6 +26,7 @@ const SIDEBAR_KEY = "rdlp-sidebar-collapsed";
 const TAB_CONFIG = [
     { id: "search" as const, label: "Search", icon: Search },
     { id: "queue" as const, label: "Queue", icon: Download },
+    { id: "download" as const, label: "Download", icon: Link },
     { id: "settings" as const, label: "Settings", icon: Settings },
 ] as const;
 
@@ -119,7 +121,16 @@ function AppContent() {
             }
             if ((e.ctrlKey || e.metaKey) && e.key === "3") {
                 e.preventDefault();
+                setActiveTab("download");
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === "4") {
+                e.preventDefault();
                 setActiveTab("settings");
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === "d") {
+                e.preventDefault();
+                setActiveTab("download");
+                window.dispatchEvent(new CustomEvent("rdlp-focus-url"));
             }
         };
         document.addEventListener("keydown", handler);
@@ -169,6 +180,7 @@ function AppContent() {
                         <SearchPage activeTab={activeTab} viewMode={viewMode} />
                     )}
                     {activeTab === "queue" && <QueuePage />}
+                    {activeTab === "download" && <DownloadPage />}
                     {activeTab === "settings" && <SettingsPage />}
                 </main>
             </div>
