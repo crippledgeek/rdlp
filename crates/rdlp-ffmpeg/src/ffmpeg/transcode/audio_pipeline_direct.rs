@@ -273,7 +273,7 @@ impl FFmpegRunner {
             timing.pkt_count += 1;
 
             // Mux-pressure instrumentation: log progress every 10,000 packets
-            if timing.pkt_count % 10_000 == 0 {
+            if timing.pkt_count.is_multiple_of(10_000) {
                 let pb_pos = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() { (*pb).pos } else { 0 }
@@ -300,7 +300,7 @@ impl FFmpegRunner {
             // If neither advances for 3 consecutive checks (768 packets), the
             // muxer is stuck. Abort with a retryable error so salvage/CLI
             // fallback can recover.
-            if timing.pkt_count % 256 == 0 {
+            if timing.pkt_count.is_multiple_of(256) {
                 // Flush AVIO buffer so pb->pos reflects actual write progress
                 unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;

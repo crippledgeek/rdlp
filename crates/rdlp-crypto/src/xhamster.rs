@@ -73,10 +73,10 @@ static HEX_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 #[must_use]
 pub fn decipher_format_url(format_url: &str) -> Option<String> {
     // Try as full URL with hex path first
-    if let Ok(parsed) = Url::parse(format_url) {
-        if let Some(result) = decipher_url_with_hex_path(&parsed) {
-            return Some(result);
-        }
+    if let Ok(parsed) = Url::parse(format_url)
+        && let Some(result) = decipher_url_with_hex_path(&parsed)
+    {
+        return Some(result);
     }
 
     // Fallback: treat the entire string as bare hex-encoded ciphertext
@@ -110,7 +110,7 @@ fn decipher_url_with_hex_path(parsed: &Url) -> Option<String> {
 /// (typically a full URL).
 fn decipher_bare_hex(hex_str: &str) -> Option<String> {
     // Quick check: must be all hex chars and even length
-    if hex_str.len() < 12 || hex_str.len() % 2 != 0 {
+    if hex_str.len() < 12 || !hex_str.len().is_multiple_of(2) {
         return None;
     }
     if !hex_str.bytes().all(|b| b.is_ascii_hexdigit()) {

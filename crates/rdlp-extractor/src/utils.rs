@@ -184,10 +184,10 @@ pub fn decode_html_entities(text: &str) -> String {
                     stripped.parse::<u32>().ok()
                 };
 
-                if let Some(code) = code {
-                    if let Some(ch) = char::from_u32(code) {
-                        return ch.to_string();
-                    }
+                if let Some(code) = code
+                    && let Some(ch) = char::from_u32(code)
+                {
+                    return ch.to_string();
                 }
             }
             // Return original if can't decode
@@ -259,10 +259,10 @@ pub fn make_absolute_url(base_url: &str, relative_url: &str) -> String {
     }
 
     // Try to join with base
-    if let Ok(base) = url::Url::parse(base_url) {
-        if let Ok(absolute) = base.join(relative_url) {
-            return absolute.to_string();
-        }
+    if let Ok(base) = url::Url::parse(base_url)
+        && let Ok(absolute) = base.join(relative_url)
+    {
+        return absolute.to_string();
     }
 
     // Fallback: return original

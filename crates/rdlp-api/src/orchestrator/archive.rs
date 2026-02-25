@@ -38,10 +38,10 @@ pub fn is_in_archive(archive: &HashSet<String>, extractor: &str, id: &str) -> bo
 ///
 /// Creates the file (and parent directories) if they don't exist.
 pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)?;
     }
 
     let mut file = OpenOptions::new().append(true).create(true).open(path)?;

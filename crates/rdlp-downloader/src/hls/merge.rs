@@ -150,24 +150,24 @@ pub(crate) async fn download_segments_with_resume(
 
             async move {
                 // Check if segment file already exists and is non-empty (single async stat)
-                if let Ok(meta) = tokio::fs::metadata(&segment_path).await {
-                    if meta.len() > 0 {
-                        debug!(
-                            segment = idx,
-                            bytes = meta.len();
-                            "Segment already exists, skipping"
-                        );
-                        let bytes = meta.len();
-                        // Mark as completed in state
-                        {
-                            let mut state_guard = state.lock().await;
-                            state_guard.mark_completed(idx, bytes);
-                        }
-                        segments.fetch_add(1, Ordering::Relaxed);
-                        progress.fetch_add(bytes, Ordering::Relaxed);
-                        duration.fetch_add((seg_duration * 100.0) as u64, Ordering::Relaxed);
-                        return Ok((idx, segment_path, bytes));
+                if let Ok(meta) = tokio::fs::metadata(&segment_path).await
+                    && meta.len() > 0
+                {
+                    debug!(
+                        segment = idx,
+                        bytes = meta.len();
+                        "Segment already exists, skipping"
+                    );
+                    let bytes = meta.len();
+                    // Mark as completed in state
+                    {
+                        let mut state_guard = state.lock().await;
+                        state_guard.mark_completed(idx, bytes);
                     }
+                    segments.fetch_add(1, Ordering::Relaxed);
+                    progress.fetch_add(bytes, Ordering::Relaxed);
+                    duration.fetch_add((seg_duration * 100.0) as u64, Ordering::Relaxed);
+                    return Ok((idx, segment_path, bytes));
                 }
 
                 // Download segment with retry logic (now using backon)
@@ -195,10 +195,10 @@ pub(crate) async fn download_segments_with_resume(
                             }
                         };
                         // Save outside the lock to avoid holding it across I/O
-                        if let Some(snapshot) = snapshot {
-                            if let Err(e) = snapshot.save(&output_path).await {
-                                warn!("Failed to save HLS state: {e}");
-                            }
+                        if let Some(snapshot) = snapshot
+                            && let Err(e) = snapshot.save(&output_path).await
+                        {
+                            warn!("Failed to save HLS state: {e}");
                         }
 
                         segments.fetch_add(1, Ordering::Relaxed);

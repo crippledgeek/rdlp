@@ -149,33 +149,33 @@ impl BaseExtractor {
         // Extract hours
         if let Some(h_idx) = text.find('h') {
             let before = text[..h_idx].trim();
-            if let Some(num_str) = before.split_whitespace().next_back() {
-                if let Ok(hours) = num_str.parse::<f64>() {
-                    total_seconds += hours * 3600.0;
-                    found_any = true;
-                }
+            if let Some(num_str) = before.split_whitespace().next_back()
+                && let Ok(hours) = num_str.parse::<f64>()
+            {
+                total_seconds += hours * 3600.0;
+                found_any = true;
             }
         }
 
         // Extract minutes
         if let Some(min_idx) = text.find("min") {
             let before = text[..min_idx].trim();
-            if let Some(num_str) = before.split_whitespace().next_back() {
-                if let Ok(mins) = num_str.parse::<f64>() {
-                    total_seconds += mins * 60.0;
-                    found_any = true;
-                }
+            if let Some(num_str) = before.split_whitespace().next_back()
+                && let Ok(mins) = num_str.parse::<f64>()
+            {
+                total_seconds += mins * 60.0;
+                found_any = true;
             }
         }
 
         // Extract seconds
         if let Some(sec_idx) = text.find("sec") {
             let before = text[..sec_idx].trim();
-            if let Some(num_str) = before.split_whitespace().next_back() {
-                if let Ok(secs) = num_str.parse::<f64>() {
-                    total_seconds += secs;
-                    found_any = true;
-                }
+            if let Some(num_str) = before.split_whitespace().next_back()
+                && let Ok(secs) = num_str.parse::<f64>()
+            {
+                total_seconds += secs;
+                found_any = true;
             }
         }
 

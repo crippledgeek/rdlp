@@ -160,14 +160,14 @@ impl Orchestrator {
         }
 
         // Log when fallback URLs exist but can't be used for pipe output
-        if let Some(ref fallbacks) = format.fallback_urls {
-            if !fallbacks.is_empty() {
-                info!(
-                    count = fallbacks.len();
-                    "Format has fallback CDN URLs but they cannot be used \
-                     with stdout (partial pipe writes are irreversible)"
-                );
-            }
+        if let Some(ref fallbacks) = format.fallback_urls
+            && !fallbacks.is_empty()
+        {
+            info!(
+                count = fallbacks.len();
+                "Format has fallback CDN URLs but they cannot be used \
+                 with stdout (partial pipe writes are irreversible)"
+            );
         }
 
         // SSRF protection: validate URL before passing to downloader

@@ -138,10 +138,10 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
 
             // First: top-level "url" and "fallback" keys (master playlists)
             for top_key in &["url", "fallback"] {
-                if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str()) {
-                    if !url_str.is_empty() {
-                        hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
-                    }
+                if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str())
+                    && !url_str.is_empty()
+                {
+                    hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
                 }
             }
 
@@ -154,11 +154,10 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
                 if let Some(codec_obj) = value.as_object() {
                     // New layout: codec-keyed objects like {url: "...", fallback: "..."}
                     for hls_key in &["url", "fallback"] {
-                        if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str()) {
-                            if !url_str.is_empty() {
-                                hls_urls
-                                    .push((format!("hls-{key}-{hls_key}"), url_str.to_string()));
-                            }
+                        if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str())
+                            && !url_str.is_empty()
+                        {
+                            hls_urls.push((format!("hls-{key}-{hls_key}"), url_str.to_string()));
                         }
                     }
                 }
@@ -282,23 +281,22 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
         .captures(webpage)
         .and_then(|caps| caps.get(1))
         .and_then(|json_str| serde_json::from_str::<Value>(json_str.as_str()).ok())
+        && let Some(obj) = sources.as_object()
     {
-        if let Some(obj) = sources.as_object() {
-            for (format_id, url_val) in obj {
-                let Some(url) = url_val.as_str().filter(|u| !u.is_empty()) else {
-                    continue;
-                };
-                if !seen_urls.insert(url.to_string()) {
-                    continue;
-                }
-                let height = get_height(format_id);
-                formats.push(BaseExtractor::build_format(
-                    format_id.clone(),
-                    url.to_string(),
-                    "mp4".to_string(),
-                    height,
-                ));
+        for (format_id, url_val) in obj {
+            let Some(url) = url_val.as_str().filter(|u| !u.is_empty()) else {
+                continue;
+            };
+            if !seen_urls.insert(url.to_string()) {
+                continue;
             }
+            let height = get_height(format_id);
+            formats.push(BaseExtractor::build_format(
+                format_id.clone(),
+                url.to_string(),
+                "mp4".to_string(),
+                height,
+            ));
         }
     }
 
@@ -315,15 +313,14 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
             .and_then(|caps| caps.name("url"))
             .map(|m| m.as_str())
             .filter(|u| !u.is_empty())
+            && seen_urls.insert(url.to_string())
         {
-            if seen_urls.insert(url.to_string()) {
-                formats.push(Format::new(
-                    "video",
-                    url,
-                    "mp4",
-                    rdlp_core::DownloadProtocol::Https,
-                ));
-            }
+            formats.push(Format::new(
+                "video",
+                url,
+                "mp4",
+                rdlp_core::DownloadProtocol::Https,
+            ));
         }
     }
 

@@ -174,22 +174,20 @@ pub(crate) async fn build_formats(
 ///
 /// Returns a static string reference to avoid allocation.
 fn extract_extension_from_url(url: &str) -> &'static str {
-    if let Ok(parsed_url) = url::Url::parse(url) {
-        if let Some(mut path_segments) = parsed_url.path_segments() {
-            if let Some(last_segment) = path_segments.next_back() {
-                if let Some(ext_start) = last_segment.rfind('.') {
-                    let extension = &last_segment[ext_start + 1..];
-                    return match extension {
-                        "mp4" => "mp4",
-                        "flv" => "flv",
-                        "m3u8" => "hls",
-                        "webm" => "webm",
-                        "mkv" => "mkv",
-                        _ => "unknown",
-                    };
-                }
-            }
-        }
+    if let Ok(parsed_url) = url::Url::parse(url)
+        && let Some(mut path_segments) = parsed_url.path_segments()
+        && let Some(last_segment) = path_segments.next_back()
+        && let Some(ext_start) = last_segment.rfind('.')
+    {
+        let extension = &last_segment[ext_start + 1..];
+        return match extension {
+            "mp4" => "mp4",
+            "flv" => "flv",
+            "m3u8" => "hls",
+            "webm" => "webm",
+            "mkv" => "mkv",
+            _ => "unknown",
+        };
     }
     "unknown"
 }

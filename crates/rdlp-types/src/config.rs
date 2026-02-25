@@ -427,13 +427,13 @@ impl Config {
         if self.playlist_start == 0 {
             return Err(ConfigValidationError::InvalidPlaylistStart);
         }
-        if let Some(end) = self.playlist_end {
-            if end < self.playlist_start {
-                return Err(ConfigValidationError::InvalidPlaylistRange {
-                    start: self.playlist_start,
-                    end,
-                });
-            }
+        if let Some(end) = self.playlist_end
+            && end < self.playlist_start
+        {
+            return Err(ConfigValidationError::InvalidPlaylistRange {
+                start: self.playlist_start,
+                end,
+            });
         }
 
         // Stdout mode rejects post-processing options that require file I/O

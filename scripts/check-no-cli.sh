@@ -9,9 +9,9 @@ set -euo pipefail
 
 FOUND=0
 
-# Search production source directories only (exclude tests/)
+# Search production source directories only (exclude tests/ and comment lines)
 for pattern in 'std::process::Command' 'Command::new("ffmpeg")' 'Command::new("ffprobe")'; do
-    if grep -rn "$pattern" crates/*/src/ 2>/dev/null; then
+    if grep -rn "$pattern" crates/*/src/ 2>/dev/null | grep -v '^\([^:]*:[^:]*:\)\s*//'; then
         echo "ERROR: Forbidden CLI pattern found: $pattern"
         FOUND=1
     fi

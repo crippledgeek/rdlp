@@ -102,14 +102,14 @@ pub(crate) fn merge_config(
     // Audio format: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.audio_format {
         config.audio_format = Some(fmt);
-    } else if let Some(audio_format) = args.audio_format.as_deref() {
-        if audio_format != "interactive" {
-            config.audio_format = Some(
-                audio_format
-                    .parse::<AudioFormat>()
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            );
-        }
+    } else if let Some(audio_format) = args.audio_format.as_deref()
+        && audio_format != "interactive"
+    {
+        config.audio_format = Some(
+            audio_format
+                .parse::<AudioFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     if let Some(ref audio_quality) = args.audio_quality {
@@ -167,14 +167,14 @@ pub(crate) fn merge_config(
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
         config.recode_video = Some(fmt);
-    } else if let Some(recode_video) = args.recode_video.as_deref() {
-        if recode_video != "interactive" {
-            config.recode_video = Some(
-                recode_video
-                    .parse::<ContainerFormat>()
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            );
-        }
+    } else if let Some(recode_video) = args.recode_video.as_deref()
+        && recode_video != "interactive"
+    {
+        config.recode_video = Some(
+            recode_video
+                .parse::<ContainerFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
@@ -244,14 +244,14 @@ pub(crate) fn merge_config(
     // Remux: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.remux_container {
         config.remux_container = Some(fmt);
-    } else if let Some(container) = args.remux.as_deref() {
-        if container != "interactive" {
-            config.remux_container = Some(
-                container
-                    .parse::<ContainerFormat>()
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            );
-        }
+    } else if let Some(container) = args.remux.as_deref()
+        && container != "interactive"
+    {
+        config.remux_container = Some(
+            container
+                .parse::<ContainerFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
     }
 
     // Derived settings

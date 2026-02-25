@@ -182,15 +182,15 @@ impl Orchestrator {
 
         if resuming {
             info!("Resuming with saved selections");
-            if let Some(SessionState::Playlist(ref saved)) = saved_state {
-                if !saved.failed_episodes.is_empty() {
-                    warn!(
-                        count = saved.failed_episodes.len();
-                        "Previously failed episodes will be retried"
-                    );
-                    for ep in &saved.failed_episodes {
-                        warn!("  [{}] {}: {}", ep.position, ep.title, ep.last_error);
-                    }
+            if let Some(SessionState::Playlist(ref saved)) = saved_state
+                && !saved.failed_episodes.is_empty()
+            {
+                warn!(
+                    count = saved.failed_episodes.len();
+                    "Previously failed episodes will be retried"
+                );
+                for ep in &saved.failed_episodes {
+                    warn!("  [{}] {}: {}", ep.position, ep.title, ep.last_error);
                 }
             }
         }
@@ -234,21 +234,23 @@ impl Orchestrator {
         } else {
             // Audio type selection for playlists with multiple language tracks
             selected_audio = None;
-            if interactive && audio_types.len() > 1 && remaining > 0 {
-                if let Some(ref callback) = self.interactive {
-                    let options: Vec<String> = audio_types.clone();
-                    let type_count = options.len();
+            if interactive
+                && audio_types.len() > 1
+                && remaining > 0
+                && let Some(ref callback) = self.interactive
+            {
+                let options: Vec<String> = audio_types.clone();
+                let type_count = options.len();
 
-                    let selection = callback.select_audio_type(&options).await;
+                let selection = callback.select_audio_type(&options).await;
 
-                    if let Some(idx) = selection {
-                        if idx < type_count {
-                            let selected = &audio_types[idx];
-                            info!(audio:% = selected; "Filtering to selected audio type");
-                            selected_audio = Some(selected.clone());
-                            filter_formats_by_language(&mut infos, selected);
-                        }
-                    }
+                if let Some(idx) = selection
+                    && idx < type_count
+                {
+                    let selected = &audio_types[idx];
+                    info!(audio:% = selected; "Filtering to selected audio type");
+                    selected_audio = Some(selected.clone());
+                    filter_formats_by_language(&mut infos, selected);
                 }
             }
 
@@ -277,18 +279,19 @@ impl Orchestrator {
                 };
 
             // Confirm before downloading (unless non-interactive)
-            if interactive && remaining > 0 {
-                if let Some(ref callback) = self.interactive {
-                    let prompt = if already_downloaded > 0 {
-                        format!("Resume downloading {remaining} remaining videos?")
-                    } else {
-                        format!("Download {total} videos to '{playlist_folder_name}'?")
-                    };
+            if interactive
+                && remaining > 0
+                && let Some(ref callback) = self.interactive
+            {
+                let prompt = if already_downloaded > 0 {
+                    format!("Resume downloading {remaining} remaining videos?")
+                } else {
+                    format!("Download {total} videos to '{playlist_folder_name}'?")
+                };
 
-                    if !callback.confirm(&prompt).await {
-                        info!("Cancelled by user");
-                        return Ok(None);
-                    }
+                if !callback.confirm(&prompt).await {
+                    info!("Cancelled by user");
+                    return Ok(None);
                 }
             }
 

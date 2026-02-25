@@ -199,7 +199,7 @@ impl FFmpegRunner {
             timing.pkt_count += 1;
 
             // Mux-pressure instrumentation: log progress every 10,000 packets
-            if timing.pkt_count % 10_000 == 0 {
+            if timing.pkt_count.is_multiple_of(10_000) {
                 let current_pos_for_log = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() { (*pb).pos } else { 0 }
@@ -222,7 +222,7 @@ impl FFmpegRunner {
             }
 
             // Mux progress watchdog: flush AVIO then check pos + file size
-            if timing.pkt_count % 256 == 0 {
+            if timing.pkt_count.is_multiple_of(256) {
                 unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() {

@@ -134,17 +134,17 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
         info.description = anime_metadata.description.clone();
 
         // The probed episode gets full formats + subtitles
-        if index == probe_index {
-            if let Some((ref formats, ref hls_flags, ref subtitle_tracks)) = probe_result {
-                info.formats = formats.clone();
-                info.is_live = Some(hls_flags.is_live);
+        if index == probe_index
+            && let Some((ref formats, ref hls_flags, ref subtitle_tracks)) = probe_result
+        {
+            info.formats = formats.clone();
+            info.is_live = Some(hls_flags.is_live);
 
-                if !subtitle_tracks.is_empty() {
-                    info.subtitles = Some(build_subtitle_map(subtitle_tracks));
-                }
-
-                info.propagate_duration();
+            if !subtitle_tracks.is_empty() {
+                info.subtitles = Some(build_subtitle_map(subtitle_tracks));
             }
+
+            info.propagate_duration();
         }
         // All other episodes: empty formats (lazy resolution marker)
 

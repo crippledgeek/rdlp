@@ -132,12 +132,11 @@ impl TnaFlixNetworkBase {
     /// Extract video title from HTML using multiple strategies
     pub(crate) fn extract_title(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD
-        if let Some(json_ld) = json_ld::extract_json_ld(html) {
-            if let Some(name) = json_ld.name {
-                if !name.is_empty() {
-                    return Some(name);
-                }
-            }
+        if let Some(json_ld) = json_ld::extract_json_ld(html)
+            && let Some(name) = json_ld.name
+            && !name.is_empty()
+        {
+            return Some(name);
         }
 
         // Strategy 2: Open Graph title
@@ -146,12 +145,11 @@ impl TnaFlixNetworkBase {
         }
 
         // Strategy 3: Input field
-        if let Some(input) = html.select(&TITLE_SELECTOR).next() {
-            if let Some(value) = input.value().attr("value") {
-                if !value.is_empty() {
-                    return Some(value.to_string());
-                }
-            }
+        if let Some(input) = html.select(&TITLE_SELECTOR).next()
+            && let Some(value) = input.value().attr("value")
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
         }
 
         // Strategy 4: H1 tag
@@ -172,12 +170,11 @@ impl TnaFlixNetworkBase {
     /// Extract video description from HTML using multiple strategies
     pub(crate) fn extract_description(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD
-        if let Some(json_ld) = json_ld::extract_json_ld(html) {
-            if let Some(desc) = json_ld.description {
-                if !desc.is_empty() {
-                    return Some(desc);
-                }
-            }
+        if let Some(json_ld) = json_ld::extract_json_ld(html)
+            && let Some(desc) = json_ld.description
+            && !desc.is_empty()
+        {
+            return Some(desc);
         }
 
         // Strategy 2: Open Graph description
@@ -201,14 +198,12 @@ impl TnaFlixNetworkBase {
     /// Extract uploader username from HTML
     pub(crate) fn extract_uploader(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD author
-        if let Some(json_ld) = json_ld::extract_json_ld(html) {
-            if let Some(author) = json_ld.author {
-                if let Some(name) = author.name() {
-                    if !name.is_empty() {
-                        return Some(name);
-                    }
-                }
-            }
+        if let Some(json_ld) = json_ld::extract_json_ld(html)
+            && let Some(author) = json_ld.author
+            && let Some(name) = author.name()
+            && !name.is_empty()
+        {
+            return Some(name);
         }
 
         // Strategy 2: Input field
@@ -222,10 +217,10 @@ impl TnaFlixNetworkBase {
     /// Extract thumbnail URL from HTML using multiple strategies
     pub(crate) fn extract_thumbnail(&self, html: &Html) -> Option<String> {
         // Strategy 1: JSON-LD thumbnailUrl
-        if let Some(json_ld) = json_ld::extract_json_ld(html) {
-            if let Some(url) = json_ld::get_thumbnail_url(&json_ld) {
-                return Some(url);
-            }
+        if let Some(json_ld) = json_ld::extract_json_ld(html)
+            && let Some(url) = json_ld::get_thumbnail_url(&json_ld)
+        {
+            return Some(url);
         }
 
         // Strategy 2: Open Graph image

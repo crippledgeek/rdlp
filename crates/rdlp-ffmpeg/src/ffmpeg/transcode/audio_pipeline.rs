@@ -181,7 +181,7 @@ impl FFmpegRunner {
 
             // Mux progress watchdog (interleaved path): flush AVIO then check
             // pos and file size, same dual-signal approach as the direct path.
-            if timing.pkt_count % 256 == 0 {
+            if timing.pkt_count.is_multiple_of(256) {
                 unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() {

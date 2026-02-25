@@ -59,17 +59,16 @@ impl ResolvedContainer {
         }
 
         // Priority 3: infer from output file extension
-        if let Some(path) = output_path {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if let Ok(c) = ext.parse::<ContainerFormat>() {
-                    // Skip .ts — raw MPEG-TS is an intermediate format
-                    if c != ContainerFormat::Ts {
-                        return Self {
-                            format: c,
-                            source: ContainerSource::FileExtension,
-                        };
-                    }
-                }
+        if let Some(path) = output_path
+            && let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && let Ok(c) = ext.parse::<ContainerFormat>()
+        {
+            // Skip .ts — raw MPEG-TS is an intermediate format
+            if c != ContainerFormat::Ts {
+                return Self {
+                    format: c,
+                    source: ContainerSource::FileExtension,
+                };
             }
         }
 

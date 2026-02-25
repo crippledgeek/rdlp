@@ -101,15 +101,14 @@ impl BaseExtractor {
             let Ok(selector) = Selector::parse(selector_str) else {
                 continue;
             };
-            if let Some(element) = html.select(&selector).next() {
-                if let Some(href) = element.value().attr("href") {
-                    if !href.is_empty() {
-                        if href.starts_with('/') {
-                            return Some(format!("{base_url}{href}"));
-                        }
-                        return Some(href.to_string());
-                    }
+            if let Some(element) = html.select(&selector).next()
+                && let Some(href) = element.value().attr("href")
+                && !href.is_empty()
+            {
+                if href.starts_with('/') {
+                    return Some(format!("{base_url}{href}"));
                 }
+                return Some(href.to_string());
             }
         }
         None

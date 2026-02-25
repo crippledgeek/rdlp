@@ -119,61 +119,61 @@ impl Orchestrator {
                 }
 
                 // Check for completed file
-                if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                    if file_stem == sanitized_title {
-                        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str())
+                    && file_stem == sanitized_title
+                {
+                    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-                        // Skip .part files
-                        if ext.contains("part") {
-                            found_partial = true;
-                            continue;
-                        }
+                    // Skip .part files
+                    if ext.contains("part") {
+                        found_partial = true;
+                        continue;
+                    }
 
-                        // Reject .ts files -- HLS remux didn't complete
-                        if ext.eq_ignore_ascii_case("ts") {
-                            debug!(
-                                file:% = filename;
-                                "Skipping .ts file (remux incomplete)"
-                            );
-                            found_partial = true;
-                            continue;
-                        }
+                    // Reject .ts files -- HLS remux didn't complete
+                    if ext.eq_ignore_ascii_case("ts") {
+                        debug!(
+                            file:% = filename;
+                            "Skipping .ts file (remux incomplete)"
+                        );
+                        found_partial = true;
+                        continue;
+                    }
 
-                        // Check if file has reasonable size (> 1MB)
-                        if let Ok(metadata) = file_path.metadata() {
-                            if metadata.len() > 1_000_000 {
-                                // Check subtitle file existence
-                                let subs_missing = if !subtitle_langs.is_empty() {
-                                    let dir = file_path.parent().unwrap_or(playlist_dir);
-                                    !subtitle_langs
-                                        .iter()
-                                        .any(|lang| has_subtitle_file(dir, &sanitized_title, lang))
-                                } else {
-                                    false
-                                };
-
-                                // Strict mode: missing subs invalidate the video
-                                if strict_subs && subs_missing {
-                                    debug!(
-                                        file:% = filename;
-                                        "Skipping: missing subtitle file (strict mode)"
-                                    );
-                                    found_partial = true;
-                                    continue;
-                                }
-
-                                // Lenient mode: track for reporting / --retry-subs
-                                if subs_missing {
-                                    missing_subs.insert(sanitized_title.clone(), file_path.clone());
-                                }
-
-                                completed.insert(sanitized_title.clone(), file_path.clone());
-                                found_complete = true;
-                                break;
+                    // Check if file has reasonable size (> 1MB)
+                    if let Ok(metadata) = file_path.metadata() {
+                        if metadata.len() > 1_000_000 {
+                            // Check subtitle file existence
+                            let subs_missing = if !subtitle_langs.is_empty() {
+                                let dir = file_path.parent().unwrap_or(playlist_dir);
+                                !subtitle_langs
+                                    .iter()
+                                    .any(|lang| has_subtitle_file(dir, &sanitized_title, lang))
                             } else {
-                                // File exists but is too small - treat as partial
+                                false
+                            };
+
+                            // Strict mode: missing subs invalidate the video
+                            if strict_subs && subs_missing {
+                                debug!(
+                                    file:% = filename;
+                                    "Skipping: missing subtitle file (strict mode)"
+                                );
                                 found_partial = true;
+                                continue;
                             }
+
+                            // Lenient mode: track for reporting / --retry-subs
+                            if subs_missing {
+                                missing_subs.insert(sanitized_title.clone(), file_path.clone());
+                            }
+
+                            completed.insert(sanitized_title.clone(), file_path.clone());
+                            found_complete = true;
+                            break;
+                        } else {
+                            // File exists but is too small - treat as partial
+                            found_partial = true;
                         }
                     }
                 }

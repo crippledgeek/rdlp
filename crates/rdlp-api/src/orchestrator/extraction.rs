@@ -53,10 +53,10 @@ impl Orchestrator {
         if let Some(rating) = info.average_rating {
             info!("Rating: {rating:.0}%");
         }
-        if let Some(ref tags) = info.tags {
-            if !tags.is_empty() {
-                info!("Tags: {}", tags.len());
-            }
+        if let Some(ref tags) = info.tags
+            && !tags.is_empty()
+        {
+            info!("Tags: {}", tags.len());
         }
 
         info!("Found {} formats", info.formats.len());

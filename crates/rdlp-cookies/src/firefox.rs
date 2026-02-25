@@ -50,10 +50,10 @@ fn find_default_profile() -> Result<PathBuf, std::io::Error> {
 
     // Try profiles.ini first
     let profiles_ini = profiles_dir.join("profiles.ini");
-    if profiles_ini.exists() {
-        if let Some(profile) = parse_profiles_ini(&profiles_ini, &profiles_dir) {
-            return Ok(profile);
-        }
+    if profiles_ini.exists()
+        && let Some(profile) = parse_profiles_ini(&profiles_ini, &profiles_dir)
+    {
+        return Ok(profile);
     }
 
     // Fallback: scan directories for preferred profile suffixes, then any profile
@@ -113,10 +113,10 @@ fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
         let line = line.trim();
 
         if line.starts_with('[') {
-            if current_is_default {
-                if let Some(profile) = try_commit(current_path.as_deref(), current_is_relative) {
-                    return Some(profile);
-                }
+            if current_is_default
+                && let Some(profile) = try_commit(current_path.as_deref(), current_is_relative)
+            {
+                return Some(profile);
             }
 
             current_path = None;
