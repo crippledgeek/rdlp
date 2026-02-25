@@ -211,6 +211,26 @@ impl TNAFlixSearchExtractor {
         Self
     }
 
+    /// Build the URL for a given page, dispatching to browse or search URL builders.
+    ///
+    /// When a `category` filter is present, builds a browse URL (ignoring the query text).
+    /// Otherwise, builds a search URL from the query.
+    ///
+    /// # Arguments
+    /// * `query` - The search query with optional filters.
+    /// * `page` - 1-based page number.
+    fn build_page_url(query: &rdlp_core::SearchQuery, page: usize) -> String {
+        if let Some(cat) = query.filters.iter().find(|f| f.key == "category") {
+            if page <= 1 {
+                search_patterns::build_browse_url(&cat.value)
+            } else {
+                search_patterns::build_browse_url_page(&cat.value, page)
+            }
+        } else {
+            search_patterns::build_search_url_page(query, page)
+        }
+    }
+
     /// Fetch a single search results page and return `(results, max_page_number)`.
     async fn fetch_single_search_page(
         &self,
@@ -218,7 +238,7 @@ impl TNAFlixSearchExtractor {
         page: usize,
         ctx: &ExtractionContext,
     ) -> Result<(Vec<rdlp_core::SearchResultPreview>, usize)> {
-        let page_url = search_patterns::build_search_url_page(query, page);
+        let page_url = Self::build_page_url(query, page);
         debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
@@ -421,7 +441,7 @@ mod tests {
     fn test_search_extractor_supported_filters() {
         let extractor = TNAFlixSearchExtractor::new();
         let filters = extractor.supported_filters();
-        assert_eq!(filters.len(), 1);
+        assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].key, "ordering");
     }
 }

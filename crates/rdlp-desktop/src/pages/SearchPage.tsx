@@ -84,7 +84,11 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                     : "idle";
 
     const error = isError
-        ? (queryError instanceof Error ? queryError.message : String(queryError))
+        ? (queryError instanceof Error
+            ? queryError.message
+            : (typeof queryError === "object" && queryError !== null && "message" in queryError)
+                ? String((queryError as Record<string, unknown>).message)
+                : String(queryError))
         : null;
 
     const { addEntry } = useSearchHistory();
@@ -130,7 +134,8 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
 
     // Record search history when results arrive
     useEffect(() => {
-        if (status === "results" && query.trim() !== "" && site !== "") {
+        const hasCategoryFilter = filters.some((f) => f.key === "category" && f.value !== "");
+        if (status === "results" && (query.trim() !== "" || hasCategoryFilter) && site !== "") {
             const displayName =
                 providers.find((p) => p.name === site)?.display_name ?? site;
             addEntry({ query, site, siteDisplayName: displayName, filters: [] });

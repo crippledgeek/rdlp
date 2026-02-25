@@ -25,6 +25,8 @@ use rdlp_core::{RdlpError, Result, SearchFilter, SearchResultPreview};
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
+use super::search_patterns;
+
 /// Video item container: `<div data-vid="...">` grid columns.
 static VIDEO_ITEM_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("div[data-vid]").expect("Valid TNAFlix video item selector"));
@@ -165,6 +167,14 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
                         "Invalid TNAFlix ordering value '{}'. Valid values: {}",
                         filter.value,
                         VALID_ORDERINGS.join(", ")
+                    )));
+                }
+            }
+            "category" => {
+                if !search_patterns::is_valid_category(&filter.value) {
+                    return Err(RdlpError::Extraction(format!(
+                        "Invalid TNAFlix category '{}'. Use search_filters() to see valid values.",
+                        filter.value
                     )));
                 }
             }
@@ -453,5 +463,47 @@ mod tests {
     #[test]
     fn test_parse_view_count_invalid() {
         assert_eq!(parse_view_count("N/A"), None);
+    }
+
+    #[test]
+    fn test_validate_search_filters_valid_category() {
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "teen-porn".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_ok());
+    }
+
+    #[test]
+    fn test_validate_search_filters_valid_category_section() {
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "new".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_ok());
+    }
+
+    #[test]
+    fn test_validate_search_filters_invalid_category() {
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "not-a-real-category".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_search_filters_category_and_ordering() {
+        let filters = vec![
+            SearchFilter {
+                key: "ordering".to_string(),
+                value: "newest".to_string(),
+            },
+            SearchFilter {
+                key: "category".to_string(),
+                value: "milf-porn".to_string(),
+            },
+        ];
+        assert!(validate_search_filters(&filters).is_ok());
     }
 }
