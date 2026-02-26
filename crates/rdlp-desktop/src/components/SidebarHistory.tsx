@@ -26,7 +26,7 @@ export function SidebarHistory({ onRestoreSearch }: SidebarHistoryProps) {
         >
             <CollapsibleTrigger asChild>
                 <button
-                    className="sidebar-section-btn hover:bg-white/[0.04]"
+                    className="sidebar-section-btn"
                     aria-expanded={!collapsed}
                 >
                     <ChevronDown

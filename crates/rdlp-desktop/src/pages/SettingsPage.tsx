@@ -222,7 +222,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
+                className="settings-toggle-row mb-4"
                 onClick={() => setDraft({ ...draft, embed_thumbnail: !draft.embed_thumbnail })}
             >
                 <Checkbox
@@ -235,7 +235,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
+                className="settings-toggle-row mb-4"
                 onClick={() => setDraft({ ...draft, embed_metadata: !draft.embed_metadata })}
             >
                 <Checkbox
@@ -248,7 +248,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
+                className="settings-toggle-row mb-4"
                 onClick={() => setDraft({ ...draft, verbose: !draft.verbose })}
             >
                 <Checkbox
@@ -266,7 +266,7 @@ export function SettingsPage() {
             <h3 className="text-sm font-bold text-foreground mb-3">Audio Normalization</h3>
 
             <div
-                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-3"
+                className="settings-toggle-row mb-3"
                 onClick={() => setDraft({ ...draft, normalize_audio: !draft.normalize_audio })}
             >
                 <Checkbox
@@ -451,7 +451,7 @@ export function SettingsPage() {
 
                             {/* Dynamic mode */}
                             <div
-                                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
+                                className="settings-toggle-row"
                                 onClick={() =>
                                     setDraft({ ...draft, loudnorm_dynamic: !draft.loudnorm_dynamic })
                                 }
@@ -473,7 +473,7 @@ export function SettingsPage() {
 
                             {/* Precompress */}
                             <div
-                                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
+                                className="settings-toggle-row"
                                 onClick={() =>
                                     setDraft({ ...draft, loudnorm_precompress: !draft.loudnorm_precompress })
                                 }
@@ -497,7 +497,7 @@ export function SettingsPage() {
 
                     {/* Boost fallback — visible whenever normalize_audio is true */}
                     <div
-                        className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
+                        className="settings-toggle-row"
                         onClick={() =>
                             setDraft({ ...draft, normalize_boost: !draft.normalize_boost })
                         }
