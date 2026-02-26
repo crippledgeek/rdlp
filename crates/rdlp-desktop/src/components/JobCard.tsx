@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DownloadJob } from "../types";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,6 +42,7 @@ function statusClasses(status: string): string {
 
 /** Displays a single download job with status, progress, and action buttons. */
 export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
+    const [revealError, setRevealError] = useState<string | null>(null);
     const displayTitle = job.title ?? job.url;
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
@@ -106,6 +108,14 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                     </Alert>
                 )}
 
+                {revealError && (
+                    <Alert variant="destructive" className="py-2">
+                        <AlertDescription className="text-xs">
+                            Could not reveal file: {revealError}
+                        </AlertDescription>
+                    </Alert>
+                )}
+
                 <div className="flex items-center gap-2">
                     {isRunning && (
                         <Button
@@ -130,17 +140,22 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                             Retry
                         </Button>
                     )}
-                    {job.status === "completed" && job.output_path !== null && (
+                    {job.status === "completed" && job.output_path && (
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={() =>
+                            onClick={() => {
+                                setRevealError(null);
                                 invokeTyped<void>("reveal_in_folder", {
                                     path: job.output_path,
-                                }).catch((e) =>
-                                    console.error("Failed to reveal file", e),
-                                )
-                            }
+                                }).catch((e) => {
+                                    const msg =
+                                        e && typeof e === "object" && "message" in e
+                                            ? String(e.message)
+                                            : String(e);
+                                    setRevealError(msg);
+                                });
+                            }}
                         >
                             Reveal in Folder
                         </Button>

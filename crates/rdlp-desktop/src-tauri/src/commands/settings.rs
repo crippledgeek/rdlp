@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use log::{info, warn};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -158,7 +159,23 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
 /// reveal action fails.
 #[tauri::command]
 pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppError> {
+    if path.is_empty() {
+        return Err(AppError::InvalidInput {
+            field: "path".to_owned(),
+            message: "Output file path is empty".to_owned(),
+        });
+    }
+
     let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
+        warn!("reveal_in_folder: file does not exist: {}", path);
+        return Err(AppError::Internal {
+            message: format!("File not found: {path}"),
+        });
+    }
+
+    info!("reveal_in_folder: revealing {}", path);
 
     app.opener()
         .reveal_item_in_dir(&path_buf)

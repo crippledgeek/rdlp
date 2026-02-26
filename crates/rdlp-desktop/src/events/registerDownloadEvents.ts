@@ -90,7 +90,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                                   ...job,
                                   status: "completed" as const,
                                   progress: 1.0,
-                                  output_path: p.filepath,
+                                  output_path: p.filepath || null,
                                   completed_at: Math.floor(Date.now() / 1000),
                               }
                             : job,

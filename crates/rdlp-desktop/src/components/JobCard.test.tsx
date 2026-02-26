@@ -1,5 +1,6 @@
-import { render, screen } from "@/test/test-utils";
+import { render, screen, waitFor } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
+import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { JobCard } from "./JobCard";
 import type { DownloadJob } from "../types";
 
@@ -140,5 +141,60 @@ describe("JobCard", () => {
             />,
         );
         expect(screen.getByText("Download timed out")).toBeInTheDocument();
+    });
+
+    it("shows Reveal in Folder button for completed jobs with output_path", () => {
+        render(
+            <JobCard
+                job={makeJob({ status: "completed", output_path: "/tmp/video.mp4" })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.getByRole("button", { name: /reveal in folder/i })).toBeInTheDocument();
+    });
+
+    it("does not show Reveal in Folder button when output_path is null", () => {
+        render(
+            <JobCard
+                job={makeJob({ status: "completed", output_path: null })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByRole("button", { name: /reveal in folder/i })).not.toBeInTheDocument();
+    });
+
+    it("does not show Reveal in Folder button when output_path is empty string", () => {
+        render(
+            <JobCard
+                job={makeJob({ status: "completed", output_path: "" })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByRole("button", { name: /reveal in folder/i })).not.toBeInTheDocument();
+    });
+
+    it("shows error when reveal_in_folder fails", async () => {
+        setInvokeHandler("reveal_in_folder", () => {
+            throw { kind: "Internal", data: { message: "File not found" } };
+        });
+        render(
+            <JobCard
+                job={makeJob({ status: "completed", output_path: "/tmp/missing.mp4" })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        await userEvent.click(screen.getByRole("button", { name: /reveal in folder/i }));
+        await waitFor(() => {
+            expect(screen.getByText(/could not reveal file/i)).toBeInTheDocument();
+        });
+        clearInvokeHandlers();
     });
 });
