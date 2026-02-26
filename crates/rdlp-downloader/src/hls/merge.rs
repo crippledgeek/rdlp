@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use log::{debug, warn};
-use rdlp_core::{RdlpError, Result, RetryConfig};
+use rdlp_core::{ProgressCallback, RdlpError, Result, RetryConfig};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
@@ -45,7 +45,7 @@ use crate::http::HttpDownloader;
 /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
 /// * `Err(_)` - Download error (network, I/O, etc.)
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip(http_downloader, retry_config, segments, progress_counter, segments_counter, duration_counter, state), fields(segments = segments.len()))]
+#[instrument(skip(http_downloader, retry_config, segments, progress_counter, segments_counter, duration_counter, state, log_callback), fields(segments = segments.len()))]
 pub(crate) async fn download_segments_with_resume(
     http_downloader: &HttpDownloader,
     retry_config: Arc<RetryConfig>,
@@ -60,6 +60,7 @@ pub(crate) async fn download_segments_with_resume(
     duration_counter: Arc<AtomicU64>,
     state: Arc<Mutex<HlsDownloadState>>,
     output_path: &Path,
+    log_callback: Option<Arc<dyn ProgressCallback>>,
 ) -> Result<Vec<PathBuf>> {
     let total_segments = segments.len();
 
@@ -138,7 +139,7 @@ pub(crate) async fn download_segments_with_resume(
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
-        None, // log_callback: HLS segment path does not thread a ProgressCallback here
+        log_callback,
     ));
     let sem = controller.semaphore().clone();
 
