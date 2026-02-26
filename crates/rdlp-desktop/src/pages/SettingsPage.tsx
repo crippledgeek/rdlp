@@ -305,9 +305,11 @@ export function SettingsPage() {
                                 </ToggleGroupItem>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <ToggleGroupItem value="loudnorm" size="sm" className="text-xs px-3">
-                                            EBU R128 Loudnorm
-                                        </ToggleGroupItem>
+                                        <span>
+                                            <ToggleGroupItem value="loudnorm" size="sm" className="text-xs px-3">
+                                                EBU R128 Loudnorm
+                                            </ToggleGroupItem>
+                                        </span>
                                     </TooltipTrigger>
                                     <TooltipContent side="top">
                                         Two-pass loudness normalization to a target LUFS level

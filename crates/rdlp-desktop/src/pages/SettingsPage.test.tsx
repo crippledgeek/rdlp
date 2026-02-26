@@ -121,4 +121,51 @@ describe("SettingsPage", () => {
             expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
         });
     });
+
+    it("shows normalize audio checkbox unchecked by default", async () => {
+        render(<SettingsPage />);
+        await waitFor(() => screen.getByText(/normalize audio/i));
+        const label = screen.getByText(/normalize audio/i);
+        const checkbox = label.closest("div")?.querySelector('button[role="checkbox"]');
+        expect(checkbox).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("reveals mode toggle and boost fallback when normalize audio is checked", async () => {
+        render(<SettingsPage />);
+        await waitFor(() => screen.getByText(/normalize audio/i));
+        // Click the checkbox button directly to avoid double-fire from label+div onClick
+        const normalizeLabel = screen.getByText(/normalize audio/i);
+        const checkbox = normalizeLabel.closest("div")?.querySelector('button[role="checkbox"]');
+        await userEvent.click(checkbox!);
+        await waitFor(() => {
+            expect(screen.getByText(/ebu r128 loudnorm/i)).toBeInTheDocument();
+        });
+        expect(screen.getByText(/boost fallback/i)).toBeInTheDocument();
+    });
+
+    it("reveals preset select and advanced options when loudnorm mode is active", async () => {
+        setInvokeHandler("get_settings", () => ({
+            ...defaultSettings,
+            normalize_audio: true,
+            loudnorm: true,
+        }));
+        render(<SettingsPage />);
+        await waitFor(() => screen.getByText(/dynamic mode/i));
+        expect(screen.getByText(/dynamic mode/i)).toBeInTheDocument();
+        expect(screen.getByText(/precompress/i)).toBeInTheDocument();
+        // Preset label is present (using heading role to disambiguate from select items)
+        expect(screen.getByText("Preset")).toBeInTheDocument();
+    });
+
+    it("reveals boost gain input when boost fallback is checked", async () => {
+        setInvokeHandler("get_settings", () => ({
+            ...defaultSettings,
+            normalize_audio: true,
+            loudnorm: true,
+            normalize_boost: true,
+        }));
+        render(<SettingsPage />);
+        await waitFor(() => screen.getByPlaceholderText("12.0"));
+        expect(screen.getByPlaceholderText("12.0")).toBeInTheDocument();
+    });
 });
