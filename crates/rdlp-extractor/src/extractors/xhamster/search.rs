@@ -1,6 +1,6 @@
 //! XHamster search result parsing and filter validation.
 
-use log::warn;
+use log::debug;
 use rdlp_core::{RdlpError, Result, SearchFilter, SearchResultPreview};
 use serde_json::Value;
 
@@ -38,7 +38,7 @@ pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPre
         let video_url = match item.get("pageURL").and_then(|v| v.as_str()) {
             Some(url) => url.to_string(),
             None => {
-                warn!("[XHamster] Search result missing pageURL, skipping");
+                debug!("[XHamster] Search result missing pageURL, skipping");
                 continue;
             }
         };

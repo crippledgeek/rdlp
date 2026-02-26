@@ -15,7 +15,7 @@ mod netscape;
 mod util;
 
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::debug;
 use rdlp_core::{BrowserType, CookieJar, Result};
 use reqwest::cookie::CookieStore;
 use std::path::Path;
@@ -73,7 +73,7 @@ impl CookieJar for SimpleCookieJar {
         let parsed = match Url::parse(url) {
             Ok(u) => u,
             Err(e) => {
-                warn!("Invalid URL for cookie: {e}");
+                debug!("Invalid URL for cookie: {e}");
                 return Ok(());
             }
         };

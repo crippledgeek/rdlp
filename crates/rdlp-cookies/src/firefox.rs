@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use log::{debug, warn};
+use log::debug;
 use reqwest::cookie::CookieStore;
 
 use crate::util;
@@ -209,7 +209,7 @@ fn read_cookies_from_db(db_path: &Path, jar: &impl CookieStore) -> Result<usize,
         let (host, name, value, path, is_secure, is_httponly) = match row {
             Ok(r) => r,
             Err(e) => {
-                warn!("Failed to read Firefox cookie row: {e}");
+                debug!("Failed to read Firefox cookie row: {e}");
                 continue;
             }
         };

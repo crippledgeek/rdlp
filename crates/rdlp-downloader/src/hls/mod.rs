@@ -28,7 +28,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use log::{info, warn};
+use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig};
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -204,7 +204,7 @@ impl Downloader for HlsDownloader {
             let has_init = segments.iter().any(|s| s.init_segment.is_some());
             let total_segments = segments.len();
             let total_duration: f64 = segments.iter().map(|s| s.duration).sum();
-            info!(
+            debug!(
                 segments = total_segments,
                 duration_secs = total_duration,
                 fmp4 = has_init;
@@ -225,7 +225,7 @@ impl Downloader for HlsDownloader {
                     Arc::new(Mutex::new(existing_state))
                 }
                 None => {
-                    info!("Starting fresh HLS download");
+                    debug!("Starting fresh HLS download");
                     Arc::new(Mutex::new(HlsDownloadState::new(
                         url.to_string(),
                         total_segments,
@@ -303,7 +303,7 @@ impl Downloader for HlsDownloader {
                 HashMap::with_capacity(unique_inits.len());
             for (i, init) in unique_inits.into_iter().enumerate() {
                 let init_path = temp_dir.join(format!("{base_filename}.init{i}"));
-                info!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
+                debug!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
                 download_init_segment(&self.http_downloader, &self.retry_config, &init, &init_path)
                     .await?;
                 init_file_map.insert(init, init_path);

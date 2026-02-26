@@ -174,7 +174,7 @@ impl PostProcessor for FFmpegVideoConvertor {
         let target_format = match config.recode_video {
             Some(c) => c.as_ext(),
             None => {
-                info!("No recode target configured; defaulting to MP4");
+                debug!("No recode target configured; defaulting to MP4");
                 "mp4"
             }
         };

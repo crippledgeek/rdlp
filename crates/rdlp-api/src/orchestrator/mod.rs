@@ -234,7 +234,7 @@ impl Orchestrator {
                     path.display()
                 ))
             })?;
-            info!(count, file = path.display().to_string().as_str(); "Loaded cookies from file");
+            debug!(count, file = path.display().to_string().as_str(); "Loaded cookies from file");
         }
 
         if let Some(browser) = self.config.cookies_from_browser {
@@ -243,7 +243,7 @@ impl Orchestrator {
                     "Failed to load cookies from {browser}: {e}"
                 ))
             })?;
-            info!(count, browser = browser.to_string().as_str(); "Loaded cookies from browser");
+            debug!(count, browser = browser.to_string().as_str(); "Loaded cookies from browser");
         }
 
         Ok(())

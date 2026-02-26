@@ -19,7 +19,7 @@
 pub mod cipher;
 mod client_key;
 
-use log::{debug, info, warn};
+use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -109,7 +109,7 @@ pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result
         match fetch_get_sources(&url, embed_url, ctx).await {
             Ok(json) => match parse_sources_response(&json, None, None) {
                 Ok(sources) if !sources.sources.is_empty() => {
-                    info!("Resolved sources via same-domain getSources");
+                    debug!("Resolved sources via same-domain getSources");
                     return Ok(sources);
                 }
                 Ok(_) => debug!("Same-domain getSources returned empty sources"),
@@ -123,7 +123,7 @@ pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result
     match try_extract_v3(&source_id, embed_url, ctx).await {
         Ok(sources) => return Ok(sources),
         Err(e) => {
-            warn!("v3 extraction failed: {e}");
+            debug!("v3 extraction failed: {e}");
         }
     }
 
@@ -265,7 +265,7 @@ fn parse_sources_response(
 
         match (client_key, megacloud_key) {
             (Some(ck), Some(mk)) => {
-                info!("Decrypting sources with custom cipher");
+                debug!("Decrypting sources with custom cipher");
                 let decrypted = cipher::decrypt_src(encrypted_str, ck, mk)?;
                 let arr: Vec<serde_json::Value> =
                     serde_json::from_str(&decrypted).map_err(|e| {

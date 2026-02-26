@@ -21,7 +21,7 @@ mod patterns;
 mod search;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use rdlp_core::{
     ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
     SearchPageResponse,
@@ -307,7 +307,7 @@ impl RedTubeExtractor {
                 Err(e) => {
                     if page == 1 {
                         // First page failed, try HTML fallback
-                        warn!("[RedTube] API search failed, falling back to HTML: {e}");
+                        debug!("[RedTube] API search failed, falling back to HTML: {e}");
                         let html_url = patterns::build_html_search_url(&query.query);
                         match self.fetch_html_search_page(&html_url, ctx).await {
                             Ok(results) => results,
@@ -317,7 +317,7 @@ impl RedTubeExtractor {
                             }
                         }
                     } else {
-                        warn!(
+                        debug!(
                             page;
                             "[RedTube] Failed to fetch search page, returning partial results: {e}"
                         );
@@ -350,7 +350,7 @@ impl RedTubeExtractor {
             tokio::time::sleep(Duration::from_millis(SEARCH_RATE_LIMIT_MS)).await;
         }
 
-        info!(
+        debug!(
             count = all_results.len(), pages = page;
             "[RedTube] Search complete"
         );
@@ -431,7 +431,7 @@ impl SearchExtractor for RedTubeExtractor {
             Ok(result) => result,
             Err(e) => {
                 if page == 1 {
-                    warn!("[RedTube] API search failed, falling back to HTML: {e}");
+                    debug!("[RedTube] API search failed, falling back to HTML: {e}");
                     let html_url = patterns::build_html_search_url(&query.query);
                     let results = self.fetch_html_search_page(&html_url, ctx).await?;
                     (results, None)

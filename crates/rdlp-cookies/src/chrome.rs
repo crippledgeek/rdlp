@@ -9,7 +9,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use log::{debug, warn};
+use log::debug;
 use reqwest::cookie::CookieStore;
 
 use crate::util;
@@ -277,7 +277,7 @@ fn read_cookies_from_db(
             match row {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("Failed to read cookie row: {e}");
+                    debug!("Failed to read cookie row: {e}");
                     continue;
                 }
             };

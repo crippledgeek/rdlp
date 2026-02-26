@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use log::debug;
+use log::trace;
 use reqwest::cookie::CookieStore;
 
 use crate::util;
@@ -60,7 +60,7 @@ fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
         };
 
         let Some(cookie) = parse_cookie_line(line) else {
-            debug!("Skipping malformed cookie line: {line}");
+            trace!("Skipping malformed cookie line: {line}");
             continue;
         };
         if insert_cookie(&cookie, jar) {

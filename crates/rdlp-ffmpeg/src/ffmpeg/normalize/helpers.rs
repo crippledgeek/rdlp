@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use log::{info, warn};
+use log::{debug, warn};
 
 use crate::error::{PostProcessError, Result};
 
@@ -68,7 +68,7 @@ pub(super) fn build_loudnorm_pass2_filter(
     let shortfall = measurements.linear_shortfall(opts.target_i, opts.target_tp);
     let predicted_gain = measurements.predict_linear_gain(opts.target_i, opts.target_tp);
 
-    info!(
+    debug!(
         "Loudnorm analysis: desired_gain={:.1} dB, predicted_linear_gain={:.1} dB, \
          shortfall={:.1} LU",
         opts.target_i - measurements.input_i,
@@ -77,10 +77,10 @@ pub(super) fn build_loudnorm_pass2_filter(
     );
 
     let linear_mode = if opts.force_dynamic {
-        info!("Strategy: dynamic (forced via --loudnorm-dynamic)");
+        debug!("Strategy: dynamic (forced via --loudnorm-dynamic)");
         "false"
     } else {
-        info!(
+        debug!(
             "Strategy: linear (shortfall={shortfall:.1} LU, \
              loudnorm handles internal fallback to dynamic if needed)"
         );
@@ -103,7 +103,7 @@ pub(super) fn build_loudnorm_pass2_filter(
     );
 
     if opts.precompress {
-        info!("Precompress enabled: prepending acompressor (threshold=-18dB, ratio=3:1)");
+        debug!("Precompress enabled: prepending acompressor (threshold=-18dB, ratio=3:1)");
         format!(
             "acompressor=threshold=0.125893:ratio=3:attack=20:release=200:makeup=2:knee=6,\
              {loudnorm}"
@@ -330,7 +330,7 @@ where
             let result = encode_fn(&salvaged, false);
             if result.is_ok() {
                 if keep_salvage {
-                    info!(
+                    debug!(
                         "RDLP_KEEP_SALVAGE=1: keeping salvage temp {}",
                         salvaged.display()
                     );
@@ -344,7 +344,7 @@ where
                 result.as_ref().unwrap_err()
             );
             if !keep_salvage {
-                info!(
+                debug!(
                     "Keeping salvage temp for post-mortem: {}",
                     salvaged.display()
                 );
@@ -363,7 +363,7 @@ where
     }
 
     // Tier 3: library encode with resilient input (discardcorrupt+genpts)
-    info!("Attempting resilient encode (discardcorrupt+genpts)...");
+    debug!("Attempting resilient encode (discardcorrupt+genpts)...");
     encode_fn(input, true)
 }
 

@@ -3,7 +3,7 @@
 //! Provides serde structs for the RedTube JSON API response, conversion to
 //! `SearchResultPreview`, HTML fallback scraping, and filter validation.
 
-use log::warn;
+use log::debug;
 use rdlp_core::{RdlpError, Result, SearchFilter, SearchFilterDescriptor, SearchResultPreview};
 use serde::{Deserialize, Deserializer};
 
@@ -109,7 +109,7 @@ pub(crate) fn parse_api_search_results(
 /// Returns `None` if essential fields (url) are empty, logging a warning.
 fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
     if video.url.is_empty() {
-        warn!(
+        debug!(
             "[RedTube] Search result missing URL for video_id={}, skipping",
             video.video_id
         );

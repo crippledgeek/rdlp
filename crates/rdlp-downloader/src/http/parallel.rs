@@ -52,7 +52,7 @@ async fn cleanup_chunk_files(
     download_id: u64,
     total_chunks: usize,
 ) {
-    info!(chunks = total_chunks; "Cleaning up partial chunk files");
+    debug!(chunks = total_chunks; "Cleaning up partial chunk files");
     let mut deleted = 0;
     for chunk_id in 0..total_chunks {
         let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
@@ -101,7 +101,7 @@ impl HttpDownloader {
             ProgressReporterConfig::http(start_time, total_size, 0),
         );
 
-        info!(
+        debug!(
             "Starting parallel download with {} concurrent connections",
             self.config.concurrent_fragments
         );
@@ -152,7 +152,7 @@ impl HttpDownloader {
         };
 
         let total_downloaded: u64 = chunk_results.iter().sum();
-        info!(
+        debug!(
             "All {} chunks completed ({} MB total)",
             total_chunks,
             total_downloaded / 1024 / 1024
@@ -221,7 +221,7 @@ impl HttpDownloader {
             ProgressReporterConfig::http(start_time, total_size, resume_from),
         );
 
-        info!(
+        debug!(
             "Starting parallel download with {} concurrent connections",
             self.config.concurrent_fragments
         );
@@ -273,7 +273,7 @@ impl HttpDownloader {
         };
 
         let newly_downloaded: u64 = chunk_results.iter().sum();
-        info!(
+        debug!(
             "All {} chunks completed ({} MB new data)",
             total_chunks,
             newly_downloaded / 1024 / 1024
@@ -334,7 +334,7 @@ async fn merge_chunks_with_mode(
         };
         let mut writer = BufWriter::with_capacity(config.buffer_size, file);
 
-        info!(chunks = total_chunks; "{action} chunks into file");
+        debug!(chunks = total_chunks; "{action} chunks into file");
         let mut deleted_chunks = 0;
         for chunk_id in 0..total_chunks {
             let chunk_path = temp_dir.join(format!("{filename}.{download_id}.{suffix}{chunk_id}"));

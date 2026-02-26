@@ -108,7 +108,7 @@ impl PostProcessor for FFmpegRemuxer {
         // Perform remux via library bindings
         self.ffmpeg.remux(input_file, &output_path, &opts).await?;
 
-        info!(
+        debug!(
             output:? = output_path.display();
             "Remuxed successfully"
         );

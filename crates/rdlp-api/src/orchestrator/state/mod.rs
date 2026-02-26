@@ -8,7 +8,7 @@ use super::DownloadPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
 use crate::events::Event;
-use log::{info, warn};
+use log::{debug, warn};
 use rdlp_core::Format;
 use std::fmt;
 use std::path::PathBuf;
@@ -176,7 +176,7 @@ impl DownloadPhase {
                         .find(|f| f.format_id == saved.format_id)
                         .cloned()
                     {
-                        info!(
+                        debug!(
                             format_id = saved.format_id.as_str();
                             "Resuming with saved selections"
                         );
@@ -191,7 +191,7 @@ impl DownloadPhase {
                                 .find(|f| f.format_id == *audio_id)
                                 .cloned()
                             {
-                                info!(
+                                debug!(
                                     audio_id = audio_id.as_str();
                                     "Resuming merge plan with saved audio format"
                                 );
@@ -321,7 +321,7 @@ impl DownloadPhase {
                                 .to_string(),
                         ));
                     }
-                    info!("Downloading to stdout");
+                    debug!("Downloading to stdout");
                     return Ok(Self::Downloading {
                         info,
                         output_path: PathBuf::from("-"),
@@ -333,7 +333,7 @@ impl DownloadPhase {
                 }
 
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
-                info!(path:? = output_path.display(); "Downloading to");
+                debug!(path:? = output_path.display(); "Downloading to");
 
                 // Resume detection only applies to Single downloads.
                 // Merge downloads create separate stream files (video + audio)

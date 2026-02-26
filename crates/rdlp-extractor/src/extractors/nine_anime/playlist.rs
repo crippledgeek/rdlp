@@ -13,7 +13,7 @@
 //! - Each episode resolves formats just before download (~3-5s per episode)
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
-use log::{debug, info, warn};
+use log::{debug, info};
 use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result};
 use scraper::Html;
 
@@ -52,7 +52,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     };
 
     let anime_title = anime_metadata.title.clone();
-    info!(title:% = anime_title; "Anime metadata resolved");
+    debug!(title:% = anime_title; "Anime metadata resolved");
 
     // Fetch full episode list
     let episodes = episodes::fetch_all_episodes(&anime_id, ctx).await?;
@@ -64,7 +64,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     }
 
     let total = episodes.len();
-    info!(total; "Found episodes in anime");
+    debug!(total; "Found episodes in anime");
 
     // Security: limit playlist size
     if total > MAX_PLAYLIST_SIZE {
@@ -91,7 +91,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
 
         match resolve_episode_formats(&ep.data_id, ctx).await {
             Ok((formats, hls_flags, subtitle_tracks)) if !formats.is_empty() => {
-                info!(
+                debug!(
                     episode:% = label,
                     formats = formats.len();
                     "Episode resolved successfully for type detection"
@@ -101,10 +101,10 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
                 break;
             }
             Ok(_) => {
-                warn!(episode:% = label; "No formats resolved, trying next episode");
+                debug!(episode:% = label; "No formats resolved, trying next episode");
             }
             Err(e) => {
-                warn!(episode:% = label; "Failed to resolve episode: {e}");
+                debug!(episode:% = label; "Failed to resolve episode: {e}");
             }
         }
     }

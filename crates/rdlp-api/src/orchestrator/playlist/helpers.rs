@@ -2,7 +2,7 @@
 
 use super::super::{Orchestrator, Result};
 use futures_util::StreamExt;
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -85,7 +85,7 @@ impl Orchestrator {
 
         // Resolve with buffer_unordered
         let futs = to_resolve.into_iter().map(|(i, url, title)| async move {
-            info!(position = i + 1, title:? = title; "Resolving episode");
+            debug!(position = i + 1, title:? = title; "Resolving episode");
             (i, self.extract_lazy_formats(&url).await)
         });
 
@@ -130,7 +130,7 @@ impl Orchestrator {
         }
 
         let batch_resolved_at = Instant::now();
-        info!("Batch resolution complete ({resolve_count} episodes)");
+        debug!("Batch resolution complete ({resolve_count} episodes)");
         batch_resolved_at
     }
 }

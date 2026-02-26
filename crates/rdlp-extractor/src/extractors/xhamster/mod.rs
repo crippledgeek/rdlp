@@ -26,7 +26,7 @@ mod search_patterns;
 mod utils;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::debug;
 use rdlp_core::{
     ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
     SearchPageResponse,
@@ -232,7 +232,7 @@ impl XHamsterExtractor {
             {
                 Ok(result) => result,
                 Err(e) => {
-                    warn!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
+                    debug!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
                     break;
                 }
             };
@@ -257,7 +257,7 @@ impl XHamsterExtractor {
             tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
         }
 
-        info!(count = all_results.len(), pages = page; "[XHamster] Search complete");
+        debug!(count = all_results.len(), pages = page; "[XHamster] Search complete");
 
         Ok(all_results)
     }

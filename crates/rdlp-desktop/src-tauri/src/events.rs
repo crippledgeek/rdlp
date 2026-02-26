@@ -5,7 +5,7 @@
 //! events. The frontend listens for these events via Tauri's IPC
 //! event system to update the download queue UI in real time.
 
-use log::warn;
+use log::debug;
 use rdlp_api::Event;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -139,7 +139,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-progress", &payload) {
-                warn!("Failed to emit download-progress for job {job_id}: {e}");
+                debug!("Failed to emit download-progress for job {job_id}: {e}");
             }
         }
 
@@ -156,7 +156,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-complete", &payload) {
-                warn!("Failed to emit download-complete for job {job_id}: {e}");
+                debug!("Failed to emit download-complete for job {job_id}: {e}");
             }
         }
 
@@ -168,7 +168,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-error", &payload) {
-                warn!("Failed to emit download-error for job {job_id}: {e}");
+                debug!("Failed to emit download-error for job {job_id}: {e}");
             }
         }
 
@@ -180,7 +180,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-log", &payload) {
-                warn!("Failed to emit download-log (metadata-ready) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (metadata-ready) for job {job_id}: {e}");
             }
         }
 
@@ -192,7 +192,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-log", &payload) {
-                warn!("Failed to emit download-log (post-processing) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (post-processing) for job {job_id}: {e}");
             }
         }
 
@@ -204,7 +204,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-log", &payload) {
-                warn!("Failed to emit download-log (warning) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (warning) for job {job_id}: {e}");
             }
         }
 
@@ -221,7 +221,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-log", &payload) {
-                warn!("Failed to emit download-log (retrying) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (retrying) for job {job_id}: {e}");
             }
         }
 
@@ -234,7 +234,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 quality: quality.clone(),
             };
             if let Err(e) = app.emit("format-selected", &payload) {
-                warn!("Failed to emit format-selected for job {job_id}: {e}");
+                debug!("Failed to emit format-selected for job {job_id}: {e}");
             }
 
             // Also emit as a log message for the status bar
@@ -244,7 +244,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 message: format!("Format selected: {quality} ({format_id})"),
             };
             if let Err(e) = app.emit("download-log", &log) {
-                warn!("Failed to emit download-log (format-selected) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (format-selected) for job {job_id}: {e}");
             }
         }
 
@@ -256,7 +256,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             };
 
             if let Err(e) = app.emit("download-log", &payload) {
-                warn!("Failed to emit download-log (debug) for job {job_id}: {e}");
+                debug!("Failed to emit download-log (debug) for job {job_id}: {e}");
             }
         }
 

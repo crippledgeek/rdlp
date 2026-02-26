@@ -1,7 +1,7 @@
 //! Video information extraction
 
 use super::{Orchestrator, errors::*};
-use log::info;
+use log::{debug, info};
 use rdlp_core::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
@@ -17,7 +17,7 @@ impl Orchestrator {
     /// - Extraction fails
     #[instrument(skip(self), fields(url = %url))]
     pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_core::InfoDict> {
-        info!("Finding extractor for URL...");
+        debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
@@ -25,8 +25,8 @@ impl Orchestrator {
             }
         })?;
 
-        info!("Using extractor: {}", extractor.name());
-        info!("Extracting video information...");
+        debug!("Using extractor: {}", extractor.name());
+        debug!("Extracting video information...");
 
         let mut info = extractor
             .extract(url, &self.extraction_context)
@@ -34,32 +34,32 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         // Log extracted metadata
-        info!("Title: {}", info.title);
+        debug!("Title: {}", info.title);
 
         if let Some(ref uploader) = info.uploader {
-            info!("Uploader: {uploader}");
+            debug!("Uploader: {uploader}");
         }
         if let Some(ref channel) = info.channel {
-            info!("Channel: {channel}");
+            debug!("Channel: {channel}");
         }
         if let Some(duration) = info.duration {
             let mins = (duration / 60.0) as u32;
             let secs = (duration % 60.0) as u32;
-            info!("Duration: {mins}:{secs:02}");
+            debug!("Duration: {mins}:{secs:02}");
         }
         if let Some(views) = info.view_count {
-            info!("Views: {views}");
+            debug!("Views: {views}");
         }
         if let Some(rating) = info.average_rating {
-            info!("Rating: {rating:.0}%");
+            debug!("Rating: {rating:.0}%");
         }
         if let Some(ref tags) = info.tags
             && !tags.is_empty()
         {
-            info!("Tags: {}", tags.len());
+            debug!("Tags: {}", tags.len());
         }
 
-        info!("Found {} formats", info.formats.len());
+        debug!("Found {} formats", info.formats.len());
 
         // Auto-set Referer header on all formats that don't already have one.
         // Many CDNs (PornHub, XHamster, etc.) require a Referer to serve content.
@@ -95,7 +95,7 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
-        info!(formats = info.formats.len(); "Lazily resolved formats");
+        debug!(formats = info.formats.len(); "Lazily resolved formats");
 
         // Auto-set Referer header on all formats
         if !info.webpage_url.is_empty() {
@@ -131,7 +131,7 @@ impl Orchestrator {
         &self,
         url: &str,
     ) -> Result<Vec<rdlp_core::InfoDict>> {
-        info!("Finding extractor for URL...");
+        debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
@@ -139,8 +139,8 @@ impl Orchestrator {
             }
         })?;
 
-        info!("Using extractor: {}", extractor.name());
-        info!("Extracting playlist information...");
+        debug!("Using extractor: {}", extractor.name());
+        debug!("Extracting playlist information...");
 
         let infos = extractor
             .extract_playlist(url, &self.extraction_context)
@@ -148,14 +148,14 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         if infos.len() == 1 {
-            info!("Single video: {}", infos[0].title);
+            debug!("Single video: {}", infos[0].title);
         } else {
             let playlist_title = infos[0]
                 .playlist_title
                 .as_deref()
                 .unwrap_or("Unnamed Playlist");
             info!("Playlist: {playlist_title}");
-            info!("Found {} videos", infos.len());
+            debug!("Found {} videos", infos.len());
         }
 
         Ok(infos)

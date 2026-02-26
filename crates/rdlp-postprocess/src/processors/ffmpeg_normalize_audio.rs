@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use log::info;
+use log::{debug, info};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use rdlp_ffmpeg::{AudioNormMode, LoudnormPreset, NormalizeOptions, PostProcessError};
@@ -108,7 +108,7 @@ impl PostProcessor for FFmpegNormalizeAudio {
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_else(|| {
-                info!(
+                debug!(
                     file:? = input_file.display();
                     "No file extension detected, defaulting to mp4"
                 );
