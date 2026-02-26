@@ -44,6 +44,16 @@ function makeOptions(overrides: Partial<DownloadOptions> = {}): DownloadOptions 
         embedThumbnail: false,
         audioMultistreams: false,
         recodeVideo: null,
+        normalizeAudio: null,
+        loudnorm: null,
+        loudnormPreset: null,
+        loudnormTargetI: null,
+        loudnormTargetTp: null,
+        loudnormTargetLra: null,
+        loudnormDynamic: null,
+        loudnormPrecompress: null,
+        normalizeBoost: null,
+        normalizeBoostDb: null,
         ...overrides,
     };
 }

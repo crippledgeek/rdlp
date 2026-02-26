@@ -83,6 +83,16 @@ export function buildDefaultOptions(
         embedThumbnail: settings?.embed_thumbnail ?? true,
         audioMultistreams: false,
         recodeVideo: null,
+        normalizeAudio: settings?.normalize_audio ?? false,
+        loudnorm: settings?.loudnorm ?? false,
+        loudnormPreset: settings?.loudnorm_preset ?? null,
+        loudnormTargetI: settings?.loudnorm_target_i ?? null,
+        loudnormTargetTp: settings?.loudnorm_target_tp ?? null,
+        loudnormTargetLra: settings?.loudnorm_target_lra ?? null,
+        loudnormDynamic: settings?.loudnorm_dynamic ?? false,
+        loudnormPrecompress: settings?.loudnorm_precompress ?? false,
+        normalizeBoost: settings?.normalize_boost ?? false,
+        normalizeBoostDb: settings?.normalize_boost_db ?? null,
     };
 }
 
