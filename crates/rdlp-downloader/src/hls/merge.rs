@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use log::{debug, warn};
@@ -16,6 +16,7 @@ use tracing::instrument;
 
 use super::segment::download_segment_with_retry;
 use super::types::SegmentInfo;
+use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
 
@@ -129,7 +130,17 @@ pub(crate) async fn download_segments_with_resume(
         );
     }
 
-    // Download remaining segments using buffer_unordered with state tracking
+    // Download remaining segments using adaptive controller with semaphore-based concurrency.
+    let controller = Arc::new(AdaptiveController::new(
+        0, // total_size not meaningful for HLS (segment count drives iteration)
+        AdaptiveConfig {
+            max_connections: concurrent_segments,
+            ..AdaptiveConfig::default()
+        },
+        ControllerMode::HlsSegments,
+    ));
+    let sem = controller.semaphore().clone();
+
     let http_downloader = http_downloader.clone();
     let temp_dir_owned = temp_dir.to_path_buf();
     let base_filename_owned = base_filename.to_string();
@@ -147,6 +158,8 @@ pub(crate) async fn download_segments_with_resume(
             let output_path = output_path_owned.clone();
             let seg_duration = seg.duration;
             let seg_url = seg.url;
+            let sem = sem.clone();
+            let controller = controller.clone();
 
             async move {
                 // Check if segment file already exists and is non-empty (single async stat)
@@ -170,7 +183,16 @@ pub(crate) async fn download_segments_with_resume(
                     return Ok((idx, segment_path, bytes));
                 }
 
-                // Download segment with retry logic (now using backon)
+                // Acquire semaphore permit before starting the download so that
+                // the adaptive controller governs the actual concurrency level.
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| RdlpError::Download("Semaphore closed".to_string()))?;
+
+                let download_start = Instant::now();
+
+                // Download segment with retry logic
                 let result = download_segment_with_retry(
                     &http_downloader,
                     &retry_config,
@@ -184,6 +206,13 @@ pub(crate) async fn download_segments_with_resume(
 
                 match &result {
                     Ok((_, _, bytes)) => {
+                        // Report to adaptive controller (permit still held — released on drop)
+                        controller.report_segment_complete(
+                            *bytes,
+                            download_start.elapsed(),
+                            Some(seg_duration),
+                        );
+
                         // Update state on success; clone if periodic save needed
                         let snapshot = {
                             let mut guard = state.lock().await;
@@ -217,7 +246,7 @@ pub(crate) async fn download_segments_with_resume(
                 result
             }
         })
-        .buffer_unordered(concurrent_segments);
+        .buffer_unordered(concurrent_segments * 2);
 
     // Collect results, tolerating up to max_segment_failures errors
     let mut results: Vec<(usize, PathBuf, u64)> = Vec::new();

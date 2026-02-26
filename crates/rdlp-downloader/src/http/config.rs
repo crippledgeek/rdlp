@@ -53,6 +53,9 @@ pub(crate) struct DownloaderConfig {
     pub download_timeout: Duration,
     /// Merge operation timeout (chunk/segment merge must complete within this)
     pub merge_timeout: Duration,
+    /// Enable adaptive chunk sizing and connection tuning via AIMD controller.
+    /// Forced to `false` when `chunk_strategy` is `Fixed`.
+    pub adaptive: bool,
 }
 
 impl Default for DownloaderConfig {
@@ -76,6 +79,7 @@ impl Default for DownloaderConfig {
             read_timeout: DEFAULT_READ_TIMEOUT,
             download_timeout: DEFAULT_DOWNLOAD_TIMEOUT,
             merge_timeout: DEFAULT_MERGE_TIMEOUT,
+            adaptive: true,
         }
     }
 }
