@@ -1,7 +1,7 @@
-import { render, screen } from "@/test/test-utils";
+import { render, screen, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
-import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { ResultCard } from "./ResultCard";
+import { queryKeys } from "../query/queryKeys";
 import type { SearchResultPreview } from "../types";
 
 const baseResult: SearchResultPreview = {
@@ -13,13 +13,12 @@ const baseResult: SearchResultPreview = {
     upload_date: null,
 };
 
-beforeEach(() => {
-    setInvokeHandler("get_settings", () => null);
-});
-
-afterEach(() => {
-    clearInvokeHandlers();
-});
+/** Pre-seed settings so ResultCard renders synchronously. */
+function seededClient() {
+    const qc = createTestQueryClient();
+    qc.setQueryData(queryKeys.settings(), null);
+    return qc;
+}
 
 describe("ResultCard", () => {
     it("renders the video title", () => {
@@ -30,6 +29,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         expect(screen.getByRole("heading", { name: "Sample Video Title" })).toBeInTheDocument();
     });
@@ -42,6 +42,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         const img = screen.getByRole("img", { name: "Sample Video Title" });
         expect(img).toHaveAttribute("src", "https://example.com/thumb.jpg");
@@ -55,6 +56,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         expect(screen.getByText(/no thumbnail/i)).toBeInTheDocument();
     });
@@ -67,6 +69,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         // 185s = 3:05
         expect(screen.getByText("3:05")).toBeInTheDocument();
@@ -80,6 +83,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         expect(screen.getByText("12.5K views")).toBeInTheDocument();
     });
@@ -93,6 +97,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         await userEvent.click(screen.getByRole("button", { name: /^download$/i }));
         expect(onDownload).toHaveBeenCalledWith(
@@ -110,6 +115,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={onOpenFormatDialog}
             />,
+            { queryClient: seededClient() },
         );
         await userEvent.click(screen.getByRole("button", { name: /choose format/i }));
         expect(onOpenFormatDialog).toHaveBeenCalledWith("https://example.com/video.mp4");
@@ -123,6 +129,7 @@ describe("ResultCard", () => {
                 onDownloadWithOptions={vi.fn()}
                 onOpenFormatDialog={vi.fn()}
             />,
+            { queryClient: seededClient() },
         );
         expect(screen.queryByText(/views/i)).not.toBeInTheDocument();
     });
