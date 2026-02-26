@@ -155,34 +155,24 @@ pub async fn start_download(
             recode_video: options.recode_video,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
-            normalize_audio: Some(
-                options.normalize_audio.unwrap_or(settings.normalize_audio),
-            ),
+            normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
             loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
-            loudnorm_preset: options
-                .loudnorm_preset
-                .or(settings.loudnorm_preset.clone()),
+            loudnorm_preset: options.loudnorm_preset.or(settings.loudnorm_preset.clone()),
             loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
-            loudnorm_target_tp: options
-                .loudnorm_target_tp
-                .or(settings.loudnorm_target_tp),
-            loudnorm_target_lra: options
-                .loudnorm_target_lra
-                .or(settings.loudnorm_target_lra),
+            loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
+            loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
             loudnorm_dynamic: Some(
-                options.loudnorm_dynamic.unwrap_or(settings.loudnorm_dynamic),
+                options
+                    .loudnorm_dynamic
+                    .unwrap_or(settings.loudnorm_dynamic),
             ),
             loudnorm_precompress: Some(
                 options
                     .loudnorm_precompress
                     .unwrap_or(settings.loudnorm_precompress),
             ),
-            normalize_boost: Some(
-                options.normalize_boost.unwrap_or(settings.normalize_boost),
-            ),
-            normalize_boost_db: options
-                .normalize_boost_db
-                .or(settings.normalize_boost_db),
+            normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
+            normalize_boost_db: options.normalize_boost_db.or(settings.normalize_boost_db),
             ..PostProcessOptions::default()
         },
         verbose: if settings.verbose { Some(true) } else { None },
@@ -255,6 +245,323 @@ pub async fn start_download(
     });
 
     Ok(job_id)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the normalization option merge logic in [`start_download`].
+    //!
+    //! Because `start_download` is an async Tauri command that requires
+    //! managed `State` and `AppHandle`, it cannot be called directly in
+    //! unit tests.  Instead, the merge pattern is replicated here in
+    //! [`merge_normalize_options`] so the semantics can be verified in
+    //! isolation.
+
+    use super::*;
+    use crate::state::AppSettings;
+
+    /// Replicates the normalization-field merge from `start_download`
+    /// (the `postprocess` block) for isolated testing.
+    ///
+    /// # Arguments
+    ///
+    /// * `options` - Frontend-supplied download options.
+    /// * `settings` - Persisted application settings used as defaults.
+    ///
+    /// # Returns
+    ///
+    /// A [`PostProcessOptions`] with every normalization field resolved.
+    fn merge_normalize_options(
+        options: &DownloadOptions,
+        settings: &AppSettings,
+    ) -> PostProcessOptions {
+        PostProcessOptions {
+            normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
+            loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
+            loudnorm_preset: options
+                .loudnorm_preset
+                .clone()
+                .or(settings.loudnorm_preset.clone()),
+            loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
+            loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
+            loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
+            loudnorm_dynamic: Some(
+                options
+                    .loudnorm_dynamic
+                    .unwrap_or(settings.loudnorm_dynamic),
+            ),
+            loudnorm_precompress: Some(
+                options
+                    .loudnorm_precompress
+                    .unwrap_or(settings.loudnorm_precompress),
+            ),
+            normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
+            normalize_boost_db: options.normalize_boost_db.or(settings.normalize_boost_db),
+            ..PostProcessOptions::default()
+        }
+    }
+
+    /// Build a [`DownloadOptions`] with all normalization fields set to `None`.
+    fn default_download_options() -> DownloadOptions {
+        DownloadOptions {
+            format: None,
+            output_dir: None,
+            subtitles: false,
+            subtitle_langs: Vec::new(),
+            remux: None,
+            extract_audio: None,
+            embed_thumbnail: true,
+            audio_multistreams: false,
+            recode_video: None,
+            normalize_audio: None,
+            loudnorm: None,
+            loudnorm_preset: None,
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            loudnorm_dynamic: None,
+            loudnorm_precompress: None,
+            normalize_boost: None,
+            normalize_boost_db: None,
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    // A. All-None options fall back to settings defaults
+    // ------------------------------------------------------------------ //
+
+    /// When every normalization field in `DownloadOptions` is `None`, the
+    /// result MUST equal the corresponding settings value.
+    #[test]
+    fn test_merge_all_none_uses_settings_defaults() {
+        let settings = AppSettings {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_target_i: Some(-23.0),
+            loudnorm_target_tp: Some(-2.0),
+            loudnorm_target_lra: Some(7.0),
+            loudnorm_dynamic: true,
+            loudnorm_precompress: true,
+            normalize_boost: true,
+            normalize_boost_db: Some(8.0),
+            ..AppSettings::default()
+        };
+        let options = default_download_options();
+        let result = merge_normalize_options(&options, &settings);
+
+        assert_eq!(result.normalize_audio, Some(true));
+        assert_eq!(result.loudnorm, Some(true));
+        assert_eq!(result.loudnorm_preset.as_deref(), Some("broadcast"));
+        assert_eq!(result.loudnorm_target_i, Some(-23.0));
+        assert_eq!(result.loudnorm_target_tp, Some(-2.0));
+        assert_eq!(result.loudnorm_target_lra, Some(7.0));
+        assert_eq!(result.loudnorm_dynamic, Some(true));
+        assert_eq!(result.loudnorm_precompress, Some(true));
+        assert_eq!(result.normalize_boost, Some(true));
+        assert_eq!(result.normalize_boost_db, Some(8.0));
+    }
+
+    // ------------------------------------------------------------------ //
+    // B. Per-download overrides take precedence over settings
+    // ------------------------------------------------------------------ //
+
+    /// Explicit values in `DownloadOptions` MUST shadow settings defaults.
+    #[test]
+    fn test_merge_overrides_take_precedence() {
+        let settings = AppSettings {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_target_i: Some(-23.0),
+            loudnorm_target_tp: Some(-2.0),
+            loudnorm_target_lra: Some(7.0),
+            loudnorm_dynamic: true,
+            loudnorm_precompress: true,
+            normalize_boost: true,
+            normalize_boost_db: Some(12.0),
+            ..AppSettings::default()
+        };
+        let options = DownloadOptions {
+            normalize_audio: Some(false),
+            loudnorm: Some(false),
+            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_target_i: Some(-14.0),
+            loudnorm_target_tp: Some(-1.0),
+            loudnorm_target_lra: Some(11.0),
+            loudnorm_dynamic: Some(false),
+            loudnorm_precompress: Some(false),
+            normalize_boost: Some(false),
+            normalize_boost_db: Some(6.0),
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&options, &settings);
+
+        assert_eq!(result.normalize_audio, Some(false));
+        assert_eq!(result.loudnorm, Some(false));
+        assert_eq!(result.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(result.loudnorm_target_i, Some(-14.0));
+        assert_eq!(result.loudnorm_target_tp, Some(-1.0));
+        assert_eq!(result.loudnorm_target_lra, Some(11.0));
+        assert_eq!(result.loudnorm_dynamic, Some(false));
+        assert_eq!(result.loudnorm_precompress, Some(false));
+        assert_eq!(result.normalize_boost, Some(false));
+        assert_eq!(result.normalize_boost_db, Some(6.0));
+    }
+
+    // ------------------------------------------------------------------ //
+    // C. Mixed: some overridden, some defaulted
+    // ------------------------------------------------------------------ //
+
+    /// Overriding only a subset of fields MUST leave the rest falling
+    /// through to the settings defaults.
+    #[test]
+    fn test_merge_partial_overrides() {
+        let settings = AppSettings {
+            normalize_audio: false,
+            loudnorm: true,
+            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_target_i: Some(-23.0),
+            loudnorm_dynamic: false,
+            ..AppSettings::default()
+        };
+        // Override normalize_audio and loudnorm_target_i only; leave
+        // loudnorm_preset as None so it falls back to the settings value.
+        let options = DownloadOptions {
+            normalize_audio: Some(true),
+            loudnorm_target_i: Some(-16.0),
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&options, &settings);
+
+        // Overridden fields
+        assert_eq!(result.normalize_audio, Some(true));
+        assert_eq!(result.loudnorm_target_i, Some(-16.0));
+
+        // Fields that fall through to settings
+        assert_eq!(result.loudnorm, Some(true));
+        assert_eq!(result.loudnorm_preset.as_deref(), Some("broadcast"));
+        assert_eq!(result.loudnorm_dynamic, Some(false));
+    }
+
+    // ------------------------------------------------------------------ //
+    // D. Default settings + default options = all disabled
+    // ------------------------------------------------------------------ //
+
+    /// When both options and settings are at their default values every
+    /// normalization flag MUST be disabled and every target MUST be `None`.
+    #[test]
+    fn test_merge_all_defaults_all_disabled() {
+        let settings = AppSettings::default();
+        let options = default_download_options();
+        let result = merge_normalize_options(&options, &settings);
+
+        assert_eq!(result.normalize_audio, Some(false));
+        assert_eq!(result.loudnorm, Some(false));
+        assert!(result.loudnorm_preset.is_none());
+        assert!(result.loudnorm_target_i.is_none());
+        assert!(result.loudnorm_target_tp.is_none());
+        assert!(result.loudnorm_target_lra.is_none());
+        assert_eq!(result.loudnorm_dynamic, Some(false));
+        assert_eq!(result.loudnorm_precompress, Some(false));
+        assert_eq!(result.normalize_boost, Some(false));
+        assert!(result.normalize_boost_db.is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // E. Option<f64> fields: None option + None settings → None result
+    // ------------------------------------------------------------------ //
+
+    /// When both the download option and the settings value for an
+    /// `Option<f64>` field are `None`, the result MUST also be `None`.
+    #[test]
+    fn test_merge_option_f64_both_none_stays_none() {
+        let settings = AppSettings {
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            normalize_boost_db: None,
+            ..AppSettings::default()
+        };
+        let options = DownloadOptions {
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            normalize_boost_db: None,
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&options, &settings);
+
+        assert!(result.loudnorm_target_i.is_none());
+        assert!(result.loudnorm_target_tp.is_none());
+        assert!(result.loudnorm_target_lra.is_none());
+        assert!(result.normalize_boost_db.is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // F. unwrap_or vs or semantics
+    // ------------------------------------------------------------------ //
+
+    /// For `bool` fields (merged via `unwrap_or`): `Some(false)` in the
+    /// download options MUST override a `true` settings default.
+    #[test]
+    fn test_merge_bool_some_false_overrides_true_settings() {
+        let settings = AppSettings {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_dynamic: true,
+            loudnorm_precompress: true,
+            normalize_boost: true,
+            ..AppSettings::default()
+        };
+        let options = DownloadOptions {
+            normalize_audio: Some(false),
+            loudnorm: Some(false),
+            loudnorm_dynamic: Some(false),
+            loudnorm_precompress: Some(false),
+            normalize_boost: Some(false),
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&options, &settings);
+
+        assert_eq!(result.normalize_audio, Some(false));
+        assert_eq!(result.loudnorm, Some(false));
+        assert_eq!(result.loudnorm_dynamic, Some(false));
+        assert_eq!(result.loudnorm_precompress, Some(false));
+        assert_eq!(result.normalize_boost, Some(false));
+    }
+
+    /// For `Option<f64>` fields (merged via `or`): `None` in the download
+    /// options MUST pass through to the settings value; `Some(x)` MUST
+    /// override the settings value.
+    #[test]
+    fn test_merge_option_f64_or_semantics() {
+        let settings = AppSettings {
+            loudnorm_target_i: Some(-23.0),
+            loudnorm_target_tp: Some(-2.0),
+            normalize_boost_db: Some(8.0),
+            ..AppSettings::default()
+        };
+
+        // None option → falls through to settings
+        let none_options = default_download_options();
+        let result = merge_normalize_options(&none_options, &settings);
+        assert_eq!(result.loudnorm_target_i, Some(-23.0));
+        assert_eq!(result.loudnorm_target_tp, Some(-2.0));
+        assert_eq!(result.normalize_boost_db, Some(8.0));
+
+        // Some(x) option → overrides settings
+        let some_options = DownloadOptions {
+            loudnorm_target_i: Some(-14.0),
+            loudnorm_target_tp: Some(-1.0),
+            normalize_boost_db: Some(4.0),
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&some_options, &settings);
+        assert_eq!(result.loudnorm_target_i, Some(-14.0));
+        assert_eq!(result.loudnorm_target_tp, Some(-1.0));
+        assert_eq!(result.normalize_boost_db, Some(4.0));
+    }
 }
 
 /// Cancel an in-progress download by its job ID.

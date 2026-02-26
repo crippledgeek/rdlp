@@ -232,6 +232,49 @@ mod tests {
         );
     }
 
+    /// Settings JSON that predates the normalization fields (i.e. produced
+    /// by an older version of the application) MUST deserialize without
+    /// error, with all normalization fields falling back to their defaults.
+    #[test]
+    fn test_load_legacy_settings_without_normalization_fields() {
+        // Simulate a settings.json from before normalization was added.
+        let legacy_json = r#"{
+            "output_dir": "/tmp/downloads",
+            "default_remux": null,
+            "default_extract_audio": null,
+            "default_subtitle_format": null,
+            "default_subtitle_langs": [],
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_search_provider": null
+        }"#;
+
+        let settings: AppSettings = serde_json::from_str(legacy_json)
+            .expect("legacy JSON without normalization fields should deserialize");
+
+        // All normalization fields should default to false / None.
+        assert!(!settings.normalize_audio);
+        assert!(!settings.loudnorm);
+        assert!(settings.loudnorm_preset.is_none());
+        assert!(settings.loudnorm_target_i.is_none());
+        assert!(settings.loudnorm_target_tp.is_none());
+        assert!(settings.loudnorm_target_lra.is_none());
+        assert!(!settings.loudnorm_dynamic);
+        assert!(!settings.loudnorm_precompress);
+        assert!(!settings.normalize_boost);
+        assert!(settings.normalize_boost_db.is_none());
+
+        // Pre-existing fields should be preserved.
+        assert_eq!(
+            settings.output_dir,
+            std::path::PathBuf::from("/tmp/downloads")
+        );
+        assert!(settings.embed_thumbnail);
+        assert!(!settings.embed_metadata);
+        assert!(!settings.verbose);
+    }
+
     #[test]
     fn test_settings_round_trip() {
         let settings = AppSettings {
