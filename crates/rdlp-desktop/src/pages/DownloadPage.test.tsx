@@ -59,7 +59,8 @@ describe("DownloadPage", () => {
         const user = userEvent.setup();
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "not a url");
+        await user.click(input);
+        await user.paste("not a url");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/enter a valid url/i)).toBeInTheDocument();
@@ -72,7 +73,8 @@ describe("DownloadPage", () => {
         const user = userEvent.setup();
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://example.com/video");
+        await user.click(input);
+        await user.paste("https://example.com/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(startHandler).toHaveBeenCalled();
@@ -84,7 +86,8 @@ describe("DownloadPage", () => {
         const user = userEvent.setup();
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://example.com/video");
+        await user.click(input);
+        await user.paste("https://example.com/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(input).toHaveValue("");
@@ -98,7 +101,8 @@ describe("DownloadPage", () => {
         const user = userEvent.setup();
         render(<DownloadPage />);
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://evil.local/video");
+        await user.click(input);
+        await user.paste("https://evil.local/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/failed to start download/i)).toBeInTheDocument();
