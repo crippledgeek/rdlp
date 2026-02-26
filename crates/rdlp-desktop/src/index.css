@@ -121,6 +121,12 @@
     background: hsl(220 5% 20%);
 }
 
+/* Active-state styling for Select triggers and toggle items. */
+@utility select-active {
+    border-color: oklch(from var(--color-primary) l c h / 0.4);
+    color: var(--color-primary);
+}
+
 @keyframes loading-sweep {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(350%); }

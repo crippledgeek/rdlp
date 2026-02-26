@@ -52,9 +52,6 @@ const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
 
 const NONE_SENTINEL = "none";
 
-/** Applied to SelectTrigger when a non-default value is chosen. */
-const ACTIVE_SELECT = "border-primary/40 text-primary";
-
 // -- Types ----------------------------------------------------------------
 
 interface DownloadOptionsPanelProps {
@@ -129,7 +126,7 @@ export function DownloadOptionsPanel({
                                 remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
                             }))}
                         >
-                            <SelectTrigger className={cn("h-7 text-xs", options.remux && ACTIVE_SELECT)}>
+                            <SelectTrigger className={cn("h-7 text-xs", options.remux && "select-active")}>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -151,7 +148,7 @@ export function DownloadOptionsPanel({
                                 extractAudio: val === NONE_SENTINEL ? null : (val as AudioFormat),
                             }))}
                         >
-                            <SelectTrigger className={cn("h-7 text-xs", options.extractAudio && ACTIVE_SELECT)}>
+                            <SelectTrigger className={cn("h-7 text-xs", options.extractAudio && "select-active")}>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -257,7 +254,7 @@ export function DownloadOptionsPanel({
                                     setOptions((prev) => handleNormSelectChange(prev, val))
                                 }
                             >
-                                <SelectTrigger className={cn("h-7 text-xs", getNormSelectValue(options) !== "default" && ACTIVE_SELECT)}>
+                                <SelectTrigger className={cn("h-7 text-xs", getNormSelectValue(options) !== "default" && "select-active")}>
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
