@@ -243,7 +243,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Audio Normalization */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide self-start pt-1.5">
                             Normalize
                         </Label>
                         <div className="flex flex-col gap-0">
