@@ -338,6 +338,14 @@ describe("getNormSelectValue", () => {
         }))).toBe("loudnorm-loud");
     });
 
+    test("returns 'custom' when loudnormPreset is 'custom' (no custom fields yet)", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "custom",
+        }))).toBe("custom");
+    });
+
     test("returns 'custom' when custom target fields are set", () => {
         expect(getNormSelectValue(makeOptions({
             normalizeAudio: true,
@@ -395,7 +403,7 @@ describe("handleNormSelectChange", () => {
         expect(result.normalizeBoost).toBeNull();
     });
 
-    test("'custom' enables normalization and keeps existing values", () => {
+    test("'custom' enables normalization and sets preset to 'custom'", () => {
         const opts = makeOptions({
             normalizeAudio: false,
             loudnorm: false,
@@ -403,7 +411,7 @@ describe("handleNormSelectChange", () => {
         });
         const result = handleNormSelectChange(opts, "custom");
         expect(result.normalizeAudio).toBe(true);
-        expect(result.loudnormPreset).toBe("broadcast");
+        expect(result.loudnormPreset).toBe("custom");
     });
 
     test("loudnorm preset clears custom overrides", () => {

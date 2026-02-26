@@ -5,17 +5,8 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { DownloadOptions } from "../types";
-
-const NONE_SENTINEL = "none";
 
 interface NormalizationCustomControlsProps {
     value: DownloadOptions;
@@ -57,27 +48,6 @@ export function NormalizationCustomControls({
             {/* Loudnorm-specific controls */}
             {value.loudnorm && (
                 <>
-                    {/* Preset */}
-                    <div>
-                        <Label className="text-[10px] text-muted-foreground mb-1 block">Preset</Label>
-                        <Select
-                            value={value.loudnormPreset ?? NONE_SENTINEL}
-                            onValueChange={(val) =>
-                                onChange({ ...value, loudnormPreset: val === NONE_SENTINEL ? null : val })
-                            }
-                        >
-                            <SelectTrigger className="h-6 text-[11px]">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={NONE_SENTINEL}>Default (Streaming)</SelectItem>
-                                <SelectItem value="streaming">Streaming (-14 LUFS)</SelectItem>
-                                <SelectItem value="broadcast">Broadcast (-23 LUFS)</SelectItem>
-                                <SelectItem value="loud">Loud (-11 LUFS)</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-
                     {/* Custom targets */}
                     <div className="grid grid-cols-3 gap-1.5">
                         <div>
@@ -87,11 +57,7 @@ export function NormalizationCustomControls({
                                 step="0.1"
                                 min="-70"
                                 max="0"
-                                placeholder={
-                                    value.loudnormPreset === "broadcast" ? "-23.0"
-                                    : value.loudnormPreset === "loud" ? "-11.0"
-                                    : "-14.0"
-                                }
+                                placeholder="-14.0"
                                 value={value.loudnormTargetI ?? ""}
                                 onChange={(e) =>
                                     onChange({
@@ -109,7 +75,7 @@ export function NormalizationCustomControls({
                                 step="0.1"
                                 min="-9"
                                 max="0"
-                                placeholder={value.loudnormPreset === "broadcast" ? "-2.0" : "-1.0"}
+                                placeholder="-1.0"
                                 value={value.loudnormTargetTp ?? ""}
                                 onChange={(e) =>
                                     onChange({
@@ -127,7 +93,7 @@ export function NormalizationCustomControls({
                                 step="0.1"
                                 min="1"
                                 max="30"
-                                placeholder={value.loudnormPreset === "broadcast" ? "7.0" : "11.0"}
+                                placeholder="11.0"
                                 value={value.loudnormTargetLra ?? ""}
                                 onChange={(e) =>
                                     onChange({

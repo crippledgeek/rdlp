@@ -6,6 +6,7 @@ import type { DownloadOptions } from "../../types";
 export function isCustomNormalization(opts: DownloadOptions): boolean {
     if (!opts.normalizeAudio) return false;
     return (
+        opts.loudnormPreset === "custom" ||
         opts.loudnormTargetI !== null ||
         opts.loudnormTargetTp !== null ||
         opts.loudnormTargetLra !== null ||
@@ -86,6 +87,7 @@ export function handleNormSelectChange(
             ...current,
             normalizeAudio: true,
             loudnorm: current.loudnorm ?? true,
+            loudnormPreset: "custom",
         };
     }
     // Standard loudnorm preset — clear custom overrides
