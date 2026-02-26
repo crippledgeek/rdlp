@@ -59,6 +59,13 @@ impl FFmpegRunner {
             })?
         };
 
+        // Read the format-level start_time (in AV_TIME_BASE = µs) before
+        // borrowing individual streams.  HLS downloads and some containers
+        // have a non-zero start time.  We must preserve this offset in the
+        // sample-clock DTS synthesis so the normalized audio aligns with
+        // the original video stream when they are merged back together.
+        let format_start_time_us: i64 = unsafe { (*ictx.as_mut_ptr()).start_time };
+
         let audio_ist_index = ictx
             .streams()
             .best(ffmpeg_the_third::media::Type::Audio)
@@ -71,6 +78,7 @@ impl FFmpegRunner {
             ))
         })?;
         let audio_ist_time_base = audio_ist.time_base();
+
         let mut audio_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
         set_single_thread_codec(unsafe { audio_dec_ctx.as_mut_ptr() });
@@ -237,11 +245,30 @@ impl FFmpegRunner {
 
         let _log_suppress = LogSuppressGuard::error_level();
 
+        // Compute the starting sample offset from the input's format-level
+        // start_time.  When the source has a non-zero start (e.g. HLS downloads
+        // starting mid-stream), this ensures the normalized audio output
+        // preserves the same temporal offset, preventing audio/video desync
+        // in the subsequent merge step.
+        let start_samples = if format_start_time_us > 0
+            && format_start_time_us != ffmpeg_the_third::ffi::AV_NOPTS_VALUE
+        {
+            format_start_time_us * i64::from(audio_decoder.rate()) / 1_000_000
+        } else {
+            0
+        };
+        if start_samples > 0 {
+            info!(
+                "[{label}] preserving input start offset: {format_start_time_us} µs = {start_samples} samples",
+            );
+        }
+
         let mut timing = MuxTimingState {
             encoder_frame_size: audio_encoder.frame_size(),
             expected_duration,
             sample_rate: audio_decoder.rate(),
             use_sample_clock: true,
+            samples_written: start_samples,
             ..Default::default()
         };
 
