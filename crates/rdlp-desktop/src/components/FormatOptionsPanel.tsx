@@ -66,6 +66,9 @@ const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
 /** Sentinel value for "no selection" in Radix Select (empty string is not supported). */
 const NONE_SENTINEL = "none";
 
+/** Applied to SelectTrigger when a non-default value is chosen. */
+const ACTIVE_SELECT = "border-primary/40 text-primary";
+
 /**
  * Build a `DownloadOptions` from persisted settings.
  *
@@ -208,7 +211,7 @@ export function FormatOptionsPanel({
                     value={value.remux ?? NONE_SENTINEL}
                     onValueChange={handleRemux}
                 >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", value.remux && ACTIVE_SELECT)}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -230,7 +233,7 @@ export function FormatOptionsPanel({
                     value={value.extractAudio ?? NONE_SENTINEL}
                     onValueChange={handleAudio}
                 >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", value.extractAudio && ACTIVE_SELECT)}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -343,7 +346,7 @@ export function FormatOptionsPanel({
                     value={getNormSelectValue(value)}
                     onValueChange={(val) => onChange(handleNormSelectChange(value, val))}
                 >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", getNormSelectValue(value) !== "default" && ACTIVE_SELECT)}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
