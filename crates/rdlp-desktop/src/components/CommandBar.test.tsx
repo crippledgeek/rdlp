@@ -1,4 +1,4 @@
-import { render, screen, act, createTestQueryClient } from "@/test/test-utils";
+import { render, screen, act, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { CommandBar } from "./CommandBar";
 import { searchParamsAtom, resetSearchParams } from "../stores/searchParamsStore";
@@ -62,10 +62,10 @@ describe("CommandBar", () => {
         expect(btn).toBeDisabled();
     });
 
-    it("submit button is enabled after typing a query", async () => {
+    it("submit button is enabled after typing a query", () => {
         renderCommandBar();
         const input = screen.getByPlaceholderText("Search videos...");
-        await userEvent.type(input, "test");
+        fireEvent.change(input, { target: { value: "test" } });
         expect(screen.getByRole("button", { name: /^search$/i })).not.toBeDisabled();
     });
 
@@ -73,22 +73,22 @@ describe("CommandBar", () => {
         const onSearch = vi.fn();
         renderCommandBar({ onSearch });
         const input = screen.getByPlaceholderText("Search videos...");
-        await userEvent.type(input, "cats");
+        fireEvent.change(input, { target: { value: "cats" } });
         await userEvent.click(screen.getByRole("button", { name: /^search$/i }));
         expect(onSearch).toHaveBeenCalledTimes(1);
     });
 
-    it("shows clear button when query has text", async () => {
+    it("shows clear button when query has text", () => {
         renderCommandBar();
         const input = screen.getByPlaceholderText("Search videos...");
-        await userEvent.type(input, "dogs");
+        fireEvent.change(input, { target: { value: "dogs" } });
         expect(screen.getByRole("button", { name: /clear search/i })).toBeInTheDocument();
     });
 
     it("clears the query when clear button is clicked", async () => {
         renderCommandBar();
         const input = screen.getByPlaceholderText("Search videos...");
-        await userEvent.type(input, "dogs");
+        fireEvent.change(input, { target: { value: "dogs" } });
         await userEvent.click(screen.getByRole("button", { name: /clear search/i }));
         expect(input).toHaveValue("");
     });
@@ -99,10 +99,10 @@ describe("CommandBar", () => {
         expect(screen.getByRole("button", { name: /^search$/i })).toBeDisabled();
     });
 
-    it("updates store query on input change", async () => {
+    it("updates store query on input change", () => {
         renderCommandBar();
         const input = screen.getByPlaceholderText("Search videos...");
-        await userEvent.type(input, "hello");
+        fireEvent.change(input, { target: { value: "hello" } });
         expect(searchParamsAtom.state.query).toBe("hello");
     });
 });

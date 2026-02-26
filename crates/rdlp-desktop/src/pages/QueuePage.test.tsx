@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@/test/test-utils";
+import { render, screen, waitFor, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { QueuePage } from "./QueuePage";
+import { queryKeys } from "../query/queryKeys";
 import type { AppSettings, DownloadJob } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,14 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
     };
 }
 
+/** Pre-seed the query cache so QueuePage renders synchronously. */
+function seededClient(jobs: DownloadJob[] = []) {
+    const qc = createTestQueryClient();
+    qc.setQueryData(queryKeys.settings(), defaultSettings);
+    qc.setQueryData(queryKeys.downloads.list(), jobs);
+    return qc;
+}
+
 // ---------------------------------------------------------------------------
 // Setup / teardown
 // ---------------------------------------------------------------------------
@@ -80,16 +89,14 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("QueuePage — empty state", () => {
-    it("shows empty state when there are no jobs", async () => {
-        render(<QueuePage />);
-        await waitFor(() => {
-            expect(screen.getByText(/no downloads yet/i)).toBeInTheDocument();
-        });
+    it("shows empty state when there are no jobs", () => {
+        render(<QueuePage />, { queryClient: seededClient() });
+        expect(screen.getByText(/no downloads yet/i)).toBeInTheDocument();
     });
 
-    it("does not render Active or History headings when queue is empty", async () => {
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/no downloads yet/i));
+    it("does not render Active or History headings when queue is empty", () => {
+        render(<QueuePage />, { queryClient: seededClient() });
+        expect(screen.getByText(/no downloads yet/i)).toBeInTheDocument();
         expect(screen.queryByText(/^active/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/^history/i)).not.toBeInTheDocument();
     });
@@ -100,60 +107,54 @@ describe("QueuePage — empty state", () => {
 // ---------------------------------------------------------------------------
 
 describe("QueuePage — active/history split", () => {
-    it("renders Active section for pending and running jobs", async () => {
-        setInvokeHandler("get_queue", () => [
+    it("renders Active section for pending and running jobs", () => {
+        const jobs = [
             makeJob({ id: "j1", status: "pending" }),
             makeJob({ id: "j2", status: "running", progress: 0.5 }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => {
-            expect(screen.getByText(/^active \(2\)/i)).toBeInTheDocument();
-        });
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^active \(2\)/i)).toBeInTheDocument();
         expect(screen.queryByText(/^history/i)).not.toBeInTheDocument();
     });
 
-    it("renders History section for completed, failed, and cancelled jobs", async () => {
-        setInvokeHandler("get_queue", () => [
+    it("renders History section for completed, failed, and cancelled jobs", () => {
+        const jobs = [
             makeJob({ id: "j1", status: "completed" }),
             makeJob({ id: "j2", status: "failed", error: "timeout" }),
             makeJob({ id: "j3", status: "cancelled" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => {
-            expect(screen.getByText(/^history \(3\)/i)).toBeInTheDocument();
-        });
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^history \(3\)/i)).toBeInTheDocument();
         expect(screen.queryByText(/^active/i)).not.toBeInTheDocument();
     });
 
-    it("renders both Active and History sections when both exist", async () => {
-        setInvokeHandler("get_queue", () => [
+    it("renders both Active and History sections when both exist", () => {
+        const jobs = [
             makeJob({ id: "j1", status: "running", progress: 0.2 }),
             makeJob({ id: "j2", status: "completed" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => {
-            expect(screen.getByText(/^active \(1\)/i)).toBeInTheDocument();
-        });
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^active \(1\)/i)).toBeInTheDocument();
         expect(screen.getByText(/^history \(1\)/i)).toBeInTheDocument();
     });
 
-    it("renders a Cancel button only for active jobs", async () => {
-        setInvokeHandler("get_queue", () => [
+    it("renders a Cancel button only for active jobs", () => {
+        const jobs = [
             makeJob({ id: "j1", status: "running", progress: 0.3 }),
             makeJob({ id: "j2", status: "completed" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/^active \(1\)/i));
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^active \(1\)/i)).toBeInTheDocument();
         expect(screen.getAllByRole("button", { name: /cancel/i })).toHaveLength(1);
     });
 
-    it("renders a Remove button for each terminal job", async () => {
-        setInvokeHandler("get_queue", () => [
+    it("renders a Remove button for each terminal job", () => {
+        const jobs = [
             makeJob({ id: "j1", status: "completed" }),
             makeJob({ id: "j2", status: "cancelled" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/^history \(2\)/i));
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^history \(2\)/i)).toBeInTheDocument();
         expect(screen.getAllByRole("button", { name: /remove/i })).toHaveLength(2);
     });
 });
@@ -166,11 +167,8 @@ describe("QueuePage — cancel", () => {
     it("calls cancel_download with the correct job id", async () => {
         const cancelHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("cancel_download", cancelHandler);
-        setInvokeHandler("get_queue", () => [
-            makeJob({ id: "job-abc", status: "running", progress: 0.5 }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByRole("button", { name: /cancel/i }));
+        const jobs = [makeJob({ id: "job-abc", status: "running", progress: 0.5 })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
         await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
         await waitFor(() => expect(cancelHandler).toHaveBeenCalled());
         const args = cancelHandler.mock.calls[0][0] as { jobId: string };
@@ -186,11 +184,8 @@ describe("QueuePage — remove", () => {
     it("calls remove_job with the correct job id", async () => {
         const removeHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("remove_job", removeHandler);
-        setInvokeHandler("get_queue", () => [
-            makeJob({ id: "job-xyz", status: "completed" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByRole("button", { name: /remove/i }));
+        const jobs = [makeJob({ id: "job-xyz", status: "completed" })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
         await userEvent.click(screen.getByRole("button", { name: /remove/i }));
         await waitFor(() => expect(removeHandler).toHaveBeenCalled());
         const args = removeHandler.mock.calls[0][0] as { jobId: string };
@@ -203,29 +198,23 @@ describe("QueuePage — remove", () => {
 // ---------------------------------------------------------------------------
 
 describe("QueuePage — retry", () => {
-    it("shows Retry button for retryable failed jobs", async () => {
-        setInvokeHandler("get_queue", () => [
-            makeJob({ status: "failed", retryable: true, error: "Network error" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() =>
-            expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument(),
-        );
+    it("shows Retry button for retryable failed jobs", () => {
+        const jobs = [makeJob({ status: "failed", retryable: true, error: "Network error" })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
     });
 
-    it("does not show Retry button for non-retryable failed jobs", async () => {
-        setInvokeHandler("get_queue", () => [
-            makeJob({ status: "failed", retryable: false, error: "Fatal error" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/^history/i));
+    it("does not show Retry button for non-retryable failed jobs", () => {
+        const jobs = [makeJob({ status: "failed", retryable: false, error: "Fatal error" })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^history/i)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
     });
 
     it("calls start_download when Retry is clicked", async () => {
         const startHandler = vi.fn(() => "new-job-id");
         setInvokeHandler("start_download", startHandler);
-        setInvokeHandler("get_queue", () => [
+        const jobs = [
             makeJob({
                 id: "j1",
                 url: "https://example.com/retry-me",
@@ -233,9 +222,8 @@ describe("QueuePage — retry", () => {
                 retryable: true,
                 error: "Timeout",
             }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByRole("button", { name: /retry/i }));
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
         await userEvent.click(screen.getByRole("button", { name: /retry/i }));
         await waitFor(() => expect(startHandler).toHaveBeenCalled());
     });
@@ -246,33 +234,28 @@ describe("QueuePage — retry", () => {
 // ---------------------------------------------------------------------------
 
 describe("QueuePage — Clear All", () => {
-    it("shows Clear All button in the History section", async () => {
-        setInvokeHandler("get_queue", () => [
-            makeJob({ id: "j1", status: "completed" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/^history/i));
+    it("shows Clear All button in the History section", () => {
+        const jobs = [makeJob({ id: "j1", status: "completed" })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^history/i)).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /clear all/i })).toBeInTheDocument();
     });
 
-    it("does not show Clear All button when history is empty", async () => {
-        setInvokeHandler("get_queue", () => [
-            makeJob({ id: "j1", status: "running", progress: 0.1 }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByText(/^active/i));
+    it("does not show Clear All button when history is empty", () => {
+        const jobs = [makeJob({ id: "j1", status: "running", progress: 0.1 })];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
+        expect(screen.getByText(/^active/i)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: /clear all/i })).not.toBeInTheDocument();
     });
 
     it("calls clear_completed_jobs when Clear All is clicked", async () => {
         const clearHandler = vi.fn(() => undefined);
         setInvokeHandler("clear_completed_jobs", clearHandler);
-        setInvokeHandler("get_queue", () => [
+        const jobs = [
             makeJob({ id: "j1", status: "completed" }),
             makeJob({ id: "j2", status: "failed", error: "Error" }),
-        ]);
-        render(<QueuePage />);
-        await waitFor(() => screen.getByRole("button", { name: /clear all/i }));
+        ];
+        render(<QueuePage />, { queryClient: seededClient(jobs) });
         await userEvent.click(screen.getByRole("button", { name: /clear all/i }));
         await waitFor(() => expect(clearHandler).toHaveBeenCalled());
     });
