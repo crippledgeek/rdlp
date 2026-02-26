@@ -45,6 +45,26 @@ pub struct DownloadOptions {
     pub audio_multistreams: bool,
     /// Container format to recode video into (transcodes, not just remux).
     pub recode_video: Option<ContainerFormat>,
+    /// Enable audio normalization for this download. `None` = use settings default.
+    pub normalize_audio: Option<bool>,
+    /// Use EBU R128 loudnorm mode. `None` = use settings default.
+    pub loudnorm: Option<bool>,
+    /// Loudnorm preset override. `None` = use settings default.
+    pub loudnorm_preset: Option<String>,
+    /// Custom LUFS target. `None` = use settings default.
+    pub loudnorm_target_i: Option<f64>,
+    /// Custom dBTP target. `None` = use settings default.
+    pub loudnorm_target_tp: Option<f64>,
+    /// Custom LU target. `None` = use settings default.
+    pub loudnorm_target_lra: Option<f64>,
+    /// Force dynamic mode. `None` = use settings default.
+    pub loudnorm_dynamic: Option<bool>,
+    /// Precompress before loudnorm. `None` = use settings default.
+    pub loudnorm_precompress: Option<bool>,
+    /// Enable boost fallback. `None` = use settings default.
+    pub normalize_boost: Option<bool>,
+    /// Boost gain in dB. `None` = use settings default.
+    pub normalize_boost_db: Option<f64>,
 }
 
 /// Start a new download for the given URL.
@@ -135,6 +155,34 @@ pub async fn start_download(
             recode_video: options.recode_video,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
+            normalize_audio: Some(
+                options.normalize_audio.unwrap_or(settings.normalize_audio),
+            ),
+            loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
+            loudnorm_preset: options
+                .loudnorm_preset
+                .or(settings.loudnorm_preset.clone()),
+            loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
+            loudnorm_target_tp: options
+                .loudnorm_target_tp
+                .or(settings.loudnorm_target_tp),
+            loudnorm_target_lra: options
+                .loudnorm_target_lra
+                .or(settings.loudnorm_target_lra),
+            loudnorm_dynamic: Some(
+                options.loudnorm_dynamic.unwrap_or(settings.loudnorm_dynamic),
+            ),
+            loudnorm_precompress: Some(
+                options
+                    .loudnorm_precompress
+                    .unwrap_or(settings.loudnorm_precompress),
+            ),
+            normalize_boost: Some(
+                options.normalize_boost.unwrap_or(settings.normalize_boost),
+            ),
+            normalize_boost_db: options
+                .normalize_boost_db
+                .or(settings.normalize_boost_db),
             ..PostProcessOptions::default()
         },
         verbose: if settings.verbose { Some(true) } else { None },

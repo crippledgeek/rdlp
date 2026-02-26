@@ -38,6 +38,36 @@ pub struct AppSettings {
     pub verbose: bool,
     /// Default search provider site name (e.g. `"xhamster"`).
     pub default_search_provider: Option<String>,
+    /// Enable audio normalization (peak mode unless loudnorm is set).
+    #[serde(default)]
+    pub normalize_audio: bool,
+    /// Use EBU R128 loudnorm normalization (implies normalize_audio).
+    #[serde(default)]
+    pub loudnorm: bool,
+    /// Loudnorm preset name ("streaming", "broadcast", "loud").
+    #[serde(default)]
+    pub loudnorm_preset: Option<String>,
+    /// Custom target integrated loudness in LUFS (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_i: Option<f64>,
+    /// Custom target true peak in dBTP (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_tp: Option<f64>,
+    /// Custom target loudness range in LU (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_lra: Option<f64>,
+    /// Force dynamic (per-frame compression) mode in loudnorm pass 2.
+    #[serde(default)]
+    pub loudnorm_dynamic: bool,
+    /// Prepend a mild acompressor before loudnorm to tame extreme peaks.
+    #[serde(default)]
+    pub loudnorm_precompress: bool,
+    /// Enable limiter-boost fallback for over-compressed content.
+    #[serde(default)]
+    pub normalize_boost: bool,
+    /// Gain in dB for limiter-boost fallback.
+    #[serde(default)]
+    pub normalize_boost_db: Option<f64>,
 }
 
 impl AppSettings {
@@ -126,6 +156,16 @@ impl Default for AppSettings {
             embed_metadata: false,
             verbose: false,
             default_search_provider: None,
+            normalize_audio: false,
+            loudnorm: false,
+            loudnorm_preset: None,
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            loudnorm_dynamic: false,
+            loudnorm_precompress: false,
+            normalize_boost: false,
+            normalize_boost_db: None,
         }
     }
 }
@@ -155,6 +195,16 @@ mod tests {
         assert!(settings.default_subtitle_format.is_none());
         assert!(settings.default_subtitle_langs.is_empty());
         assert!(settings.default_search_provider.is_none());
+        assert!(!settings.normalize_audio);
+        assert!(!settings.loudnorm);
+        assert!(settings.loudnorm_preset.is_none());
+        assert!(settings.loudnorm_target_i.is_none());
+        assert!(settings.loudnorm_target_tp.is_none());
+        assert!(settings.loudnorm_target_lra.is_none());
+        assert!(!settings.loudnorm_dynamic);
+        assert!(!settings.loudnorm_precompress);
+        assert!(!settings.normalize_boost);
+        assert!(settings.normalize_boost_db.is_none());
     }
 
     #[test]
@@ -194,6 +244,16 @@ mod tests {
             embed_metadata: true,
             verbose: true,
             default_search_provider: Some("xhamster".to_owned()),
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_target_i: Some(-14.0),
+            loudnorm_target_tp: Some(-1.0),
+            loudnorm_target_lra: Some(11.0),
+            loudnorm_dynamic: true,
+            loudnorm_precompress: true,
+            normalize_boost: true,
+            normalize_boost_db: Some(8.0),
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -212,5 +272,15 @@ mod tests {
             restored.default_search_provider.as_deref(),
             Some("xhamster")
         );
+        assert!(restored.normalize_audio);
+        assert!(restored.loudnorm);
+        assert_eq!(restored.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(restored.loudnorm_target_i, Some(-14.0));
+        assert_eq!(restored.loudnorm_target_tp, Some(-1.0));
+        assert_eq!(restored.loudnorm_target_lra, Some(11.0));
+        assert!(restored.loudnorm_dynamic);
+        assert!(restored.loudnorm_precompress);
+        assert!(restored.normalize_boost);
+        assert_eq!(restored.normalize_boost_db, Some(8.0));
     }
 }
