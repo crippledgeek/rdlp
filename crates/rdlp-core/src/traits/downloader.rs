@@ -136,6 +136,12 @@ pub trait ProgressCallback: Send + Sync {
 
     /// Called when download fails
     fn on_error(&self, error: &str);
+
+    /// Called when a log message is produced during download.
+    ///
+    /// Used by the adaptive controller to report AIMD decisions.
+    /// Default is a no-op; GUI implementations forward to the event system.
+    fn on_log(&self, _message: &str) {}
 }
 
 /// Current download progress information

@@ -100,6 +100,26 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                     </div>
                 )}
 
+                {job.logMessages && job.logMessages.length > 0 && (
+                    <div className="border-t border-border pt-2">
+                        <details>
+                            <summary className="cursor-pointer select-none text-xs text-muted-foreground">
+                                Logs ({job.logMessages.length})
+                            </summary>
+                            <div className="mt-1.5 max-h-[120px] overflow-y-auto">
+                                {job.logMessages.map((msg, i) => (
+                                    <p
+                                        key={i}
+                                        className="font-mono text-xs text-muted-foreground"
+                                    >
+                                        {msg}
+                                    </p>
+                                ))}
+                            </div>
+                        </details>
+                    </div>
+                )}
+
                 {isFailed && job.error && (
                     <Alert variant="destructive" className="py-2">
                         <AlertDescription className="text-xs">

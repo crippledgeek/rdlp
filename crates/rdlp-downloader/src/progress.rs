@@ -128,7 +128,7 @@ impl ProgressReporterConfig {
 /// A `ProgressGuard` that manages the spawned task's lifecycle.
 #[must_use]
 pub fn spawn_progress_reporter(
-    callback: Option<Box<dyn ProgressCallback>>,
+    callback: Option<Arc<dyn ProgressCallback>>,
     metrics: ProgressMetrics,
     config: ProgressReporterConfig,
 ) -> ProgressGuard {

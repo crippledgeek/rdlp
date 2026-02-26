@@ -9,7 +9,7 @@ use crate::chunking::calculate_chunks;
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info};
-use rdlp_core::{DownloadStats, RdlpError, Result};
+use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,8 +80,9 @@ impl HttpDownloader {
             .into_owned();
 
         let downloaded = Arc::new(AtomicU64::new(0));
+        let progress: Option<Arc<dyn rdlp_core::ProgressCallback>> = progress.map(Arc::from);
         let _progress_guard = spawn_progress_reporter(
-            progress,
+            progress.clone(),
             ProgressMetrics::bytes_only(downloaded.clone()),
             ProgressReporterConfig::http(start_time, total_size, 0),
         );
@@ -96,6 +97,7 @@ impl HttpDownloader {
                 downloaded.clone(),
                 0,
                 "part",
+                progress.clone(),
             )
             .await?
         } else {
@@ -164,8 +166,9 @@ impl HttpDownloader {
             .into_owned();
 
         let downloaded = Arc::new(AtomicU64::new(resume_from));
+        let progress: Option<Arc<dyn rdlp_core::ProgressCallback>> = progress.map(Arc::from);
         let mut progress_guard = spawn_progress_reporter(
-            progress,
+            progress.clone(),
             ProgressMetrics::bytes_only(downloaded.clone()),
             ProgressReporterConfig::http(start_time, total_size, resume_from),
         );
@@ -188,6 +191,7 @@ impl HttpDownloader {
                 downloaded.clone(),
                 resume_from,
                 "resume",
+                progress.clone(),
             )
             .await
         } else {
@@ -254,6 +258,7 @@ impl HttpDownloader {
         progress_counter: Arc<AtomicU64>,
         byte_offset: u64,
         suffix: &str,
+        log_callback: Option<Arc<dyn ProgressCallback>>,
     ) -> Result<(Vec<PathBuf>, u64)> {
         let controller = Arc::new(AdaptiveController::new(
             size_to_download,
@@ -262,6 +267,7 @@ impl HttpDownloader {
                 ..AdaptiveConfig::default()
             },
             ControllerMode::HttpChunked,
+            log_callback,
         ));
 
         let sem = controller.semaphore().clone();

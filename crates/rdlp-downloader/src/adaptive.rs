@@ -18,6 +18,8 @@
 //! HLS mode skips chunk-level adjustments (segments have fixed server-determined
 //! sizes) and only tunes the connection count.
 
+use log::info;
+use rdlp_core::ProgressCallback;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -167,6 +169,7 @@ pub struct AdaptiveController {
     config: AdaptiveConfig,
     total_size: u64,
     mode: ControllerMode,
+    log_callback: Option<Arc<dyn ProgressCallback>>,
 }
 
 impl AdaptiveController {
@@ -176,18 +179,43 @@ impl AdaptiveController {
     /// * `total_size` - Total number of bytes to download.
     /// * `config` - Tuning parameters (connections, intervals, initial level).
     /// * `mode` - Whether this is an HTTP chunked or HLS segment download.
+    /// * `log_callback` - Optional progress callback for forwarding AIMD log messages.
     ///
     /// # Returns
     /// A new `AdaptiveController` ready to issue chunk requests.
-    pub fn new(total_size: u64, config: AdaptiveConfig, mode: ControllerMode) -> Self {
+    pub fn new(
+        total_size: u64,
+        config: AdaptiveConfig,
+        mode: ControllerMode,
+        log_callback: Option<Arc<dyn ProgressCallback>>,
+    ) -> Self {
+        let msg = format!(
+            "Adaptive controller: mode={mode:?}, size={:.1} MB, \
+             connections={}, chunk_level={} ({}KB)",
+            total_size as f64 / 1024.0 / 1024.0,
+            config.initial_connections,
+            config.initial_chunk_level,
+            CHUNK_LEVELS[config.initial_chunk_level as usize] / 1024,
+        );
+        info!("{msg}");
         let semaphore = Arc::new(Semaphore::new(config.initial_connections));
         let state = AdaptiveState::new(config.initial_connections, config.initial_chunk_level);
-        Self {
+        let ctrl = Self {
             state: Mutex::new(state),
             semaphore,
             config,
             total_size,
             mode,
+            log_callback,
+        };
+        ctrl.log(&msg);
+        ctrl
+    }
+
+    /// Forward a log message to the progress callback if one is set.
+    fn log(&self, message: &str) {
+        if let Some(ref cb) = self.log_callback {
+            cb.on_log(message);
         }
     }
 
@@ -322,6 +350,13 @@ impl AdaptiveController {
     ) {
         let Some(prev) = prev_ewma else {
             // No previous measurement — stay in SlowStart and ramp up.
+            let msg = format!(
+                "Adaptive [SlowStart]: initial ramp — chunk +2, +1 connection \
+                 (ewma={:.1} MB/s)",
+                current_ewma / 1024.0 / 1024.0,
+            );
+            info!("{msg}");
+            self.log(&msg);
             self.bump_chunk_level(state, 2);
             self.increase_connections(state);
             return;
@@ -329,11 +364,27 @@ impl AdaptiveController {
 
         if current_ewma > prev {
             // Throughput is increasing — stay aggressive.
+            let msg = format!(
+                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s — \
+                 chunk +2, +1 connection",
+                prev / 1024.0 / 1024.0,
+                current_ewma / 1024.0 / 1024.0,
+            );
+            info!("{msg}");
+            self.log(&msg);
             state.slow_start_plateaus = 0;
             self.bump_chunk_level(state, 2);
             self.increase_connections(state);
         } else if current_ewma < prev {
             // Throughput dropped — transition to Steady and apply one MD.
+            let msg = format!(
+                "Adaptive [SlowStart → Steady]: throughput drop {:.1} → {:.1} MB/s — \
+                 applying multiplicative decrease",
+                prev / 1024.0 / 1024.0,
+                current_ewma / 1024.0 / 1024.0,
+            );
+            info!("{msg}");
+            self.log(&msg);
             state.phase = Phase::Steady;
             state.slow_start_plateaus = 0;
             self.apply_md(state);
@@ -341,6 +392,14 @@ impl AdaptiveController {
             // Plateau: throughput unchanged.
             state.slow_start_plateaus += 1;
             if state.slow_start_plateaus >= SLOW_START_PLATEAU_LIMIT {
+                let msg = format!(
+                    "Adaptive [SlowStart → Steady]: {} consecutive plateaus at \
+                     {:.1} MB/s — transitioning",
+                    SLOW_START_PLATEAU_LIMIT,
+                    current_ewma / 1024.0 / 1024.0,
+                );
+                info!("{msg}");
+                self.log(&msg);
                 state.phase = Phase::Steady;
                 state.slow_start_plateaus = 0;
             }
@@ -364,20 +423,47 @@ impl AdaptiveController {
 
         if ratio > MD_THRESHOLD {
             // Throughput dropped > 30 % — multiplicative decrease.
+            let msg = format!(
+                "Adaptive [Steady]: throughput drop {:.0}% ({:.1} → {:.1} MB/s) — \
+                 multiplicative decrease",
+                ratio * 100.0,
+                prev / 1024.0 / 1024.0,
+                current_ewma / 1024.0 / 1024.0,
+            );
+            info!("{msg}");
+            self.log(&msg);
             self.apply_md(state);
         } else if ratio > NOISE_THRESHOLD {
             // 10–30 % drop — within noise, hold.
         } else {
             // Stable or improving — additive increase (+1 level).
+            let msg = format!(
+                "Adaptive [Steady]: stable at {:.1} MB/s — chunk +1",
+                current_ewma / 1024.0 / 1024.0,
+            );
+            info!("{msg}");
+            self.log(&msg);
             self.bump_chunk_level(state, 1);
         }
     }
 
     /// Apply multiplicative decrease: halve connections, chunk level −2.
     fn apply_md(&self, state: &mut AdaptiveState) {
+        let before_conns = state.current_connections;
+        let before_level = state.current_chunk_level;
         let target = (state.current_connections / 2).max(1);
         self.decrease_connections(state, target);
         self.bump_chunk_level(state, -(2i8));
+        let msg = format!(
+            "Adaptive MD: connections {} → {}, chunk level {} → {} ({}KB)",
+            before_conns,
+            state.current_connections,
+            before_level,
+            state.current_chunk_level,
+            CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
+        );
+        info!("{msg}");
+        self.log(&msg);
     }
 
     /// Increase the chunk level by `delta`, clamped to [0, 7].
@@ -387,8 +473,20 @@ impl AdaptiveController {
         if self.mode == ControllerMode::HlsSegments {
             return;
         }
-        let new_level = (state.current_chunk_level as i16 + delta as i16).clamp(0, 7) as u8;
+        let old_level = state.current_chunk_level;
+        let new_level = (old_level as i16 + delta as i16).clamp(0, 7) as u8;
         state.current_chunk_level = new_level;
+        if new_level != old_level {
+            let msg = format!(
+                "Adaptive: chunk level {} → {} ({}KB → {}KB)",
+                old_level,
+                new_level,
+                CHUNK_LEVELS[old_level as usize] / 1024,
+                CHUNK_LEVELS[new_level as usize] / 1024,
+            );
+            info!("{msg}");
+            self.log(&msg);
+        }
     }
 
     /// Increase connections by 1, up to `max_connections`.
@@ -398,6 +496,12 @@ impl AdaptiveController {
         if state.current_connections < self.config.max_connections {
             state.current_connections += 1;
             self.semaphore.add_permits(1);
+            let msg = format!(
+                "Adaptive: connections → {} (max {})",
+                state.current_connections, self.config.max_connections,
+            );
+            info!("{msg}");
+            self.log(&msg);
         }
     }
 
@@ -432,6 +536,7 @@ mod tests {
             total_size,
             AdaptiveConfig::default(),
             ControllerMode::HttpChunked,
+            None,
         )
     }
 
@@ -441,7 +546,7 @@ mod tests {
         config: AdaptiveConfig,
         mode: ControllerMode,
     ) -> AdaptiveController {
-        AdaptiveController::new(total_size, config, mode)
+        AdaptiveController::new(total_size, config, mode, None)
     }
 
     /// Drive the controller through `n` chunks and report each at `throughput` bytes/s.
@@ -819,6 +924,7 @@ mod tests {
             10 * 1024 * 1024,
             AdaptiveConfig::default(),
             ControllerMode::HlsSegments,
+            None,
         );
 
         // A 4-second segment downloaded in 1 second → ratio = 4.0.

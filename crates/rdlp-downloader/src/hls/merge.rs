@@ -138,6 +138,7 @@ pub(crate) async fn download_segments_with_resume(
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
+        None, // log_callback: HLS segment path does not thread a ProgressCallback here
     ));
     let sem = controller.semaphore().clone();
 

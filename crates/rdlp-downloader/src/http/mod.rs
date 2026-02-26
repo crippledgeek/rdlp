@@ -290,6 +290,7 @@ impl HttpDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
         let client = self.client.clone();
         let url_string = url.to_string();

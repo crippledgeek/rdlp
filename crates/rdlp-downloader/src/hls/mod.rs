@@ -194,6 +194,7 @@ impl Downloader for HlsDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let timeout = self.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
