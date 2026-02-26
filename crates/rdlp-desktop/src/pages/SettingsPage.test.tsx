@@ -1,4 +1,4 @@
-import { render, screen, waitFor, createTestQueryClient } from "@/test/test-utils";
+import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { SettingsPage } from "./SettingsPage";
@@ -159,10 +159,7 @@ describe("SettingsPage", () => {
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        const input = screen.getByLabelText(/loudness target/i);
-        await userEvent.clear(input);
-        await userEvent.type(input, "5");
-
+        fireEvent.change(screen.getByLabelText(/loudness target/i), { target: { value: "5" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -174,10 +171,7 @@ describe("SettingsPage", () => {
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        const input = screen.getByLabelText(/true peak limit/i);
-        await userEvent.clear(input);
-        await userEvent.type(input, "1");
-
+        fireEvent.change(screen.getByLabelText(/true peak limit/i), { target: { value: "1" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -189,10 +183,7 @@ describe("SettingsPage", () => {
         const settings = { ...defaultSettings, normalize_audio: true, normalize_boost: true };
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        const input = screen.getByPlaceholderText("12.0");
-        await userEvent.clear(input);
-        await userEvent.type(input, "50");
-
+        fireEvent.change(screen.getByPlaceholderText("12.0"), { target: { value: "50" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
