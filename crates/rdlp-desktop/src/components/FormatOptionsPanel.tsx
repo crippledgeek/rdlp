@@ -332,6 +332,87 @@ export function FormatOptionsPanel({
                     </Label>
                 </div>
             </div>
+
+            <div className="flex flex-col gap-1">
+                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                    Audio Normalization
+                </Label>
+                <Select
+                    value={
+                        value.normalizeAudio === null
+                            ? "default"
+                            : !value.normalizeAudio
+                              ? "off"
+                              : !value.loudnorm
+                                ? "peak"
+                                : value.loudnormPreset === "broadcast"
+                                  ? "loudnorm-broadcast"
+                                  : value.loudnormPreset === "loud"
+                                    ? "loudnorm-loud"
+                                    : value.loudnormPreset === "streaming"
+                                      ? "loudnorm-streaming"
+                                      : "default"
+                    }
+                    onValueChange={(val) => {
+                        if (val === "default") {
+                            onChange({
+                                ...value,
+                                normalizeAudio: null,
+                                loudnorm: null,
+                                loudnormPreset: null,
+                                loudnormTargetI: null,
+                                loudnormTargetTp: null,
+                                loudnormTargetLra: null,
+                                loudnormDynamic: null,
+                                loudnormPrecompress: null,
+                                normalizeBoost: null,
+                                normalizeBoostDb: null,
+                            });
+                        } else if (val === "off") {
+                            onChange({
+                                ...value,
+                                normalizeAudio: false,
+                                loudnorm: false,
+                                loudnormPreset: null,
+                                loudnormTargetI: null,
+                                loudnormTargetTp: null,
+                                loudnormTargetLra: null,
+                                loudnormDynamic: false,
+                                loudnormPrecompress: false,
+                                normalizeBoost: false,
+                                normalizeBoostDb: null,
+                            });
+                        } else if (val === "peak") {
+                            onChange({
+                                ...value,
+                                normalizeAudio: true,
+                                loudnorm: false,
+                                loudnormPreset: null,
+                            });
+                        } else {
+                            const preset = val.replace("loudnorm-", "");
+                            onChange({
+                                ...value,
+                                normalizeAudio: true,
+                                loudnorm: true,
+                                loudnormPreset: preset,
+                            });
+                        }
+                    }}
+                >
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="default">Use Settings Default</SelectItem>
+                        <SelectItem value="off">Off</SelectItem>
+                        <SelectItem value="peak">Peak</SelectItem>
+                        <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
+                        <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
+                        <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
+                    </SelectContent>
+                </Select>
+            </div>
         </div>
     );
 }
