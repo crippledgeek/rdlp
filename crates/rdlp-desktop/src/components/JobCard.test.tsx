@@ -17,6 +17,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         started_at: null,
         completed_at: null,
         output_path: null,
+        options: null,
         statusMessage: null,
         ...overrides,
     };
@@ -123,7 +124,10 @@ describe("JobCard", () => {
             />,
         );
         await userEvent.click(screen.getByRole("button", { name: /retry/i }));
-        expect(onRetry).toHaveBeenCalledWith("https://example.com/video");
+        // onRetry now receives the full job object so the caller can preserve options
+        expect(onRetry).toHaveBeenCalledWith(
+            expect.objectContaining({ url: "https://example.com/video" }),
+        );
     });
 
     it("displays error message for failed jobs", () => {

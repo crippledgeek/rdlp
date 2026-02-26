@@ -3,15 +3,18 @@
 //! Provides commands to read, update, and interact with persistent
 //! application settings such as the download directory. The
 //! [`pick_directory`] command uses the native OS folder picker via
-//! `tauri-plugin-dialog`.
+//! `tauri-plugin-dialog`, and [`reveal_in_folder`] uses
+//! `tauri-plugin-opener` to show a file in the system file manager.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
-use crate::state::{AppSettings, AppState};
+use crate::state::{AppSettings, AppState, SettingsValidationError};
 
 /// Retrieve the current application settings.
 ///
@@ -43,8 +46,9 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, App
 
 /// Update application settings with new values.
 ///
-/// Locks the shared settings mutex and replaces the current
-/// [`AppSettings`] with the provided values.
+/// Validates security-sensitive fields (cookies path traversal, proxy URL)
+/// before persisting. Locks the shared settings mutex and replaces the
+/// current [`AppSettings`] with the provided values.
 ///
 /// # Arguments
 ///
@@ -53,12 +57,24 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, App
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if saving settings to disk fails.
+/// Returns [`AppError::InvalidInput`] if security validation fails, or
+/// [`AppError::Internal`] if saving settings to disk fails.
 #[tauri::command]
 pub async fn update_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
+    settings
+        .validate_security()
+        .map_err(|e| AppError::InvalidInput {
+            field: match &e {
+                SettingsValidationError::CookiesFileTraversal => "cookies_file",
+                SettingsValidationError::InvalidProxy(_) => "proxy",
+            }
+            .to_owned(),
+            message: e.to_string(),
+        })?;
+
     let mut current = state.settings.lock().unwrap_or_else(|e| e.into_inner());
 
     *current = settings;
@@ -123,4 +139,32 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
         }
         None => Ok(None),
     }
+}
+
+/// Reveal a file or directory in the system file manager.
+///
+/// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
+/// action for the given path. Requires the `opener:allow-reveal-item-in-dir`
+/// capability.
+///
+/// # Arguments
+///
+/// * `path` - Absolute path to the file or directory to reveal.
+/// * `app` - Tauri application handle for accessing the opener plugin.
+///
+/// # Errors
+///
+/// Returns [`AppError::Internal`] if the path is invalid or the OS
+/// reveal action fails.
+#[tauri::command]
+pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppError> {
+    let path_buf = PathBuf::from(&path);
+
+    app.opener()
+        .reveal_item_in_dir(&path_buf)
+        .map_err(|e| AppError::Internal {
+            message: format!("Failed to reveal path in folder: {e}"),
+        })?;
+
+    Ok(())
 }

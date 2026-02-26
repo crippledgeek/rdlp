@@ -24,6 +24,7 @@ use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::search::search_content,
@@ -33,11 +34,14 @@ pub fn run() {
             commands::download::cancel_download,
             commands::download::get_queue,
             commands::download::remove_job,
+            commands::download::clear_completed_jobs,
+            commands::download::get_job_options,
             commands::formats::get_formats,
             commands::formats::validate_format_expression,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::pick_directory,
+            commands::settings::reveal_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

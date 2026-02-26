@@ -8,8 +8,8 @@
 mod app_settings;
 mod download_queue;
 
-pub use app_settings::AppSettings;
-pub use download_queue::{DownloadJob, DownloadQueue, JobStatus};
+pub use app_settings::{AppSettings, SettingsValidationError};
+pub use download_queue::{DownloadJob, DownloadQueue, JobStatus, SavedDownloadOptions};
 
 use std::sync::{Arc, Mutex};
 

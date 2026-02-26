@@ -55,6 +55,13 @@ const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
     { value: "webm", label: "WebM" },
 ];
 
+/** Common recode (transcode) options shown in the UI. */
+const RECODE_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
+    { value: "mp4", label: "MP4" },
+    { value: "mkv", label: "MKV" },
+    { value: "webm", label: "WebM" },
+];
+
 /** Common audio extraction options shown in the UI. */
 const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "mp3", label: "MP3" },
@@ -95,6 +102,7 @@ export function buildDefaultOptions(
         loudnormPrecompress: settings?.loudnorm_precompress ?? false,
         normalizeBoost: settings?.normalize_boost ?? false,
         normalizeBoostDb: settings?.normalize_boost_db ?? null,
+        embedSubtitles: settings?.embed_subtitles ?? false,
     };
 }
 
@@ -127,9 +135,22 @@ export function FormatOptionsPanel({
     };
 
     const handleRemux = (val: string) => {
+        // Remux and recode are mutually exclusive — clear recode when remux is set.
+        const remux = val === NONE_SENTINEL ? null : (val as ContainerFormat);
         onChange({
             ...value,
-            remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
+            remux,
+            recodeVideo: remux !== null ? null : value.recodeVideo,
+        });
+    };
+
+    const handleRecode = (val: string) => {
+        // Recode and remux are mutually exclusive — clear remux when recode is set.
+        const recodeVideo = val === NONE_SENTINEL ? null : (val as ContainerFormat);
+        onChange({
+            ...value,
+            recodeVideo,
+            remux: recodeVideo !== null ? null : value.remux,
         });
     };
 
@@ -220,6 +241,34 @@ export function FormatOptionsPanel({
                         ))}
                     </SelectContent>
                 </Select>
+                <p className="text-[10px] text-muted-foreground">
+                    Copy streams into a new container — no quality loss.
+                </p>
+            </div>
+
+            <div className="flex flex-col gap-1">
+                <Label className="options-label">
+                    Recode Video
+                </Label>
+                <Select
+                    value={value.recodeVideo ?? NONE_SENTINEL}
+                    onValueChange={handleRecode}
+                >
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", value.recodeVideo && "select-active")}>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                        {RECODE_OPTIONS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                                {o.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                    Re-encode video — slower, use when remux fails.
+                </p>
             </div>
 
             <div className="flex flex-col gap-1">

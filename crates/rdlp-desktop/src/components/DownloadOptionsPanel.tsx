@@ -43,6 +43,12 @@ const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
     { value: "webm", label: "WebM" },
 ];
 
+const RECODE_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
+    { value: "mp4", label: "MP4" },
+    { value: "mkv", label: "MKV" },
+    { value: "webm", label: "WebM" },
+];
+
 const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "mp3", label: "MP3" },
     { value: "aac", label: "AAC" },
@@ -119,23 +125,63 @@ export function DownloadOptionsPanel({
                         <Label className="options-label">
                             Remux
                         </Label>
-                        <Select
-                            value={options.remux ?? NONE_SENTINEL}
-                            onValueChange={(val) => setOptions((prev) => ({
-                                ...prev,
-                                remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
-                            }))}
-                        >
-                            <SelectTrigger className={cn("h-7 text-xs", options.remux && "select-active")}>
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={NONE_SENTINEL}>None</SelectItem>
-                                {REMUX_OPTIONS.map((o) => (
-                                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <div className="flex flex-col gap-0.5">
+                            <Select
+                                value={options.remux ?? NONE_SENTINEL}
+                                onValueChange={(val) => setOptions((prev) => {
+                                    const remux = val === NONE_SENTINEL ? null : (val as ContainerFormat);
+                                    return {
+                                        ...prev,
+                                        remux,
+                                        recodeVideo: remux !== null ? null : prev.recodeVideo,
+                                    };
+                                })}
+                            >
+                                <SelectTrigger className={cn("h-7 text-xs", options.remux && "select-active")}>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                                    {REMUX_OPTIONS.map((o) => (
+                                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-[10px] text-muted-foreground">
+                                Copy streams — no quality loss.
+                            </p>
+                        </div>
+
+                        {/* Recode Video */}
+                        <Label className="options-label">
+                            Recode
+                        </Label>
+                        <div className="flex flex-col gap-0.5">
+                            <Select
+                                value={options.recodeVideo ?? NONE_SENTINEL}
+                                onValueChange={(val) => setOptions((prev) => {
+                                    const recodeVideo = val === NONE_SENTINEL ? null : (val as ContainerFormat);
+                                    return {
+                                        ...prev,
+                                        recodeVideo,
+                                        remux: recodeVideo !== null ? null : prev.remux,
+                                    };
+                                })}
+                            >
+                                <SelectTrigger className={cn("h-7 text-xs", options.recodeVideo && "select-active")}>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NONE_SENTINEL}>None</SelectItem>
+                                    {RECODE_OPTIONS.map((o) => (
+                                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-[10px] text-muted-foreground">
+                                Re-encode video — use when remux fails.
+                            </p>
+                        </div>
 
                         {/* Extract Audio */}
                         <Label className="options-label">

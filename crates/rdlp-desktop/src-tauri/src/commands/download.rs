@@ -7,24 +7,26 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::events;
-use crate::state::{AppState, DownloadJob, JobStatus};
+use crate::state::{AppState, DownloadJob, JobStatus, SavedDownloadOptions};
 use rdlp_api::Event;
 use rdlp_api::request::{
-    DownloadRequest, FormatOptions, OutputOptions, PostProcessOptions, SubtitleOptions,
+    DownloadRequest, FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions,
+    SubtitleOptions,
 };
-use rdlp_types::{AudioFormat, ContainerFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat};
 
 /// Frontend-supplied download options.
 ///
 /// Deserialized from JSON sent by the React frontend. Typed enums
 /// (`ContainerFormat`, `AudioFormat`) deserialize from lowercase
-/// JSON strings via serde.
-#[derive(Debug, Deserialize)]
+/// JSON strings via serde. `Serialize` is derived so a snapshot can be
+/// stored on the job for retry.
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadOptions {
     /// Format selector string (e.g. `"bestvideo+bestaudio"`).
@@ -65,6 +67,22 @@ pub struct DownloadOptions {
     pub normalize_boost: Option<bool>,
     /// Boost gain in dB. `None` = use settings default.
     pub normalize_boost_db: Option<f64>,
+    /// Write (keep) thumbnail as a separate file. `None` = use settings default.
+    pub write_thumbnail: Option<bool>,
+    /// Additional gain in dB applied on top of normalization. `None` = use settings default.
+    pub audio_gain_target: Option<f64>,
+    /// Browser to extract cookies from. `None` = use settings default.
+    pub cookies_from_browser: Option<BrowserType>,
+    /// Path to a Netscape cookies file. `None` = use settings default.
+    pub cookies_file: Option<String>,
+    /// HTTP/SOCKS proxy URL. `None` = use settings default.
+    pub proxy: Option<String>,
+    /// Download rate limit string (e.g. `"500K"`). `None` = use settings default.
+    pub rate_limit: Option<String>,
+    /// Output filename template. `None` = use settings default.
+    pub output_template: Option<String>,
+    /// Embed subtitles into the output container. `None` = use settings default.
+    pub embed_subtitles: Option<bool>,
 }
 
 /// Start a new download for the given URL.
@@ -113,6 +131,27 @@ pub async fn start_download(
         .unwrap_or_else(|e| e.into_inner())
         .clone();
 
+    // Validate proxy URL at the boundary if provided per-download.
+    if let Some(proxy) = &options.proxy {
+        rdlp_security::validate_proxy_url(proxy).map_err(|e| AppError::InvalidInput {
+            field: "proxy".to_owned(),
+            message: e.to_string(),
+        })?;
+    }
+    // Also validate the settings proxy (may have been loaded from disk before
+    // validate_security was added).
+    if let Some(proxy) = &settings.proxy {
+        rdlp_security::validate_proxy_url(proxy).map_err(|e| AppError::InvalidInput {
+            field: "proxy".to_owned(),
+            message: e.to_string(),
+        })?;
+    }
+
+    // Save a serializable snapshot of the options for retry (before any partial moves).
+    let saved_options = serde_json::to_value(&options)
+        .ok()
+        .map(|json| SavedDownloadOptions { json });
+
     // Build the download request from options + settings
     let output_dir = options
         .output_dir
@@ -122,16 +161,48 @@ pub async fn start_download(
     let remux = options.remux.or(settings.default_remux);
     let extract_audio = options.extract_audio.or(settings.default_extract_audio);
 
-    // Add job to queue as Pending
+    // Merge cookies: per-download overrides settings default.
+    let cookies_from_browser = options
+        .cookies_from_browser
+        .or(settings.cookies_from_browser);
+    let cookies_file: Option<PathBuf> = options
+        .cookies_file
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| settings.cookies_file.clone());
+
+    // Merge proxy and rate_limit.
+    let proxy = options.proxy.or_else(|| settings.proxy.clone());
+
+    // Rate limit: parse string like "500K" to bytes per second.
+    let rate_limit_str = options.rate_limit.or_else(|| settings.rate_limit.clone());
+    let rate_limit = rate_limit_str.as_deref().and_then(parse_rate_limit);
+
+    // Output template.
+    let output_template = options
+        .output_template
+        .or_else(|| settings.output_template.clone());
+
+    // Embed subtitles.
+    let embed_subtitles = options.embed_subtitles.unwrap_or(settings.embed_subtitles);
+
+    // Write thumbnail.
+    let write_thumbnail_resolved = options.write_thumbnail.unwrap_or(settings.write_thumbnail);
+
+    // Add job to queue as Pending and immediately attach the options snapshot.
     {
         let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.add_job(&job_id, &url, title);
+        if let Some(job) = queue.get_job_mut(&job_id) {
+            job.options = saved_options;
+        }
     }
 
     let request = DownloadRequest {
         url: url.clone(),
         output: OutputOptions {
             output_dir: Some(output_dir),
+            template: output_template,
             ..OutputOptions::default()
         },
         format: FormatOptions {
@@ -147,6 +218,7 @@ pub async fn start_download(
             write_subs: options.subtitles.then_some(true),
             sub_langs: options.subtitle_langs,
             sub_format: settings.default_subtitle_format,
+            embed_subs: embed_subtitles.then_some(true),
             ..SubtitleOptions::default()
         },
         postprocess: PostProcessOptions {
@@ -155,6 +227,7 @@ pub async fn start_download(
             recode_video: options.recode_video,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
+            write_thumbnail: write_thumbnail_resolved.then_some(true),
             normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
             loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
             loudnorm_preset: options.loudnorm_preset.or(settings.loudnorm_preset.clone()),
@@ -172,8 +245,18 @@ pub async fn start_download(
                     .unwrap_or(settings.loudnorm_precompress),
             ),
             normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
-            normalize_boost_db: options.normalize_boost_db.or(settings.normalize_boost_db),
+            normalize_boost_db: options
+                .normalize_boost_db
+                .or(settings.normalize_boost_db)
+                .or(options.audio_gain_target.or(settings.audio_gain_target)),
             ..PostProcessOptions::default()
+        },
+        network: NetworkOptions {
+            cookies_from_browser,
+            cookies_file,
+            rate_limit,
+            proxy,
+            ..NetworkOptions::default()
         },
         verbose: if settings.verbose { Some(true) } else { None },
         ..DownloadRequest::default()
@@ -323,7 +406,45 @@ mod tests {
             loudnorm_precompress: None,
             normalize_boost: None,
             normalize_boost_db: None,
+            write_thumbnail: None,
+            audio_gain_target: None,
+            cookies_from_browser: None,
+            cookies_file: None,
+            proxy: None,
+            rate_limit: None,
+            output_template: None,
+            embed_subtitles: None,
         }
+    }
+
+    // ------------------------------------------------------------------ //
+    // Rate limit parsing
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn test_parse_rate_limit_bytes() {
+        assert_eq!(parse_rate_limit("1000"), Some(1000));
+    }
+
+    #[test]
+    fn test_parse_rate_limit_kilobytes() {
+        assert_eq!(parse_rate_limit("500K"), Some(512_000));
+        assert_eq!(parse_rate_limit("500k"), Some(512_000));
+    }
+
+    #[test]
+    fn test_parse_rate_limit_megabytes() {
+        assert_eq!(parse_rate_limit("2M"), Some(2 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_parse_rate_limit_empty() {
+        assert_eq!(parse_rate_limit(""), None);
+    }
+
+    #[test]
+    fn test_parse_rate_limit_invalid() {
+        assert_eq!(parse_rate_limit("notanumber"), None);
     }
 
     // ------------------------------------------------------------------ //
@@ -645,4 +766,83 @@ pub async fn remove_job(job_id: String, state: State<'_, AppState>) -> Result<()
     }
 
     Ok(())
+}
+
+/// Remove all completed, failed, and cancelled downloads from the queue.
+///
+/// Active or pending jobs are left in place.
+///
+/// # Arguments
+///
+/// * `state` - Managed application state.
+///
+/// # Returns
+///
+/// The number of jobs removed.
+#[tauri::command]
+pub async fn clear_completed_jobs(state: State<'_, AppState>) -> Result<usize, AppError> {
+    let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(queue.clear_completed())
+}
+
+/// Retrieve the options used when a job was originally started.
+///
+/// Returns the serialized [`DownloadOptions`] snapshot stored on the job,
+/// which the frontend uses to populate retry dialogs.
+///
+/// # Arguments
+///
+/// * `job_id` - UUID of the download job.
+/// * `state` - Managed application state.
+///
+/// # Returns
+///
+/// The JSON value of the original [`DownloadOptions`], or `null` if not recorded.
+///
+/// # Errors
+///
+/// Returns [`AppError::DownloadFailed`] if the job is not found.
+#[tauri::command]
+pub async fn get_job_options(
+    job_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let job = queue
+        .get_job(&job_id)
+        .ok_or_else(|| AppError::DownloadFailed {
+            job_id: job_id.clone(),
+            message: "Job not found".to_owned(),
+            retryable: false,
+        })?;
+    Ok(job.options.as_ref().map(|o| o.json.clone()))
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Parse a human-readable rate limit string into bytes per second.
+///
+/// Accepts suffixes: `K`/`k` (kilobytes), `M`/`m` (megabytes), `G`/`g` (gigabytes).
+/// Bare integers are treated as bytes per second.
+///
+/// Returns `None` on parse error.
+fn parse_rate_limit(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    let (num_str, multiplier) = if s.ends_with('K') || s.ends_with('k') {
+        (&s[..s.len() - 1], 1_024u64)
+    } else if s.ends_with('M') || s.ends_with('m') {
+        (&s[..s.len() - 1], 1_024 * 1_024)
+    } else if s.ends_with('G') || s.ends_with('g') {
+        (&s[..s.len() - 1], 1_024 * 1_024 * 1_024)
+    } else {
+        (s, 1u64)
+    };
+
+    num_str.trim().parse::<u64>().ok().map(|n| n * multiplier)
 }

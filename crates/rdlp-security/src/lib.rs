@@ -80,6 +80,10 @@ pub enum SecurityError {
     #[error("Invalid URL scheme: {0} (expected http or https)")]
     InvalidScheme(String),
 
+    /// Proxy URL uses an unsupported scheme
+    #[error("Invalid proxy scheme: {0} (expected http, https, socks5, or socks5h)")]
+    InvalidProxyScheme(String),
+
     /// URL points to a private/internal host (SSRF protection)
     #[error("URL points to private/internal host: {0}")]
     PrivateHost(String),
@@ -208,6 +212,51 @@ pub fn is_private_host(host: &str) -> bool {
     false
 }
 
+/// Validate a proxy URL for security concerns.
+///
+/// Allows only `http`, `https`, `socks5`, and `socks5h` schemes and
+/// blocks proxy targets that point to private/internal hosts (SSRF).
+///
+/// # Arguments
+///
+/// * `proxy` - The proxy URL string to validate.
+///
+/// # Returns
+///
+/// `Ok(())` if the proxy URL is safe, otherwise a [`SecurityError`].
+///
+/// # Examples
+///
+/// ```rust
+/// use rdlp_security::validate_proxy_url;
+///
+/// assert!(validate_proxy_url("http://proxy.example.com:3128").is_ok());
+/// assert!(validate_proxy_url("socks5://proxy.example.com:1080").is_ok());
+/// assert!(validate_proxy_url("http://192.168.1.1:3128").is_err());
+/// assert!(validate_proxy_url("ftp://proxy.example.com").is_err());
+/// ```
+pub fn validate_proxy_url(proxy: &str) -> Result<()> {
+    if proxy.len() > MAX_URL_LENGTH {
+        return Err(SecurityError::UrlTooLong(proxy.len()));
+    }
+
+    let parsed = url::Url::parse(proxy)?;
+
+    let scheme = parsed.scheme();
+    if !matches!(scheme, "http" | "https" | "socks5" | "socks5h") {
+        return Err(SecurityError::InvalidProxyScheme(scheme.to_string()));
+    }
+
+    // Block proxies pointing to private/internal hosts.
+    if let Some(host) = parsed.host_str()
+        && is_private_host(host)
+    {
+        return Err(SecurityError::PrivateHost(host.to_string()));
+    }
+
+    Ok(())
+}
+
 // ============================================================================
 // URL Normalization
 // ============================================================================
@@ -317,7 +366,7 @@ pub fn extract_url_path(url: &str) -> String {
 // ============================================================================
 
 /// Pre-compiled regex patterns for sensitive parameter redaction.
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 5]> = LazyLock::new(|| {
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
     [
         (
             Regex::new(r"token=[^&\s]+").expect("valid regex"),
@@ -336,6 +385,8 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 5]> = LazyLock::new(|| {
             Regex::new(r"api_key=[^&\s]+").expect("valid regex"),
             "api_key=***",
         ),
+        // Strip user:pass@ from proxy/URL authority (e.g. http://user:pass@host:port)
+        (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
     ]
 });
 
@@ -434,6 +485,40 @@ mod tests {
     // ========================================================================
     // Sanitization Tests
     // ========================================================================
+
+    // ========================================================================
+    // Proxy Validation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_proxy_url_http_ok() {
+        assert!(validate_proxy_url("http://proxy.example.com:3128").is_ok());
+    }
+
+    #[test]
+    fn test_validate_proxy_url_socks5_ok() {
+        assert!(validate_proxy_url("socks5://proxy.example.com:1080").is_ok());
+        assert!(validate_proxy_url("socks5h://proxy.example.com:1080").is_ok());
+    }
+
+    #[test]
+    fn test_validate_proxy_url_rejects_ftp() {
+        assert!(validate_proxy_url("ftp://proxy.example.com").is_err());
+    }
+
+    #[test]
+    fn test_validate_proxy_url_rejects_private_host() {
+        assert!(validate_proxy_url("http://192.168.1.1:3128").is_err());
+        assert!(validate_proxy_url("socks5://localhost:1080").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_strips_user_pass_from_proxy() {
+        let input = "http://user:password@proxy.example.com:3128";
+        let safe = sanitize_for_logging(input);
+        assert!(safe.contains("*:*@"), "should redact credentials");
+        assert!(!safe.contains("password"), "should not leak password");
+    }
 
     #[test]
     fn test_sanitize_for_logging() {

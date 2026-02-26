@@ -150,6 +150,9 @@ impl MergeOverrides for NetworkOptions {
         if let Some(v) = self.rate_limit {
             config.rate_limit = Some(v);
         }
+        if let Some(ref v) = self.proxy {
+            config.proxy = Some(v.clone());
+        }
         if let Some(v) = self.cookies_from_browser {
             config.cookies_from_browser = Some(v);
         }

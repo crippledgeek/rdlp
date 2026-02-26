@@ -5,12 +5,13 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { invokeTyped } from "../api/invokeClient";
 
 interface JobCardProps {
     job: DownloadJob;
     onCancel: (id: string) => void;
     onRemove: (id: string) => void;
-    onRetry: (url: string) => void;
+    onRetry: (job: DownloadJob) => void;
 }
 
 /** Format a progress fraction in [0.0, 1.0] as a percentage string. */
@@ -86,6 +87,14 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA: {job.eta}</span>}
                         </div>
+                        {job.statusMessage && (
+                            <p
+                                aria-live="polite"
+                                className="truncate text-xs text-muted-foreground"
+                            >
+                                {job.statusMessage}
+                            </p>
+                        )}
                     </div>
                 )}
 
@@ -116,9 +125,24 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                             size="sm"
                             className="hover:border-primary/30
                                 hover:bg-primary/10 hover:text-primary"
-                            onClick={() => onRetry(job.url)}
+                            onClick={() => onRetry(job)}
                         >
                             Retry
+                        </Button>
+                    )}
+                    {job.status === "completed" && job.output_path !== null && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                                invokeTyped<void>("reveal_in_folder", {
+                                    path: job.output_path,
+                                }).catch((e) =>
+                                    console.error("Failed to reveal file", e),
+                                )
+                            }
+                        >
+                            Reveal in Folder
                         </Button>
                     )}
                     {isTerminal && (

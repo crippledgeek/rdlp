@@ -11,10 +11,17 @@ const defaultSettings: AppSettings = {
     default_subtitle_format: null,
     default_subtitle_langs: [],
     embed_thumbnail: true,
+    write_thumbnail: false,
     embed_metadata: true,
     verbose: false,
     default_search_provider: null,
+    output_template: null,
+    cookies_from_browser: null,
+    cookies_file: null,
+    proxy: null,
+    rate_limit: null,
     normalize_audio: false,
+    audio_gain_target: null,
     loudnorm: false,
     loudnorm_preset: null,
     loudnorm_target_i: null,
@@ -24,6 +31,7 @@ const defaultSettings: AppSettings = {
     loudnorm_precompress: false,
     normalize_boost: false,
     normalize_boost_db: null,
+    embed_subtitles: false,
 };
 
 beforeEach(() => {

@@ -231,6 +231,8 @@ pub struct NetworkOptions {
     pub concurrent_fragments: Option<u32>,
     /// Download rate limit in bytes per second.
     pub rate_limit: Option<u64>,
+    /// HTTP/SOCKS proxy URL (e.g. `"http://proxy:3128"`, `"socks5://proxy:1080"`). `None` preserves base config.
+    pub proxy: Option<String>,
     /// Browser to extract cookies from.
     pub cookies_from_browser: Option<BrowserType>,
     /// Path to a Netscape-format cookies file.

@@ -14,7 +14,7 @@ import {
 } from "../api/downloads";
 import { settingsQueryOptions } from "../api/settings";
 import { FormatDialog } from "../components/FormatDialog";
-import type { DownloadOptions } from "../types";
+import type { DownloadJob, DownloadOptions } from "../types";
 
 const URL_PATTERN = /^https?:\/\/.+/i;
 
@@ -99,9 +99,9 @@ export function DownloadPage() {
     const handleRemove = (id: string) => {
         removeJob(id).catch((e) => console.error("Failed to remove", e));
     };
-    const handleRetry = (retryUrl: string) => {
-        const options = buildDefaultOptions(settings);
-        startDownload(retryUrl, options).catch((e) =>
+    const handleRetry = (job: DownloadJob) => {
+        const options = job.options ?? buildDefaultOptions(settings);
+        startDownload(job.url, options).catch((e) =>
             console.error("Failed to retry", e),
         );
     };
