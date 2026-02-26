@@ -5,9 +5,12 @@
 //! [`pick_directory`] command uses the native OS folder picker via
 //! `tauri-plugin-dialog`.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+use log::{info, warn};
 use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::error::AppError;
@@ -123,4 +126,48 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
         }
         None => Ok(None),
     }
+}
+
+/// Reveal a file or directory in the system file manager.
+///
+/// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
+/// action for the given path. Requires the `opener:allow-reveal-item-in-dir`
+/// capability.
+///
+/// # Arguments
+///
+/// * `path` - Absolute path to the file or directory to reveal.
+/// * `app` - Tauri application handle for accessing the opener plugin.
+///
+/// # Errors
+///
+/// Returns [`AppError::Internal`] if the path is invalid or the OS
+/// reveal action fails.
+#[tauri::command]
+pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppError> {
+    if path.is_empty() {
+        return Err(AppError::InvalidInput {
+            field: "path".to_owned(),
+            message: "Output file path is empty".to_owned(),
+        });
+    }
+
+    let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
+        warn!("reveal_in_folder: file does not exist: {}", path);
+        return Err(AppError::Internal {
+            message: format!("File not found: {path}"),
+        });
+    }
+
+    info!("reveal_in_folder: revealing {}", path);
+
+    app.opener()
+        .reveal_item_in_dir(&path_buf)
+        .map_err(|e| AppError::Internal {
+            message: format!("Failed to reveal path in folder: {e}"),
+        })?;
+
+    Ok(())
 }
