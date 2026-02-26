@@ -142,7 +142,7 @@ export function FilterBar({ isFetching, hasSearchData, onSearch }: FilterBarProp
                                     "hover:border-white/[0.08] hover:text-foreground/70",
                                     "focus:outline-none focus:ring-1 focus:ring-ring",
                                     "disabled:opacity-40 disabled:cursor-not-allowed",
-                                    active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                                    active && "select-active bg-primary/[0.06]",
                                 )}
                                 aria-label={desc.display_name}
                             >
@@ -219,7 +219,7 @@ export function FilterBar({ isFetching, hasSearchData, onSearch }: FilterBarProp
                                             "hover:border-white/[0.08] hover:text-foreground/70",
                                             "focus:outline-none focus:ring-1 focus:ring-ring",
                                             "disabled:opacity-40 disabled:cursor-not-allowed",
-                                            active && "border-primary/30 text-foreground bg-primary/[0.06]",
+                                            active && "select-active bg-primary/[0.06]",
                                         )}
                                         aria-label={desc.display_name}
                                     >

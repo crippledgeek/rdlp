@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings, pickDirectory } from "../api/settings";
@@ -115,7 +116,7 @@ export function SettingsPage() {
                         })
                     }
                 >
-                    <SelectTrigger className="w-full text-sm">
+                    <SelectTrigger className={cn("w-full text-sm", draft.default_remux && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -139,7 +140,7 @@ export function SettingsPage() {
                         })
                     }
                 >
-                    <SelectTrigger className="w-full text-sm">
+                    <SelectTrigger className={cn("w-full text-sm", draft.default_extract_audio && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -164,7 +165,7 @@ export function SettingsPage() {
                         })
                     }
                 >
-                    <SelectTrigger className="w-full text-sm">
+                    <SelectTrigger className={cn("w-full text-sm", draft.default_subtitle_format && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -206,7 +207,7 @@ export function SettingsPage() {
                         })
                     }
                 >
-                    <SelectTrigger className="w-full text-sm">
+                    <SelectTrigger className={cn("w-full text-sm", draft.default_search_provider && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -300,13 +301,13 @@ export function SettingsPage() {
                                 aria-labelledby="normalize-mode-label"
                                 className="w-fit"
                             >
-                                <ToggleGroupItem value="peak" size="sm" className="text-xs px-3">
+                                <ToggleGroupItem value="peak" size="sm" className="text-xs px-3 data-[state=on]:select-active data-[state=on]:bg-primary/15">
                                     Peak
                                 </ToggleGroupItem>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <span>
-                                            <ToggleGroupItem value="loudnorm" size="sm" className="text-xs px-3">
+                                            <ToggleGroupItem value="loudnorm" size="sm" className="text-xs px-3 data-[state=on]:select-active data-[state=on]:bg-primary/15">
                                                 EBU R128 Loudnorm
                                             </ToggleGroupItem>
                                         </span>
@@ -339,7 +340,7 @@ export function SettingsPage() {
                                         })
                                     }
                                 >
-                                    <SelectTrigger id="loudnorm-preset" className="w-full text-sm">
+                                    <SelectTrigger id="loudnorm-preset" className={cn("w-full text-sm", draft.loudnorm_preset && "select-active")}>
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
