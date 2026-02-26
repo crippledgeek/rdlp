@@ -36,10 +36,10 @@ export function NormalizationCustomControls({
                     }}
                     className="w-fit"
                 >
-                    <ToggleGroupItem value="peak" size="sm" className="text-[11px] px-2.5 h-6">
+                    <ToggleGroupItem value="peak" size="sm" className="text-[11px] px-2.5 h-6 data-[state=on]:bg-primary/15 data-[state=on]:text-primary data-[state=on]:border-primary/40">
                         Peak
                     </ToggleGroupItem>
-                    <ToggleGroupItem value="loudnorm" size="sm" className="text-[11px] px-2.5 h-6">
+                    <ToggleGroupItem value="loudnorm" size="sm" className="text-[11px] px-2.5 h-6 data-[state=on]:bg-primary/15 data-[state=on]:text-primary data-[state=on]:border-primary/40">
                         EBU R128
                     </ToggleGroupItem>
                 </ToggleGroup>
