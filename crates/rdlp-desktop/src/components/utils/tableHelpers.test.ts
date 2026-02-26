@@ -149,4 +149,30 @@ describe("optionsSummary", () => {
         const result = optionsSummary(makeOptions({ remux: "mkv", embedThumbnail: true }));
         expect(result).toContain("\u00b7");
     });
+
+    test("includes 'Peak normalize' when normalizeAudio is true and loudnorm is false", () => {
+        const result = optionsSummary(makeOptions({ normalizeAudio: true, loudnorm: false }));
+        expect(result).toContain("Peak normalize");
+    });
+
+    test("includes 'Loudnorm (streaming)' when loudnorm is enabled with streaming preset", () => {
+        const result = optionsSummary(makeOptions({ normalizeAudio: true, loudnorm: true, loudnormPreset: "streaming" }));
+        expect(result).toContain("Loudnorm (streaming)");
+    });
+
+    test("includes 'Loudnorm (broadcast)' when loudnorm is enabled with broadcast preset", () => {
+        const result = optionsSummary(makeOptions({ normalizeAudio: true, loudnorm: true, loudnormPreset: "broadcast" }));
+        expect(result).toContain("Loudnorm (broadcast)");
+    });
+
+    test("defaults to 'Loudnorm (streaming)' when loudnorm preset is null", () => {
+        const result = optionsSummary(makeOptions({ normalizeAudio: true, loudnorm: true, loudnormPreset: null }));
+        expect(result).toContain("Loudnorm (streaming)");
+    });
+
+    test("does not include normalization when normalizeAudio is null", () => {
+        const result = optionsSummary(makeOptions({ normalizeAudio: null }));
+        expect(result).not.toContain("normalize");
+        expect(result).not.toContain("Loudnorm");
+    });
 });

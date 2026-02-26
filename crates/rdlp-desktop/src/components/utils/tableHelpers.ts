@@ -32,5 +32,13 @@ export function optionsSummary(opts: DownloadOptions): string {
     if (opts.subtitles && opts.subtitleLangs.length > 0)
         parts.push(`Subs: ${opts.subtitleLangs.join(", ")}`);
     if (opts.embedThumbnail) parts.push("Thumbnail");
+    if (opts.normalizeAudio === true) {
+        if (opts.loudnorm) {
+            const preset = opts.loudnormPreset ?? "streaming";
+            parts.push(`Loudnorm (${preset})`);
+        } else {
+            parts.push("Peak normalize");
+        }
+    }
     return parts.length > 0 ? parts.join(" \u00b7 ") : "Default settings";
 }
