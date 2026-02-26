@@ -349,7 +349,7 @@ export function FormatOptionsPanel({
                                   ? "loudnorm-broadcast"
                                   : value.loudnormPreset === "loud"
                                     ? "loudnorm-loud"
-                                    : value.loudnormPreset === "streaming"
+                                    : value.loudnormPreset === "streaming" || value.loudnormPreset === null
                                       ? "loudnorm-streaming"
                                       : "default"
                     }
