@@ -55,10 +55,14 @@ export function FormatGroupSection({ group, columnCount, selectedId, mergeId, ex
                     <TableRow
                         key={row.id}
                         className={cn(
-                            "cursor-pointer transition-colors border-b-foreground/[0.06] hover:bg-foreground/[0.06]",
-                            isEven ? "bg-transparent" : "bg-foreground/[0.02]",
-                            isSelected && "bg-primary/20 border-l-[3px] border-l-primary",
-                            isMerge && "bg-foreground/10 border-l-[3px] border-l-foreground/40",
+                            "cursor-pointer transition-colors border-b-foreground/[0.06]",
+                            // Base: zebra stripe + hover (only for unselected rows)
+                            !isSelected && !isMerge && (isEven ? "bg-transparent" : "bg-foreground/[0.02]"),
+                            !isSelected && !isMerge && "hover:bg-foreground/[0.06]",
+                            // Selected: strong primary highlight, no hover override
+                            isSelected && "bg-primary/30 border-l-[3px] border-l-primary hover:bg-primary/35",
+                            // Merge: distinct secondary highlight
+                            isMerge && "bg-foreground/15 border-l-[3px] border-l-foreground/40 hover:bg-foreground/18",
                             isExprMatch && !isSelected && !isMerge && "bg-yellow-500/5",
                         )}
                         onClick={(e) => onRowClick(f.format_id, e)}
