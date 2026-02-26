@@ -113,7 +113,7 @@ export function ResultsTableSection({
                                             key={header.id}
                                             style={{ width: `${(header.getSize() / visibleTotalSize * 100).toFixed(1)}%` }}
                                             className={cn(
-                                                "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none transition-colors relative",
+                                                "table-th relative",
                                                 header.column.getCanSort() && "cursor-pointer hover:text-foreground",
                                                 align === "right" && "text-right",
                                                 isSorted ? "text-foreground" : "text-muted-foreground",
@@ -185,9 +185,9 @@ export function ResultsTableSection({
                             </TableRow>
                         )}
                     </TableBody>
-                    <TableFooter className="sticky bottom-0 z-10 bg-card/95 backdrop-blur-sm">
+                    <TableFooter className="table-footer-sticky">
                         <TableRow className="hover:bg-transparent">
-                            <TableCell colSpan={columns.length} className="px-3 py-1.5 text-[10px] text-muted-foreground">
+                            <TableCell colSpan={columns.length} className="table-footer-cell">
                                 {resultCount} result{resultCount !== 1 ? "s" : ""}
                             </TableCell>
                         </TableRow>

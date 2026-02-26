@@ -72,7 +72,7 @@ export function SearchIdleState({
                     <div className="flex flex-col gap-1">
                         {SHORTCUTS.map((s) => (
                             <div key={s.keys} className="flex items-center gap-2.5 text-xs text-muted-foreground">
-                                <kbd className="inline-block min-w-16 px-1.5 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06] font-mono text-[10px] text-muted-foreground text-center">
+                                <kbd className="kbd-chip inline-block min-w-16 text-center">
                                     {s.keys}
                                 </kbd>
                                 <span>{s.desc}</span>

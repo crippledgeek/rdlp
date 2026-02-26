@@ -62,11 +62,7 @@ export function QueuePage() {
         <div className="max-w-3xl">
             {activeJobs.length > 0 && (
                 <section className="mb-6">
-                    <h3
-                        className="mb-2.5 border-b border-border pb-1.5
-                            text-[11px] font-bold uppercase tracking-widest
-                            text-muted-foreground"
-                    >
+                    <h3 className="section-heading">
                         Active ({activeJobs.length})
                     </h3>
                     <div className="space-y-2">
@@ -85,11 +81,7 @@ export function QueuePage() {
 
             {completedJobs.length > 0 && (
                 <section className="mb-6">
-                    <h3
-                        className="mb-2.5 border-b border-border pb-1.5
-                            text-[11px] font-bold uppercase tracking-widest
-                            text-muted-foreground"
-                    >
+                    <h3 className="section-heading">
                         History ({completedJobs.length})
                     </h3>
                     <div className="space-y-2">

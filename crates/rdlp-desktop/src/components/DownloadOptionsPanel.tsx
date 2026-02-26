@@ -94,7 +94,7 @@ export function DownloadOptionsPanel({
                 <CollapsibleContent>
                     <div className="px-5 pb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 items-center animate-in fade-in-0 slide-in-from-top-1 duration-150">
                         {/* Save to */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Save to
                         </Label>
                         <div className="flex gap-1.5">
@@ -116,7 +116,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Remux */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Remux
                         </Label>
                         <Select
@@ -138,7 +138,7 @@ export function DownloadOptionsPanel({
                         </Select>
 
                         {/* Extract Audio */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Audio
                         </Label>
                         <Select
@@ -160,7 +160,7 @@ export function DownloadOptionsPanel({
                         </Select>
 
                         {/* Subtitles */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Subtitles
                         </Label>
                         <div className="flex flex-col gap-1.5">
@@ -226,7 +226,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Thumbnail */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Thumbnail
                         </Label>
                         <div className="flex items-center gap-2">
@@ -244,7 +244,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Audio Normalization */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide self-start pt-1.5">
+                        <Label className="options-label self-start pt-1.5">
                             Normalize
                         </Label>
                         <div className="flex flex-col gap-0">

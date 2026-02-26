@@ -97,7 +97,7 @@ export function SettingsPage() {
             <h2 className="text-lg font-bold mb-4 text-foreground">Settings</h2>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Output Directory</Label>
+                <Label className="settings-label">Output Directory</Label>
                 <div className="flex gap-1.5">
                     <Input type="text" value={draft.output_dir} readOnly className="flex-1 font-mono text-xs" />
                     <Button variant="outline" onClick={handlePickDir}>Browse</Button>
@@ -105,7 +105,7 @@ export function SettingsPage() {
             </div>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Remux Format</Label>
+                <Label className="settings-label">Default Remux Format</Label>
                 <Select
                     value={draft.default_remux ?? NONE_SENTINEL}
                     onValueChange={(val) =>
@@ -129,7 +129,7 @@ export function SettingsPage() {
             </div>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Audio Extraction</Label>
+                <Label className="settings-label">Default Audio Extraction</Label>
                 <Select
                     value={draft.default_extract_audio ?? NONE_SENTINEL}
                     onValueChange={(val) =>
@@ -154,7 +154,7 @@ export function SettingsPage() {
             </div>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Subtitle Format</Label>
+                <Label className="settings-label">Default Subtitle Format</Label>
                 <Select
                     value={draft.default_subtitle_format ?? NONE_SENTINEL}
                     onValueChange={(val) =>
@@ -178,7 +178,7 @@ export function SettingsPage() {
             </div>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Subtitle Languages</Label>
+                <Label className="settings-label">Default Subtitle Languages</Label>
                 <Input
                     type="text"
                     placeholder="en,sv,ja"
@@ -196,7 +196,7 @@ export function SettingsPage() {
             </div>
 
             <div className="mb-4">
-                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">Default Search Provider</Label>
+                <Label className="settings-label">Default Search Provider</Label>
                 <Select
                     value={draft.default_search_provider ?? NONE_SENTINEL}
                     onValueChange={(val) =>
@@ -222,7 +222,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
                 onClick={() => setDraft({ ...draft, embed_thumbnail: !draft.embed_thumbnail })}
             >
                 <Checkbox
@@ -235,7 +235,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
                 onClick={() => setDraft({ ...draft, embed_metadata: !draft.embed_metadata })}
             >
                 <Checkbox
@@ -248,7 +248,7 @@ export function SettingsPage() {
             </div>
 
             <div
-                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-4"
+                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-4"
                 onClick={() => setDraft({ ...draft, verbose: !draft.verbose })}
             >
                 <Checkbox
@@ -266,7 +266,7 @@ export function SettingsPage() {
             <h3 className="text-sm font-bold text-foreground mb-3">Audio Normalization</h3>
 
             <div
-                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors mb-3"
+                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted mb-3"
                 onClick={() => setDraft({ ...draft, normalize_audio: !draft.normalize_audio })}
             >
                 <Checkbox
@@ -285,7 +285,7 @@ export function SettingsPage() {
                     <div>
                         <Label
                             id="normalize-mode-label"
-                            className="text-[13px] font-semibold text-foreground mb-1.5 block"
+                            className="settings-label"
                         >
                             Mode
                         </Label>
@@ -327,7 +327,7 @@ export function SettingsPage() {
                             <div>
                                 <Label
                                     htmlFor="loudnorm-preset"
-                                    className="text-[13px] font-semibold text-foreground mb-1.5 block"
+                                    className="settings-label"
                                 >
                                     Preset
                                 </Label>
@@ -354,7 +354,7 @@ export function SettingsPage() {
 
                             {/* Custom targets */}
                             <div>
-                                <Label className="text-[13px] font-semibold text-foreground mb-1.5 block">
+                                <Label className="settings-label">
                                     Custom Targets (override preset)
                                 </Label>
                                 <div className="grid grid-cols-3 gap-2">
@@ -451,7 +451,7 @@ export function SettingsPage() {
 
                             {/* Dynamic mode */}
                             <div
-                                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors"
+                                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
                                 onClick={() =>
                                     setDraft({ ...draft, loudnorm_dynamic: !draft.loudnorm_dynamic })
                                 }
@@ -473,7 +473,7 @@ export function SettingsPage() {
 
                             {/* Precompress */}
                             <div
-                                className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors"
+                                className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
                                 onClick={() =>
                                     setDraft({ ...draft, loudnorm_precompress: !draft.loudnorm_precompress })
                                 }
@@ -497,7 +497,7 @@ export function SettingsPage() {
 
                     {/* Boost fallback — visible whenever normalize_audio is true */}
                     <div
-                        className="flex items-center gap-2.5 p-2.5 px-3 bg-card border border-border rounded-md cursor-pointer hover:border-white/[0.08] hover:bg-muted transition-colors"
+                        className="settings-toggle-row hover:border-white/[0.08] hover:bg-muted"
                         onClick={() =>
                             setDraft({ ...draft, normalize_boost: !draft.normalize_boost })
                         }
@@ -521,7 +521,7 @@ export function SettingsPage() {
                         <div>
                             <Label
                                 htmlFor="normalize-boost-db"
-                                className="text-[13px] font-semibold text-foreground mb-1.5 block"
+                                className="settings-label"
                             >
                                 Boost Gain (dB)
                             </Label>

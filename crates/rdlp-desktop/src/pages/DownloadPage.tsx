@@ -175,11 +175,7 @@ export function DownloadPage() {
             {/* Recent downloads */}
             {recentJobs.length > 0 && (
                 <section className="mt-6">
-                    <h3
-                        className="mb-2.5 border-b border-border pb-1.5
-                            text-[11px] font-bold uppercase tracking-widest
-                            text-muted-foreground"
-                    >
+                    <h3 className="section-heading">
                         Recent Downloads
                     </h3>
                     <div className="space-y-2">

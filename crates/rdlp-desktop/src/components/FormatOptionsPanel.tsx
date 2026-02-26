@@ -169,7 +169,7 @@ export function FormatOptionsPanel({
         <div className="flex flex-col gap-1.5">
             {!hidePresets && (
                 <div className="flex flex-col gap-1">
-                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                    <Label className="options-label">
                         Quality Preset
                     </Label>
                     <RadioGroup
@@ -201,7 +201,7 @@ export function FormatOptionsPanel({
             )}
 
             <div className="flex flex-col gap-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                <Label className="options-label">
                     Remux
                 </Label>
                 <Select
@@ -223,7 +223,7 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                <Label className="options-label">
                     Extract Audio
                 </Label>
                 <Select
@@ -255,7 +255,7 @@ export function FormatOptionsPanel({
                     />
                     <Label
                         htmlFor="subtitles"
-                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                        className="options-label cursor-pointer"
                     >
                         Download Subtitles
                     </Label>
@@ -328,7 +328,7 @@ export function FormatOptionsPanel({
                     />
                     <Label
                         htmlFor="embed-thumbnail"
-                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                        className="options-label cursor-pointer"
                     >
                         Embed Thumbnail
                     </Label>
@@ -336,7 +336,7 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                <Label className="options-label">
                     Audio Normalization
                 </Label>
                 <Select
