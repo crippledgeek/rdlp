@@ -245,6 +245,181 @@ fn test_postprocess_some_overrides_loudnorm_preset() {
 }
 
 #[test]
+fn test_postprocess_none_preserves_loudnorm_target_i() {
+    let mut config = Config {
+        loudnorm_target_i: Some(-16.0),
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_i, Some(-16.0));
+}
+
+#[test]
+fn test_postprocess_some_overrides_loudnorm_target_i() {
+    let mut config = Config {
+        loudnorm_target_i: None,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        loudnorm_target_i: Some(-23.0),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_i, Some(-23.0));
+}
+
+#[test]
+fn test_postprocess_none_preserves_loudnorm_target_tp() {
+    let mut config = Config {
+        loudnorm_target_tp: Some(-1.0),
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_tp, Some(-1.0));
+}
+
+#[test]
+fn test_postprocess_some_overrides_loudnorm_target_tp() {
+    let mut config = Config {
+        loudnorm_target_tp: None,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        loudnorm_target_tp: Some(-2.0),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_tp, Some(-2.0));
+}
+
+#[test]
+fn test_postprocess_none_preserves_loudnorm_target_lra() {
+    let mut config = Config {
+        loudnorm_target_lra: Some(7.0),
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_lra, Some(7.0));
+}
+
+#[test]
+fn test_postprocess_some_overrides_loudnorm_target_lra() {
+    let mut config = Config {
+        loudnorm_target_lra: None,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        loudnorm_target_lra: Some(11.0),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.loudnorm_target_lra, Some(11.0));
+}
+
+#[test]
+fn test_postprocess_none_preserves_loudnorm_dynamic() {
+    let mut config = Config {
+        loudnorm_dynamic: true,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert!(config.loudnorm_dynamic);
+}
+
+#[test]
+fn test_postprocess_some_overrides_loudnorm_dynamic() {
+    let mut config = Config {
+        loudnorm_dynamic: false,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        loudnorm_dynamic: Some(true),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert!(config.loudnorm_dynamic);
+}
+
+#[test]
+fn test_postprocess_none_preserves_loudnorm_precompress() {
+    let mut config = Config {
+        loudnorm_precompress: true,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert!(config.loudnorm_precompress);
+}
+
+#[test]
+fn test_postprocess_some_overrides_loudnorm_precompress() {
+    let mut config = Config {
+        loudnorm_precompress: false,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        loudnorm_precompress: Some(true),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert!(config.loudnorm_precompress);
+}
+
+#[test]
+fn test_postprocess_none_preserves_normalize_boost() {
+    let mut config = Config {
+        normalize_boost: true,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert!(config.normalize_boost);
+}
+
+#[test]
+fn test_postprocess_some_overrides_normalize_boost() {
+    let mut config = Config {
+        normalize_boost: false,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        normalize_boost: Some(true),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert!(config.normalize_boost);
+}
+
+#[test]
+fn test_postprocess_none_preserves_normalize_boost_db() {
+    let mut config = Config {
+        normalize_boost_db: Some(8.0),
+        ..Config::default()
+    };
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert_eq!(config.normalize_boost_db, Some(8.0));
+}
+
+#[test]
+fn test_postprocess_some_overrides_normalize_boost_db() {
+    let mut config = Config {
+        normalize_boost_db: None,
+        ..Config::default()
+    };
+    let opts = PostProcessOptions {
+        normalize_boost_db: Some(12.0),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.normalize_boost_db, Some(12.0));
+}
+
+#[test]
 fn test_postprocess_none_preserves_recode_video() {
     let mut config = Config {
         recode_video: Some(rdlp_core::ContainerFormat::Mkv),
