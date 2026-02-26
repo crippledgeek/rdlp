@@ -14,6 +14,16 @@ const defaultSettings: AppSettings = {
     embed_metadata: true,
     verbose: false,
     default_search_provider: null,
+    normalize_audio: false,
+    loudnorm: false,
+    loudnorm_preset: null,
+    loudnorm_target_i: null,
+    loudnorm_target_tp: null,
+    loudnorm_target_lra: null,
+    loudnorm_dynamic: false,
+    loudnorm_precompress: false,
+    normalize_boost: false,
+    normalize_boost_db: null,
 };
 
 beforeEach(() => {

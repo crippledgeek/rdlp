@@ -189,6 +189,20 @@ pub struct PostProcessOptions {
     pub loudnorm: Option<bool>,
     /// Loudness normalization preset name (e.g. `"streaming"`).
     pub loudnorm_preset: Option<String>,
+    /// Target integrated loudness in LUFS. `None` preserves base config.
+    pub loudnorm_target_i: Option<f64>,
+    /// Target true peak in dBTP. `None` preserves base config.
+    pub loudnorm_target_tp: Option<f64>,
+    /// Target loudness range in LU. `None` preserves base config.
+    pub loudnorm_target_lra: Option<f64>,
+    /// Force dynamic (per-frame compression) in loudnorm pass 2. `None` preserves base config.
+    pub loudnorm_dynamic: Option<bool>,
+    /// Prepend a mild acompressor before loudnorm. `None` preserves base config.
+    pub loudnorm_precompress: Option<bool>,
+    /// Enable limiter-boost fallback for over-compressed content. `None` preserves base config.
+    pub normalize_boost: Option<bool>,
+    /// Gain in dB for limiter-boost fallback. `None` preserves base config.
+    pub normalize_boost_db: Option<f64>,
     /// Recode (transcode) video into a different container format.
     pub recode_video: Option<ContainerFormat>,
 }
@@ -266,6 +280,13 @@ mod tests {
         assert!(req.postprocess.normalize_audio.is_none());
         assert!(req.postprocess.loudnorm.is_none());
         assert!(req.postprocess.loudnorm_preset.is_none());
+        assert!(req.postprocess.loudnorm_target_i.is_none());
+        assert!(req.postprocess.loudnorm_target_tp.is_none());
+        assert!(req.postprocess.loudnorm_target_lra.is_none());
+        assert!(req.postprocess.loudnorm_dynamic.is_none());
+        assert!(req.postprocess.loudnorm_precompress.is_none());
+        assert!(req.postprocess.normalize_boost.is_none());
+        assert!(req.postprocess.normalize_boost_db.is_none());
         assert!(req.postprocess.recode_video.is_none());
 
         // NetworkOptions defaults

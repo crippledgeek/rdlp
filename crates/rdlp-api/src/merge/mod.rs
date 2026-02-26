@@ -109,6 +109,27 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(ref v) = self.loudnorm_preset {
             config.loudnorm_preset = Some(v.clone());
         }
+        if let Some(v) = self.loudnorm_target_i {
+            config.loudnorm_target_i = Some(v);
+        }
+        if let Some(v) = self.loudnorm_target_tp {
+            config.loudnorm_target_tp = Some(v);
+        }
+        if let Some(v) = self.loudnorm_target_lra {
+            config.loudnorm_target_lra = Some(v);
+        }
+        if let Some(v) = self.loudnorm_dynamic {
+            config.loudnorm_dynamic = v;
+        }
+        if let Some(v) = self.loudnorm_precompress {
+            config.loudnorm_precompress = v;
+        }
+        if let Some(v) = self.normalize_boost {
+            config.normalize_boost = v;
+        }
+        if let Some(v) = self.normalize_boost_db {
+            config.normalize_boost_db = Some(v);
+        }
         if let Some(v) = self.recode_video {
             config.recode_video = Some(v);
         }

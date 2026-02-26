@@ -125,7 +125,7 @@ export function CommandBar({ inputRef, activeTab, isFetching, onSearch }: Comman
                         <X className="h-3.5 w-3.5" />
                     </button>
                 )}
-                <kbd className="absolute right-2 px-1.5 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06] text-muted-foreground font-mono text-[10px] pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
+                <kbd className="absolute right-2 kbd-chip pointer-events-none peer-focus:opacity-0">Ctrl+K</kbd>
             </div>
 
             <Button

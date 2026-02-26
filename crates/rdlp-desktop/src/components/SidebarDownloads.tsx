@@ -39,7 +39,7 @@ export function SidebarDownloads({ onSwitchToQueue }: SidebarDownloadsProps) {
         >
             <CollapsibleTrigger asChild>
                 <button
-                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-white/[0.04] transition-colors"
+                    className="sidebar-section-btn"
                     aria-expanded={!collapsed}
                 >
                     <ChevronDown

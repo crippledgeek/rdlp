@@ -111,7 +111,7 @@ export function FormatTableSection({
                                             key={header.id}
                                             style={{ width: `${(header.getSize() / totalColumnSize * 100).toFixed(1)}%` }}
                                             className={cn(
-                                                "h-8 px-3 text-[10px] font-bold tracking-wider uppercase select-none transition-colors",
+                                                "table-th",
                                                 header.column.getCanSort() && "cursor-pointer hover:text-foreground",
                                                 align === "right" && "text-right",
                                                 align === "center" && "text-center",
@@ -151,9 +151,9 @@ export function FormatTableSection({
                             </TableRow>
                         )}
                     </TableBody>
-                    <TableFooter className="sticky bottom-0 z-10 bg-card/95 backdrop-blur-sm">
+                    <TableFooter className="table-footer-sticky">
                         <TableRow className="hover:bg-transparent">
-                            <TableCell colSpan={columns.length} className="px-3 py-1.5 text-[10px] text-muted-foreground">
+                            <TableCell colSpan={columns.length} className="table-footer-cell">
                                 {filteredCount} format{filteredCount !== 1 ? "s" : ""}
                             </TableCell>
                         </TableRow>

@@ -22,6 +22,8 @@ import type {
     ContainerFormat,
     DownloadOptions,
 } from "../types";
+import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
+import { NormalizationCustomControls } from "./NormalizationCustomControls";
 
 /** A format preset with a human-readable label and yt-dlp selector string. */
 export interface FormatPreset {
@@ -83,6 +85,16 @@ export function buildDefaultOptions(
         embedThumbnail: settings?.embed_thumbnail ?? true,
         audioMultistreams: false,
         recodeVideo: null,
+        normalizeAudio: settings?.normalize_audio ?? false,
+        loudnorm: settings?.loudnorm ?? false,
+        loudnormPreset: settings?.loudnorm_preset ?? null,
+        loudnormTargetI: settings?.loudnorm_target_i ?? null,
+        loudnormTargetTp: settings?.loudnorm_target_tp ?? null,
+        loudnormTargetLra: settings?.loudnorm_target_lra ?? null,
+        loudnormDynamic: settings?.loudnorm_dynamic ?? false,
+        loudnormPrecompress: settings?.loudnorm_precompress ?? false,
+        normalizeBoost: settings?.normalize_boost ?? false,
+        normalizeBoostDb: settings?.normalize_boost_db ?? null,
     };
 }
 
@@ -157,7 +169,7 @@ export function FormatOptionsPanel({
         <div className="flex flex-col gap-1.5">
             {!hidePresets && (
                 <div className="flex flex-col gap-1">
-                    <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                    <Label className="options-label">
                         Quality Preset
                     </Label>
                     <RadioGroup
@@ -189,14 +201,14 @@ export function FormatOptionsPanel({
             )}
 
             <div className="flex flex-col gap-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                <Label className="options-label">
                     Remux
                 </Label>
                 <Select
                     value={value.remux ?? NONE_SENTINEL}
                     onValueChange={handleRemux}
                 >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", value.remux && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -211,14 +223,14 @@ export function FormatOptionsPanel({
             </div>
 
             <div className="flex flex-col gap-1">
-                <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                <Label className="options-label">
                     Extract Audio
                 </Label>
                 <Select
                     value={value.extractAudio ?? NONE_SENTINEL}
                     onValueChange={handleAudio}
                 >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", value.extractAudio && "select-active")}>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -243,7 +255,7 @@ export function FormatOptionsPanel({
                     />
                     <Label
                         htmlFor="subtitles"
-                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                        className="options-label cursor-pointer"
                     >
                         Download Subtitles
                     </Label>
@@ -316,11 +328,41 @@ export function FormatOptionsPanel({
                     />
                     <Label
                         htmlFor="embed-thumbnail"
-                        className="text-[11px] font-semibold text-muted-foreground tracking-wide cursor-pointer"
+                        className="options-label cursor-pointer"
                     >
                         Embed Thumbnail
                     </Label>
                 </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+                <Label className="options-label">
+                    Audio Normalization
+                </Label>
+                <Select
+                    value={getNormSelectValue(value)}
+                    onValueChange={(val) => onChange(handleNormSelectChange(value, val))}
+                >
+                    <SelectTrigger size="sm" className={cn("w-full text-xs", getNormSelectValue(value) !== "default" && "select-active")}>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="default">Use Settings Default</SelectItem>
+                        <SelectItem value="off">Off</SelectItem>
+                        <SelectItem value="peak">Peak</SelectItem>
+                        <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
+                        <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
+                        <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
+                        <SelectItem value="custom">Custom...</SelectItem>
+                    </SelectContent>
+                </Select>
+                {getNormSelectValue(value) === "custom" && (
+                    <NormalizationCustomControls
+                        value={value}
+                        onChange={onChange}
+                        idPrefix="fop-norm"
+                    />
+                )}
             </div>
         </div>
     );

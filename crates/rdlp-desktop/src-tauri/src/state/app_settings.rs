@@ -38,6 +38,36 @@ pub struct AppSettings {
     pub verbose: bool,
     /// Default search provider site name (e.g. `"xhamster"`).
     pub default_search_provider: Option<String>,
+    /// Enable audio normalization (peak mode unless loudnorm is set).
+    #[serde(default)]
+    pub normalize_audio: bool,
+    /// Use EBU R128 loudnorm normalization (implies normalize_audio).
+    #[serde(default)]
+    pub loudnorm: bool,
+    /// Loudnorm preset name ("streaming", "broadcast", "loud").
+    #[serde(default)]
+    pub loudnorm_preset: Option<String>,
+    /// Custom target integrated loudness in LUFS (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_i: Option<f64>,
+    /// Custom target true peak in dBTP (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_tp: Option<f64>,
+    /// Custom target loudness range in LU (overrides preset).
+    #[serde(default)]
+    pub loudnorm_target_lra: Option<f64>,
+    /// Force dynamic (per-frame compression) mode in loudnorm pass 2.
+    #[serde(default)]
+    pub loudnorm_dynamic: bool,
+    /// Prepend a mild acompressor before loudnorm to tame extreme peaks.
+    #[serde(default)]
+    pub loudnorm_precompress: bool,
+    /// Enable limiter-boost fallback for over-compressed content.
+    #[serde(default)]
+    pub normalize_boost: bool,
+    /// Gain in dB for limiter-boost fallback.
+    #[serde(default)]
+    pub normalize_boost_db: Option<f64>,
 }
 
 impl AppSettings {
@@ -126,6 +156,16 @@ impl Default for AppSettings {
             embed_metadata: false,
             verbose: false,
             default_search_provider: None,
+            normalize_audio: false,
+            loudnorm: false,
+            loudnorm_preset: None,
+            loudnorm_target_i: None,
+            loudnorm_target_tp: None,
+            loudnorm_target_lra: None,
+            loudnorm_dynamic: false,
+            loudnorm_precompress: false,
+            normalize_boost: false,
+            normalize_boost_db: None,
         }
     }
 }
@@ -155,6 +195,16 @@ mod tests {
         assert!(settings.default_subtitle_format.is_none());
         assert!(settings.default_subtitle_langs.is_empty());
         assert!(settings.default_search_provider.is_none());
+        assert!(!settings.normalize_audio);
+        assert!(!settings.loudnorm);
+        assert!(settings.loudnorm_preset.is_none());
+        assert!(settings.loudnorm_target_i.is_none());
+        assert!(settings.loudnorm_target_tp.is_none());
+        assert!(settings.loudnorm_target_lra.is_none());
+        assert!(!settings.loudnorm_dynamic);
+        assert!(!settings.loudnorm_precompress);
+        assert!(!settings.normalize_boost);
+        assert!(settings.normalize_boost_db.is_none());
     }
 
     #[test]
@@ -182,6 +232,49 @@ mod tests {
         );
     }
 
+    /// Settings JSON that predates the normalization fields (i.e. produced
+    /// by an older version of the application) MUST deserialize without
+    /// error, with all normalization fields falling back to their defaults.
+    #[test]
+    fn test_load_legacy_settings_without_normalization_fields() {
+        // Simulate a settings.json from before normalization was added.
+        let legacy_json = r#"{
+            "output_dir": "/tmp/downloads",
+            "default_remux": null,
+            "default_extract_audio": null,
+            "default_subtitle_format": null,
+            "default_subtitle_langs": [],
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_search_provider": null
+        }"#;
+
+        let settings: AppSettings = serde_json::from_str(legacy_json)
+            .expect("legacy JSON without normalization fields should deserialize");
+
+        // All normalization fields should default to false / None.
+        assert!(!settings.normalize_audio);
+        assert!(!settings.loudnorm);
+        assert!(settings.loudnorm_preset.is_none());
+        assert!(settings.loudnorm_target_i.is_none());
+        assert!(settings.loudnorm_target_tp.is_none());
+        assert!(settings.loudnorm_target_lra.is_none());
+        assert!(!settings.loudnorm_dynamic);
+        assert!(!settings.loudnorm_precompress);
+        assert!(!settings.normalize_boost);
+        assert!(settings.normalize_boost_db.is_none());
+
+        // Pre-existing fields should be preserved.
+        assert_eq!(
+            settings.output_dir,
+            std::path::PathBuf::from("/tmp/downloads")
+        );
+        assert!(settings.embed_thumbnail);
+        assert!(!settings.embed_metadata);
+        assert!(!settings.verbose);
+    }
+
     #[test]
     fn test_settings_round_trip() {
         let settings = AppSettings {
@@ -194,6 +287,16 @@ mod tests {
             embed_metadata: true,
             verbose: true,
             default_search_provider: Some("xhamster".to_owned()),
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_target_i: Some(-14.0),
+            loudnorm_target_tp: Some(-1.0),
+            loudnorm_target_lra: Some(11.0),
+            loudnorm_dynamic: true,
+            loudnorm_precompress: true,
+            normalize_boost: true,
+            normalize_boost_db: Some(8.0),
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -212,5 +315,15 @@ mod tests {
             restored.default_search_provider.as_deref(),
             Some("xhamster")
         );
+        assert!(restored.normalize_audio);
+        assert!(restored.loudnorm);
+        assert_eq!(restored.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(restored.loudnorm_target_i, Some(-14.0));
+        assert_eq!(restored.loudnorm_target_tp, Some(-1.0));
+        assert_eq!(restored.loudnorm_target_lra, Some(11.0));
+        assert!(restored.loudnorm_dynamic);
+        assert!(restored.loudnorm_precompress);
+        assert!(restored.normalize_boost);
+        assert_eq!(restored.normalize_boost_db, Some(8.0));
     }
 }

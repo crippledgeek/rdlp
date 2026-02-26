@@ -2,6 +2,7 @@
 //
 // Contains save directory, remux, audio extraction, subtitles, and thumbnail controls.
 
+import { cn } from "@/lib/utils";
 import { ChevronUp, ChevronDown, FolderOpen, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -25,6 +26,8 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { optionsSummary } from "./utils/tableHelpers";
+import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
+import { NormalizationCustomControls } from "./NormalizationCustomControls";
 import type {
     AppSettings,
     AudioFormat,
@@ -91,7 +94,7 @@ export function DownloadOptionsPanel({
                 <CollapsibleContent>
                     <div className="px-5 pb-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 items-center animate-in fade-in-0 slide-in-from-top-1 duration-150">
                         {/* Save to */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Save to
                         </Label>
                         <div className="flex gap-1.5">
@@ -113,7 +116,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Remux */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Remux
                         </Label>
                         <Select
@@ -123,7 +126,7 @@ export function DownloadOptionsPanel({
                                 remux: val === NONE_SENTINEL ? null : (val as ContainerFormat),
                             }))}
                         >
-                            <SelectTrigger className="h-7 text-xs">
+                            <SelectTrigger className={cn("h-7 text-xs", options.remux && "select-active")}>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -135,7 +138,7 @@ export function DownloadOptionsPanel({
                         </Select>
 
                         {/* Extract Audio */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Audio
                         </Label>
                         <Select
@@ -145,7 +148,7 @@ export function DownloadOptionsPanel({
                                 extractAudio: val === NONE_SENTINEL ? null : (val as AudioFormat),
                             }))}
                         >
-                            <SelectTrigger className="h-7 text-xs">
+                            <SelectTrigger className={cn("h-7 text-xs", options.extractAudio && "select-active")}>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -157,7 +160,7 @@ export function DownloadOptionsPanel({
                         </Select>
 
                         {/* Subtitles */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Subtitles
                         </Label>
                         <div className="flex flex-col gap-1.5">
@@ -223,7 +226,7 @@ export function DownloadOptionsPanel({
                         </div>
 
                         {/* Thumbnail */}
-                        <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
+                        <Label className="options-label">
                             Thumbnail
                         </Label>
                         <div className="flex items-center gap-2">
@@ -238,6 +241,39 @@ export function DownloadOptionsPanel({
                             <Label htmlFor="dialog-thumbnail" className="text-xs text-muted-foreground cursor-pointer">
                                 Embed thumbnail
                             </Label>
+                        </div>
+
+                        {/* Audio Normalization */}
+                        <Label className="options-label self-start pt-1.5">
+                            Normalize
+                        </Label>
+                        <div className="flex flex-col gap-0">
+                            <Select
+                                value={getNormSelectValue(options)}
+                                onValueChange={(val) =>
+                                    setOptions((prev) => handleNormSelectChange(prev, val))
+                                }
+                            >
+                                <SelectTrigger className={cn("h-7 text-xs", getNormSelectValue(options) !== "default" && "select-active")}>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="default">Use Settings Default</SelectItem>
+                                    <SelectItem value="off">Off</SelectItem>
+                                    <SelectItem value="peak">Peak</SelectItem>
+                                    <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
+                                    <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
+                                    <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
+                                    <SelectItem value="custom">Custom...</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            {getNormSelectValue(options) === "custom" && (
+                                <NormalizationCustomControls
+                                    value={options}
+                                    onChange={(next) => setOptions(next)}
+                                    idPrefix="dop-norm"
+                                />
+                            )}
                         </div>
                     </div>
                 </CollapsibleContent>

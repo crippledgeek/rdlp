@@ -153,6 +153,16 @@ export interface DownloadOptions {
     embedThumbnail: boolean;
     audioMultistreams: boolean;
     recodeVideo: ContainerFormat | null;
+    normalizeAudio: boolean | null;
+    loudnorm: boolean | null;
+    loudnormPreset: string | null;
+    loudnormTargetI: number | null;
+    loudnormTargetTp: number | null;
+    loudnormTargetLra: number | null;
+    loudnormDynamic: boolean | null;
+    loudnormPrecompress: boolean | null;
+    normalizeBoost: boolean | null;
+    normalizeBoostDb: number | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
@@ -211,6 +221,16 @@ export interface AppSettings {
     embed_metadata: boolean;
     verbose: boolean;
     default_search_provider: string | null;
+    normalize_audio: boolean;
+    loudnorm: boolean;
+    loudnorm_preset: string | null;
+    loudnorm_target_i: number | null;
+    loudnorm_target_tp: number | null;
+    loudnorm_target_lra: number | null;
+    loudnorm_dynamic: boolean;
+    loudnorm_precompress: boolean;
+    normalize_boost: boolean;
+    normalize_boost_db: number | null;
 }
 
 // ========== Error Types ==========
