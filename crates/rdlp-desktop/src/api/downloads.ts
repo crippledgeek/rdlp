@@ -41,3 +41,9 @@ export async function removeJob(jobId: string): Promise<void> {
     await invokeTyped<void>("remove_job", { jobId });
     await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
 }
+
+/** Remove all completed/failed/cancelled jobs from the queue. */
+export async function clearCompletedJobs(): Promise<void> {
+    await invokeTyped<void>("clear_completed_jobs");
+    await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
+}

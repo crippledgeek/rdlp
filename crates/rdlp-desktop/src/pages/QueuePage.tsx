@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { JobCard } from "../components/JobCard";
+import type { DownloadJob } from "../types";
 import {
     downloadsQueryOptions,
     cancelDownload,
     removeJob,
+    clearCompletedJobs,
     startDownload,
     buildDefaultOptions,
 } from "../api/downloads";
@@ -27,9 +30,15 @@ export function QueuePage() {
         );
     };
 
-    const handleRetry = (url: string) => {
-        const options = buildDefaultOptions(settings);
-        startDownload(url, options).catch((e) =>
+    const handleClearAll = () => {
+        clearCompletedJobs().catch((e) =>
+            console.error("Failed to clear completed jobs", e),
+        );
+    };
+
+    const handleRetry = (job: DownloadJob) => {
+        const options = job.options ?? buildDefaultOptions(settings);
+        startDownload(job.url, options).catch((e) =>
             console.error("Failed to retry download", e),
         );
     };
@@ -81,9 +90,19 @@ export function QueuePage() {
 
             {completedJobs.length > 0 && (
                 <section className="mb-6">
-                    <h3 className="section-heading">
-                        History ({completedJobs.length})
-                    </h3>
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="section-heading">
+                            History ({completedJobs.length})
+                        </h3>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto py-0.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={handleClearAll}
+                        >
+                            Clear All
+                        </Button>
+                    </div>
                     <div className="space-y-2">
                         {completedJobs.map((job) => (
                             <JobCard

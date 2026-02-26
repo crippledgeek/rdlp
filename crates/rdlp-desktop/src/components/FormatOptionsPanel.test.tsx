@@ -19,10 +19,17 @@ const fullSettings: AppSettings = {
     default_subtitle_format: null,
     default_subtitle_langs: [],
     embed_thumbnail: true,
+    write_thumbnail: false,
     embed_metadata: true,
     verbose: false,
     default_search_provider: null,
+    output_template: null,
+    cookies_from_browser: null,
+    cookies_file: null,
+    proxy: null,
+    rate_limit: null,
     normalize_audio: true,
+    audio_gain_target: null,
     loudnorm: true,
     loudnorm_preset: "streaming",
     loudnorm_target_i: -14,
@@ -32,6 +39,7 @@ const fullSettings: AppSettings = {
     loudnorm_precompress: false,
     normalize_boost: true,
     normalize_boost_db: 8,
+    embed_subtitles: false,
 };
 
 /** Default DownloadOptions used in rendering tests. */
@@ -55,6 +63,7 @@ const defaultOptions: DownloadOptions = {
     loudnormPrecompress: null,
     normalizeBoost: null,
     normalizeBoostDb: null,
+    embedSubtitles: null,
 };
 
 function renderPanel(value: DownloadOptions, onChange = vi.fn()) {

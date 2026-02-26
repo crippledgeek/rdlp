@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { DownloadJob } from "../types";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -5,12 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { invokeTyped } from "../api/invokeClient";
 
 interface JobCardProps {
     job: DownloadJob;
     onCancel: (id: string) => void;
     onRemove: (id: string) => void;
-    onRetry: (url: string) => void;
+    onRetry: (job: DownloadJob) => void;
 }
 
 /** Format a progress fraction in [0.0, 1.0] as a percentage string. */
@@ -40,6 +42,7 @@ function statusClasses(status: string): string {
 
 /** Displays a single download job with status, progress, and action buttons. */
 export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
+    const [revealError, setRevealError] = useState<string | null>(null);
     const displayTitle = job.title ?? job.url;
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
@@ -86,6 +89,14 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA: {job.eta}</span>}
                         </div>
+                        {job.statusMessage && (
+                            <p
+                                aria-live="polite"
+                                className="truncate text-xs text-muted-foreground"
+                            >
+                                {job.statusMessage}
+                            </p>
+                        )}
                     </div>
                 )}
 
@@ -93,6 +104,14 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                     <Alert variant="destructive" className="py-2">
                         <AlertDescription className="text-xs">
                             {job.error}
+                        </AlertDescription>
+                    </Alert>
+                )}
+
+                {revealError && (
+                    <Alert variant="destructive" className="py-2">
+                        <AlertDescription className="text-xs">
+                            Could not reveal file: {revealError}
                         </AlertDescription>
                     </Alert>
                 )}
@@ -116,9 +135,29 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                             size="sm"
                             className="hover:border-primary/30
                                 hover:bg-primary/10 hover:text-primary"
-                            onClick={() => onRetry(job.url)}
+                            onClick={() => onRetry(job)}
                         >
                             Retry
+                        </Button>
+                    )}
+                    {job.status === "completed" && job.output_path && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                setRevealError(null);
+                                invokeTyped<void>("reveal_in_folder", {
+                                    path: job.output_path,
+                                }).catch((e) => {
+                                    const msg =
+                                        e && typeof e === "object" && "message" in e
+                                            ? String(e.message)
+                                            : String(e);
+                                    setRevealError(msg);
+                                });
+                            }}
+                        >
+                            Reveal in Folder
                         </Button>
                     )}
                     {isTerminal && (

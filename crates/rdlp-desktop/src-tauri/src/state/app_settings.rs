@@ -4,10 +4,10 @@
 //! post-processing options, and subtitle configuration. Settings are
 //! serializable for persistence between sessions.
 
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use log::{info, warn};
-use rdlp_types::{AudioFormat, ContainerFormat, SubtitleFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
 use serde::{Deserialize, Serialize};
 
 /// Application settings that persist between sessions.
@@ -68,6 +68,34 @@ pub struct AppSettings {
     /// Gain in dB for limiter-boost fallback.
     #[serde(default)]
     pub normalize_boost_db: Option<f64>,
+    /// Write (keep) downloaded thumbnail as a separate file alongside the output.
+    #[serde(default)]
+    pub write_thumbnail: bool,
+    /// Gain in dB applied on top of normalization (peak or loudnorm).
+    #[serde(default)]
+    pub audio_gain_target: Option<f64>,
+    /// Browser to extract cookies from for age-gated content.
+    #[serde(default)]
+    pub cookies_from_browser: Option<BrowserType>,
+    /// Path to a Netscape-format cookies file.
+    ///
+    /// MUST NOT contain `..` path components (validated on save).
+    #[serde(default)]
+    pub cookies_file: Option<PathBuf>,
+    /// HTTP/SOCKS proxy URL (e.g. `"http://proxy:3128"` or `"socks5://proxy:1080"`).
+    ///
+    /// Validated via `rdlp_security::validate_proxy_url()` on save.
+    #[serde(default)]
+    pub proxy: Option<String>,
+    /// Download rate limit expressed as a string (e.g. `"500K"`, `"2M"`).
+    #[serde(default)]
+    pub rate_limit: Option<String>,
+    /// Output filename template (yt-dlp `%(field)s` syntax).
+    #[serde(default)]
+    pub output_template: Option<String>,
+    /// Embed subtitles into the output container.
+    #[serde(default)]
+    pub embed_subtitles: bool,
 }
 
 impl AppSettings {
@@ -166,13 +194,118 @@ impl Default for AppSettings {
             loudnorm_precompress: false,
             normalize_boost: false,
             normalize_boost_db: None,
+            write_thumbnail: false,
+            audio_gain_target: None,
+            cookies_from_browser: None,
+            cookies_file: None,
+            proxy: None,
+            rate_limit: None,
+            output_template: None,
+            embed_subtitles: false,
         }
+    }
+}
+
+/// Errors that can occur when validating settings before saving.
+#[derive(Debug)]
+pub enum SettingsValidationError {
+    /// `cookies_file` path contains a `..` component.
+    CookiesFileTraversal,
+    /// `proxy` URL failed security validation.
+    InvalidProxy(String),
+}
+
+impl std::fmt::Display for SettingsValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CookiesFileTraversal => {
+                f.write_str("cookies_file path must not contain '..' components")
+            }
+            Self::InvalidProxy(msg) => write!(f, "invalid proxy URL: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SettingsValidationError {}
+
+impl AppSettings {
+    /// Validate security-sensitive fields before persisting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsValidationError`] if any field fails validation.
+    pub fn validate_security(&self) -> Result<(), SettingsValidationError> {
+        // Reject cookies_file paths with `..` components (path traversal).
+        if let Some(path) = &self.cookies_file {
+            let has_dotdot = path.components().any(|c| matches!(c, Component::ParentDir));
+            if has_dotdot {
+                return Err(SettingsValidationError::CookiesFileTraversal);
+            }
+        }
+
+        // Validate proxy URL if set.
+        if let Some(proxy) = &self.proxy {
+            rdlp_security::validate_proxy_url(proxy)
+                .map_err(|e| SettingsValidationError::InvalidProxy(e.to_string()))?;
+        }
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_security_rejects_dotdot_cookies_path() {
+        let settings = AppSettings {
+            cookies_file: Some(PathBuf::from("/tmp/../etc/passwd")),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_validate_security_accepts_clean_cookies_path() {
+        let settings = AppSettings {
+            cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_validate_security_rejects_private_proxy() {
+        let settings = AppSettings {
+            proxy: Some("http://192.168.1.1:3128".to_owned()),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_validate_security_rejects_invalid_proxy_scheme() {
+        let settings = AppSettings {
+            proxy: Some("ftp://proxy.example.com:21".to_owned()),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_validate_security_accepts_valid_proxy() {
+        let settings = AppSettings {
+            proxy: Some("socks5://proxy.example.com:1080".to_owned()),
+            ..AppSettings::default()
+        };
+        assert!(settings.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_validate_security_default_is_ok() {
+        assert!(AppSettings::default().validate_security().is_ok());
+    }
 
     #[test]
     fn test_default_settings() {
@@ -205,6 +338,14 @@ mod tests {
         assert!(!settings.loudnorm_precompress);
         assert!(!settings.normalize_boost);
         assert!(settings.normalize_boost_db.is_none());
+        assert!(!settings.write_thumbnail);
+        assert!(settings.audio_gain_target.is_none());
+        assert!(settings.cookies_from_browser.is_none());
+        assert!(settings.cookies_file.is_none());
+        assert!(settings.proxy.is_none());
+        assert!(settings.rate_limit.is_none());
+        assert!(settings.output_template.is_none());
+        assert!(!settings.embed_subtitles);
     }
 
     #[test]
@@ -265,6 +406,16 @@ mod tests {
         assert!(!settings.normalize_boost);
         assert!(settings.normalize_boost_db.is_none());
 
+        // New fields should also default to false / None.
+        assert!(!settings.write_thumbnail);
+        assert!(settings.audio_gain_target.is_none());
+        assert!(settings.cookies_from_browser.is_none());
+        assert!(settings.cookies_file.is_none());
+        assert!(settings.proxy.is_none());
+        assert!(settings.rate_limit.is_none());
+        assert!(settings.output_template.is_none());
+        assert!(!settings.embed_subtitles);
+
         // Pre-existing fields should be preserved.
         assert_eq!(
             settings.output_dir,
@@ -297,6 +448,14 @@ mod tests {
             loudnorm_precompress: true,
             normalize_boost: true,
             normalize_boost_db: Some(8.0),
+            write_thumbnail: true,
+            audio_gain_target: Some(3.0),
+            cookies_from_browser: Some(BrowserType::Firefox),
+            cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
+            proxy: Some("http://proxy.example.com:3128".to_owned()),
+            rate_limit: Some("500K".to_owned()),
+            output_template: Some("%(title)s.%(ext)s".to_owned()),
+            embed_subtitles: true,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -325,5 +484,22 @@ mod tests {
         assert!(restored.loudnorm_precompress);
         assert!(restored.normalize_boost);
         assert_eq!(restored.normalize_boost_db, Some(8.0));
+        assert!(restored.write_thumbnail);
+        assert_eq!(restored.audio_gain_target, Some(3.0));
+        assert_eq!(restored.cookies_from_browser, Some(BrowserType::Firefox));
+        assert_eq!(
+            restored.cookies_file.as_deref(),
+            Some(std::path::Path::new("/tmp/cookies.txt"))
+        );
+        assert_eq!(
+            restored.proxy.as_deref(),
+            Some("http://proxy.example.com:3128")
+        );
+        assert_eq!(restored.rate_limit.as_deref(), Some("500K"));
+        assert_eq!(
+            restored.output_template.as_deref(),
+            Some("%(title)s.%(ext)s")
+        );
+        assert!(restored.embed_subtitles);
     }
 }

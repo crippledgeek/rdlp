@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Lifecycle status of a download job.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,6 +56,18 @@ pub struct DownloadJob {
     pub(crate) completed_at: Option<i64>,
     /// Final output file path on disk.
     pub(crate) output_path: Option<String>,
+    /// The options used when this download was started (for retry).
+    pub(crate) options: Option<SavedDownloadOptions>,
+}
+
+/// A serializable snapshot of the options used when a download was started.
+///
+/// Stored on [`DownloadJob`] so that retry operations can reconstruct the
+/// original [`crate::commands::download::DownloadOptions`] exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedDownloadOptions {
+    /// Raw JSON of the original `DownloadOptions` sent by the frontend.
+    pub(crate) json: serde_json::Value,
 }
 
 /// In-memory download queue holding all download entries.
@@ -114,6 +126,7 @@ impl DownloadQueue {
             started_at: None,
             completed_at: None,
             output_path: None,
+            options: None,
         };
         self.order.push(id.clone());
         self.jobs.insert(id.clone(), job);
@@ -186,6 +199,32 @@ impl DownloadQueue {
     /// Returns `None` if no cancel function is stored for the given ID.
     pub fn take_cancel(&mut self, id: &str) -> Option<Box<dyn Fn() + Send + Sync>> {
         self.cancel_fns.remove(id)
+    }
+
+    /// Remove all jobs in a terminal state from the queue.
+    ///
+    /// Removes all jobs with status `Completed`, `Failed`, or `Cancelled`.
+    /// Returns the number of jobs removed.
+    pub fn clear_completed(&mut self) -> usize {
+        let terminal_ids: Vec<String> = self
+            .jobs
+            .iter()
+            .filter(|(_, j)| {
+                matches!(
+                    j.status,
+                    JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled
+                )
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let count = terminal_ids.len();
+        for id in &terminal_ids {
+            self.jobs.remove(id);
+            self.cancel_fns.remove(id);
+        }
+        self.order.retain(|id| !terminal_ids.contains(id));
+        count
     }
 
     /// Remove a job from the queue.
@@ -319,6 +358,34 @@ mod tests {
         let cancel = queue.take_cancel("job-1").expect("cancel fn should exist");
         cancel();
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_clear_completed_removes_terminal_jobs() {
+        let mut queue = DownloadQueue::new();
+        queue.add_job("a", "https://example.com/a", None);
+        queue.add_job("b", "https://example.com/b", None);
+        queue.add_job("c", "https://example.com/c", None);
+
+        // a: completed, b: running, c: cancelled
+        queue.get_job_mut("a").unwrap().status = JobStatus::Completed;
+        queue.get_job_mut("b").unwrap().status = JobStatus::Running;
+        queue.get_job_mut("c").unwrap().status = JobStatus::Cancelled;
+
+        let removed = queue.clear_completed();
+        assert_eq!(removed, 2); // a and c
+        assert!(queue.get_job("a").is_none());
+        assert!(queue.get_job("b").is_some());
+        assert!(queue.get_job("c").is_none());
+
+        let remaining: Vec<&str> = queue.all_jobs().iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(remaining, vec!["b"]);
+    }
+
+    #[test]
+    fn test_clear_completed_empty_queue() {
+        let mut queue = DownloadQueue::new();
+        assert_eq!(queue.clear_completed(), 0);
     }
 
     #[test]

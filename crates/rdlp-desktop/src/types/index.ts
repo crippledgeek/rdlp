@@ -113,6 +113,8 @@ export interface DownloadJob {
     started_at: number | null;
     completed_at: number | null;
     output_path: string | null;
+    /** Original options used to start this job (populated by backend). */
+    options: DownloadOptions | null;
     /** Latest log message from the download-log event (frontend-only, not from Rust). */
     statusMessage: string | null;
 }
@@ -163,6 +165,7 @@ export interface DownloadOptions {
     loudnormPrecompress: boolean | null;
     normalizeBoost: boolean | null;
     normalizeBoostDb: number | null;
+    embedSubtitles: boolean | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
@@ -218,10 +221,17 @@ export interface AppSettings {
     default_subtitle_format: SubtitleFormat | null;
     default_subtitle_langs: string[];
     embed_thumbnail: boolean;
+    write_thumbnail: boolean;
     embed_metadata: boolean;
     verbose: boolean;
     default_search_provider: string | null;
+    output_template: string | null;
+    cookies_from_browser: string | null;
+    cookies_file: string | null;
+    proxy: string | null;
+    rate_limit: string | null;
     normalize_audio: boolean;
+    audio_gain_target: number | null;
     loudnorm: boolean;
     loudnorm_preset: string | null;
     loudnorm_target_i: number | null;
@@ -231,6 +241,7 @@ export interface AppSettings {
     loudnorm_precompress: boolean;
     normalize_boost: boolean;
     normalize_boost_db: number | null;
+    embed_subtitles: boolean;
 }
 
 // ========== Error Types ==========

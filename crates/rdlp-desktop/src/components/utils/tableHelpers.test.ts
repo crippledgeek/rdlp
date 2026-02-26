@@ -59,6 +59,7 @@ function makeOptions(overrides: Partial<DownloadOptions> = {}): DownloadOptions 
         loudnormPrecompress: null,
         normalizeBoost: null,
         normalizeBoostDb: null,
+        embedSubtitles: null,
         ...overrides,
     };
 }
