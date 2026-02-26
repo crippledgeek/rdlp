@@ -46,7 +46,7 @@ impl FFmpegMerger {
 
             // Default to MP4 for most content (h264/h265 + aac)
             _ => {
-                info!("No merge output format configured; defaulting to MP4");
+                debug!("No merge output format configured; defaulting to MP4");
                 "mp4"
             }
         }
@@ -131,7 +131,7 @@ impl PostProcessor for FFmpegMerger {
             .merge(video_file, audio_file, &output_path, &opts)
             .await?;
 
-        info!(output:? = output_path.display(); "Merged output");
+        debug!(output:? = output_path.display(); "Merged output");
 
         // Return result with merged file and original files as temp
         Ok(PostProcessResult {

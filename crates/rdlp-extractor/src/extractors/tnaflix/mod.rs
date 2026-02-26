@@ -18,7 +18,7 @@ mod search;
 mod search_patterns;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::debug;
 use rdlp_core::{
     ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
     SearchPageResponse,
@@ -275,7 +275,7 @@ impl TNAFlixSearchExtractor {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(page; "[TNAFlix] Failed to fetch search page, returning partial results: {e}");
+                    debug!(page; "[TNAFlix] Failed to fetch search page, returning partial results: {e}");
                     break;
                 }
             };
@@ -300,7 +300,7 @@ impl TNAFlixSearchExtractor {
             tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
         }
 
-        info!(count = all_results.len(), pages = page; "[TNAFlix] Search complete");
+        debug!(count = all_results.len(), pages = page; "[TNAFlix] Search complete");
 
         Ok(all_results)
     }

@@ -222,11 +222,11 @@ impl Orchestrator {
 
             // Apply audio filter from saved state
             if let Some(ref lang) = selected_audio {
-                info!(audio:% = lang; "Restoring audio type from saved state");
+                debug!(audio:% = lang; "Restoring audio type from saved state");
                 filter_formats_by_language(&mut infos, lang);
             }
             if !selected_sub_langs.is_empty() {
-                info!(
+                debug!(
                     subs:% = selected_sub_langs.join(", ");
                     "Restoring subtitle selection from saved state"
                 );
@@ -248,7 +248,7 @@ impl Orchestrator {
                     && idx < type_count
                 {
                     let selected = &audio_types[idx];
-                    info!(audio:% = selected; "Filtering to selected audio type");
+                    debug!(audio:% = selected; "Filtering to selected audio type");
                     selected_audio = Some(selected.clone());
                     filter_formats_by_language(&mut infos, selected);
                 }
@@ -290,7 +290,7 @@ impl Orchestrator {
                 };
 
                 if !callback.confirm(&prompt).await {
-                    info!("Cancelled by user");
+                    debug!("Cancelled by user");
                     return Ok(None);
                 }
             }
@@ -321,7 +321,7 @@ impl Orchestrator {
                         playlist_dir.display()
                     ))
                 })?;
-            info!(path:? = playlist_dir.display(); "Created folder");
+            debug!(path:? = playlist_dir.display(); "Created folder");
         }
 
         // Download episodes with bounded parallelism (2 concurrent).

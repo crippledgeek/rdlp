@@ -14,7 +14,7 @@ use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -95,7 +95,7 @@ async fn async_main() -> Result<()> {
     }
 
     if let Some(rate) = config.rate_limit {
-        info!("Rate limit: {rate} bytes/s");
+        debug!("Rate limit: {rate} bytes/s");
     }
 
     if config.verify_sub_urls && !config.strict_subs {
@@ -118,17 +118,17 @@ async fn async_main() -> Result<()> {
 
     // List extractors if requested
     if args.list_extractors {
-        info!("Available extractors:");
+        debug!("Available extractors:");
         for extractor in client.list_extractors() {
-            info!("  - {extractor}");
+            debug!("  - {extractor}");
         }
         return Ok(());
     }
 
     if args.list_downloaders {
-        info!("Available download protocols:");
+        debug!("Available download protocols:");
         for downloader in client.list_downloaders() {
-            info!("  - {downloader}");
+            debug!("  - {downloader}");
         }
         return Ok(());
     }
@@ -221,7 +221,7 @@ async fn async_main() -> Result<()> {
             match client.download_subtitles_only(info).await {
                 Ok(Some(paths)) => {
                     if paths.is_empty() {
-                        info!("No subtitles downloaded");
+                        debug!("No subtitles downloaded");
                     } else {
                         for path in &paths {
                             info!("Subtitle saved: {}", path.display());
@@ -229,7 +229,7 @@ async fn async_main() -> Result<()> {
                     }
                 }
                 Ok(None) => {
-                    info!("Subtitle selection cancelled");
+                    debug!("Subtitle selection cancelled");
                 }
                 Err(e) => fail_with(e, verbose),
             }
@@ -260,7 +260,7 @@ async fn async_main() -> Result<()> {
 
         if args.simulate && !args.dump_json && args.print.is_none() {
             for info in &infos {
-                info!(
+                debug!(
                     "[Simulate] {} | id={} | extractor={} | {} format(s)",
                     info.title,
                     info.id,

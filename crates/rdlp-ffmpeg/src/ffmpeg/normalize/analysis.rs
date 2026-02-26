@@ -7,7 +7,7 @@
 use std::ffi::CStr;
 use std::path::Path;
 
-use log::{debug, info, warn};
+use log::{debug, warn};
 
 use crate::error::{PostProcessError, Result};
 
@@ -327,10 +327,10 @@ impl FFmpegRunner {
     /// levels against targets. Warns on significant deviations but does
     /// not fail — the output is already written.
     pub(super) fn verify_loudness_sync(output: &Path, opts: &NormalizeOptions) -> Result<()> {
-        info!("Loudness verification: analyzing output...");
+        debug!("Loudness verification: analyzing output...");
         match Self::loudnorm_pass1_sync(output, opts) {
             Ok(measured) => {
-                info!(
+                debug!(
                     "Loudness verification: I={:.1} LUFS, TP={:.1} dBTP, LRA={:.1} LU",
                     measured.input_i, measured.input_tp, measured.input_lra
                 );

@@ -10,7 +10,7 @@
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, info};
 use rdlp_core::{
     ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, check_http_response,
 };
@@ -115,7 +115,7 @@ pub async fn extract_playlist(
                     all_video_urls.extend(page_videos);
                 }
                 Err(e) => {
-                    warn!(page = page_num; "Failed to fetch page: {e}");
+                    debug!(page = page_num; "Failed to fetch page: {e}");
                     break;
                 }
             }
@@ -126,7 +126,7 @@ pub async fn extract_playlist(
     }
 
     let total = all_video_urls.len();
-    info!(total; "[PornHub] Found videos in playlist");
+    debug!(total; "[PornHub] Found videos in playlist");
 
     // Security check: limit playlist size to prevent memory exhaustion
     if total > MAX_PLAYLIST_SIZE {
@@ -169,14 +169,14 @@ pub async fn extract_playlist(
                         Some((position, info))
                     }
                     Ok(Err(e)) => {
-                        warn!(
+                        debug!(
                             position, total, title:? = video_title_hint;
                             "Failed to extract video: {e}"
                         );
                         None
                     }
                     Err(_) => {
-                        warn!(position, total, title:? = video_title_hint; "Timed out extracting video");
+                        debug!(position, total, title:? = video_title_hint; "Timed out extracting video");
                         None
                     }
                 }

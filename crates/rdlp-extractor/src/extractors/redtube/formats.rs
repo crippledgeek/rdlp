@@ -3,7 +3,7 @@
 //! Extracts video formats from JavaScript sources, mediaDefinition arrays,
 //! and the `getVideoById` JSON API response.
 
-use log::{debug, warn};
+use log::debug;
 use rdlp_core::{ExtractionContext, Format, RdlpError, Result, Thumbnail};
 use regex::Regex;
 use serde::Deserialize;
@@ -399,11 +399,11 @@ async fn fetch_formats_from_endpoint(
         Ok(r) => r,
         Err(e) => {
             if e.is_timeout() {
-                warn!(url:? = absolute_url; "[RedTube] Request timed out");
+                debug!(url:? = absolute_url; "[RedTube] Request timed out");
             } else if e.is_connect() {
-                warn!(url:? = absolute_url; "[RedTube] Connection failed: {e}");
+                debug!(url:? = absolute_url; "[RedTube] Connection failed: {e}");
             } else {
-                warn!("[RedTube] Request failed: {e}");
+                debug!("[RedTube] Request failed: {e}");
             }
             return None;
         }

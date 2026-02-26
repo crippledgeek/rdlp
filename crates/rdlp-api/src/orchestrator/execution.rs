@@ -3,7 +3,7 @@
 use super::{Orchestrator, errors::*};
 use crate::events::Event;
 use crate::handle::DownloadId;
-use log::info;
+use log::{debug, info};
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
 use std::path::Path;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ impl Orchestrator {
             EventProgressCallback::new(self.event_tx.clone(), self.download_id),
         ));
 
-        info!("Starting download (cancel via CancellationToken)");
+        debug!("Starting download (cancel via CancellationToken)");
 
         let download_future = if resume_from > 0 {
             downloader.download_with_resume(url, output_path, resume_from, progress_callback)
@@ -88,7 +88,7 @@ impl Orchestrator {
                 result.map_err(OrchestratorError::DownloadFailed)?
             }
             () = self.cancel_token.cancelled() => {
-                info!("Download interrupted by cancellation");
+                debug!("Download interrupted by cancellation");
                 info!("Progress saved. Run the same command again to resume.");
                 return Ok(None);
             }
@@ -125,7 +125,7 @@ impl Orchestrator {
             EventProgressCallback::new(self.event_tx.clone(), self.download_id),
         ));
 
-        info!("Starting stdout download (cancel via CancellationToken)");
+        debug!("Starting stdout download (cancel via CancellationToken)");
 
         let download_future = downloader.download_to_writer(url, writer, progress_callback);
 
@@ -134,7 +134,7 @@ impl Orchestrator {
                 result.map_err(OrchestratorError::DownloadFailed)?
             }
             () = self.cancel_token.cancelled() => {
-                info!("Download to stdout interrupted by cancellation");
+                debug!("Download to stdout interrupted by cancellation");
                 return Ok(None);
             }
         };

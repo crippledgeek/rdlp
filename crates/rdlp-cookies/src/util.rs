@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use log::warn;
+use log::debug;
 use reqwest::cookie::CookieStore;
 use reqwest::header::HeaderValue;
 use url::Url;
@@ -24,7 +24,7 @@ pub(crate) fn insert_cookie_into_jar(
     let url_str = format!("{scheme}://{host}{path}");
 
     let Ok(url) = Url::parse(&url_str) else {
-        warn!("Invalid URL from cookie domain: {url_str}");
+        debug!("Invalid URL from cookie domain: {url_str}");
         return false;
     };
 
@@ -42,7 +42,7 @@ pub(crate) fn insert_cookie_into_jar(
             true
         }
         Err(e) => {
-            warn!("Invalid cookie header value for {name}: {e}");
+            debug!("Invalid cookie header value for {name}: {e}");
             false
         }
     }

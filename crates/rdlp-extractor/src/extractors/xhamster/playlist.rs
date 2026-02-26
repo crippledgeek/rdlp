@@ -6,7 +6,7 @@ use super::XHamsterExtractor;
 use super::patterns;
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, info};
 use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result, check_http_response};
 use regex::Regex;
 use std::collections::HashSet;
@@ -83,7 +83,7 @@ impl XHamsterExtractor {
         }
 
         let total = all_video_urls.len();
-        info!(total; "[XHamster] Found videos in user playlist");
+        debug!(total; "[XHamster] Found videos in user playlist");
 
         if total == 0 {
             return Err(RdlpError::Extraction(format!(
@@ -130,11 +130,11 @@ impl XHamsterExtractor {
                                 Some((position, info))
                             }
                             Ok(Err(e)) => {
-                                warn!(position, total; "Failed to extract video: {e}");
+                                debug!(position, total; "Failed to extract video: {e}");
                                 None
                             }
                             Err(_) => {
-                                warn!(position, total; "Timed out extracting video");
+                                debug!(position, total; "Timed out extracting video");
                                 None
                             }
                         }

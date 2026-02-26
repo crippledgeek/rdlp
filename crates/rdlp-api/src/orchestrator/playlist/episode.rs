@@ -82,7 +82,7 @@ impl Orchestrator {
             let tokens_stale =
                 attempt == 0 && batch_resolved_at.is_some_and(|t| t.elapsed() > TOKEN_MAX_AGE);
             if tokens_stale {
-                info!(
+                debug!(
                     "Batch-resolved tokens stale (>{} min), forcing re-extraction",
                     TOKEN_MAX_AGE.as_secs() / 60
                 );
@@ -90,7 +90,7 @@ impl Orchestrator {
             let info_ref = if (attempt > 0 || info.formats.is_empty() || tokens_stale)
                 && !info.webpage_url.is_empty()
             {
-                info!(title:? = info.title; "Lazily resolving episode formats");
+                debug!(title:? = info.title; "Lazily resolving episode formats");
                 let mut resolved = match self.extract_lazy_formats(&info.webpage_url).await {
                     Ok(r) => r,
                     Err(e) if attempt < MAX_EXTRACT_RETRIES => {
@@ -165,7 +165,7 @@ impl Orchestrator {
                         self.cleanup_leftover_segments(output_dir, &sanitized_title)
                             .await;
 
-                        info!(path:? = path.display(); "Downloading to");
+                        debug!(path:? = path.display(); "Downloading to");
                         output_path = Some(path);
                     }
 
@@ -178,7 +178,7 @@ impl Orchestrator {
                     if let Some(expected_size) = format.filesize
                         && resume_offset == expected_size
                     {
-                        info!("File already complete, skipping");
+                        debug!("File already complete, skipping");
                         return Ok(Some(path.clone()));
                     }
 
@@ -246,7 +246,7 @@ impl Orchestrator {
                         self.cleanup_leftover_segments(output_dir, &sanitized_title)
                             .await;
 
-                        info!(path:? = path.display(); "Downloading merge to");
+                        debug!(path:? = path.display(); "Downloading merge to");
                         output_path = Some(path);
                     }
 

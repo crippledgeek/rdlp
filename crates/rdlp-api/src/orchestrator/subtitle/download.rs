@@ -1,7 +1,7 @@
 //! Subtitle download execution — HTTP fetching and pipeline integration
 
 use super::{Orchestrator, Result};
-use log::{debug, info, warn};
+use log::{debug, warn};
 use rdlp_core::InfoDict;
 use std::path::{Path, PathBuf};
 
@@ -69,11 +69,11 @@ impl Orchestrator {
                 continue;
             }
 
-            info!("Downloading subtitle: lang={lang}, url={}", sub.url);
+            debug!("Downloading subtitle: lang={lang}, url={}", sub.url);
 
             match self.download_subtitle_file(&sub.url, &sub_path).await {
                 Ok(()) => {
-                    info!("Subtitle downloaded: {}", sub_path.display());
+                    debug!("Subtitle downloaded: {}", sub_path.display());
                     downloaded.push((lang.clone(), sub_path));
                 }
                 Err(e) => {
@@ -105,7 +105,7 @@ impl Orchestrator {
         };
 
         if selected.is_empty() {
-            info!("No subtitles selected");
+            debug!("No subtitles selected");
             return Ok(Some(Vec::new()));
         }
 
@@ -186,7 +186,7 @@ impl Orchestrator {
                 continue;
             }
 
-            info!(
+            debug!(
                 lang:% = track.language,
                 ext:% = track.ext;
                 "Downloading subtitle"
@@ -194,7 +194,7 @@ impl Orchestrator {
 
             match self.download_subtitle_file(&track.url, &sub_path).await {
                 Ok(()) => {
-                    info!("Subtitle downloaded: {}", sub_path.display());
+                    debug!("Subtitle downloaded: {}", sub_path.display());
                     downloaded.push((track.language.clone(), sub_path));
                 }
                 Err(e) => {

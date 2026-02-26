@@ -21,7 +21,7 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use log::{debug, info, warn};
+use log::{debug, info};
 use rdlp_security::extract_url_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -111,28 +111,28 @@ impl HlsDownloadState {
         let mut file = match File::open(&state_path).await {
             Ok(file) => file,
             Err(e) => {
-                warn!("Failed to open HLS state file: {e}");
+                debug!("Failed to open HLS state file: {e}");
                 return None;
             }
         };
 
         let mut contents = String::new();
         if let Err(e) = file.read_to_string(&mut contents).await {
-            warn!("Failed to read HLS state file: {e}");
+            debug!("Failed to read HLS state file: {e}");
             return None;
         }
 
         let state: Self = match serde_json::from_str(&contents) {
             Ok(state) => state,
             Err(e) => {
-                warn!("Failed to parse HLS state file: {e}");
+                debug!("Failed to parse HLS state file: {e}");
                 return None;
             }
         };
 
         // Validate state
         if state.version != STATE_VERSION {
-            warn!(
+            debug!(
                 "HLS state version mismatch (expected {}, got {}), starting fresh",
                 STATE_VERSION, state.version
             );
@@ -142,12 +142,12 @@ impl HlsDownloadState {
         // Compare normalized URLs to handle dynamic tokens
         let normalized_url = extract_url_path(playlist_url);
         if state.playlist_url != normalized_url {
-            warn!(old:? = state.playlist_url, new:? = normalized_url; "Playlist URL changed, starting fresh");
+            debug!(old:? = state.playlist_url, new:? = normalized_url; "Playlist URL changed, starting fresh");
             return None;
         }
 
         if state.segment_count != segment_count {
-            warn!(
+            debug!(
                 "Segment count changed ({} -> {}), starting fresh",
                 state.segment_count, segment_count
             );

@@ -6,7 +6,7 @@
 //! the downloader crate.
 
 use chrono::{DateTime, Utc};
-use log::{debug, warn};
+use log::debug;
 use rdlp_security::extract_url_path;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -203,7 +203,7 @@ impl SessionState {
         let json = match serde_json::to_string_pretty(self) {
             Ok(j) => j,
             Err(e) => {
-                warn!("Failed to serialize session state: {e}");
+                debug!("Failed to serialize session state: {e}");
                 return;
             }
         };
@@ -215,17 +215,17 @@ impl SessionState {
             && !parent.exists()
             && let Err(e) = tokio::fs::create_dir_all(parent).await
         {
-            warn!("Failed to create directory for session state: {e}");
+            debug!("Failed to create directory for session state: {e}");
             return;
         }
 
         if let Err(e) = tokio::fs::write(&temp_path, json.as_bytes()).await {
-            warn!("Failed to write session state temp file: {e}");
+            debug!("Failed to write session state temp file: {e}");
             return;
         }
 
         if let Err(e) = tokio::fs::rename(&temp_path, path).await {
-            warn!("Failed to rename session state file: {e}");
+            debug!("Failed to rename session state file: {e}");
             // Clean up temp file on rename failure
             let _ = tokio::fs::remove_file(&temp_path).await;
             return;
@@ -252,7 +252,7 @@ impl SessionState {
                 // Already gone — nothing to do
             }
             Err(e) => {
-                warn!("Failed to delete session state at {}: {e}", path.display());
+                debug!("Failed to delete session state at {}: {e}", path.display());
             }
         }
     }

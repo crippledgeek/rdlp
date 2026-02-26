@@ -131,7 +131,7 @@ impl EmbedThumbnail {
         .await;
 
         match result {
-            Ok(Ok(())) => info!("MP4 covr atom written for Windows Explorer"),
+            Ok(Ok(())) => debug!("MP4 covr atom written for Windows Explorer"),
             Ok(Err(e)) => warn!("Failed to write MP4 covr atom: {e}"),
             Err(e) => warn!("covr atom task panicked: {e}"),
         }
@@ -172,7 +172,7 @@ impl PostProcessor for EmbedThumbnail {
         let mut temp_files: Vec<PathBuf> = Vec::new();
         let (media_file, extension, output_files) = if !Self::supports_thumbnail(extension) {
             let remuxed_path = media_file.with_extension("mp4");
-            info!(
+            debug!(
                 from:? = media_file.display(),
                 to:? = remuxed_path.display();
                 "Auto-remuxing unsupported container to MP4 for thumbnail embedding"
@@ -226,7 +226,7 @@ impl PostProcessor for EmbedThumbnail {
             Ok(()) => {
                 // Replace original with temp
                 tokio::fs::rename(&temp_output, &media_file).await?;
-                info!(file:? = media_file.display(); "Thumbnail embedded via FFmpeg");
+                debug!(file:? = media_file.display(); "Thumbnail embedded via FFmpeg");
 
                 // For MP4-family: write covr atom so Windows Explorer shows the thumbnail
                 if Self::is_mp4_family(&extension) {

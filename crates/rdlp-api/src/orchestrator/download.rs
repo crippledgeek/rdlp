@@ -4,7 +4,7 @@
 //! previously duplicated between `state.rs` and `playlist.rs`.
 
 use super::{Orchestrator, errors::*};
-use log::{info, warn};
+use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, Format, RdlpError};
 use rdlp_security::validate_url_security;
 use std::path::Path;
@@ -122,9 +122,8 @@ impl Orchestrator {
         }
         let stats = stats.expect("stats is Some when no error occurred");
 
-        info!("Downloaded successfully!");
-        info!("   File: {}", output_path.display());
-        info!("   Stats: {stats:?}");
+        debug!("Downloaded successfully: {}", output_path.display());
+        debug!("   Stats: {stats:?}");
 
         Ok(Some(DownloadOutcome { stats, is_hls }))
     }
@@ -193,7 +192,7 @@ impl Orchestrator {
             .await
         {
             Ok(Some(stats)) => {
-                info!("Stdout download completed: {stats:?}");
+                debug!("Stdout download completed: {stats:?}");
                 Ok(Some(stats))
             }
             Ok(None) => Ok(None),

@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use log::{debug, info, warn};
+use log::{debug, warn};
 
 use crate::error::{PostProcessError, Result};
 
@@ -49,7 +49,7 @@ impl FFmpegRunner {
         crate::ffmpeg::ensure_init()?;
 
         let mut ictx = if resilient {
-            info!("[{label}] opening input with resilient flags (discardcorrupt+genpts)");
+            debug!("[{label}] opening input with resilient flags (discardcorrupt+genpts)");
             open_input_resilient(input)?
         } else {
             ffmpeg_the_third::format::input(input).map_err(|e| {
@@ -189,15 +189,15 @@ impl FFmpegRunner {
             audio_encoder.rate(),
             &enc_ch_layout_desc,
         );
-        info!("[{label}] filter_spec={filter_spec}");
+        debug!("[{label}] filter_spec={filter_spec}");
 
-        info!(
+        debug!(
             "[{label}] decoder: sample_rate={}, format={}, ch_layout={}",
             audio_decoder.rate(),
             audio_decoder.format().name(),
             audio_decoder.ch_layout().description(),
         );
-        info!(
+        debug!(
             "[{label}] encoder: sample_rate={}, format={}, ch_layout={}",
             audio_encoder.rate(),
             audio_encoder.format().name(),
@@ -233,7 +233,7 @@ impl FFmpegRunner {
         } else {
             0
         };
-        info!(
+        debug!(
             "Expected audio packet duration: {} (frame_size={}, enc_tb={}/{}, ost_tb={}/{})",
             expected_duration,
             audio_encoder.frame_size(),
@@ -258,7 +258,7 @@ impl FFmpegRunner {
             0
         };
         if start_samples > 0 {
-            info!(
+            debug!(
                 "[{label}] preserving input start offset: {format_start_time_us} µs = {start_samples} samples",
             );
         }

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::stream::{self, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, warn};
 use rdlp_core::{RdlpError, Result, RetryConfig};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -119,9 +119,9 @@ pub(crate) async fn download_segments_with_resume(
     let remaining = to_download.len();
 
     if remaining == 0 {
-        info!(total = total_segments; "All segments already downloaded, skipping to merge");
+        debug!(total = total_segments; "All segments already downloaded, skipping to merge");
     } else {
-        info!(
+        debug!(
             remaining,
             completed = already_downloaded,
             concurrent = concurrent_segments;
@@ -282,7 +282,7 @@ pub(crate) async fn download_segments_with_resume(
         .map(|(_, path)| path)
         .collect();
 
-    info!(total = total_segments; "All segments ready for merge");
+    debug!(total = total_segments; "All segments ready for merge");
     Ok(segment_paths)
 }
 
@@ -304,7 +304,7 @@ pub(crate) async fn merge_segments(
 ) -> Result<u64> {
     tokio::time::timeout(merge_timeout, async {
         let has_init = segment_init_paths.iter().any(|p| p.is_some());
-        info!(
+        debug!(
             segments = segment_paths.len(),
             fmp4 = has_init;
             "Merging segments into final file"
@@ -350,7 +350,7 @@ pub(crate) async fn merge_segments(
         }
 
         writer.flush().await.map_err(RdlpError::Io)?;
-        info!(mb = total_bytes / (1024 * 1024); "Merge complete");
+        debug!(mb = total_bytes / (1024 * 1024); "Merge complete");
 
         Ok(total_bytes)
     })

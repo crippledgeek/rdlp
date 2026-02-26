@@ -1,7 +1,7 @@
 //! Resume detection and chunk merging functionality
 
 use super::{Orchestrator, errors::*};
-use log::{info, warn};
+use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use tracing::instrument;
 
@@ -109,7 +109,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
         None => "old-style".to_string(),
     };
 
-    info!(chunk_count, chunk_type:?; "Merging chunks");
+    debug!(chunk_count, chunk_type:?; "Merging chunks");
 
     // Create output file
     let file = File::create(output_path)
@@ -139,7 +139,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
 
         // Progress update every 100 chunks
         if (idx + 1) % 100 == 0 || idx == chunk_count - 1 {
-            info!(merged = idx + 1, total = chunk_count; "   Merge progress");
+            debug!(merged = idx + 1, total = chunk_count; "   Merge progress");
         }
 
         // Delete chunk file after successful merge
@@ -153,7 +153,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
         .await
         .map_err(OrchestratorError::ChunkMergeFailed)?;
 
-    info!(chunk_count; "Cleaned up chunk files");
+    debug!(chunk_count; "Cleaned up chunk files");
 
     Ok(total_size)
 }
@@ -175,7 +175,7 @@ async fn cleanup_old_chunks(output_path: &Path) {
     }
 
     if deleted > 0 {
-        info!(deleted; "Cleaned up old-style chunk files");
+        debug!(deleted; "Cleaned up old-style chunk files");
     }
 }
 
@@ -207,7 +207,7 @@ impl Orchestrator {
                 // Check if file is already complete
                 if let Some(expected) = expected_size {
                     if size == expected {
-                        info!(
+                        debug!(
                             "File already downloaded ({:.1} MB), skipping...",
                             size as f64 / (1024.0 * 1024.0)
                         );
@@ -225,7 +225,7 @@ impl Orchestrator {
                         return Ok(0);
                     }
                 }
-                info!(
+                debug!(
                     "Found partial download ({:.1} MB), resuming...",
                     size as f64 / (1024.0 * 1024.0)
                 );
@@ -243,7 +243,7 @@ impl Orchestrator {
                 "old-style".to_string()
             };
 
-            info!(
+            debug!(
                 "Found {} interrupted {} chunk files ({:.1} MB), merging and resuming...",
                 chunk_info.chunk_paths.len(),
                 chunk_type,
@@ -259,7 +259,7 @@ impl Orchestrator {
             match merge_chunk_files(output_path, &chunk_info).await {
                 Ok(size) => {
                     let mb = size as f64 / (1024.0 * 1024.0);
-                    info!(
+                    debug!(
                         chunks = chunk_info.chunk_paths.len(),
                         mb:?;
                         "Merged chunks into main file"

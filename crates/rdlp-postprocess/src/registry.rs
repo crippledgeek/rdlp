@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
 
 use crate::processors::*;
@@ -173,7 +173,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
 
         for processor in &processors {
             if !processor.should_run(&current_info, config) {
-                debug!(name:? = processor.name(); "Skipping post-processor (should_run returned false)");
+                trace!(name:? = processor.name(); "Skipping post-processor (should_run returned false)");
                 continue;
             }
 
@@ -211,7 +211,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         for temp_file in &all_temp_files {
             if temp_file.exists() {
                 if let Err(e) = tokio::fs::remove_file(temp_file).await {
-                    warn!(path:? = temp_file.display(); "Failed to remove temp file: {e}");
+                    debug!(path:? = temp_file.display(); "Failed to remove temp file: {e}");
                 } else {
                     debug!(path:? = temp_file.display(); "Removed temp file");
                 }

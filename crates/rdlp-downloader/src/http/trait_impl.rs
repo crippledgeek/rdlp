@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use log::{debug, info, warn};
+use log::debug;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
@@ -90,7 +90,7 @@ impl Downloader for HttpDownloader {
             };
 
             if use_parallel {
-                info!(
+                debug!(
                     "Using parallel download mode ({} connections)",
                     self.config.concurrent_fragments
                 );
@@ -106,7 +106,7 @@ impl Downloader for HttpDownloader {
                 Some(_) if !supports_ranges => "server doesn't support ranges",
                 Some(_) => "unknown reason",
             };
-            warn!(
+            debug!(
                 "Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
                 size.map(|s| s / 1024 / 1024),
                 self.config.concurrent_fragments
@@ -341,7 +341,7 @@ impl Downloader for HttpDownloader {
                     && supports_ranges;
 
                 if can_parallel {
-                    info!(
+                    debug!(
                         "Using parallel resume mode ({} connections), keeping {} MB, parallelizing {} MB",
                         self.config.concurrent_fragments,
                         resume_from / 1024 / 1024,
@@ -354,7 +354,7 @@ impl Downloader for HttpDownloader {
                         .await;
                 }
 
-                warn!(
+                debug!(
                     "Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
                     remaining_size / 1024 / 1024,
                     self.config.concurrent_fragments,

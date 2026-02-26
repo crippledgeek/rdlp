@@ -65,7 +65,7 @@ impl Orchestrator {
             let sub_langs = selected_sub_langs.to_vec();
             let audio = selected_audio.clone();
             async move {
-                info!("{}", "\u{2500}".repeat(60));
+                debug!("{}", "\u{2500}".repeat(60));
                 info!(position, total, title:? = info_owned.title; "Downloading");
                 let result = self
                     .download_from_info_to_dir(
@@ -91,7 +91,7 @@ impl Orchestrator {
                         Some((position, info_owned, result)) => {
                             match result {
                                 Ok(Some(path)) => {
-                                    info!(position, total, path:? = path.display(); "Saved");
+                                    debug!(position, total, path:? = path.display(); "Saved");
                                     downloaded.push(path);
                                     self.record_in_archive(
                                         &info_owned.extractor,
@@ -99,7 +99,7 @@ impl Orchestrator {
                                     );
                                 }
                                 Ok(None) => {
-                                    info!(position, total; "Skipped by user");
+                                    debug!(position, total; "Skipped by user");
                                 }
                                 Err(e) => {
                                     error!(position, total; "Failed: {e}");
@@ -223,7 +223,7 @@ impl Orchestrator {
                             Some((pos, title, result)) => {
                                 match result {
                                     Ok(Some(path)) => {
-                                        info!(
+                                        debug!(
                                             wave = wave + 1,
                                             pos, total,
                                             path:? = path.display();
@@ -238,7 +238,7 @@ impl Orchestrator {
                                         retried_ok += 1;
                                     }
                                     Ok(None) => {
-                                        info!(
+                                        debug!(
                                             pos, total;
                                             "Skipped on retry"
                                         );

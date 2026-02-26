@@ -18,7 +18,7 @@ mod tests;
 
 use std::path::Path;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::error::{PostProcessError, Result};
 
@@ -73,14 +73,14 @@ impl FFmpegRunner {
     fn normalize_peak_sync(input: &Path, output: &Path, opts: &NormalizeOptions) -> Result<()> {
         let analysis = Self::analyze_peak_sync(input, opts.target_peak_db)?;
 
-        info!(
+        debug!(
             "Peak analysis: peak={:.1} dBFS, RMS={:.1} dBFS, gain={:.1} dB",
             analysis.peak_db, analysis.rms_db, analysis.gain_db
         );
 
         // Skip if gain adjustment is negligible
         if analysis.gain_db.abs() < 0.5 {
-            info!("Audio already near target peak, skipping normalization");
+            debug!("Audio already near target peak, skipping normalization");
             std::fs::copy(input, output).map_err(|e| PostProcessError::IoError {
                 message: format!("failed to copy file: {e}"),
                 source: e,
@@ -96,7 +96,7 @@ impl FFmpegRunner {
         info!("Loudnorm pass 1: analyzing EBU R128 levels...");
         let measurements = Self::loudnorm_pass1_sync(input, opts)?;
 
-        info!(
+        debug!(
             "Loudnorm measurements: I={:.1} LUFS, TP={:.1} dBTP, LRA={:.1} LU",
             measurements.input_i, measurements.input_tp, measurements.input_lra
         );
@@ -113,7 +113,7 @@ impl FFmpegRunner {
         let shortfall = measurements.linear_shortfall(opts.target_i, opts.target_tp);
         if opts.boost_enabled {
             if shortfall > LIMITER_BOOST_SHORTFALL_THRESHOLD {
-                info!(
+                debug!(
                     "LimiterBoost: shortfall={shortfall:.1} LU, \
                      gain={:.1} dB — using fixed gain + limiter",
                     opts.boost_gain_db
@@ -122,7 +122,7 @@ impl FFmpegRunner {
                 Self::verify_loudness_sync(output, opts)?;
                 return Ok(());
             }
-            info!(
+            debug!(
                 "LimiterBoost: enabled but shortfall={shortfall:.1} LU <= \
                  {LIMITER_BOOST_SHORTFALL_THRESHOLD:.1} threshold — using standard loudnorm",
             );
@@ -149,7 +149,7 @@ impl FFmpegRunner {
     ) -> Result<()> {
         let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
         let limit_linear = 10f64.powf(ceiling_db / 20.0);
-        info!(
+        debug!(
             "LimiterBoost: gain_db={:.1}, ceiling_db={:.1} (TP={:.1} - headroom={:.1}), \
              limit_linear={:.6}",
             opts.boost_gain_db, ceiling_db, opts.target_tp, ALIMITER_TP_HEADROOM_DB, limit_linear,

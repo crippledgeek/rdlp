@@ -32,7 +32,7 @@
 //! }
 //! ```
 
-use log::{debug, warn};
+use log::{debug, trace};
 use regex::Regex;
 use std::sync::LazyLock;
 use url::Url;
@@ -127,7 +127,7 @@ fn decipher_bare_hex(hex_str: &str) -> Option<String> {
 fn decipher_hex_bytes(hex_str: &str) -> Option<String> {
     let byte_data = hex::decode(hex_str).ok()?;
     if byte_data.len() < 6 {
-        debug!("[XHamster] Hex data too short: {} bytes", byte_data.len());
+        trace!("[XHamster] Hex data too short: {} bytes", byte_data.len());
         return None;
     }
 
@@ -136,7 +136,7 @@ fn decipher_hex_bytes(hex_str: &str) -> Option<String> {
     let seed = i32::from_le_bytes([byte_data[1], byte_data[2], byte_data[3], byte_data[4]]);
 
     let Some(mut rng) = ByteGenerator::new(algo_id, seed) else {
-        warn!("[XHamster] Unknown algorithm ID: {algo_id}");
+        debug!("[XHamster] Unknown algorithm ID: {algo_id}");
         return None;
     };
 

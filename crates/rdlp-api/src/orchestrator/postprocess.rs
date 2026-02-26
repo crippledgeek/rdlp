@@ -4,7 +4,7 @@
 
 use super::{Orchestrator, Result};
 use crate::events::Event;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use rdlp_core::PostProcessConfig;
 use std::path::PathBuf;
 
@@ -105,7 +105,7 @@ impl Orchestrator {
             pp_config.merge_output_format = Some(resolved.format);
         }
 
-        info!("Running post-processing pipeline...");
+        debug!("Running post-processing pipeline...");
 
         if self.config.verbose {
             let processors = registry.list_processors();
@@ -132,7 +132,7 @@ impl Orchestrator {
         {
             Ok(result) => {
                 if result.files != files {
-                    info!("Post-processing complete");
+                    debug!("Post-processing complete");
                     if self.config.verbose {
                         for file in &result.files {
                             let msg = format!("Output: {}", file.display());
@@ -176,7 +176,7 @@ impl Orchestrator {
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or_else(|| {
-                    info!(file:? = file.display(); "No file extension detected, defaulting to mp4");
+                    debug!(file:? = file.display(); "No file extension detected, defaulting to mp4");
                     "mp4"
                 });
 
@@ -205,7 +205,7 @@ impl Orchestrator {
                         warn!("Could not rename fixed file: {e}");
                         output_files.push(temp_path);
                     } else {
-                        info!("Post-processed: faststart enabled, container fixed");
+                        debug!("Post-processed: faststart enabled, container fixed");
                         output_files.push(final_path);
                     }
                 }
@@ -260,7 +260,7 @@ impl Orchestrator {
         }
 
         if deleted > 0 {
-            info!(deleted; "Cleaned up leftover segment files");
+            debug!(deleted; "Cleaned up leftover segment files");
         }
     }
 }

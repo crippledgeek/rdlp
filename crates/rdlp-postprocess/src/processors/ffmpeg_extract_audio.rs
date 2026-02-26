@@ -101,7 +101,7 @@ impl PostProcessor for FFmpegExtractAudio {
         let target_format = match config.audio_format {
             Some(f) => f.codec_name(),
             None => {
-                info!("No audio format configured; defaulting to MP3");
+                debug!("No audio format configured; defaulting to MP3");
                 "mp3"
             }
         };
@@ -111,7 +111,7 @@ impl PostProcessor for FFmpegExtractAudio {
                 operation: "audio extraction".to_string(),
             })?;
 
-        info!(
+        debug!(
             "Extracting audio from {} to {} format",
             input_file.display(),
             target_format

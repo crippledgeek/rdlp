@@ -96,7 +96,7 @@ pub(crate) async fn resolve_episode_formats(
 
     api::sort_by_preference(&mut servers);
 
-    info!(
+    debug!(
         servers = servers.len();
         "Found streaming servers, attempting extraction"
     );
@@ -132,7 +132,7 @@ pub(crate) async fn resolve_episode_formats(
         // Extract video sources from Megacloud embed
         match megacloud::extract_sources(&source.embed_url, ctx).await {
             Ok(mega_sources) => {
-                info!(
+                debug!(
                     server:% = server.server_name,
                     sources = mega_sources.sources.len(),
                     tracks = mega_sources.tracks.len();
@@ -375,7 +375,7 @@ impl InfoExtractor for NineAnimeExtractor {
             ))
         })?;
 
-        info!(episode_id:%; "Lazily resolving 9anime episode formats");
+        debug!(episode_id:%; "Lazily resolving 9anime episode formats");
 
         let (formats, hls_flags, subtitle_tracks) =
             resolve_episode_formats(&episode_id, ctx).await?;
