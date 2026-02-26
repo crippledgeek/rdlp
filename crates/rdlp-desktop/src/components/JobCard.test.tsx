@@ -20,6 +20,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         output_path: null,
         options: null,
         statusMessage: null,
+        logMessages: undefined,
         ...overrides,
     };
 }
@@ -196,5 +197,59 @@ describe("JobCard", () => {
             expect(screen.getByText(/could not reveal file/i)).toBeInTheDocument();
         });
         clearInvokeHandlers();
+    });
+
+    it("does not render log panel when logMessages is undefined", () => {
+        render(
+            <JobCard
+                job={makeJob({ logMessages: undefined })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByText(/^logs/i)).not.toBeInTheDocument();
+    });
+
+    it("does not render log panel when logMessages is empty", () => {
+        render(
+            <JobCard
+                job={makeJob({ logMessages: [] })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByText(/^logs/i)).not.toBeInTheDocument();
+    });
+
+    it("renders log panel summary with message count", () => {
+        render(
+            <JobCard
+                job={makeJob({ logMessages: ["Starting download", "Fetching metadata"] })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.getByText("Logs (2)")).toBeInTheDocument();
+    });
+
+    it("renders all log messages in the panel", async () => {
+        render(
+            <JobCard
+                job={makeJob({
+                    logMessages: ["First message", "Second message", "Third message"],
+                })}
+                onCancel={vi.fn()}
+                onRemove={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+        );
+        // Open the details element
+        await userEvent.click(screen.getByText("Logs (3)"));
+        expect(screen.getByText("First message")).toBeInTheDocument();
+        expect(screen.getByText("Second message")).toBeInTheDocument();
+        expect(screen.getByText("Third message")).toBeInTheDocument();
     });
 });

@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@/test/test-utils";
+import { render, screen, waitFor, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { DownloadPage } from "./DownloadPage";
+import { queryKeys } from "../query/queryKeys";
 import type { AppSettings } from "../types";
 
 const defaultSettings: AppSettings = {
@@ -34,6 +35,14 @@ const defaultSettings: AppSettings = {
     embed_subtitles: false,
 };
 
+/** Pre-seed the query cache so components render synchronously. */
+function seededClient() {
+    const qc = createTestQueryClient();
+    qc.setQueryData(queryKeys.settings(), defaultSettings);
+    qc.setQueryData(queryKeys.downloads.list(), []);
+    return qc;
+}
+
 beforeEach(() => {
     setInvokeHandler("get_settings", () => defaultSettings);
     setInvokeHandler("get_queue", () => []);
@@ -44,35 +53,35 @@ afterEach(() => {
 });
 
 describe("DownloadPage", () => {
-    it("renders the URL input and Download button", async () => {
-        render(<DownloadPage />);
+    it("renders the URL input and Download button", () => {
+        render(<DownloadPage />, { queryClient: seededClient() });
         expect(screen.getByPlaceholderText(/paste a video url/i)).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
     });
 
     it("renders the Choose Format button", () => {
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         expect(screen.getByRole("button", { name: /choose format/i })).toBeInTheDocument();
     });
 
     it("shows validation error for non-URL input", async () => {
         const user = userEvent.setup();
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "not a url");
+        await user.click(input);
+        await user.paste("not a url");
         await user.click(screen.getByRole("button", { name: /download/i }));
-        await waitFor(() => {
-            expect(screen.getByText(/enter a valid url/i)).toBeInTheDocument();
-        });
+        expect(screen.getByText(/enter a valid url/i)).toBeInTheDocument();
     });
 
     it("calls start_download with a valid URL", async () => {
         const startHandler = vi.fn(() => "job-123");
         setInvokeHandler("start_download", startHandler);
         const user = userEvent.setup();
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://example.com/video");
+        await user.click(input);
+        await user.paste("https://example.com/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(startHandler).toHaveBeenCalled();
@@ -82,9 +91,10 @@ describe("DownloadPage", () => {
     it("clears the input after successful download start", async () => {
         setInvokeHandler("start_download", () => "job-123");
         const user = userEvent.setup();
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://example.com/video");
+        await user.click(input);
+        await user.paste("https://example.com/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(input).toHaveValue("");
@@ -96,9 +106,10 @@ describe("DownloadPage", () => {
             throw { kind: "InvalidInput", data: { message: "URL blocked by security policy" } };
         });
         const user = userEvent.setup();
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.type(input, "https://evil.local/video");
+        await user.click(input);
+        await user.paste("https://evil.local/video");
         await user.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/failed to start download/i)).toBeInTheDocument();
@@ -106,7 +117,7 @@ describe("DownloadPage", () => {
     });
 
     it("disables Download button when input is empty", () => {
-        render(<DownloadPage />);
+        render(<DownloadPage />, { queryClient: seededClient() });
         expect(screen.getByRole("button", { name: /download/i })).toBeDisabled();
     });
 });

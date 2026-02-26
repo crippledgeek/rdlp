@@ -238,6 +238,8 @@
 
 #![warn(missing_docs)]
 
+/// Adaptive chunk sizing and connection tuning (AIMD controller)
+pub(crate) mod adaptive;
 /// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
@@ -323,7 +325,8 @@ impl DownloaderRegistry {
         let http_downloader = HttpDownloader::with_client(client.clone())
             .with_buffer_size(config.buffer_size)
             .with_concurrent_fragments(config.concurrent_fragments)
-            .with_rate_limiter(rate_limiter);
+            .with_rate_limiter(rate_limiter)
+            .with_adaptive(config.adaptive_downloads);
 
         // Create HLS downloader
         let hls_downloader = HlsDownloader::new()

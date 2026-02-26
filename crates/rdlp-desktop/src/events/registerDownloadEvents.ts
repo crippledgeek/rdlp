@@ -128,7 +128,11 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                 (old) =>
                     old?.map((job) =>
                         job.id === p.jobId
-                            ? { ...job, statusMessage: p.message }
+                            ? {
+                                  ...job,
+                                  statusMessage: p.message,
+                                  logMessages: [...(job.logMessages || []), p.message],
+                              }
                             : job,
                     ),
             );

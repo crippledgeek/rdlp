@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@/test/test-utils";
+import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { SettingsPage } from "./SettingsPage";
+import { queryKeys } from "../query/queryKeys";
 import type { AppSettings } from "../types";
 
 const defaultSettings: AppSettings = {
@@ -34,11 +35,19 @@ const defaultSettings: AppSettings = {
     embed_subtitles: false,
 };
 
+const mockProviders = [{ name: "redtube", display_name: "RedTube" }];
+
+/** Pre-seed the query cache so SettingsPage renders synchronously. */
+function seededClient(settings: AppSettings = defaultSettings) {
+    const qc = createTestQueryClient();
+    qc.setQueryData(queryKeys.settings(), settings);
+    qc.setQueryData(queryKeys.providers(), mockProviders);
+    return qc;
+}
+
 beforeEach(() => {
     setInvokeHandler("get_settings", () => defaultSettings);
-    setInvokeHandler("get_search_providers", () => [
-        { name: "redtube", display_name: "RedTube" },
-    ]);
+    setInvokeHandler("get_search_providers", () => mockProviders);
     setInvokeHandler("update_settings", () => undefined);
 });
 
@@ -48,100 +57,77 @@ afterEach(() => {
 
 describe("SettingsPage", () => {
     it("shows loading state initially", () => {
+        // Do NOT pre-seed — test the loading skeleton
         render(<SettingsPage />);
         expect(screen.getByText(/loading settings/i)).toBeInTheDocument();
     });
 
-    it("renders the settings form after loading", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => {
-            expect(screen.getByRole("heading", { name: /settings/i })).toBeInTheDocument();
-        });
+    it("renders the settings form after loading", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
+        expect(screen.getByRole("heading", { name: /settings/i })).toBeInTheDocument();
     });
 
-    it("displays the output directory value", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => {
-            expect(screen.getByDisplayValue("/home/user/Videos")).toBeInTheDocument();
-        });
+    it("displays the output directory value", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
+        expect(screen.getByDisplayValue("/home/user/Videos")).toBeInTheDocument();
     });
 
-    it("renders the Save Settings button", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => {
-            expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument();
-        });
+    it("renders the Save Settings button", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
+        expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument();
     });
 
     it("calls update_settings invoke when Save is clicked", async () => {
         const updateHandler = vi.fn(() => undefined);
         setInvokeHandler("update_settings", updateHandler);
 
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("button", { name: /save settings/i }));
+        render(<SettingsPage />, { queryClient: seededClient() });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
     });
 
     it("shows error message when save fails", async () => {
-        // invokeTyped wraps errors into { code, message, details }.
-        // SettingsPage.handleSave calls String(err) on non-Error rejects,
-        // so throw an AppError-shaped object whose message invokeClient can extract.
         setInvokeHandler("update_settings", () => {
             throw { kind: "SaveFailed", data: { message: "Backend error" } };
         });
 
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("button", { name: /save settings/i }));
+        render(<SettingsPage />, { queryClient: seededClient() });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         await waitFor(() => {
-            // invokeTyped extracts the message from the AppError data, but handleSave
-            // then calls String() on the InvokeError object → check the error is visible
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
     });
 
-    it("embed thumbnails checkbox reflects current setting", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("heading", { name: /settings/i }));
-
-        // embed_thumbnail is true in defaultSettings → checkbox should be checked
+    it("embed thumbnails checkbox reflects current setting", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
         const checkboxes = screen.getAllByRole("checkbox");
         const thumbnailCheckbox = checkboxes[0];
         expect(thumbnailCheckbox).toBeChecked();
     });
 
-    it("verbose logging checkbox unchecked by default", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("heading", { name: /settings/i }));
-
-        // verbose is false in defaultSettings
+    it("verbose logging checkbox unchecked by default", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
         const verboseLabel = screen.getByText(/verbose logging/i);
         const checkbox = verboseLabel.closest("div")?.querySelector('button[role="checkbox"]');
         expect(checkbox).toHaveAttribute("aria-checked", "false");
     });
 
-    it("renders Browse button for output directory", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => {
-            expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
-        });
+    it("renders Browse button for output directory", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
+        expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     });
 
-    it("shows normalize audio checkbox unchecked by default", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByText(/normalize audio/i));
+    it("shows normalize audio checkbox unchecked by default", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
         const label = screen.getByText(/normalize audio/i);
         const checkbox = label.closest("div")?.querySelector('button[role="checkbox"]');
         expect(checkbox).toHaveAttribute("aria-checked", "false");
     });
 
     it("reveals mode toggle and boost fallback when normalize audio is checked", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByText(/normalize audio/i));
-        // Click the checkbox button directly to avoid double-fire from label+div onClick
+        render(<SettingsPage />, { queryClient: seededClient() });
         const normalizeLabel = screen.getByText(/normalize audio/i);
         const checkbox = normalizeLabel.closest("div")?.querySelector('button[role="checkbox"]');
         await userEvent.click(checkbox!);
@@ -151,29 +137,17 @@ describe("SettingsPage", () => {
         expect(screen.getByText(/boost fallback/i)).toBeInTheDocument();
     });
 
-    it("reveals preset select and advanced options when loudnorm mode is active", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: true,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByText(/dynamic mode/i));
+    it("reveals preset select and advanced options when loudnorm mode is active", () => {
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
         expect(screen.getByText(/dynamic mode/i)).toBeInTheDocument();
         expect(screen.getByText(/precompress/i)).toBeInTheDocument();
-        // Preset label is present (using heading role to disambiguate from select items)
         expect(screen.getByText("Preset")).toBeInTheDocument();
     });
 
-    it("reveals boost gain input when boost fallback is checked", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: true,
-            normalize_boost: true,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByPlaceholderText("12.0"));
+    it("reveals boost gain input when boost fallback is checked", () => {
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, normalize_boost: true };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
         expect(screen.getByPlaceholderText("12.0")).toBeInTheDocument();
     });
 
@@ -182,19 +156,10 @@ describe("SettingsPage", () => {
     // -----------------------------------------------------------------------
 
     it("shows error when loudnorm_target_i is out of range (above 0)", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: true,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByLabelText(/loudness target/i));
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        // Enter an out-of-range value: 5 is > 0, valid range is -70..0
-        const input = screen.getByLabelText(/loudness target/i);
-        await userEvent.clear(input);
-        await userEvent.type(input, "5");
-
+        fireEvent.change(screen.getByLabelText(/loudness target/i), { target: { value: "5" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -203,19 +168,10 @@ describe("SettingsPage", () => {
     });
 
     it("shows error when loudnorm_target_tp is out of range (above 0)", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: true,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByLabelText(/true peak limit/i));
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        // Enter 1.0 — above the 0 maximum for true peak limit
-        const input = screen.getByLabelText(/true peak limit/i);
-        await userEvent.clear(input);
-        await userEvent.type(input, "1");
-
+        fireEvent.change(screen.getByLabelText(/true peak limit/i), { target: { value: "1" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -224,19 +180,10 @@ describe("SettingsPage", () => {
     });
 
     it("shows error when normalize_boost_db is out of range (above 30)", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            normalize_boost: true,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByPlaceholderText("12.0"));
+        const settings = { ...defaultSettings, normalize_audio: true, normalize_boost: true };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
 
-        // Enter 50 — above the 30 maximum for boost gain
-        const input = screen.getByPlaceholderText("12.0");
-        await userEvent.clear(input);
-        await userEvent.type(input, "50");
-
+        fireEvent.change(screen.getByPlaceholderText("12.0"), { target: { value: "50" } });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -251,20 +198,12 @@ describe("SettingsPage", () => {
     it("calls update_settings with correct normalization payload for loudnorm broadcast preset", async () => {
         const updateHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("update_settings", updateHandler);
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: true,
-            loudnorm_preset: "broadcast",
-        }));
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, loudnorm_preset: "broadcast" };
 
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("button", { name: /save settings/i }));
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
-        // updateSettings calls invoke("update_settings", { settings }) so the mock
-        // handler receives { settings: AppSettings } as its first argument.
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
         expect(args.settings.normalize_audio).toBe(true);
         expect(args.settings.loudnorm).toBe(true);
@@ -275,8 +214,7 @@ describe("SettingsPage", () => {
         const updateHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("update_settings", updateHandler);
 
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("button", { name: /save settings/i }));
+        render(<SettingsPage />, { queryClient: seededClient() });
         await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
@@ -288,36 +226,22 @@ describe("SettingsPage", () => {
     // C. Visibility cascading
     // -----------------------------------------------------------------------
 
-    it("loudnorm mode toggle not visible when normalize_audio is unchecked", async () => {
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByRole("heading", { name: /settings/i }));
-        // normalize_audio is false in defaultSettings, so loudnorm toggle should be hidden
+    it("loudnorm mode toggle not visible when normalize_audio is unchecked", () => {
+        render(<SettingsPage />, { queryClient: seededClient() });
         expect(screen.queryByText(/ebu r128 loudnorm/i)).not.toBeInTheDocument();
     });
 
-    it("preset select and custom targets not visible when normalize_audio is checked but mode is Peak", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            loudnorm: false,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByText(/ebu r128 loudnorm/i));
-        // Peak mode: loudnorm-specific options should not appear
+    it("preset select and custom targets not visible when normalize_audio is checked but mode is Peak", () => {
+        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: false };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
         expect(screen.queryByText(/dynamic mode/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/precompress/i)).not.toBeInTheDocument();
         expect(screen.queryByText("Preset")).not.toBeInTheDocument();
     });
 
-    it("boost dB input not visible when boost fallback is unchecked", async () => {
-        setInvokeHandler("get_settings", () => ({
-            ...defaultSettings,
-            normalize_audio: true,
-            normalize_boost: false,
-        }));
-        render(<SettingsPage />);
-        await waitFor(() => screen.getByText(/boost fallback/i));
-        // normalize_boost is false → boost gain input should not appear
+    it("boost dB input not visible when boost fallback is unchecked", () => {
+        const settings = { ...defaultSettings, normalize_audio: true, normalize_boost: false };
+        render(<SettingsPage />, { queryClient: seededClient(settings) });
         expect(screen.queryByPlaceholderText("12.0")).not.toBeInTheDocument();
     });
 });

@@ -117,6 +117,8 @@ export interface DownloadJob {
     options: DownloadOptions | null;
     /** Latest log message from the download-log event (frontend-only, not from Rust). */
     statusMessage: string | null;
+    /** Accumulated log messages from download-log events (frontend-only, not from Rust). */
+    logMessages?: string[];
 }
 
 /**

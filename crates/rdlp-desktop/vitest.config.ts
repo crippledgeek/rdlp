@@ -14,6 +14,7 @@ export default defineConfig({
         environment: "jsdom",
         setupFiles: ["./src/test/setup.ts"],
         include: ["src/**/*.{test,spec}.{ts,tsx}"],
+        pool: "threads",
         coverage: {
             provider: "v8",
             reporter: ["text", "json", "html"],

@@ -194,6 +194,7 @@ impl Downloader for HlsDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let timeout = self.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
@@ -242,6 +243,9 @@ impl Downloader for HlsDownloader {
             let duration_completed = Arc::new(AtomicU64::new(0));
             let total_segments_u64 = total_segments as u64;
 
+            // Clone before reporter consumes it — merge needs it for adaptive log callback
+            let log_callback = progress.clone();
+
             // Spawn progress reporter task with duration-based progress
             let mut progress_guard = spawn_progress_reporter(
                 progress,
@@ -274,6 +278,7 @@ impl Downloader for HlsDownloader {
                 duration_completed.clone(),
                 state.clone(),
                 path,
+                log_callback,
             )
             .await
             {

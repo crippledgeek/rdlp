@@ -122,10 +122,28 @@ impl HttpDownloader {
         self
     }
 
-    /// Set chunk size strategy
+    /// Set chunk size strategy.
+    ///
+    /// When `Fixed` or `Legacy` is used, adaptive mode is forced off because
+    /// the caller has explicitly chosen a predictable chunk sizing scheme.
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_chunk_strategy(mut self, strategy: ChunkSizeStrategy) -> Self {
-        Arc::make_mut(&mut self.config).chunk_strategy = strategy;
+        let cfg = Arc::make_mut(&mut self.config);
+        if !matches!(strategy, ChunkSizeStrategy::Auto) {
+            cfg.adaptive = false;
+        }
+        cfg.chunk_strategy = strategy;
+        self
+    }
+
+    /// Enable or disable adaptive chunk sizing and connection tuning.
+    ///
+    /// When `false`, the downloader uses the static `chunk_strategy` with a
+    /// fixed connection count. Automatically forced to `false` when
+    /// `chunk_strategy` is not `Auto`.
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_adaptive(mut self, adaptive: bool) -> Self {
+        Arc::make_mut(&mut self.config).adaptive = adaptive;
         self
     }
 
@@ -272,6 +290,7 @@ impl HttpDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
         let client = self.client.clone();
         let url_string = url.to_string();

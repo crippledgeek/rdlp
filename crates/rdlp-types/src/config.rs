@@ -304,6 +304,17 @@ pub struct Config {
 
     /// Load dynamic plugins
     pub load_plugins: bool,
+
+    // === Download performance ===
+    /// Enable adaptive chunk sizing and connection tuning for downloads.
+    /// When true, the downloader adjusts chunk sizes and parallel connections
+    /// based on observed throughput using an AIMD algorithm.
+    #[serde(default = "default_true")]
+    pub adaptive_downloads: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -411,6 +422,9 @@ impl Default for Config {
             plugin_directories: Vec::new(),
             enabled_plugins: None,
             load_plugins: true,
+
+            // Download performance
+            adaptive_downloads: true,
         }
     }
 }

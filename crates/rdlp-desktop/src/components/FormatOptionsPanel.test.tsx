@@ -1,4 +1,4 @@
-import { render, screen } from "@/test/test-utils";
+import { render, screen, fireEvent } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import {
     FormatOptionsPanel,
@@ -265,21 +265,21 @@ describe("Audio Normalization Select — displayed value", () => {
 // ---------------------------------------------------------------------------
 
 describe("Audio Normalization Select — onChange branches", () => {
-    async function openNormSelect() {
+    function openNormSelect() {
         const label = screen.getByText(/audio normalization/i);
         const container = label.closest("div.flex-col")!;
         const trigger = container.querySelector('[role="combobox"]') as HTMLElement;
-        await userEvent.click(trigger);
+        fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
     }
 
-    it("selecting 'default' calls onChange with all 10 normalization fields null", async () => {
+    it("selecting 'default' calls onChange with all 10 normalization fields null", () => {
         const onChange = vi.fn();
         renderPanel(
             { ...defaultOptions, normalizeAudio: false, loudnorm: false },
             onChange,
         );
-        await openNormSelect();
-        await userEvent.click(screen.getByRole("option", { name: /use settings default/i }));
+        openNormSelect();
+        fireEvent.click(screen.getByRole("option", { name: /use settings default/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.normalizeAudio).toBeNull();
@@ -294,11 +294,11 @@ describe("Audio Normalization Select — onChange branches", () => {
         expect(called.normalizeBoostDb).toBeNull();
     });
 
-    it("selecting 'off' calls onChange with normalizeAudio false and loudnorm false", async () => {
+    it("selecting 'off' calls onChange with normalizeAudio false and loudnorm false", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, normalizeAudio: null }, onChange);
-        await openNormSelect();
-        await userEvent.click(screen.getByRole("option", { name: /^off$/i }));
+        openNormSelect();
+        fireEvent.click(screen.getByRole("option", { name: /^off$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.normalizeAudio).toBe(false);
@@ -307,11 +307,11 @@ describe("Audio Normalization Select — onChange branches", () => {
         expect(called.normalizeBoostDb).toBeNull();
     });
 
-    it("selecting 'peak' calls onChange with normalizeAudio true and loudnorm false", async () => {
+    it("selecting 'peak' calls onChange with normalizeAudio true and loudnorm false", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, normalizeAudio: null }, onChange);
-        await openNormSelect();
-        await userEvent.click(screen.getByRole("option", { name: /^peak$/i }));
+        openNormSelect();
+        fireEvent.click(screen.getByRole("option", { name: /^peak$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.normalizeAudio).toBe(true);
@@ -319,11 +319,11 @@ describe("Audio Normalization Select — onChange branches", () => {
         expect(called.loudnormPreset).toBeNull();
     });
 
-    it("selecting 'loudnorm-streaming' calls onChange with loudnorm true and preset 'streaming'", async () => {
+    it("selecting 'loudnorm-streaming' calls onChange with loudnorm true and preset 'streaming'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, normalizeAudio: null }, onChange);
-        await openNormSelect();
-        await userEvent.click(
+        openNormSelect();
+        fireEvent.click(
             screen.getByRole("option", { name: /loudnorm.*streaming/i }),
         );
         expect(onChange).toHaveBeenCalledTimes(1);
@@ -333,11 +333,11 @@ describe("Audio Normalization Select — onChange branches", () => {
         expect(called.loudnormPreset).toBe("streaming");
     });
 
-    it("selecting 'loudnorm-broadcast' calls onChange with loudnorm true and preset 'broadcast'", async () => {
+    it("selecting 'loudnorm-broadcast' calls onChange with loudnorm true and preset 'broadcast'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, normalizeAudio: null }, onChange);
-        await openNormSelect();
-        await userEvent.click(
+        openNormSelect();
+        fireEvent.click(
             screen.getByRole("option", { name: /loudnorm.*broadcast/i }),
         );
         expect(onChange).toHaveBeenCalledTimes(1);
@@ -418,31 +418,31 @@ describe("Remux Select", () => {
         expect(getRemuxSelect()).toHaveTextContent(/^none$/i);
     });
 
-    it("selecting MP4 calls onChange with remux: 'mp4'", async () => {
+    it("selecting MP4 calls onChange with remux: 'mp4'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, remux: null }, onChange);
-        await userEvent.click(getRemuxSelect());
-        await userEvent.click(screen.getByRole("option", { name: /^mp4$/i }));
+        fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
+        fireEvent.click(screen.getByRole("option", { name: /^mp4$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.remux).toBe("mp4");
     });
 
-    it("selecting MKV calls onChange with remux: 'mkv'", async () => {
+    it("selecting MKV calls onChange with remux: 'mkv'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, remux: null }, onChange);
-        await userEvent.click(getRemuxSelect());
-        await userEvent.click(screen.getByRole("option", { name: /^mkv$/i }));
+        fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
+        fireEvent.click(screen.getByRole("option", { name: /^mkv$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.remux).toBe("mkv");
     });
 
-    it("selecting None calls onChange with remux: null", async () => {
+    it("selecting None calls onChange with remux: null", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, remux: "mp4" }, onChange);
-        await userEvent.click(getRemuxSelect());
-        await userEvent.click(screen.getByRole("option", { name: /^none$/i }));
+        fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
+        fireEvent.click(screen.getByRole("option", { name: /^none$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.remux).toBeNull();
@@ -461,21 +461,21 @@ describe("Extract Audio Select", () => {
         expect(getAudioSelect()).toHaveTextContent(/^none$/i);
     });
 
-    it("selecting MP3 calls onChange with extractAudio: 'mp3'", async () => {
+    it("selecting MP3 calls onChange with extractAudio: 'mp3'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, extractAudio: null }, onChange);
-        await userEvent.click(getAudioSelect());
-        await userEvent.click(screen.getByRole("option", { name: /^mp3$/i }));
+        fireEvent.pointerDown(getAudioSelect(), { button: 0, pointerType: "mouse" });
+        fireEvent.click(screen.getByRole("option", { name: /^mp3$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.extractAudio).toBe("mp3");
     });
 
-    it("selecting Opus calls onChange with extractAudio: 'opus'", async () => {
+    it("selecting Opus calls onChange with extractAudio: 'opus'", () => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, extractAudio: null }, onChange);
-        await userEvent.click(getAudioSelect());
-        await userEvent.click(screen.getByRole("option", { name: /^opus$/i }));
+        fireEvent.pointerDown(getAudioSelect(), { button: 0, pointerType: "mouse" });
+        fireEvent.click(screen.getByRole("option", { name: /^opus$/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         expect(called.extractAudio).toBe("opus");
