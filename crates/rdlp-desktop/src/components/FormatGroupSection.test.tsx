@@ -184,4 +184,85 @@ describe("FormatGroupSection", () => {
         expect(cells[1].className).toContain("text-foreground");
         expect(cells[2].className).toContain("text-foreground/60");
     });
+
+    it("applies zebra stripe to odd unselected rows", () => {
+        render(<TestHarness data={[fmt1080hls, fmt1080mp4, fmt720]} />);
+        const rows = screen.getAllByRole("row");
+        // row 1 = index 0 (even) → bg-transparent, row 2 = index 1 (odd) → zebra
+        expect(rows[1].className).toContain("bg-transparent");
+        expect(rows[2].className).toContain("bg-foreground/[0.02]");
+    });
+
+    it("applies expression match background to matched unselected row", () => {
+        render(<TestHarness data={[fmt1080hls, fmt720]} exprMatches={new Set(["720"])} />);
+        const rows = screen.getAllByRole("row");
+        // row 1 = 1080 (no match), row 2 = 720 (match)
+        expect(rows[1].className).not.toContain("bg-yellow-500/5");
+        expect(rows[2].className).toContain("bg-yellow-500/5");
+    });
+
+    it("applies text-yellow-500 to expression-matched cells", () => {
+        render(<TestHarness data={[fmt1080hls, fmt720]} exprMatches={new Set(["720"])} />);
+        const cells = screen.getAllByRole("cell");
+        // cell 0 = header, cell 1 = 1080 (no match), cell 2 = 720 (match)
+        expect(cells[1].className).toContain("text-foreground/60");
+        expect(cells[2].className).toContain("text-yellow-500");
+    });
+
+    it("suppresses expression match styling when row is selected", () => {
+        render(
+            <TestHarness data={[fmt1080hls]} selectedId="1080" exprMatches={new Set(["1080"])} />,
+        );
+        const rows = screen.getAllByRole("row");
+        const cells = screen.getAllByRole("cell");
+        // Selected takes priority over expr match
+        expect(rows[1].className).toContain("bg-primary/30");
+        expect(rows[1].className).not.toContain("bg-yellow-500/5");
+        expect(cells[1].className).toContain("text-foreground");
+        expect(cells[1].className).not.toContain("text-yellow-500");
+    });
+
+    it("suppresses expression match styling when row is merge target", () => {
+        render(
+            <TestHarness
+                data={[fmt1080hls, fmt720]}
+                selectedId="1080"
+                mergeId="720"
+                exprMatches={new Set(["720"])}
+            />,
+        );
+        const rows = screen.getAllByRole("row");
+        const cells = screen.getAllByRole("cell");
+        // Merge takes priority over expr match
+        expect(rows[2].className).toContain("bg-foreground/15");
+        expect(rows[2].className).not.toContain("bg-yellow-500/5");
+        expect(cells[2].className).toContain("text-foreground");
+        expect(cells[2].className).not.toContain("text-yellow-500");
+    });
+
+    it("gives unselected rows default hover and selected rows dedicated hover", () => {
+        render(<TestHarness data={[fmt1080hls, fmt720]} selectedId="1080" />);
+        const rows = screen.getAllByRole("row");
+        // Selected row: dedicated hover
+        expect(rows[1].className).toContain("hover:bg-primary/35");
+        expect(rows[1].className).not.toContain("hover:bg-foreground/[0.06]");
+        // Unselected row: default hover
+        expect(rows[2].className).toContain("hover:bg-foreground/[0.06]");
+        expect(rows[2].className).not.toContain("hover:bg-primary/35");
+    });
+
+    it("gives merge row its own hover class", () => {
+        render(<TestHarness data={[fmt1080hls, fmt720]} selectedId="1080" mergeId="720" />);
+        const rows = screen.getAllByRole("row");
+        expect(rows[2].className).toContain("hover:bg-foreground/18");
+        expect(rows[2].className).not.toContain("hover:bg-foreground/[0.06]");
+    });
+
+    it("applies text-foreground to merge row cells", () => {
+        render(<TestHarness data={[fmt1080hls, fmt720]} selectedId="1080" mergeId="720" />);
+        const cells = screen.getAllByRole("cell");
+        // cell 1 = selected, cell 2 = merge — both get text-foreground
+        expect(cells[1].className).toContain("text-foreground");
+        expect(cells[2].className).toContain("text-foreground");
+    });
 });
