@@ -1,8 +1,18 @@
-import { render, screen, act } from "@/test/test-utils";
+import { render, screen, act, createTestQueryClient } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { StatusBar } from "./StatusBar";
 import { resetSearchParams } from "../stores/searchParamsStore";
+import { queryKeys } from "../query/queryKeys";
+import type { DownloadJob } from "../types";
+
+/** Pre-seed the query cache so StatusBar renders synchronously. */
+function seededClient(jobs: DownloadJob[] = []) {
+    const qc = createTestQueryClient();
+    qc.setQueryData(queryKeys.providers(), []);
+    qc.setQueryData(queryKeys.downloads.list(), jobs);
+    return qc;
+}
 
 beforeEach(() => {
     resetSearchParams();
@@ -15,17 +25,21 @@ afterEach(() => {
     act(() => resetSearchParams());
 });
 
-function renderStatusBar(props?: {
-    viewMode?: "list" | "grid";
-    onViewModeChange?: (mode: "list" | "grid") => void;
-    onSwitchToQueue?: () => void;
-}) {
+function renderStatusBar(
+    props?: {
+        viewMode?: "list" | "grid";
+        onViewModeChange?: (mode: "list" | "grid") => void;
+        onSwitchToQueue?: () => void;
+    },
+    jobs: DownloadJob[] = [],
+) {
     return render(
         <StatusBar
             viewMode={props?.viewMode ?? "list"}
             onViewModeChange={props?.onViewModeChange ?? vi.fn()}
             onSwitchToQueue={props?.onSwitchToQueue ?? vi.fn()}
         />,
+        { queryClient: seededClient(jobs) },
     );
 }
 
@@ -67,30 +81,24 @@ describe("StatusBar", () => {
 
     it("calls onSwitchToQueue when active download link is clicked", async () => {
         const onSwitchToQueue = vi.fn();
-
-        // Return an active job so the center button appears
-        setInvokeHandler("get_queue", () => [
-            {
-                id: "job-1",
-                url: "https://example.com/video",
-                title: "Video",
-                status: "running",
-                progress: 0.5,
-                speed: "2 MB/s",
-                eta: "5s",
-                error: null,
-                retryable: false,
-                started_at: null,
-                completed_at: null,
-                output_path: null,
-                statusMessage: null,
-            },
-        ]);
-
-        renderStatusBar({ onSwitchToQueue });
-
-        // Wait for queue to load and the center button to appear
-        const link = await screen.findByTitle(/switch to queue/i);
+        const activeJob: DownloadJob = {
+            id: "job-1",
+            url: "https://example.com/video",
+            title: "Video",
+            status: "running",
+            progress: 0.5,
+            speed: "2 MB/s",
+            eta: "5s",
+            error: null,
+            retryable: false,
+            started_at: null,
+            completed_at: null,
+            output_path: null,
+            options: null,
+            statusMessage: null,
+        };
+        renderStatusBar({ onSwitchToQueue }, [activeJob]);
+        const link = screen.getByTitle(/switch to queue/i);
         await userEvent.click(link);
         expect(onSwitchToQueue).toHaveBeenCalledTimes(1);
     });
