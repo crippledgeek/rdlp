@@ -4,6 +4,11 @@ import { describe, test, expect } from "vitest";
 import type { Row } from "@tanstack/react-table";
 import type { FormatInfo, DownloadOptions } from "../../types";
 import { groupRows, optionsSummary } from "./tableHelpers";
+import {
+    isCustomNormalization,
+    getNormSelectValue,
+    handleNormSelectChange,
+} from "./normalization";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -174,5 +179,248 @@ describe("optionsSummary", () => {
         const result = optionsSummary(makeOptions({ normalizeAudio: null }));
         expect(result).not.toContain("normalize");
         expect(result).not.toContain("Loudnorm");
+    });
+
+    test("includes 'Custom normalize' when custom target fields are set", () => {
+        const result = optionsSummary(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "streaming",
+            loudnormTargetI: -16,
+        }));
+        expect(result).toContain("Custom normalize");
+    });
+
+    test("includes 'Custom normalize' when dynamic mode is enabled", () => {
+        const result = optionsSummary(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormDynamic: true,
+        }));
+        expect(result).toContain("Custom normalize");
+    });
+
+    test("includes 'Custom normalize' when boost is enabled", () => {
+        const result = optionsSummary(makeOptions({
+            normalizeAudio: true,
+            loudnorm: false,
+            normalizeBoost: true,
+        }));
+        expect(result).toContain("Custom normalize");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// isCustomNormalization
+// ---------------------------------------------------------------------------
+
+describe("isCustomNormalization", () => {
+    test("returns false when normalizeAudio is null", () => {
+        expect(isCustomNormalization(makeOptions())).toBe(false);
+    });
+
+    test("returns false when normalizeAudio is false", () => {
+        expect(isCustomNormalization(makeOptions({ normalizeAudio: false }))).toBe(false);
+    });
+
+    test("returns false for standard peak mode", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: false,
+        }))).toBe(false);
+    });
+
+    test("returns false for standard loudnorm preset", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "streaming",
+        }))).toBe(false);
+    });
+
+    test("returns true when loudnormTargetI is set", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetI: -16,
+        }))).toBe(true);
+    });
+
+    test("returns true when loudnormTargetTp is set", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetTp: -2,
+        }))).toBe(true);
+    });
+
+    test("returns true when loudnormTargetLra is set", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetLra: 9,
+        }))).toBe(true);
+    });
+
+    test("returns true when loudnormDynamic is true", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormDynamic: true,
+        }))).toBe(true);
+    });
+
+    test("returns true when loudnormPrecompress is true", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPrecompress: true,
+        }))).toBe(true);
+    });
+
+    test("returns true when normalizeBoost is true", () => {
+        expect(isCustomNormalization(makeOptions({
+            normalizeAudio: true,
+            normalizeBoost: true,
+        }))).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// getNormSelectValue
+// ---------------------------------------------------------------------------
+
+describe("getNormSelectValue", () => {
+    test("returns 'default' for null normalizeAudio", () => {
+        expect(getNormSelectValue(makeOptions())).toBe("default");
+    });
+
+    test("returns 'off' when normalizeAudio is false", () => {
+        expect(getNormSelectValue(makeOptions({ normalizeAudio: false }))).toBe("off");
+    });
+
+    test("returns 'peak' when normalizeAudio is true and loudnorm is false", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: false,
+        }))).toBe("peak");
+    });
+
+    test("returns 'loudnorm-streaming' for streaming preset", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "streaming",
+        }))).toBe("loudnorm-streaming");
+    });
+
+    test("returns 'loudnorm-streaming' when preset is null", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: null,
+        }))).toBe("loudnorm-streaming");
+    });
+
+    test("returns 'loudnorm-broadcast' for broadcast preset", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "broadcast",
+        }))).toBe("loudnorm-broadcast");
+    });
+
+    test("returns 'loudnorm-loud' for loud preset", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "loud",
+        }))).toBe("loudnorm-loud");
+    });
+
+    test("returns 'custom' when custom target fields are set", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetI: -16,
+        }))).toBe("custom");
+    });
+
+    test("returns 'custom' when boost is enabled", () => {
+        expect(getNormSelectValue(makeOptions({
+            normalizeAudio: true,
+            loudnorm: false,
+            normalizeBoost: true,
+        }))).toBe("custom");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// handleNormSelectChange
+// ---------------------------------------------------------------------------
+
+describe("handleNormSelectChange", () => {
+    test("'default' clears all normalization fields to null", () => {
+        const result = handleNormSelectChange(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormPreset: "streaming",
+            loudnormTargetI: -16,
+        }), "default");
+        expect(result.normalizeAudio).toBeNull();
+        expect(result.loudnorm).toBeNull();
+        expect(result.loudnormPreset).toBeNull();
+        expect(result.loudnormTargetI).toBeNull();
+        expect(result.normalizeBoost).toBeNull();
+    });
+
+    test("'off' sets normalizeAudio to false and clears fields", () => {
+        const result = handleNormSelectChange(makeOptions(), "off");
+        expect(result.normalizeAudio).toBe(false);
+        expect(result.loudnorm).toBe(false);
+        expect(result.loudnormDynamic).toBe(false);
+        expect(result.normalizeBoost).toBe(false);
+    });
+
+    test("'peak' clears custom fields", () => {
+        const result = handleNormSelectChange(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetI: -16,
+            normalizeBoost: true,
+        }), "peak");
+        expect(result.normalizeAudio).toBe(true);
+        expect(result.loudnorm).toBe(false);
+        expect(result.loudnormTargetI).toBeNull();
+        expect(result.normalizeBoost).toBeNull();
+    });
+
+    test("'custom' enables normalization and keeps existing values", () => {
+        const opts = makeOptions({
+            normalizeAudio: false,
+            loudnorm: false,
+            loudnormPreset: "broadcast",
+        });
+        const result = handleNormSelectChange(opts, "custom");
+        expect(result.normalizeAudio).toBe(true);
+        expect(result.loudnormPreset).toBe("broadcast");
+    });
+
+    test("loudnorm preset clears custom overrides", () => {
+        const result = handleNormSelectChange(makeOptions({
+            normalizeAudio: true,
+            loudnorm: true,
+            loudnormTargetI: -16,
+            loudnormDynamic: true,
+            normalizeBoost: true,
+            normalizeBoostDb: 8,
+        }), "loudnorm-broadcast");
+        expect(result.normalizeAudio).toBe(true);
+        expect(result.loudnorm).toBe(true);
+        expect(result.loudnormPreset).toBe("broadcast");
+        expect(result.loudnormTargetI).toBeNull();
+        expect(result.loudnormDynamic).toBeNull();
+        expect(result.normalizeBoost).toBeNull();
+        expect(result.normalizeBoostDb).toBeNull();
     });
 });

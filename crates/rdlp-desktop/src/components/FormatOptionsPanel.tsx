@@ -22,6 +22,8 @@ import type {
     ContainerFormat,
     DownloadOptions,
 } from "../types";
+import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
+import { NormalizationCustomControls } from "./NormalizationCustomControls";
 
 /** A format preset with a human-readable label and yt-dlp selector string. */
 export interface FormatPreset {
@@ -338,67 +340,8 @@ export function FormatOptionsPanel({
                     Audio Normalization
                 </Label>
                 <Select
-                    value={
-                        value.normalizeAudio === null
-                            ? "default"
-                            : !value.normalizeAudio
-                              ? "off"
-                              : !value.loudnorm
-                                ? "peak"
-                                : value.loudnormPreset === "broadcast"
-                                  ? "loudnorm-broadcast"
-                                  : value.loudnormPreset === "loud"
-                                    ? "loudnorm-loud"
-                                    : value.loudnormPreset === "streaming" || value.loudnormPreset === null
-                                      ? "loudnorm-streaming"
-                                      : "default"
-                    }
-                    onValueChange={(val) => {
-                        if (val === "default") {
-                            onChange({
-                                ...value,
-                                normalizeAudio: null,
-                                loudnorm: null,
-                                loudnormPreset: null,
-                                loudnormTargetI: null,
-                                loudnormTargetTp: null,
-                                loudnormTargetLra: null,
-                                loudnormDynamic: null,
-                                loudnormPrecompress: null,
-                                normalizeBoost: null,
-                                normalizeBoostDb: null,
-                            });
-                        } else if (val === "off") {
-                            onChange({
-                                ...value,
-                                normalizeAudio: false,
-                                loudnorm: false,
-                                loudnormPreset: null,
-                                loudnormTargetI: null,
-                                loudnormTargetTp: null,
-                                loudnormTargetLra: null,
-                                loudnormDynamic: false,
-                                loudnormPrecompress: false,
-                                normalizeBoost: false,
-                                normalizeBoostDb: null,
-                            });
-                        } else if (val === "peak") {
-                            onChange({
-                                ...value,
-                                normalizeAudio: true,
-                                loudnorm: false,
-                                loudnormPreset: null,
-                            });
-                        } else {
-                            const preset = val.replace("loudnorm-", "");
-                            onChange({
-                                ...value,
-                                normalizeAudio: true,
-                                loudnorm: true,
-                                loudnormPreset: preset,
-                            });
-                        }
-                    }}
+                    value={getNormSelectValue(value)}
+                    onValueChange={(val) => onChange(handleNormSelectChange(value, val))}
                 >
                     <SelectTrigger size="sm" className="w-full text-xs">
                         <SelectValue />
@@ -410,8 +353,16 @@ export function FormatOptionsPanel({
                         <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
                         <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
                         <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
+                        <SelectItem value="custom">Custom...</SelectItem>
                     </SelectContent>
                 </Select>
+                {getNormSelectValue(value) === "custom" && (
+                    <NormalizationCustomControls
+                        value={value}
+                        onChange={onChange}
+                        idPrefix="fop-norm"
+                    />
+                )}
             </div>
         </div>
     );

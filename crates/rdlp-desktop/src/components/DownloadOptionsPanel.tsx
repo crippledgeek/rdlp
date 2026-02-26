@@ -25,6 +25,8 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { optionsSummary } from "./utils/tableHelpers";
+import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
+import { NormalizationCustomControls } from "./NormalizationCustomControls";
 import type {
     AppSettings,
     AudioFormat,
@@ -244,81 +246,34 @@ export function DownloadOptionsPanel({
                         <Label className="text-[11px] font-semibold text-muted-foreground tracking-wide">
                             Normalize
                         </Label>
-                        <Select
-                            value={
-                                options.normalizeAudio === null
-                                    ? "default"
-                                    : !options.normalizeAudio
-                                      ? "off"
-                                      : !options.loudnorm
-                                        ? "peak"
-                                        : options.loudnormPreset === "broadcast"
-                                          ? "loudnorm-broadcast"
-                                          : options.loudnormPreset === "loud"
-                                            ? "loudnorm-loud"
-                                            : options.loudnormPreset === "streaming" || options.loudnormPreset === null
-                                              ? "loudnorm-streaming"
-                                              : "default"
-                            }
-                            onValueChange={(val) => {
-                                if (val === "default") {
-                                    setOptions((prev) => ({
-                                        ...prev,
-                                        normalizeAudio: null,
-                                        loudnorm: null,
-                                        loudnormPreset: null,
-                                        loudnormTargetI: null,
-                                        loudnormTargetTp: null,
-                                        loudnormTargetLra: null,
-                                        loudnormDynamic: null,
-                                        loudnormPrecompress: null,
-                                        normalizeBoost: null,
-                                        normalizeBoostDb: null,
-                                    }));
-                                } else if (val === "off") {
-                                    setOptions((prev) => ({
-                                        ...prev,
-                                        normalizeAudio: false,
-                                        loudnorm: false,
-                                        loudnormPreset: null,
-                                        loudnormTargetI: null,
-                                        loudnormTargetTp: null,
-                                        loudnormTargetLra: null,
-                                        loudnormDynamic: false,
-                                        loudnormPrecompress: false,
-                                        normalizeBoost: false,
-                                        normalizeBoostDb: null,
-                                    }));
-                                } else if (val === "peak") {
-                                    setOptions((prev) => ({
-                                        ...prev,
-                                        normalizeAudio: true,
-                                        loudnorm: false,
-                                        loudnormPreset: null,
-                                    }));
-                                } else {
-                                    const preset = val.replace("loudnorm-", "");
-                                    setOptions((prev) => ({
-                                        ...prev,
-                                        normalizeAudio: true,
-                                        loudnorm: true,
-                                        loudnormPreset: preset,
-                                    }));
+                        <div className="flex flex-col gap-0">
+                            <Select
+                                value={getNormSelectValue(options)}
+                                onValueChange={(val) =>
+                                    setOptions((prev) => handleNormSelectChange(prev, val))
                                 }
-                            }}
-                        >
-                            <SelectTrigger className="h-7 text-xs">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="default">Use Settings Default</SelectItem>
-                                <SelectItem value="off">Off</SelectItem>
-                                <SelectItem value="peak">Peak</SelectItem>
-                                <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
-                                <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
-                                <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
-                            </SelectContent>
-                        </Select>
+                            >
+                                <SelectTrigger className="h-7 text-xs">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="default">Use Settings Default</SelectItem>
+                                    <SelectItem value="off">Off</SelectItem>
+                                    <SelectItem value="peak">Peak</SelectItem>
+                                    <SelectItem value="loudnorm-streaming">Loudnorm (Streaming -14 LUFS)</SelectItem>
+                                    <SelectItem value="loudnorm-broadcast">Loudnorm (Broadcast -23 LUFS)</SelectItem>
+                                    <SelectItem value="loudnorm-loud">Loudnorm (Loud -11 LUFS)</SelectItem>
+                                    <SelectItem value="custom">Custom...</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            {getNormSelectValue(options) === "custom" && (
+                                <NormalizationCustomControls
+                                    value={options}
+                                    onChange={(next) => setOptions(next)}
+                                    idPrefix="dop-norm"
+                                />
+                            )}
+                        </div>
                     </div>
                 </CollapsibleContent>
             </Collapsible>

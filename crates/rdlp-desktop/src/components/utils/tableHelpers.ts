@@ -3,6 +3,7 @@
 import type { Row } from "@tanstack/react-table";
 import type { DownloadOptions, FormatInfo } from "../../types";
 import type { FormatGroup } from "../FormatGroupSection";
+import { isCustomNormalization } from "./normalization";
 
 /** Group sorted TanStack rows into Video+Audio, Video Only, Audio Only sections. */
 export function groupRows(rows: Row<FormatInfo>[]): FormatGroup[] {
@@ -33,7 +34,9 @@ export function optionsSummary(opts: DownloadOptions): string {
         parts.push(`Subs: ${opts.subtitleLangs.join(", ")}`);
     if (opts.embedThumbnail) parts.push("Thumbnail");
     if (opts.normalizeAudio === true) {
-        if (opts.loudnorm) {
+        if (isCustomNormalization(opts)) {
+            parts.push("Custom normalize");
+        } else if (opts.loudnorm) {
             const preset = opts.loudnormPreset ?? "streaming";
             parts.push(`Loudnorm (${preset})`);
         } else {
