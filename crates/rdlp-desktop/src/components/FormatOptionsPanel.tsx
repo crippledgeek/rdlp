@@ -22,6 +22,7 @@ import type {
     ContainerFormat,
     DownloadOptions,
 } from "../types";
+import { NONE_SENTINEL, REMUX_OPTIONS, RECODE_OPTIONS, AUDIO_OPTIONS } from "./utils/formatConstants";
 import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
 import { NormalizationCustomControls } from "./NormalizationCustomControls";
 
@@ -48,30 +49,6 @@ export const PRESETS: FormatPreset[] = [
     { id: "audio-only", label: "Audio Only", selector: "bestaudio/best" },
 ];
 
-/** Common remux options shown in the UI. */
-const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
-    { value: "mp4", label: "MP4" },
-    { value: "mkv", label: "MKV" },
-    { value: "webm", label: "WebM" },
-];
-
-/** Common recode (transcode) options shown in the UI. */
-const RECODE_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
-    { value: "mp4", label: "MP4" },
-    { value: "mkv", label: "MKV" },
-    { value: "webm", label: "WebM" },
-];
-
-/** Common audio extraction options shown in the UI. */
-const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
-    { value: "mp3", label: "MP3" },
-    { value: "aac", label: "AAC" },
-    { value: "opus", label: "Opus" },
-    { value: "flac", label: "FLAC" },
-];
-
-/** Sentinel value for "no selection" in Radix Select (empty string is not supported). */
-const NONE_SENTINEL = "none";
 
 /**
  * Build a `DownloadOptions` from persisted settings.

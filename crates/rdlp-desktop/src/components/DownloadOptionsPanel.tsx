@@ -26,6 +26,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { optionsSummary } from "./utils/tableHelpers";
+import { NONE_SENTINEL, REMUX_OPTIONS, RECODE_OPTIONS, AUDIO_OPTIONS } from "./utils/formatConstants";
 import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
 import { NormalizationCustomControls } from "./NormalizationCustomControls";
 import type {
@@ -34,29 +35,6 @@ import type {
     ContainerFormat,
     DownloadOptions,
 } from "../types";
-
-// -- Constants --------------------------------------------------------
-
-const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
-    { value: "mp4", label: "MP4" },
-    { value: "mkv", label: "MKV" },
-    { value: "webm", label: "WebM" },
-];
-
-const RECODE_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
-    { value: "mp4", label: "MP4" },
-    { value: "mkv", label: "MKV" },
-    { value: "webm", label: "WebM" },
-];
-
-const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
-    { value: "mp3", label: "MP3" },
-    { value: "aac", label: "AAC" },
-    { value: "opus", label: "Opus" },
-    { value: "flac", label: "FLAC" },
-];
-
-const NONE_SENTINEL = "none";
 
 // -- Types ----------------------------------------------------------------
 
