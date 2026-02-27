@@ -451,9 +451,12 @@ mod tests {
     #[tokio::test]
     async fn test_full_extraction_modern_layout() {
         let engine = BoaJsEngine::new();
-        // Build a realistic mock page with encrypted URLs
+        // Build a realistic mock page with encrypted URLs.
+        // Only HLS URLs are kept — standard direct URLs are CDN-blocked.
         let encrypted_hls = encrypt_test_vector(1, 100, "https://cdn.example.com/master.m3u8");
-        let encrypted_std = encrypt_test_vector(3, 200, "https://cdn.example.com/720.mp4");
+        // Standard URL that decrypts to an HLS-like path (media=hls4)
+        let encrypted_std_hls =
+            encrypt_test_vector(3, 200, "https://cdn.example.com/media=hls4/720.m3u8");
 
         let initials = serde_json::json!({
             "videoModel": {
@@ -466,7 +469,7 @@ mod tests {
                 "sources": {
                     "hls": { "url": encrypted_hls },
                     "standard": {
-                        "mp4": [{ "quality": "720", "url": encrypted_std }]
+                        "mp4": [{ "quality": "720", "url": encrypted_std_hls }]
                     }
                 }
             }
@@ -481,16 +484,24 @@ mod tests {
         .await;
 
         assert!(!formats.is_empty(), "Should extract at least one format");
+        // videoModel.sources direct URLs are CDN-blocked and skipped
         assert!(
-            formats.iter().any(|f| f.url.contains("direct.mp4")),
-            "Should have direct format"
+            !formats.iter().any(|f| f.url.contains("direct.mp4")),
+            "Direct videoModel URLs should be skipped (CDN-blocked)"
+        );
+        // HLS formats should be present
+        assert!(
+            formats.iter().any(|f| f.url.contains("master.m3u8")),
+            "HLS master playlist should be present"
         );
     }
 
     #[tokio::test]
     async fn test_full_extraction_player_js_unavailable() {
         let engine = BoaJsEngine::new();
-        let encrypted = encrypt_test_vector(2, 42, "https://cdn.example.com/video.mp4");
+        // Use an HLS URL — standard direct URLs are CDN-blocked and skipped
+        let encrypted =
+            encrypt_test_vector(2, 42, "https://cdn.example.com/media=hls4/video.m3u8");
 
         let initials = serde_json::json!({
             "videoModel": {
@@ -515,14 +526,18 @@ mod tests {
 
         assert!(
             formats.iter().any(|f| f.url.contains("cdn.example.com")),
-            "Bundled JS fallback should decrypt successfully"
+            "Bundled JS fallback should decrypt HLS URL successfully"
         );
     }
 
     #[tokio::test]
     async fn test_full_extraction_mixed_encrypted_plain() {
         let engine = BoaJsEngine::new();
-        let encrypted = encrypt_test_vector(5, 999, "https://cdn.example.com/enc.mp4");
+        // HLS URL in standard section — only HLS URLs are kept
+        let encrypted_hls =
+            encrypt_test_vector(5, 999, "https://cdn.example.com/media=hls4/enc.m3u8");
+        // Direct MP4 in standard section — should be skipped (CDN-blocked)
+        let encrypted_mp4 = encrypt_test_vector(3, 100, "https://cdn.example.com/enc.mp4");
 
         let initials = serde_json::json!({
             "videoModel": {
@@ -533,7 +548,8 @@ mod tests {
             "xplayerSettings": {
                 "sources": {
                     "standard": {
-                        "mp4": [{ "quality": "720", "url": encrypted }]
+                        "h264": [{ "quality": "720", "url": encrypted_hls }],
+                        "mp4": [{ "quality": "1080", "url": encrypted_mp4 }]
                     }
                 }
             }
@@ -548,13 +564,20 @@ mod tests {
         .await;
 
         let urls: Vec<&str> = formats.iter().map(|f| f.url.as_str()).collect();
+        // videoModel.sources direct URLs are CDN-blocked and skipped
         assert!(
-            urls.iter().any(|u| u.contains("plain.mp4")),
-            "Plain URL missing"
+            !urls.iter().any(|u| u.contains("plain.mp4")),
+            "Direct videoModel URLs should be skipped (CDN-blocked)"
         );
+        // Standard direct MP4 URLs are also CDN-blocked and skipped
         assert!(
-            urls.iter().any(|u| u.contains("enc.mp4")),
-            "Decrypted URL missing"
+            !urls.iter().any(|u| u.contains("enc.mp4")),
+            "Standard direct MP4 URLs should be skipped (CDN-blocked)"
+        );
+        // HLS URLs from standard section should be kept
+        assert!(
+            urls.iter().any(|u| u.contains("enc.m3u8")),
+            "HLS URL from standard section should be present"
         );
     }
 

@@ -14,7 +14,6 @@ use serde_json::Value;
 use rdlp_core::JsEngine;
 
 use crate::base::common::BaseExtractor;
-use crate::utils::extract_extension_from_url;
 
 use super::patterns;
 
@@ -22,6 +21,7 @@ use super::patterns;
 fn get_height(s: &str) -> Option<u32> {
     BaseExtractor::parse_quality_height(s)
 }
+
 
 /// Detect vcodec from URL by checking for `.av1.` or `.h264.` in the path.
 fn detect_vcodec(url: &str) -> Option<&'static str> {
@@ -79,46 +79,14 @@ pub async fn extract_from_initials(
         }
     }
 
-    // Extract direct formats from sources (skip "download" key)
-    for (format_id, formats_dict) in sources {
-        let Some(formats_obj) = formats_dict.as_object() else {
-            continue;
-        };
-        if format_id == "download" {
-            continue;
-        }
-
-        for (quality, format_item) in formats_obj {
-            let Some(format_url) = format_item.as_str() else {
-                continue;
-            };
-            let format_url = format_url.to_string();
-
-            if format_url.is_empty() || !seen_urls.insert(format_url.clone()) {
-                continue;
-            }
-
-            let ext = extract_extension_from_url(&format_url).unwrap_or_else(|| "mp4".to_string());
-
-            let height = get_height(quality);
-            let mut format = BaseExtractor::build_format(
-                format!("{format_id}-{quality}"),
-                format_url,
-                ext,
-                height,
-            );
-
-            if let Some(&size) = format_sizes.get(quality) {
-                format.filesize = Some(size as u64);
-            }
-
-            format.http_headers = Some(referer_headers(page_url));
-            formats.push(format);
-        }
-    }
-
-    let direct_format_count = formats.len();
-    debug!(direct_format_count; "[XHamster] Formats from videoModel.sources");
+    // Skip videoModel.sources direct URLs — XHamster CDN blocks direct
+    // MP4 downloads (403 Forbidden). Only xplayerSettings.sources URLs
+    // (HLS + encrypted standard) are functional. File sizes from
+    // sources.download are still used to annotate decrypted formats.
+    debug!(
+        "[XHamster] Skipping {} videoModel.sources direct URL key(s) (CDN-blocked)",
+        sources.keys().filter(|k| *k != "download").count()
+    );
 
     // Extract from xplayerSettings.sources
     // Also try xplayerSettings2 as a fallback
@@ -244,33 +212,31 @@ pub async fn extract_from_initials(
                             continue;
                         };
 
+                        // Only keep HLS URLs from the standard section.
+                        // Direct MP4 URLs (video-h.xhcdn.com/key=...) are
+                        // CDN-blocked (403) even after decryption. HLS URLs
+                        // that appear in the standard section (media=hls4)
+                        // are the only ones that work.
+                        let is_hls = deciphered.contains("m3u8")
+                            || deciphered.contains("media=hls");
+                        if !is_hls {
+                            debug!(
+                                "[XHamster] Skipping standard direct URL {} (CDN-blocked)",
+                                format_id
+                            );
+                            continue;
+                        }
+
                         if !seen_urls.insert(deciphered.clone()) {
                             continue;
                         }
 
-                        let ext = extract_extension_from_url(&deciphered)
-                            .unwrap_or_else(|| "mp4".to_string());
-
-                        // Check if it's actually an M3U8
-                        if ext == "m3u8" {
-                            let mut format = Format::new(
-                                format_id,
-                                deciphered,
-                                "mp4",
-                                rdlp_core::DownloadProtocol::M3u8Native,
-                            );
-                            format.http_headers = Some(referer_headers(page_url));
-                            formats.push(format);
-                            continue;
-                        }
-
-                        let height = get_height(&quality_str);
-                        let mut format =
-                            BaseExtractor::build_format(format_id, deciphered, ext, height);
-
-                        if let Some(&size) = format_sizes.get(&quality_str) {
-                            format.filesize = Some(size as u64);
-                        }
+                        let mut format = Format::new(
+                            format_id,
+                            deciphered,
+                            "mp4",
+                            rdlp_core::DownloadProtocol::M3u8Native,
+                        );
                         format.http_headers = Some(referer_headers(page_url));
                         formats.push(format);
                     }
@@ -343,9 +309,27 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
     formats
 }
 
-/// Create HTTP headers map with Referer.
+/// Create HTTP headers map matching browser request patterns.
+///
+/// XHamster CDNs reject requests missing modern browser headers.
+/// We send Referer, Origin, and Accept to pass anti-hotlinking checks.
 fn referer_headers(page_url: &str) -> HashMap<String, String> {
-    HashMap::from([("Referer".to_string(), page_url.to_string())])
+    // Extract origin (scheme + host) from page URL
+    let origin = page_url
+        .find("://")
+        .and_then(|scheme_end| {
+            let host_start = scheme_end + 3;
+            page_url[host_start..]
+                .find('/')
+                .map(|slash| &page_url[..host_start + slash])
+        })
+        .unwrap_or(page_url);
+
+    HashMap::from([
+        ("Referer".to_string(), page_url.to_string()),
+        ("Origin".to_string(), origin.to_string()),
+        ("Accept".to_string(), "*/*".to_string()),
+    ])
 }
 
 #[cfg(test)]
@@ -373,20 +357,44 @@ mod tests {
         assert_eq!(detect_vcodec("https://example.com/video.mp4"), None);
     }
 
+    /// Encrypt a plaintext URL into the hex format that `decipher_url_via_boa` can decode.
+    fn encrypt_url(plaintext: &str) -> String {
+        use rdlp_crypto::prng::ByteGenerator;
+        let algo_id: u8 = 1;
+        let seed: i32 = 42;
+        let mut rng = ByteGenerator::new(algo_id, seed).unwrap();
+        let seed_bytes = seed.to_le_bytes();
+        let mut hex_bytes = vec![algo_id];
+        hex_bytes.extend_from_slice(&seed_bytes);
+        for byte in plaintext.bytes() {
+            hex_bytes.push(byte ^ rng.next_byte());
+        }
+        hex::encode(hex_bytes)
+    }
+
     #[tokio::test]
     async fn test_extract_from_initials_basic() {
         use rdlp_jsinterp::BoaJsEngine;
         let engine = BoaJsEngine::new();
+        // xplayerSettings.sources.hls with encrypted HLS URLs (the only
+        // functional path — both videoModel.sources and standard direct
+        // URLs are CDN-blocked).
+        let enc_720 = encrypt_url("https://example.com/media=hls4/720.m3u8");
+        let enc_1080 = encrypt_url("https://example.com/media=hls4/1080.m3u8");
         let initials = serde_json::json!({
             "videoModel": {
                 "sources": {
-                    "mp4": {
-                        "720p": "https://example.com/720.mp4",
-                        "1080p": "https://example.com/1080.mp4"
-                    },
                     "download": {
                         "720p": {"size": 50000000.0},
                         "1080p": {"size": 100000000.0}
+                    }
+                }
+            },
+            "xplayerSettings": {
+                "sources": {
+                    "hls": {
+                        "url": enc_720,
+                        "fallback": enc_1080
                     }
                 }
             }
@@ -400,10 +408,8 @@ mod tests {
         )
         .await;
         assert_eq!(formats.len(), 2);
-        assert!(formats.iter().any(|f| f.format_id == "mp4-720p"));
-        assert!(formats.iter().any(|f| f.format_id == "mp4-1080p"));
-        // Check filesize was applied
-        assert!(formats.iter().any(|f| f.filesize == Some(50000000)));
+        assert!(formats.iter().any(|f| f.url.contains("720.m3u8")));
+        assert!(formats.iter().any(|f| f.url.contains("1080.m3u8")));
     }
 
     #[test]
@@ -426,20 +432,23 @@ mod tests {
             headers.get("Referer").unwrap(),
             "https://xhamster.com/videos/test-123"
         );
+        assert_eq!(headers.get("Origin").unwrap(), "https://xhamster.com");
+        assert_eq!(headers.get("Accept").unwrap(), "*/*");
     }
 
     #[tokio::test]
     async fn test_extract_from_initials_dedup() {
         use rdlp_jsinterp::BoaJsEngine;
         let engine = BoaJsEngine::new();
+        // Same encrypted HLS URL in hls url and fallback → should dedup to 1
+        let enc = encrypt_url("https://example.com/media=hls4/video.m3u8");
         let initials = serde_json::json!({
-            "videoModel": {
+            "videoModel": { "sources": {} },
+            "xplayerSettings": {
                 "sources": {
-                    "mp4": {
-                        "720p": "https://example.com/video.mp4"
-                    },
-                    "webm": {
-                        "720p": "https://example.com/video.mp4"
+                    "hls": {
+                        "url": enc,
+                        "fallback": enc
                     }
                 }
             }
@@ -455,4 +464,31 @@ mod tests {
         // Same URL should be deduped
         assert_eq!(formats.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_extract_from_initials_skips_direct_urls() {
+        use rdlp_jsinterp::BoaJsEngine;
+        let engine = BoaJsEngine::new();
+        // videoModel.sources direct URLs are CDN-blocked and should be skipped
+        let initials = serde_json::json!({
+            "videoModel": {
+                "sources": {
+                    "mp4": {
+                        "720p": "https://example.com/720.mp4",
+                        "1080p": "https://example.com/1080.mp4"
+                    }
+                }
+            }
+        });
+
+        let formats = extract_from_initials(
+            &initials,
+            "https://xhamster.com/videos/test-123",
+            &engine,
+            None,
+        )
+        .await;
+        assert_eq!(formats.len(), 0, "Direct URLs should be skipped (CDN-blocked)");
+    }
+
 }
