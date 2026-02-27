@@ -247,6 +247,21 @@ pub async fn extract_from_initials(
         debug!("[XHamster] No xplayerSettings.sources found");
     }
 
+    // Propagate file sizes from sources.download to extracted formats.
+    // Match by quality label in the format_id (e.g., "720" matches "720p").
+    if !format_sizes.is_empty() {
+        for format in &mut formats {
+            for (quality, &size) in &format_sizes {
+                // Strip trailing 'p'/'P' from quality for numeric comparison
+                let q = quality.trim_end_matches(['p', 'P']);
+                if format.format_id.contains(q) {
+                    format.filesize = Some(size as u64);
+                    break;
+                }
+            }
+        }
+    }
+
     debug!("[XHamster] Total formats extracted: {}", formats.len());
     fixup_formats(&mut formats);
     formats
@@ -463,6 +478,48 @@ mod tests {
         .await;
         // Same URL should be deduped
         assert_eq!(formats.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_extract_from_initials_filesize_propagation() {
+        use rdlp_jsinterp::BoaJsEngine;
+        let engine = BoaJsEngine::new();
+        // HLS URLs with download sizes that should be propagated
+        let enc_720 = encrypt_url("https://example.com/media=hls4/720.m3u8");
+        let enc_1080 = encrypt_url("https://example.com/media=hls4/1080.m3u8");
+        let initials = serde_json::json!({
+            "videoModel": {
+                "sources": {
+                    "download": {
+                        "720p": {"size": 50_000_000.0},
+                        "1080p": {"size": 100_000_000.0}
+                    }
+                }
+            },
+            "xplayerSettings": {
+                "sources": {
+                    "standard": {
+                        "h264": [
+                            { "quality": "720", "url": enc_720 },
+                            { "quality": "1080", "url": enc_1080 }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let formats = extract_from_initials(
+            &initials,
+            "https://xhamster.com/videos/test-123",
+            &engine,
+            None,
+        )
+        .await;
+        assert_eq!(formats.len(), 2);
+        let f720 = formats.iter().find(|f| f.format_id.contains("720")).unwrap();
+        let f1080 = formats.iter().find(|f| f.format_id.contains("1080")).unwrap();
+        assert_eq!(f720.filesize, Some(50_000_000), "720p should have download size");
+        assert_eq!(f1080.filesize, Some(100_000_000), "1080p should have download size");
     }
 
     #[tokio::test]

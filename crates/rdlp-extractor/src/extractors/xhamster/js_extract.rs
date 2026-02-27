@@ -620,6 +620,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_decipher_url_with_hex_segment() {
+        let engine = BoaJsEngine::new();
+        // Encrypt a path segment, then embed it in a full URL with remainder.
+        // This tests the URL-with-hex-segment path in decipherFormatUrl.
+        let plaintext = "decrypted-path-segment";
+        let hex_segment = encrypt_test_vector(1, 42, plaintext);
+        let url_with_hex = format!("https://cdn.example.com/{hex_segment}/rest/of/path.m3u8");
+
+        let result = try_bundled_decrypt(&url_with_hex, &engine).await;
+        assert!(result.is_some(), "Should handle URL-with-hex-segment");
+        let decrypted = result.unwrap();
+        assert!(
+            decrypted.contains(plaintext),
+            "Decrypted URL should contain plaintext segment: {decrypted}"
+        );
+        assert!(
+            decrypted.contains("/rest/of/path.m3u8"),
+            "Remainder should be preserved: {decrypted}"
+        );
+        assert!(
+            decrypted.starts_with("https://cdn.example.com/"),
+            "Host should be preserved: {decrypted}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decipher_url_with_short_hex_not_matched() {
+        let engine = BoaJsEngine::new();
+        // Hex segment shorter than 12 chars — should not match the URL pattern
+        let url = "https://cdn.example.com/abcd1234/path.m3u8";
+        let result = try_bundled_decrypt(url, &engine).await;
+        assert!(result.is_none(), "Short hex in URL should not be deciphered");
+    }
+
+    #[tokio::test]
     async fn test_boa_very_large_initials() {
         let engine = BoaJsEngine::new();
         // Generate a large but valid initials object
