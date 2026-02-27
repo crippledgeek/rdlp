@@ -102,7 +102,11 @@ async fn enrich_single_hls_format(
         format.tbr = Some(bw as f64 / 1000.0);
     }
     format.duration = hls_info.total_duration;
-    format.filesize_approx = Some(hls_info.segment_count as u64);
+    // Estimate file size from bitrate × duration (bytes = bps × seconds / 8)
+    format.filesize_approx = match (hls_info.bandwidth, hls_info.total_duration) {
+        (Some(bw), Some(dur)) => Some((bw as f64 * dur / 8.0) as u64),
+        _ => None,
+    };
     format.container = hls_info.segment_container;
     if has_encryption {
         format.has_drm = Some(true);
@@ -229,8 +233,11 @@ pub async fn detect_format_sizes(
                         expanded_format.tbr = Some(variant.bandwidth as f64 / 1000.0);
                         expanded_format.http_headers = format.http_headers.clone();
                         expanded_format.language = format.language.clone();
-                        expanded_format.filesize_approx = Some(variant.segment_count as u64);
                         expanded_format.duration = variant.total_duration;
+                        // Estimate size from bitrate × duration (bytes = bps × s / 8)
+                        expanded_format.filesize_approx = variant
+                            .total_duration
+                            .map(|dur| (variant.bandwidth as f64 * dur / 8.0) as u64);
                         expanded_format.container = variant.segment_container.clone();
                         if variant.has_encryption {
                             expanded_format.has_drm = Some(true);
@@ -293,10 +300,9 @@ pub async fn detect_format_sizes(
                 flags.has_any_drm = true;
             }
 
-            // Deduplicate expanded HLS formats: keep format with most segments per
-            // (height, vcodec, acodec, language), collect other URLs as fallbacks.
+            // Deduplicate expanded HLS formats: keep format with largest estimated size
+            // per (height, vcodec, acodec, language), collect other URLs as fallbacks.
             // Language is included so SUB/DUB tracks at the same resolution aren't merged.
-            // Note: HLS segment count is stored in filesize_approx during extraction.
             if format.is_hls() {
                 let key = (
                     format.height,
@@ -313,13 +319,12 @@ pub async fn detect_format_sizes(
                             && f.acodec == format.acodec
                             && f.language == format.language
                     }) {
-                        // Compare segment counts (stored in filesize_approx for HLS)
-                        // Keep the one with more segments (more complete playlist)
-                        let existing_segments = existing.filesize_approx.unwrap_or(0);
-                        let new_segments = format.filesize_approx.unwrap_or(0);
+                        // Keep the one with larger estimated size (more complete playlist)
+                        let existing_size = existing.filesize_approx.unwrap_or(0);
+                        let new_size = format.filesize_approx.unwrap_or(0);
 
-                        if new_segments > existing_segments {
-                            // New format has more segments - swap: make existing the fallback
+                        if new_size > existing_size {
+                            // New format has larger estimate - swap: make existing the fallback
                             let old_url = std::mem::replace(&mut existing.url, format.url.clone());
                             existing.filesize_approx = format.filesize_approx;
                             existing.duration = format.duration;
