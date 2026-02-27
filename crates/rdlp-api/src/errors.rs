@@ -123,8 +123,26 @@ impl RdlpApiError {
             Self::NetworkError {
                 status: Some(status),
                 ..
-            } => *status == 429 || *status >= 500,
+            } => *status == 429 || *status == 403 || *status >= 500,
             Self::NetworkError { status: None, .. } => true,
+            Self::ExtractError { message, .. } => message.contains("invalid M3U8"),
+            _ => false,
+        }
+    }
+
+    /// Whether re-extracting fresh CDN URLs might resolve this error.
+    ///
+    /// CDN token expiry (403), server overload (503), and corrupted HLS
+    /// playlists ("invalid M3U8") can be resolved by re-running extraction
+    /// to obtain fresh URLs.
+    #[must_use]
+    pub fn is_reextractable(&self) -> bool {
+        match self {
+            Self::NetworkError {
+                status: Some(403 | 503),
+                ..
+            } => true,
+            Self::ExtractError { message, .. } => message.contains("invalid M3U8"),
             _ => false,
         }
     }
@@ -305,6 +323,77 @@ mod tests {
             }
             .is_retryable()
         );
+    }
+
+    #[test]
+    fn test_is_retryable_403() {
+        assert!(
+            RdlpApiError::NetworkError {
+                message: "forbidden".into(),
+                status: Some(403),
+            }
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn test_is_retryable_invalid_m3u8() {
+        assert!(
+            RdlpApiError::ExtractError {
+                message: "invalid M3U8 playlist".into(),
+                source_url: String::new(),
+            }
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn test_is_reextractable_403() {
+        assert!(
+            RdlpApiError::NetworkError {
+                message: "Forbidden".into(),
+                status: Some(403),
+            }
+            .is_reextractable()
+        );
+    }
+
+    #[test]
+    fn test_is_reextractable_503() {
+        assert!(
+            RdlpApiError::NetworkError {
+                message: "Service Unavailable".into(),
+                status: Some(503),
+            }
+            .is_reextractable()
+        );
+    }
+
+    #[test]
+    fn test_is_reextractable_invalid_m3u8() {
+        assert!(
+            RdlpApiError::ExtractError {
+                message: "invalid M3U8 playlist".into(),
+                source_url: String::new(),
+            }
+            .is_reextractable()
+        );
+    }
+
+    #[test]
+    fn test_not_reextractable_404() {
+        assert!(
+            !RdlpApiError::NetworkError {
+                message: "Not Found".into(),
+                status: Some(404),
+            }
+            .is_reextractable()
+        );
+    }
+
+    #[test]
+    fn test_not_reextractable_cancelled() {
+        assert!(!RdlpApiError::UserCancelled.is_reextractable());
     }
 
     #[test]
