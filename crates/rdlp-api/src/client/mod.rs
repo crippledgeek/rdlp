@@ -117,9 +117,14 @@ impl RdlpClient {
             if let Err(e) = orchestrator.load_cookies().await {
                 if cookies_explicitly_requested {
                     // Sanitize the error message to avoid leaking DPAPI
-                    // errors, decryption keys, or raw cookie values
+                    // errors, decryption keys, or raw cookie values.
+                    // On Windows, Chrome locks its cookie DB exclusively
+                    // via LockFileEx — the file cannot be copied while
+                    // Chrome is running (see yt-dlp/yt-dlp#7271).
                     let safe_msg = "Failed to load cookies: browser cookie extraction \
-                         failed. Check browser is installed and not running."
+                         failed. Close the browser completely (including background \
+                         processes), then retry. Alternatively, export cookies to a \
+                         Netscape file and use --cookies instead."
                         .to_string();
                     error!("Cookie loading failed (explicit request): {e}");
                     let api_err = RdlpApiError::IoError { message: safe_msg };
