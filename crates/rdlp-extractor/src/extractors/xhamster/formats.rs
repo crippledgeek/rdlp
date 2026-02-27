@@ -11,9 +11,10 @@ use log::debug;
 use rdlp_core::Format;
 use serde_json::Value;
 
+use rdlp_core::JsEngine;
+
 use crate::base::common::BaseExtractor;
 use crate::utils::extract_extension_from_url;
-use rdlp_crypto::xhamster::decipher_format_url;
 
 use super::patterns;
 
@@ -45,7 +46,12 @@ pub fn fixup_formats(formats: &mut [Format]) {
 /// 1. `videoModel.sources` — direct URLs keyed by format type and quality
 /// 2. `xplayerSettings.sources.hls` — encrypted HLS manifests
 /// 3. `xplayerSettings.sources.standard` — encrypted standard video URLs
-pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
+pub async fn extract_from_initials(
+    initials: &Value,
+    page_url: &str,
+    js_engine: &dyn JsEngine,
+    player_decrypt_js: Option<&str>,
+) -> Vec<Format> {
     let mut formats = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
 
@@ -164,7 +170,10 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
             }
 
             for (format_id, hls_url) in hls_urls {
-                let Some(deciphered) = decipher_format_url(&hls_url) else {
+                let Some(deciphered) =
+                    super::js_extract::decipher_url_via_boa(&hls_url, js_engine, player_decrypt_js)
+                        .await
+                else {
                     debug!(format_id:?; "[XHamster] Failed to decipher HLS URL");
                     continue;
                 };
@@ -224,7 +233,13 @@ pub fn extract_from_initials(initials: &Value, page_url: &str) -> Vec<Format> {
                             format!("{identifier}-{quality_str}")
                         };
 
-                        let Some(deciphered) = decipher_format_url(std_url) else {
+                        let Some(deciphered) = super::js_extract::decipher_url_via_boa(
+                            std_url,
+                            js_engine,
+                            player_decrypt_js,
+                        )
+                        .await
+                        else {
                             debug!(format_id:?; "[XHamster] Failed to decipher standard URL");
                             continue;
                         };
@@ -358,8 +373,10 @@ mod tests {
         assert_eq!(detect_vcodec("https://example.com/video.mp4"), None);
     }
 
-    #[test]
-    fn test_extract_from_initials_basic() {
+    #[tokio::test]
+    async fn test_extract_from_initials_basic() {
+        use rdlp_jsinterp::BoaJsEngine;
+        let engine = BoaJsEngine::new();
         let initials = serde_json::json!({
             "videoModel": {
                 "sources": {
@@ -375,7 +392,13 @@ mod tests {
             }
         });
 
-        let formats = extract_from_initials(&initials, "https://xhamster.com/videos/test-123");
+        let formats = extract_from_initials(
+            &initials,
+            "https://xhamster.com/videos/test-123",
+            &engine,
+            None,
+        )
+        .await;
         assert_eq!(formats.len(), 2);
         assert!(formats.iter().any(|f| f.format_id == "mp4-720p"));
         assert!(formats.iter().any(|f| f.format_id == "mp4-1080p"));
@@ -405,8 +428,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_extract_from_initials_dedup() {
+    #[tokio::test]
+    async fn test_extract_from_initials_dedup() {
+        use rdlp_jsinterp::BoaJsEngine;
+        let engine = BoaJsEngine::new();
         let initials = serde_json::json!({
             "videoModel": {
                 "sources": {
@@ -420,7 +445,13 @@ mod tests {
             }
         });
 
-        let formats = extract_from_initials(&initials, "https://xhamster.com/videos/test-123");
+        let formats = extract_from_initials(
+            &initials,
+            "https://xhamster.com/videos/test-123",
+            &engine,
+            None,
+        )
+        .await;
         // Same URL should be deduped
         assert_eq!(formats.len(), 1);
     }
