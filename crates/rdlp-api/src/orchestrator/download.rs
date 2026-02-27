@@ -52,6 +52,13 @@ impl Orchestrator {
             format.filesize.or(format.filesize_approx)
         };
 
+        debug!(
+            url = rdlp_security::sanitize_for_logging(&format.url).as_str(),
+            headers = format.http_headers.as_ref().map_or(0, |h| h.len()),
+            protocol = format.protocol.to_string().as_str();
+            "Dispatching download"
+        );
+
         // SSRF protection: validate primary URL before passing to downloader
         validate_url_security(&format.url).map_err(|e| {
             OrchestratorError::DownloadFailed(RdlpError::Network(format!(

@@ -31,12 +31,18 @@ use crate::merge::MergeOverrides;
 use crate::orchestrator::{InteractiveCallback, Orchestrator};
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
-use log::error;
+use log::{error, warn};
 use rdlp_core::{Config, DownloadStats, InfoDict};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Maximum number of re-extraction retries after a reextractable error.
+const MAX_REEXTRACT_RETRIES: u32 = 2;
+
+/// Delay (in seconds) before each re-extraction attempt.
+const REEXTRACT_DELAYS_SECS: [u64; 2] = [5, 15];
 
 #[cfg(test)]
 mod tests;
@@ -111,9 +117,14 @@ impl RdlpClient {
             if let Err(e) = orchestrator.load_cookies().await {
                 if cookies_explicitly_requested {
                     // Sanitize the error message to avoid leaking DPAPI
-                    // errors, decryption keys, or raw cookie values
+                    // errors, decryption keys, or raw cookie values.
+                    // On Windows, Chrome locks its cookie DB exclusively
+                    // via LockFileEx — the file cannot be copied while
+                    // Chrome is running (see yt-dlp/yt-dlp#7271).
                     let safe_msg = "Failed to load cookies: browser cookie extraction \
-                         failed. Check browser is installed and not running."
+                         failed. Close the browser completely (including background \
+                         processes), then retry. Alternatively, export cookies to a \
+                         Netscape file and use --cookies instead."
                         .to_string();
                     error!("Cookie loading failed (explicit request): {e}");
                     let api_err = RdlpApiError::IoError { message: safe_msg };
@@ -133,44 +144,93 @@ impl RdlpClient {
                     .await;
             }
 
-            match orchestrator.download(&url, interactive_flag).await {
-                Ok(Some(path)) => {
-                    // Stdout mode returns "-" sentinel — don't expose it
-                    // as a real file path to API consumers.
-                    let output_files = if path.as_os_str() == "-" {
-                        vec![]
-                    } else {
-                        vec![path]
+            let mut last_err: Option<RdlpApiError> = None;
+            for attempt in 0..=MAX_REEXTRACT_RETRIES {
+                if attempt > 0 {
+                    let delay = REEXTRACT_DELAYS_SECS[(attempt - 1) as usize];
+                    let reason = match &last_err {
+                        Some(RdlpApiError::NetworkError {
+                            status: Some(403), ..
+                        }) => "HTTP 403 Forbidden",
+                        Some(RdlpApiError::NetworkError {
+                            status: Some(503), ..
+                        }) => "HTTP 503 Service Unavailable",
+                        _ => "stale CDN URLs",
                     };
-                    let result = DownloadResult {
-                        id,
-                        output_files,
-                        info: InfoDict::new("", "", "", &url),
-                        stats: DownloadStats::new(0, Duration::ZERO, 0),
-                    };
+                    warn!(
+                        "Re-extracting fresh URLs (attempt {}/{}, {})",
+                        attempt + 1,
+                        MAX_REEXTRACT_RETRIES + 1,
+                        reason,
+                    );
                     let _ = tx
-                        .send(Event::Completed {
+                        .send(Event::Retrying {
                             id,
-                            result: Box::new(result.clone()),
+                            attempt,
+                            max_attempts: MAX_REEXTRACT_RETRIES + 1,
+                            reason: format!("Re-extracting fresh URLs ({reason})"),
                         })
                         .await;
-                    Ok(result)
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
                 }
-                Ok(None) => {
-                    // Already emitted Cancelled from the state machine
-                    Err(RdlpApiError::UserCancelled)
-                }
-                Err(e) => {
-                    let api_err = RdlpApiError::from(e);
-                    let _ = tx
-                        .send(Event::Failed {
+
+                match orchestrator.download(&url, interactive_flag).await {
+                    Ok(Some(path)) => {
+                        // Stdout mode returns "-" sentinel — don't
+                        // expose it as a real file path to API consumers.
+                        let output_files = if path.as_os_str() == "-" {
+                            vec![]
+                        } else {
+                            vec![path]
+                        };
+                        let result = DownloadResult {
                             id,
-                            error: api_err.clone(),
-                        })
-                        .await;
-                    Err(api_err)
+                            output_files,
+                            info: InfoDict::new("", "", "", &url),
+                            stats: DownloadStats::new(0, Duration::ZERO, 0),
+                        };
+                        let _ = tx
+                            .send(Event::Completed {
+                                id,
+                                result: Box::new(result.clone()),
+                            })
+                            .await;
+                        return Ok(result);
+                    }
+                    Ok(None) => {
+                        // User cancelled — exit immediately
+                        return Err(RdlpApiError::UserCancelled);
+                    }
+                    Err(e) => {
+                        let api_err = RdlpApiError::from(e);
+                        if attempt < MAX_REEXTRACT_RETRIES && api_err.is_reextractable() {
+                            last_err = Some(api_err);
+                            continue;
+                        }
+                        // Final failure — emit and return
+                        let _ = tx
+                            .send(Event::Failed {
+                                id,
+                                error: api_err.clone(),
+                            })
+                            .await;
+                        return Err(api_err);
+                    }
                 }
             }
+            // All retries exhausted (unreachable in practice, but
+            // satisfies the compiler)
+            let err = last_err.unwrap_or(RdlpApiError::NetworkError {
+                message: "All re-extraction attempts failed".into(),
+                status: None,
+            });
+            let _ = tx
+                .send(Event::Failed {
+                    id,
+                    error: err.clone(),
+                })
+                .await;
+            Err(err)
         });
 
         DownloadHandle::new(id, rx, cancel_token, join_handle)

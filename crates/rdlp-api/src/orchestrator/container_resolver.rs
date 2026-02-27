@@ -4,7 +4,7 @@
 //! which records *how* the format was chosen so callers can make informed
 //! decisions and every fallback is explicitly logged.
 
-use log::warn;
+use log::debug;
 use rdlp_core::ContainerFormat;
 use std::path::{Path, PathBuf};
 
@@ -72,8 +72,8 @@ impl ResolvedContainer {
             }
         }
 
-        // Priority 4: fallback
-        warn!("No container preference set; falling back to MP4");
+        // Priority 4: fallback (common for HLS where output starts as .ts)
+        debug!("No container preference set; falling back to MP4");
         Self {
             format: ContainerFormat::Mp4,
             source: ContainerSource::Fallback,

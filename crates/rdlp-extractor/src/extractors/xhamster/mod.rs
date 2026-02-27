@@ -19,6 +19,7 @@
 //! - Creators: `https://xhamster.com/creators/username`
 
 mod formats;
+mod js_extract;
 mod patterns;
 mod playlist;
 mod search;
@@ -93,8 +94,24 @@ impl XHamsterExtractor {
         // Extract age limit
         let age_limit = utils::extract_age_limit(&webpage);
 
+        // Try boa-based initials extraction first, fall back to regex
+        let boa_initials =
+            js_extract::extract_initials_via_boa(&webpage, ctx.js_engine.as_ref()).await;
+        let initials = match boa_initials {
+            Some(val) => Some(val),
+            None => {
+                debug!("[XHamster] Boa initials extraction failed, trying regex fallback");
+                extract_initials_json(&webpage)
+            }
+        };
+
+        // Discover and fetch player JS for decryption
+        let player_script_urls = js_extract::find_player_script_urls(&webpage);
+        let player_js =
+            js_extract::fetch_player_js(&player_script_urls, &ctx.http_client, &url).await;
+
         // Try modern layout: window.initials JSON
-        let (mut info, formats) = if let Some(initials) = extract_initials_json(&webpage) {
+        let (mut info, formats) = if let Some(initials) = initials {
             let video_model = initials.get("videoModel");
 
             let info = if let Some(vm) = video_model {
@@ -118,7 +135,13 @@ impl XHamsterExtractor {
                 )
             };
 
-            let formats = formats::extract_from_initials(&initials, &url);
+            let formats = formats::extract_from_initials(
+                &initials,
+                &url,
+                ctx.js_engine.as_ref(),
+                player_js.as_deref(),
+            )
+            .await;
             (info, formats)
         } else {
             // Legacy fallback

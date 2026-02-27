@@ -9,6 +9,7 @@ license.workspace = true
 rdlp-core = { path = "../rdlp-core" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-crypto = { path = "../rdlp-crypto" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 async-trait = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
@@ -24,6 +25,7 @@ m3u8-rs = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+hex = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 mockito = { workspace = true }
 
