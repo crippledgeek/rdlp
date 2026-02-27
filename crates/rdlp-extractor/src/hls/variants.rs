@@ -9,6 +9,28 @@ use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 
+/// Infer muxed audio codec for HLS variants.
+///
+/// Per the HLS spec, when a variant stream has a video codec declared in
+/// `CODECS` but no audio codec, and doesn't reference a separate audio
+/// rendition via the `AUDIO` attribute, audio is muxed in the transport
+/// stream segments. Default to "aac" — the universal HLS muxed audio codec.
+///
+/// Returns the audio codec to use: either the declared one or the inferred one.
+pub(crate) fn infer_muxed_audio<'a>(
+    video_codec: Option<&'a str>,
+    audio_codec: Option<&'a str>,
+    has_separate_audio_group: bool,
+) -> Option<&'a str> {
+    audio_codec.or(
+        if video_codec.is_some() && !has_separate_audio_group {
+            Some("aac")
+        } else {
+            None
+        },
+    )
+}
+
 impl HlsSizeDetector {
     /// Detect comprehensive HLS metadata from an M3U8 playlist
     ///
@@ -75,6 +97,8 @@ impl HlsSizeDetector {
                     .as_deref()
                     .map(rdlp_core::parse_hls_codecs)
                     .unwrap_or((None, None));
+                let audio_codec =
+                    infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
                 let frame_rate = variant.frame_rate;
                 let bandwidth = Some(variant.bandwidth);
                 let average_bandwidth = variant.average_bandwidth;
@@ -229,6 +253,8 @@ impl HlsSizeDetector {
                 .as_deref()
                 .map(rdlp_core::parse_hls_codecs)
                 .unwrap_or((None, None));
+            let audio_codec =
+                infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
 
             variants.push(HlsVariantInfo {
                 media_playlist_url: media_url,
