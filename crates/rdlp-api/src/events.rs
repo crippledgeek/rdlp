@@ -58,6 +58,16 @@ pub enum Event {
         stage: String,
     },
 
+    /// Post-processing progress update.
+    PostProcessProgress {
+        /// The download this event belongs to.
+        id: DownloadId,
+        /// Name of the post-processing stage (e.g. "remux", "normalize").
+        stage: String,
+        /// Progress as a fraction in \[0.0, 1.0\].
+        progress: f64,
+    },
+
     /// Subtitles were found for the requested languages.
     SubtitlesFound {
         /// The download this event belongs to.
@@ -159,6 +169,7 @@ impl Event {
             | Self::FormatSelected { id, .. }
             | Self::Progress { id, .. }
             | Self::PostProcessing { id, .. }
+            | Self::PostProcessProgress { id, .. }
             | Self::SubtitlesFound { id, .. }
             | Self::SubtitlesMissing { id, .. }
             | Self::Warning { id, .. }
@@ -210,6 +221,11 @@ mod tests {
             Event::PostProcessing {
                 id,
                 stage: "remux".into(),
+            },
+            Event::PostProcessProgress {
+                id,
+                stage: "remux".into(),
+                progress: 0.45,
             },
             Event::SubtitlesFound {
                 id,
