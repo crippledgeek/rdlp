@@ -60,6 +60,51 @@ impl FFmpegRunner {
         }
     }
 
+    /// Pick a sample rate supported by the encoder codec.
+    ///
+    /// If the codec accepts any rate (`supported_samplerates` is NULL), returns
+    /// `preferred` unchanged.  Otherwise returns `preferred` if it appears in
+    /// the supported list, or the nearest supported rate (preferring higher
+    /// rates on ties, which naturally selects 48 kHz for a 44.1 kHz source on
+    /// libopus).
+    pub(crate) fn pick_audio_sample_rate(
+        codec: &ffmpeg_the_third::Codec,
+        preferred: u32,
+    ) -> u32 {
+        // SAFETY: `codec.as_ptr()` returns a valid AVCodec pointer.
+        // `supported_samplerates` is a NULL-terminated i32 array (or NULL if
+        // the codec accepts any rate).
+        unsafe {
+            let ptr = codec.as_ptr();
+            let rates = (*ptr).supported_samplerates;
+            if rates.is_null() {
+                return preferred;
+            }
+
+            let mut i = 0;
+            let mut best: Option<u32> = None;
+            let mut best_dist = u32::MAX;
+            loop {
+                let rate = *rates.offset(i);
+                if rate == 0 {
+                    break;
+                }
+                let rate_u = rate as u32;
+                if rate_u == preferred {
+                    return preferred;
+                }
+                let dist = rate_u.abs_diff(preferred);
+                if dist < best_dist || (dist == best_dist && rate_u > best.unwrap_or(0)) {
+                    best = Some(rate_u);
+                    best_dist = dist;
+                }
+                i += 1;
+            }
+
+            best.unwrap_or(preferred)
+        }
+    }
+
     /// Enable VBR (variable bitrate) quality mode on an encoder.
     pub(crate) fn set_vbr_quality(
         encoder_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext,
@@ -280,5 +325,32 @@ mod tests {
         let mut frame = ffmpeg_the_third::frame::Video::empty();
         frame_unref_video(&mut frame);
         frame_unref_video(&mut frame);
+    }
+
+    #[test]
+    fn pick_sample_rate_opus_rejects_44100() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let codec = ffmpeg_the_third::encoder::find_by_name("libopus").unwrap();
+        // 44100 is not a supported libopus rate; should pick 48000 (nearest).
+        let rate = FFmpegRunner::pick_audio_sample_rate(&codec, 44100);
+        assert_eq!(rate, 48000, "libopus should resample 44100→48000");
+    }
+
+    #[test]
+    fn pick_sample_rate_opus_accepts_48000() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let codec = ffmpeg_the_third::encoder::find_by_name("libopus").unwrap();
+        let rate = FFmpegRunner::pick_audio_sample_rate(&codec, 48000);
+        assert_eq!(rate, 48000);
+    }
+
+    #[test]
+    fn pick_sample_rate_aac_accepts_44100() {
+        crate::ffmpeg::ensure_init().unwrap();
+        if let Some(codec) = ffmpeg_the_third::encoder::find_by_name("aac") {
+            // AAC supports 44100; should return it unchanged.
+            let rate = FFmpegRunner::pick_audio_sample_rate(&codec, 44100);
+            assert_eq!(rate, 44100);
+        }
     }
 }

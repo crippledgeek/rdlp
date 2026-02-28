@@ -121,8 +121,16 @@ impl FFmpegRunner {
         let mut audio_encoder = audio_enc_context.encoder().audio()?;
         let target_format = Self::pick_audio_sample_format(&enc_codec, audio_decoder.format());
         audio_encoder.set_format(target_format);
-        audio_encoder.set_rate(audio_decoder.rate() as i32);
-        let enc_time_base = ffmpeg_the_third::Rational(1, audio_decoder.rate() as i32);
+        let target_rate = Self::pick_audio_sample_rate(&enc_codec, audio_decoder.rate());
+        if target_rate != audio_decoder.rate() {
+            debug!(
+                "[{label}] resampling {}→{} Hz (encoder does not support source rate)",
+                audio_decoder.rate(),
+                target_rate,
+            );
+        }
+        audio_encoder.set_rate(target_rate as i32);
+        let enc_time_base = ffmpeg_the_third::Rational(1, target_rate as i32);
         audio_encoder.set_time_base(enc_time_base);
 
         let channels = audio_decoder.ch_layout().channels();
@@ -250,10 +258,11 @@ impl FFmpegRunner {
         // starting mid-stream), this ensures the normalized audio output
         // preserves the same temporal offset, preventing audio/video desync
         // in the subsequent merge step.
+        let enc_rate = audio_encoder.rate();
         let start_samples = if format_start_time_us > 0
             && format_start_time_us != ffmpeg_the_third::ffi::AV_NOPTS_VALUE
         {
-            format_start_time_us * i64::from(audio_decoder.rate()) / 1_000_000
+            format_start_time_us * i64::from(enc_rate) / 1_000_000
         } else {
             0
         };
@@ -266,7 +275,7 @@ impl FFmpegRunner {
         let mut timing = MuxTimingState {
             encoder_frame_size: audio_encoder.frame_size(),
             expected_duration,
-            sample_rate: audio_decoder.rate(),
+            sample_rate: enc_rate,
             use_sample_clock: true,
             samples_written: start_samples,
             ..Default::default()

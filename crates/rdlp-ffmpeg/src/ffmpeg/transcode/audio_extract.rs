@@ -231,8 +231,16 @@ impl FFmpegRunner {
 
         let target_format = Self::pick_audio_sample_format(&enc_codec, decoder.format());
         audio_encoder.set_format(target_format);
-        audio_encoder.set_rate(decoder.rate() as i32);
-        let enc_time_base = ffmpeg_the_third::Rational(1, decoder.rate() as i32);
+        let target_rate = Self::pick_audio_sample_rate(&enc_codec, decoder.rate());
+        if target_rate != decoder.rate() {
+            debug!(
+                "Resampling {}→{} Hz (encoder does not support source rate)",
+                decoder.rate(),
+                target_rate,
+            );
+        }
+        audio_encoder.set_rate(target_rate as i32);
+        let enc_time_base = ffmpeg_the_third::Rational(1, target_rate as i32);
         audio_encoder.set_time_base(enc_time_base);
 
         // Set channel layout from decoder (default layout matching channel count)
