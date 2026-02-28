@@ -4502,6 +4502,7 @@ name = "rdlp-table"
 version = "0.1.0"
 dependencies = [
  "console",
+ "rdlp-types",
  "tabled",
  "terminal_size",
 ]
@@ -4510,7 +4511,6 @@ dependencies = [
 name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
- "rdlp-table",
  "regex",
  "serde",
  "serde_json",
