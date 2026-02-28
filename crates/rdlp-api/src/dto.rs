@@ -84,6 +84,16 @@ impl From<&Event> for EventDto {
 
             Event::PostProcessing { stage, .. } => ("post_processing", json!({ "stage": stage })),
 
+            Event::PostProcessProgress {
+                stage, progress, ..
+            } => (
+                "postprocess_progress",
+                json!({
+                    "stage": stage,
+                    "progress": progress,
+                }),
+            ),
+
             Event::SubtitlesFound { langs, .. } => ("subtitles_found", json!({ "langs": langs })),
 
             Event::SubtitlesMissing { requested, .. } => {

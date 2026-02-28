@@ -15,6 +15,7 @@ import type {
     DownloadProgressPayload,
     FormatListResponse,
     FormatSelectedPayload,
+    PostProcessProgressPayload,
     SearchFilter,
     SearchFilterDescriptor,
     SearchPageResponse,
@@ -138,6 +139,15 @@ export function onFormatSelected(
     callback: (payload: FormatSelectedPayload) => void,
 ): Promise<UnlistenFn> {
     return listen<FormatSelectedPayload>("format-selected", (event) =>
+        callback(event.payload),
+    );
+}
+
+/** Subscribe to post-processing progress events. Returns an unlisten function. */
+export function onPostProcessProgress(
+    callback: (payload: PostProcessProgressPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<PostProcessProgressPayload>("postprocess-progress", (event) =>
         callback(event.payload),
     );
 }

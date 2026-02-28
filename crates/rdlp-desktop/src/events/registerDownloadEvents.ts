@@ -14,6 +14,7 @@ import {
     onDownloadError,
     onDownloadLog,
     onFormatSelected,
+    onPostProcessProgress,
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
 import type { DownloadJob } from "../types";
@@ -148,6 +149,25 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                     old?.map((job) =>
                         job.id === p.jobId
                             ? { ...job, statusMessage: `Format: ${p.quality}` }
+                            : job,
+                    ),
+            );
+        }),
+    );
+
+    unlisteners.push(
+        onPostProcessProgress((p) => {
+            if (!mounted) return;
+            const pct = Math.round(p.progress * 100);
+            qc.setQueryData<DownloadJob[]>(
+                queryKeys.downloads.list(),
+                (old) =>
+                    old?.map((job) =>
+                        job.id === p.jobId
+                            ? {
+                                  ...job,
+                                  statusMessage: `${p.stage}… ${pct}%`,
+                              }
                             : job,
                     ),
             );
