@@ -61,7 +61,7 @@ impl CliEventHandler {
                     let pb = self.multi_progress.add(ProgressBar::new(1000));
                     pb.set_style(
                         ProgressStyle::with_template(
-                            "{wide_bar:.yellow/blue} {pos:.0}% | Post-processing: {msg}",
+                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
                         )
                         .expect("valid progress template"),
                     );
@@ -81,7 +81,7 @@ impl CliEventHandler {
                     let pb = self.multi_progress.add(ProgressBar::new(1000));
                     pb.set_style(
                         ProgressStyle::with_template(
-                            "{wide_bar:.yellow/blue} {pos:.0}% | Post-processing: {msg}",
+                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
                         )
                         .expect("valid progress template"),
                     );
