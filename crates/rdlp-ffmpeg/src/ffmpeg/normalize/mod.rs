@@ -17,6 +17,7 @@ mod io_diag;
 mod tests;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use log::{debug, info, warn};
 
@@ -45,6 +46,7 @@ impl FFmpegRunner {
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         opts: &NormalizeOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -53,9 +55,11 @@ impl FFmpegRunner {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, opts.salvage)?;
 
             let result = match opts.mode {
-                AudioNormMode::Peak => Self::normalize_peak_sync(&effective_input, &output, &opts),
+                AudioNormMode::Peak => {
+                    Self::normalize_peak_sync(&effective_input, &output, &opts, progress_fn.clone())
+                }
                 AudioNormMode::Loudnorm => {
-                    Self::normalize_loudnorm_sync(&effective_input, &output, &opts)
+                    Self::normalize_loudnorm_sync(&effective_input, &output, &opts, progress_fn)
                 }
             };
 
@@ -70,7 +74,12 @@ impl FFmpegRunner {
     }
 
     /// Peak normalization: analyze then apply gain + limiter.
-    fn normalize_peak_sync(input: &Path, output: &Path, opts: &NormalizeOptions) -> Result<()> {
+    fn normalize_peak_sync(
+        input: &Path,
+        output: &Path,
+        opts: &NormalizeOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+    ) -> Result<()> {
         let analysis = Self::analyze_peak_sync(input, opts.target_peak_db)?;
 
         debug!(
@@ -85,14 +94,28 @@ impl FFmpegRunner {
                 message: format!("failed to copy file: {e}"),
                 source: e,
             })?;
+            // Emit final 1.0 even when skipping
+            if let Some(ref progress) = progress_fn {
+                progress(1.0);
+            }
             return Ok(());
         }
 
-        Self::apply_peak_gain_sync(input, output, &analysis, opts)
+        // Peak: analysis (0.0–0.3) already done above; encode phase (0.3–1.0)
+        let encode_progress: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac: f64| p(0.3 + frac * 0.7))
+            });
+        Self::apply_peak_gain_sync(input, output, &analysis, opts, encode_progress.as_deref())
     }
 
     /// EBU R128 loudnorm two-pass normalization.
-    fn normalize_loudnorm_sync(input: &Path, output: &Path, opts: &NormalizeOptions) -> Result<()> {
+    fn normalize_loudnorm_sync(
+        input: &Path,
+        output: &Path,
+        opts: &NormalizeOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+    ) -> Result<()> {
         info!("Loudnorm pass 1: analyzing EBU R128 levels...");
         let measurements = Self::loudnorm_pass1_sync(input, opts)?;
 
@@ -118,7 +141,8 @@ impl FFmpegRunner {
                      gain={:.1} dB — using fixed gain + limiter",
                     opts.boost_gain_db
                 );
-                Self::apply_limiter_boost_sync(input, output, opts)?;
+                // Boost maps to full range 0.0–1.0
+                Self::apply_limiter_boost_sync(input, output, opts, progress_fn.as_deref())?;
                 Self::verify_loudness_sync(output, opts)?;
                 return Ok(());
             }
@@ -129,7 +153,18 @@ impl FFmpegRunner {
         }
 
         info!("Loudnorm pass 2: applying normalization...");
-        Self::loudnorm_pass2_sync(input, output, opts, &measurements)?;
+        // Pass 2: progress maps to 0.5–1.0 (pass 1 covers 0.0–0.5 but is fast/no callback)
+        let pass2_progress: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac: f64| p(0.5 + frac * 0.5))
+            });
+        Self::loudnorm_pass2_sync(
+            input,
+            output,
+            opts,
+            &measurements,
+            pass2_progress.as_deref(),
+        )?;
 
         // Verify output loudness against targets
         Self::verify_loudness_sync(output, opts)?;
@@ -146,6 +181,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         opts: &NormalizeOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
         let limit_linear = 10f64.powf(ceiling_db / 20.0);
@@ -164,6 +200,6 @@ impl FFmpegRunner {
         let mut boost_opts = opts.clone();
         boost_opts.target_peak_db = ceiling_db;
 
-        Self::apply_peak_gain_sync(input, output, &synthetic_analysis, &boost_opts)
+        Self::apply_peak_gain_sync(input, output, &synthetic_analysis, &boost_opts, progress_fn)
     }
 }

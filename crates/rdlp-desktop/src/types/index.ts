@@ -209,6 +209,13 @@ export interface DownloadLogPayload {
     message: string;
 }
 
+/** Post-processing progress payload emitted as "postprocess-progress". */
+export interface PostProcessProgressPayload {
+    jobId: string;
+    stage: string;
+    progress: number; // 0.0–1.0
+}
+
 // ========== Settings Types ==========
 
 /**

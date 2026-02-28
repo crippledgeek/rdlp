@@ -4,6 +4,7 @@
 //! peak normalization and loudnorm pass 2.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use log::{debug, warn};
 
@@ -40,6 +41,7 @@ impl FFmpegRunner {
         final_output_ext: &str,
         label: &str,
         resilient: bool,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
         build_filter: impl FnOnce(
             /*fmt:*/ &str,
             /*rate:*/ u32,
@@ -59,12 +61,13 @@ impl FFmpegRunner {
             })?
         };
 
-        // Read the format-level start_time (in AV_TIME_BASE = µs) before
+        // Read the format-level start_time and duration (in AV_TIME_BASE = µs) before
         // borrowing individual streams.  HLS downloads and some containers
         // have a non-zero start time.  We must preserve this offset in the
         // sample-clock DTS synthesis so the normalized audio aligns with
         // the original video stream when they are merged back together.
         let format_start_time_us: i64 = unsafe { (*ictx.as_mut_ptr()).start_time };
+        let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
         let audio_ist_index = ictx
             .streams()
@@ -284,12 +287,27 @@ impl FFmpegRunner {
         // Transcode loop (audio only)
         let mut packets_processed = 0u64;
         let mut packets_skipped = 0u64;
+        let mut last_progress = Instant::now();
+        let progress_throttle = Duration::from_millis(100);
         for result in ictx.packets() {
             let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to read packet: {e}"),
             })?;
             if stream.index() != audio_ist_index {
                 continue;
+            }
+            // PTS-based progress: rescale packet PTS to µs, compare against total duration
+            if let Some(ref progress) = progress_fn
+                && input_duration_us > 0
+                && last_progress.elapsed() >= progress_throttle
+                && let Some(pts) = packet.pts()
+            {
+                let tb = audio_ist_time_base;
+                let pts_us =
+                    pts * i64::from(tb.numerator()) * 1_000_000 / i64::from(tb.denominator());
+                let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                progress(frac);
+                last_progress = Instant::now();
             }
             if let Err(e) = audio_decoder.send_packet(&packet) {
                 if packets_skipped == 0 {
@@ -336,6 +354,10 @@ impl FFmpegRunner {
                 &mut timing,
                 Some(output),
             )?;
+        }
+        // Emit final 1.0 on completion
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
         }
 
         if packets_skipped > 0 {

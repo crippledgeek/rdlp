@@ -58,10 +58,36 @@ impl CliEventHandler {
             Event::PostProcessing { stage, .. } => {
                 self.finish_progress();
                 if !self.quiet {
-                    let spinner = self.multi_progress.add(ProgressBar::new_spinner());
-                    spinner.set_message(format!("Post-processing: {stage}..."));
-                    spinner.enable_steady_tick(Duration::from_millis(100));
-                    self.progress_bar = Some(spinner);
+                    let pb = self.multi_progress.add(ProgressBar::new(1000));
+                    pb.set_style(
+                        ProgressStyle::with_template(
+                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
+                        )
+                        .expect("valid progress template"),
+                    );
+                    pb.set_message(stage.clone());
+                    pb.set_position(0);
+                    self.progress_bar = Some(pb);
+                }
+            }
+            Event::PostProcessProgress {
+                stage, progress, ..
+            } => {
+                if let Some(ref pb) = self.progress_bar {
+                    let pct = (*progress * 1000.0) as u64;
+                    pb.set_position(pct);
+                    pb.set_message(stage.clone());
+                } else if !self.quiet {
+                    let pb = self.multi_progress.add(ProgressBar::new(1000));
+                    pb.set_style(
+                        ProgressStyle::with_template(
+                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
+                        )
+                        .expect("valid progress template"),
+                    );
+                    pb.set_message(stage.clone());
+                    pb.set_position((*progress * 1000.0) as u64);
+                    self.progress_bar = Some(pb);
                 }
             }
             Event::SubtitlesFound { langs, .. } => {

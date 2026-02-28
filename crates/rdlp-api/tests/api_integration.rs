@@ -29,6 +29,7 @@ fn event_tag(event: &Event) -> &'static str {
         Event::FormatSelected { .. } => "format_selected",
         Event::Progress { .. } => "progress",
         Event::PostProcessing { .. } => "post_processing",
+        Event::PostProcessProgress { .. } => "post_process_progress",
         Event::SubtitlesFound { .. } => "subtitles_found",
         Event::SubtitlesMissing { .. } => "subtitles_missing",
         Event::Warning { .. } => "warning",

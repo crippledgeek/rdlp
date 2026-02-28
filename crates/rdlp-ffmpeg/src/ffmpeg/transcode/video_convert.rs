@@ -5,6 +5,8 @@
 //! encoder packet writing.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use log::debug;
 
@@ -28,6 +30,7 @@ impl FFmpegRunner {
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         opts: &VideoConvertOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -35,7 +38,8 @@ impl FFmpegRunner {
         Self::spawn_blocking("convert_video", move || {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, true)?;
 
-            let result = Self::convert_video_sync(&effective_input, &output, &opts);
+            let result =
+                Self::convert_video_sync(&effective_input, &output, &opts, progress_fn.as_deref());
 
             if let Some(ref temp) = salvage_temp {
                 let _ = std::fs::remove_file(temp);
@@ -47,7 +51,12 @@ impl FFmpegRunner {
     }
 
     /// Convert video synchronously (dispatches to remux or transcode).
-    fn convert_video_sync(input: &Path, output: &Path, opts: &VideoConvertOptions) -> Result<()> {
+    fn convert_video_sync(
+        input: &Path,
+        output: &Path,
+        opts: &VideoConvertOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> Result<()> {
         if opts.remux_only {
             // Determine if output is MP4/MOV for faststart
             let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -55,9 +64,9 @@ impl FFmpegRunner {
                 faststart: ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mov"),
                 ..Default::default()
             };
-            Self::remux_sync(input, output, &remux_opts)
+            Self::remux_sync(input, output, &remux_opts, progress_fn)
         } else {
-            Self::convert_video_transcode_sync(input, output, opts)
+            Self::convert_video_transcode_sync(input, output, opts, progress_fn)
         }
     }
 
@@ -71,6 +80,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         opts: &VideoConvertOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
 
@@ -80,6 +90,8 @@ impl FFmpegRunner {
                 message: format!("failed to open input {}: {e}", input.display()),
             }
         })?;
+
+        let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
         // Find video and audio stream indices
         let video_ist_index = ictx
@@ -270,6 +282,9 @@ impl FFmpegRunner {
         let mut filter_graph =
             Self::build_video_filter(&video_decoder, &video_encoder, video_ist_time_base)?;
 
+        let mut last_progress = Instant::now();
+        let progress_throttle = Duration::from_millis(100);
+
         // Process packets: video -> decode/filter/encode, audio -> copy
         for result in ictx.packets() {
             let (stream, mut packet) =
@@ -279,6 +294,19 @@ impl FFmpegRunner {
             let ist_index = stream.index();
 
             if ist_index == video_ist_index {
+                // PTS-based progress from video stream
+                if let Some(ref progress) = progress_fn
+                    && input_duration_us > 0
+                    && last_progress.elapsed() >= progress_throttle
+                    && let Some(pts) = packet.pts()
+                {
+                    let tb = video_ist_time_base;
+                    let pts_us =
+                        pts * i64::from(tb.numerator()) * 1_000_000 / i64::from(tb.denominator());
+                    let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                    progress(frac);
+                    last_progress = Instant::now();
+                }
                 // Video: decode -> filter -> encode -> write
                 video_decoder.send_packet(&packet)?;
                 Self::receive_and_process_video(
@@ -312,6 +340,10 @@ impl FFmpegRunner {
                     })?;
                 }
             }
+        }
+        // Emit final 1.0 on completion
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
         }
 
         // Flush video decoder

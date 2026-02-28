@@ -5,10 +5,13 @@
 //! Supports various output formats including MP3, AAC, Opus, FLAC, etc.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 
 use rdlp_ffmpeg::PostProcessError;
 use rdlp_ffmpeg::ffmpeg::{AudioCodecConfig, AudioExtractOptions, get_audio_codec};
@@ -84,6 +87,7 @@ impl PostProcessor for FFmpegExtractAudio {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -135,8 +139,12 @@ impl PostProcessor for FFmpegExtractAudio {
             Self::build_extract_options(codec_config, can_copy, config.audio_quality.as_deref());
 
         // Extract audio via library bindings
+        let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac| cb.on_progress(frac))
+            });
         self.ffmpeg
-            .extract_audio(input_file, &output_path, &opts)
+            .extract_audio(input_file, &output_path, &opts, progress_fn)
             .await?;
 
         info!(output:? = output_path.display(); "Audio extracted");

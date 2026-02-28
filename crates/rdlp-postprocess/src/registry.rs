@@ -27,7 +27,7 @@
 //! let config = PostProcessConfig::default();
 //! let files = vec![PathBuf::from("video.mp4")];
 //!
-//! let result = registry.process(&info, files, &config).await?;
+//! let result = registry.process(&info, files, &config, None).await?;
 //! println!("Output files: {:?}", result.files);
 //! # Ok(())
 //! # }
@@ -38,7 +38,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, trace, warn};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
+use rdlp_core::{
+    InfoDict, PostProcessCallbackFactory, PostProcessConfig, PostProcessResult, PostProcessor,
+};
 
 use crate::processors::*;
 use rdlp_ffmpeg::error::Result;
@@ -48,11 +50,17 @@ use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 #[async_trait]
 pub trait PostProcessorRegistryTrait: Send + Sync {
     /// Process files through all applicable post-processors.
+    ///
+    /// The `callback_factory` is called once per processor stage with the
+    /// processor name, returning a fresh `PostProcessCallback` for that stage.
+    /// Each stage callback receives progress in `[0.0, 1.0]`, starting at 0.0
+    /// and reaching 1.0 when the stage completes.
     async fn process(
         &self,
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback_factory: Option<PostProcessCallbackFactory>,
     ) -> anyhow::Result<PostProcessResult>;
 
     /// Remux a file with faststart enabled (stream copy, no re-encoding).
@@ -164,6 +172,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback_factory: Option<PostProcessCallbackFactory>,
     ) -> anyhow::Result<PostProcessResult> {
         let mut current_info = info.clone();
         let mut current_files = files;
@@ -179,8 +188,13 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
 
             info!(name:? = processor.name(); "Running post-processor");
 
+            // Create a per-stage callback from the factory, if provided.
+            let stage_callback = callback_factory
+                .as_ref()
+                .map(|factory| factory(processor.name()));
+
             match processor
-                .process(&current_info, current_files.clone(), config)
+                .process(&current_info, current_files.clone(), config, stage_callback)
                 .await
             {
                 Ok(result) => {
@@ -230,7 +244,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             faststart: true,
             ..Default::default()
         };
-        self.ffmpeg.remux(input, output, &opts).await?;
+        self.ffmpeg.remux(input, output, &opts, None).await?;
         Ok(())
     }
 

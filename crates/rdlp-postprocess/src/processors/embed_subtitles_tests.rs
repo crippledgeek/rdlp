@@ -266,7 +266,10 @@ async fn test_process_no_files_returns_unchanged() {
     let info = InfoDict::new("id", "title", "extractor", "https://example.com");
     let config = PostProcessConfig::default();
 
-    let result = processor.process(&info, vec![], &config).await.unwrap();
+    let result = processor
+        .process(&info, vec![], &config, None)
+        .await
+        .unwrap();
     assert!(result.files.is_empty());
     assert!(result.temp_files.is_empty());
 }
@@ -289,7 +292,7 @@ async fn test_process_unsupported_container() {
     fs::write(&video, b"fake").unwrap();
 
     let result = processor
-        .process(&info, vec![video.clone()], &config)
+        .process(&info, vec![video.clone()], &config, None)
         .await
         .unwrap();
     assert_eq!(result.files, vec![video]);
@@ -314,7 +317,7 @@ async fn test_process_no_subtitle_files() {
     fs::write(&video, b"fake").unwrap();
 
     let result = processor
-        .process(&info, vec![video.clone()], &config)
+        .process(&info, vec![video.clone()], &config, None)
         .await
         .unwrap();
     assert_eq!(result.files, vec![video]);
@@ -342,7 +345,7 @@ async fn test_process_marks_subs_as_temp_when_not_write() {
     fs::write(&sub, b"subtitle").unwrap();
 
     let result = processor
-        .process(&info, vec![video.clone()], &config)
+        .process(&info, vec![video.clone()], &config, None)
         .await
         .unwrap();
     assert_eq!(result.files, vec![video]);
@@ -372,7 +375,7 @@ async fn test_process_keeps_subs_when_write_subtitles() {
     fs::write(&sub, b"subtitle").unwrap();
 
     let result = processor
-        .process(&info, vec![video.clone()], &config)
+        .process(&info, vec![video.clone()], &config, None)
         .await
         .unwrap();
     assert_eq!(result.files, vec![video]);

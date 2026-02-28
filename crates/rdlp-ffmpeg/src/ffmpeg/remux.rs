@@ -1,6 +1,8 @@
 //! Container remuxing (stream copy, no re-encoding).
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use log::debug;
 
@@ -20,18 +22,27 @@ impl FFmpegRunner {
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         opts: &RemuxOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        Self::spawn_blocking("remux", move || Self::remux_sync(&input, &output, &opts)).await
+        Self::spawn_blocking("remux", move || {
+            Self::remux_sync(&input, &output, &opts, progress_fn.as_deref())
+        })
+        .await
     }
 
     /// Remux a single input file synchronously (stream copy).
     ///
     /// Normalizes PTS/DTS timestamps to start at 0 (fixes HLS streams with non-zero start times).
     /// For MKV output, uses raw FFI with proper stream property copying for VLC compatibility.
-    pub(crate) fn remux_sync(input: &Path, output: &Path, opts: &RemuxOptions) -> Result<()> {
+    pub(crate) fn remux_sync(
+        input: &Path,
+        output: &Path,
+        opts: &RemuxOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> Result<()> {
         ensure_init()?;
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility.
@@ -40,7 +51,7 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Self::remux_mkv_raw_ffi(input, output);
+            return Self::remux_mkv_raw_ffi(input, output, progress_fn);
         }
 
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
@@ -131,6 +142,11 @@ impl FFmpegRunner {
                 message: format!("failed to write output header: {e}"),
             })?;
 
+        // Read input duration for progress reporting (AV_TIME_BASE microseconds)
+        let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
+        let mut last_progress = Instant::now();
+        let throttle = Duration::from_millis(100);
+
         // Copy packets with PTS normalization (shifts timestamps to start at 0)
         for result in ictx.packets() {
             let (stream, mut packet) =
@@ -143,6 +159,20 @@ impl FFmpegRunner {
                 continue;
             }
             let ost_idx = ost_idx as usize;
+
+            // Report PTS-based progress (throttled to 10 updates/sec)
+            if let Some(ref progress) = progress_fn
+                && input_duration_us > 0
+                && let Some(pts) = packet.pts()
+                && last_progress.elapsed() >= throttle
+            {
+                let ist_tb = ist_time_bases[ist_index];
+                let pts_us = pts * i64::from(ist_tb.numerator()) * 1_000_000
+                    / i64::from(ist_tb.denominator());
+                let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                progress(frac);
+                last_progress = Instant::now();
+            }
 
             // Apply PTS offset to normalize timestamps to start at 0
             let offset = ist_pts_offsets[ist_index];
@@ -171,6 +201,11 @@ impl FFmpegRunner {
             })?;
         }
 
+        // Emit final 1.0 on completion
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
+        }
+
         octx.write_trailer()
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output trailer: {e}"),
@@ -191,7 +226,11 @@ impl FFmpegRunner {
     /// - `max_interleave_delta=0` — disables delta-based queue flushing (safe
     ///   for remux since packets arrive in muxer order from a single input)
     #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
-    fn remux_mkv_raw_ffi(input: &Path, output: &Path) -> Result<()> {
+    fn remux_mkv_raw_ffi(
+        input: &Path,
+        output: &Path,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
         use std::ptr;
@@ -410,6 +449,10 @@ impl FFmpegRunner {
                 time_base: ffi::AVRational { num: 0, den: 1 },
             };
 
+            let input_duration_us: i64 = (*ifmt_ctx).duration;
+            let mut last_progress_mkv = Instant::now();
+            let throttle_mkv = Duration::from_millis(100);
+
             loop {
                 let ret = ffi::av_read_frame(ifmt_ctx, &mut pkt);
                 if ret < 0 {
@@ -428,6 +471,22 @@ impl FFmpegRunner {
                 // Rescale timestamps
                 let in_stream = *(*ifmt_ctx).streams.add(in_stream_idx);
                 let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
+
+                // Report PTS-based progress using AV_TIME_BASE (throttled)
+                if let Some(ref progress) = progress_fn
+                    && input_duration_us > 0
+                    && pkt.pts != ffi::AV_NOPTS_VALUE
+                    && last_progress_mkv.elapsed() >= throttle_mkv
+                {
+                    let av_time_base = ffi::AVRational {
+                        num: 1,
+                        den: 1_000_000,
+                    };
+                    let pts_us = ffi::av_rescale_q(pkt.pts, (*in_stream).time_base, av_time_base);
+                    let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                    progress(frac);
+                    last_progress_mkv = Instant::now();
+                }
 
                 // Guard against AV_NOPTS_VALUE before rescaling
                 if pkt.pts != ffi::AV_NOPTS_VALUE {
@@ -462,6 +521,11 @@ impl FFmpegRunner {
                     log::error!("Error writing packet: {ret}");
                     break;
                 }
+            }
+
+            // Emit final 1.0 on completion
+            if let Some(ref progress) = progress_fn {
+                progress(1.0);
             }
 
             // 10. Write trailer and cleanup

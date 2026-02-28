@@ -5,10 +5,13 @@
 //! Video streams are copied without re-encoding.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 
 use rdlp_ffmpeg::{AudioNormMode, LoudnormPreset, NormalizeOptions, PostProcessError};
 
@@ -79,6 +82,7 @@ impl PostProcessor for FFmpegNormalizeAudio {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -120,8 +124,12 @@ impl PostProcessor for FFmpegNormalizeAudio {
             .unwrap_or("output");
         let output_path = input_file.with_file_name(format!("{stem}.norm.{ext}"));
 
+        let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac| cb.on_progress(frac))
+            });
         self.ffmpeg
-            .normalize_audio(input_file, &output_path, &opts)
+            .normalize_audio(input_file, &output_path, &opts, progress_fn)
             .await?;
 
         info!("Audio normalization complete: {}", output_path.display());

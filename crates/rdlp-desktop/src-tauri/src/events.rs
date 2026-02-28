@@ -80,6 +80,21 @@ pub struct FormatSelectedPayload {
     pub(crate) quality: String,
 }
 
+/// Post-processing progress payload emitted as `"postprocess-progress"`.
+///
+/// Sent for every [`Event::PostProcessProgress`] update. The `progress`
+/// field is a fraction in `[0.0, 1.0]`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostProcessProgressPayload {
+    /// The UUID of the download job.
+    pub(crate) job_id: String,
+    /// Name of the post-processing stage (e.g. `"remux"`, `"normalize"`).
+    pub(crate) stage: String,
+    /// Progress as a fraction in `[0.0, 1.0]`.
+    pub(crate) progress: f64,
+}
+
 /// Log message payload emitted as `"download-log"`.
 ///
 /// Used for informational events (metadata ready, post-processing
@@ -193,6 +208,19 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
 
             if let Err(e) = app.emit("download-log", &payload) {
                 debug!("Failed to emit download-log (post-processing) for job {job_id}: {e}");
+            }
+        }
+
+        Event::PostProcessProgress {
+            stage, progress, ..
+        } => {
+            let payload = PostProcessProgressPayload {
+                job_id: job_id.to_owned(),
+                stage: stage.clone(),
+                progress: *progress,
+            };
+            if let Err(e) = app.emit("postprocess-progress", &payload) {
+                debug!("Failed to emit postprocess-progress for job {job_id}: {e}");
             }
         }
 
@@ -354,5 +382,18 @@ mod tests {
         assert_eq!(json["jobId"], "abc-123");
         assert_eq!(json["level"], "warn");
         assert_eq!(json["message"], "low quality fallback");
+    }
+
+    #[test]
+    fn test_postprocess_progress_payload_serializes() {
+        let payload = PostProcessProgressPayload {
+            job_id: "abc-123".to_owned(),
+            stage: "remux".to_owned(),
+            progress: 0.45,
+        };
+        let json = serde_json::to_value(&payload).expect("serialization should succeed");
+        assert_eq!(json["jobId"], "abc-123");
+        assert_eq!(json["stage"], "remux");
+        assert_eq!(json["progress"], 0.45);
     }
 }

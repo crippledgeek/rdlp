@@ -5,6 +5,7 @@
 //! plus `cluster_time_limit=500` for VLC-compatible seeking.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use log::{debug, info};
 
@@ -31,6 +32,7 @@ impl FFmpegRunner {
         video_input: &Path,
         audio_input: &Path,
         output: &Path,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
@@ -328,6 +330,13 @@ impl FFmpegRunner {
 
             info!("Merge: video=stream#{video_out_idx}, audio=stream#{audio_out_idx} (DEFAULT)");
 
+            // Byte-based progress tracking
+            let total_input_bytes = std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
+                + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0);
+            let mut bytes_written: u64 = 0;
+            let mut last_progress = Instant::now();
+            let throttle = Duration::from_millis(100);
+
             // 13. Two-way timestamp-interleaved merge
             //
             // Write packets from both inputs in DTS order to avoid ENOMEM
@@ -351,6 +360,7 @@ impl FFmpegRunner {
                     match (have_video, have_audio) {
                         (false, false) => break,
                         (true, false) => {
+                            bytes_written += vpkt.size as u64;
                             rescale_and_write_raw(
                                 &mut vpkt,
                                 in_video_stream,
@@ -361,6 +371,7 @@ impl FFmpegRunner {
                             have_video = read_next_raw(ifmt_video, video_stream_idx, &mut vpkt);
                         }
                         (false, true) => {
+                            bytes_written += apkt.size as u64;
                             rescale_and_write_raw(
                                 &mut apkt,
                                 in_audio_stream,
@@ -382,6 +393,7 @@ impl FFmpegRunner {
                             };
 
                             if write_video {
+                                bytes_written += vpkt.size as u64;
                                 rescale_and_write_raw(
                                     &mut vpkt,
                                     in_video_stream,
@@ -391,6 +403,7 @@ impl FFmpegRunner {
                                 ffi::av_packet_unref(&mut vpkt);
                                 have_video = read_next_raw(ifmt_video, video_stream_idx, &mut vpkt);
                             } else {
+                                bytes_written += apkt.size as u64;
                                 rescale_and_write_raw(
                                     &mut apkt,
                                     in_audio_stream,
@@ -402,10 +415,27 @@ impl FFmpegRunner {
                             }
                         }
                     }
+
+                    // Report byte-based progress (throttled to 10 updates/sec)
+                    if let Some(ref progress) = progress_fn
+                        && total_input_bytes > 0
+                        && last_progress.elapsed() >= throttle
+                    {
+                        let frac =
+                            (bytes_written as f64 / total_input_bytes as f64).clamp(0.0, 1.0);
+                        progress(frac);
+                        last_progress = Instant::now();
+                    }
                 }
 
                 ffi::av_packet_unref(&mut vpkt);
                 ffi::av_packet_unref(&mut apkt);
+
+                // Emit final 1.0 on completion
+                if let Some(ref progress) = progress_fn {
+                    progress(1.0);
+                }
+
                 Ok(())
             })();
 

@@ -44,7 +44,7 @@
 //!
 //! // Process files
 //! let files = vec![PathBuf::from("video.mp4")];
-//! let result = registry.process(&info, files, &config).await?;
+//! let result = registry.process(&info, files, &config, None).await?;
 //!
 //! println!("Output: {:?}", result.files);
 //! # Ok(())
@@ -57,8 +57,9 @@
 //!
 //! ```no_run
 //! use async_trait::async_trait;
-//! use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+//! use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 //! use std::path::PathBuf;
+//! use std::sync::Arc;
 //!
 //! struct MyProcessor;
 //!
@@ -73,7 +74,13 @@
 //!         true
 //!     }
 //!
-//!     async fn process(&self, info: &InfoDict, files: Vec<PathBuf>, _config: &PostProcessConfig) -> Result<PostProcessResult> {
+//!     async fn process(
+//!         &self,
+//!         info: &InfoDict,
+//!         files: Vec<PathBuf>,
+//!         _config: &PostProcessConfig,
+//!         _callback: Option<Arc<dyn PostProcessCallback>>,
+//!     ) -> Result<PostProcessResult> {
 //!         // Custom processing logic
 //!         Ok(PostProcessResult::new(info.clone(), files))
 //!     }

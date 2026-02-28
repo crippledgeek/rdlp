@@ -5,10 +5,13 @@
 //! a centralized index.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 
 use rdlp_ffmpeg::RemuxOptions;
 
@@ -57,6 +60,7 @@ impl PostProcessor for FFmpegRemuxer {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -106,7 +110,13 @@ impl PostProcessor for FFmpegRemuxer {
         };
 
         // Perform remux via library bindings
-        self.ffmpeg.remux(input_file, &output_path, &opts).await?;
+        let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac| cb.on_progress(frac))
+            });
+        self.ffmpeg
+            .remux(input_file, &output_path, &opts, progress_fn)
+            .await?;
 
         debug!(
             output:? = output_path.display();

@@ -67,10 +67,7 @@ impl FFmpegRunner {
     /// the supported list, or the nearest supported rate (preferring higher
     /// rates on ties, which naturally selects 48 kHz for a 44.1 kHz source on
     /// libopus).
-    pub(crate) fn pick_audio_sample_rate(
-        codec: &ffmpeg_the_third::Codec,
-        preferred: u32,
-    ) -> u32 {
+    pub(crate) fn pick_audio_sample_rate(codec: &ffmpeg_the_third::Codec, preferred: u32) -> u32 {
         // SAFETY: `codec.as_ptr()` returns a valid AVCodec pointer.
         // `supported_samplerates` is a NULL-terminated i32 array (or NULL if
         // the codec accepts any rate).
