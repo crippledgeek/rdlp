@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use log::info;
 use rdlp_api::InteractiveCallback;
 use rdlp_core::{Format, InfoDict};
-use rdlp_table::{ColorMode, TableOpts, render_format_rows, render_formats_table};
+use rdlp_table::{ColorMode, TableOpts, render_table_and_rows};
 
 /// CLI interactive callback backed by inquire.
 pub struct DialoguerCallback;
@@ -33,12 +33,9 @@ impl InteractiveCallback for DialoguerCallback {
 
         let refs: Vec<&Format> = formats.iter().collect();
 
-        // Print the formatted table header.
-        let table = render_formats_table(&refs, &opts);
+        // Compute budget once for both header table and menu items.
+        let (table, items) = render_table_and_rows(&refs, &opts);
         info!("Available formats:\n{table}");
-
-        // Build menu items matching the table's column layout.
-        let items = render_format_rows(&refs, &opts);
 
         tokio::task::spawn_blocking(move || {
             inquire::Select::new("Select a format to download:", items)

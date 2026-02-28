@@ -164,4 +164,44 @@ mod tests {
         let result = pad_to_width("exact", 5, false);
         assert_eq!(result, "exact");
     }
+
+    #[test]
+    fn test_truncate_cjk_characters() {
+        // CJK characters are 2 columns wide each.
+        // "日本語" = 6 columns. Truncating to 5 means 2 CJK chars (4 cols) + '…' (1 col) = 5.
+        let result = truncate_to_width("日本語", 5);
+        assert_eq!(result, "日本…");
+        assert_eq!(measure_text_width(&result), 5);
+    }
+
+    #[test]
+    fn test_truncate_cjk_exact_fit() {
+        // "日本語" = 6 columns, max_width = 6 → no truncation.
+        assert_eq!(truncate_to_width("日本語", 6), "日本語");
+    }
+
+    #[test]
+    fn test_truncate_cjk_tight() {
+        // max_width = 3: target = 2 columns for content + 1 for '…'.
+        // One CJK char = 2 cols, fits.
+        let result = truncate_to_width("日本語", 3);
+        assert_eq!(result, "日…");
+        assert_eq!(measure_text_width(&result), 3);
+    }
+
+    #[test]
+    fn test_truncate_mixed_ascii_cjk() {
+        // "hi日本" = 2 + 2 + 2 = 6 columns.
+        let result = truncate_to_width("hi日本", 5);
+        assert_eq!(result, "hi日…");
+        assert_eq!(measure_text_width(&result), 5);
+    }
+
+    #[test]
+    fn test_pad_cjk_right_align() {
+        // "日本" = 4 columns. Padding to 8 → 4 spaces + "日本".
+        let result = pad_to_width("日本", 8, true);
+        assert_eq!(result, "    日本");
+        assert_eq!(measure_text_width(&result), 8);
+    }
 }

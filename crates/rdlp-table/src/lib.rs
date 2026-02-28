@@ -43,6 +43,10 @@ impl Default for TableOpts {
 }
 
 /// ANSI color output mode.
+///
+/// Reserved for future use. Currently the table renderer does not emit ANSI
+/// codes, but this field is plumbed through `TableOpts` so callers can
+/// declare intent for when color support is added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     /// Detect from terminal capabilities and `NO_COLOR` env var.
@@ -175,6 +179,105 @@ pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> 
             }
         })
         .collect()
+}
+
+/// Render both the header table and per-row strings in a single pass.
+///
+/// Computes the column budget once and returns both the styled table
+/// (for display) and the per-row strings (for `inquire::Select` items).
+/// Use this instead of calling `render_formats_table` + `render_format_rows`
+/// separately when you need both outputs.
+///
+/// # Arguments
+/// * `formats` - Format references to display
+/// * `opts` - Rendering options (width, color, compact)
+///
+/// # Returns
+/// A tuple of (table string, row strings). Both are empty if `formats` is empty.
+#[must_use]
+pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, Vec<String>) {
+    if formats.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let width = opts.width_override.unwrap_or_else(detect_width);
+    let compact = opts.compact.unwrap_or(width < 80);
+    let columns = all_columns();
+    let budget = compute_budget(&columns, width, compact, formats);
+
+    if budget.selected_indices.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    // Build the tabled grid.
+    let mut builder = Builder::new();
+
+    // Header row.
+    let headers: Vec<String> = budget
+        .selected_indices
+        .iter()
+        .enumerate()
+        .map(|(i, &col_idx)| {
+            let col = &columns[col_idx];
+            truncate::pad_to_width(col.header, budget.widths[i], col.align == Align::Right)
+        })
+        .collect();
+    builder.push_record(headers);
+
+    // Data rows.
+    for fmt in formats {
+        let cells: Vec<String> = budget
+            .selected_indices
+            .iter()
+            .enumerate()
+            .map(|(i, &col_idx)| {
+                let col = &columns[col_idx];
+                let raw = (col.extract)(fmt);
+                truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
+            })
+            .collect();
+        builder.push_record(cells);
+    }
+
+    let mut table = builder.build();
+
+    if compact {
+        table.with(Style::blank());
+    } else {
+        table.with(Style::rounded());
+    }
+
+    for (i, &col_idx) in budget.selected_indices.iter().enumerate() {
+        if columns[col_idx].align == Align::Right {
+            table.modify(Columns::one(i), Alignment::right());
+        }
+    }
+
+    let table_str = table.to_string();
+
+    // Build row strings using the same budget.
+    let rows = formats
+        .iter()
+        .map(|fmt| {
+            let cells: Vec<String> = budget
+                .selected_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &col_idx)| {
+                    let col = &columns[col_idx];
+                    let raw = (col.extract)(fmt);
+                    truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
+                })
+                .collect();
+            if compact {
+                cells.join("  ")
+            } else {
+                cells.join(" │ ")
+            }
+        })
+        .collect();
+
+    (table_str, rows)
 }
 
 #[cfg(test)]

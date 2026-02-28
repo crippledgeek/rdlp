@@ -18,7 +18,7 @@ pub enum Align {
 }
 
 /// Definition of a single table column.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ColumnDef {
     /// Column header text.
     pub header: &'static str,
@@ -204,6 +204,7 @@ pub fn border_overhead(n_cols: usize, compact: bool) -> usize {
 }
 
 /// Result of the column budget algorithm.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnBudget {
     /// Indices into `all_columns()` that fit within the width.
     pub selected_indices: Vec<usize>,
