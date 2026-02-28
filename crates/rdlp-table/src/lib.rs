@@ -3,11 +3,6 @@
 //! Provides a responsive, terminal-width-aware table renderer for
 //! displaying video/audio format lists. Supports column priority-based
 //! hiding, Unicode-aware truncation, and configurable styles.
-//!
-//! The renderer works with [`FormatRow`] — a pre-extracted data struct
-//! that callers populate from their domain types. This avoids a circular
-//! crate dependency (rdlp-types already depends on rdlp-table for legacy
-//! column constants).
 
 #![warn(missing_docs)]
 
@@ -18,10 +13,9 @@ pub mod truncate;
 // Re-export legacy constants at crate root for backward compatibility.
 pub use constants::*;
 
-pub use column::{
-    Align, ColumnBudget, ColumnDef, FormatRow, all_columns, border_overhead, compute_budget,
-};
+pub use column::{Align, ColumnBudget, ColumnDef, all_columns, border_overhead, compute_budget};
 
+use rdlp_types::Format;
 use tabled::{
     builder::Builder,
     settings::{Alignment, Style, object::Columns},
@@ -73,20 +67,20 @@ fn detect_width() -> usize {
 /// returns a styled table string.
 ///
 /// # Arguments
-/// * `rows` - Pre-extracted format rows to display
+/// * `formats` - Format references to display
 /// * `opts` - Rendering options (width, color, compact)
 ///
 /// # Returns
 /// A `String` containing the complete table, ready for printing.
-pub fn render_formats_table(rows: &[FormatRow], opts: &TableOpts) -> String {
-    if rows.is_empty() {
+pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
+    if formats.is_empty() {
         return String::new();
     }
 
     let width = opts.width_override.unwrap_or_else(detect_width);
     let compact = opts.compact.unwrap_or(width < 80);
     let columns = all_columns();
-    let budget = compute_budget(&columns, width, compact, rows);
+    let budget = compute_budget(&columns, width, compact, formats);
 
     if budget.selected_indices.is_empty() {
         return String::new();
@@ -108,15 +102,15 @@ pub fn render_formats_table(rows: &[FormatRow], opts: &TableOpts) -> String {
     builder.push_record(headers);
 
     // Data rows.
-    for row in rows {
+    for fmt in formats {
         let cells: Vec<String> = budget
             .selected_indices
             .iter()
             .enumerate()
             .map(|(i, &col_idx)| {
                 let col = &columns[col_idx];
-                let raw = (col.extract)(row);
-                truncate::pad_to_width(raw, budget.widths[i], col.align == Align::Right)
+                let raw = (col.extract)(fmt);
+                truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
             })
             .collect();
         builder.push_record(cells);
@@ -143,34 +137,35 @@ pub fn render_formats_table(rows: &[FormatRow], opts: &TableOpts) -> String {
 
 /// Render per-row strings matching the table's column layout.
 ///
-/// Returns one string per row, using the same column set and widths
+/// Returns one string per format, using the same column set and widths
 /// as `render_formats_table`. These are suitable for `inquire::Select` items
 /// so the selection menu aligns with the header table.
 ///
 /// # Arguments
-/// * `rows` - Pre-extracted format rows to render
+/// * `formats` - Format references to render
 /// * `opts` - Same options used for the header table
 #[must_use]
-pub fn render_format_rows(rows: &[FormatRow], opts: &TableOpts) -> Vec<String> {
-    if rows.is_empty() {
+pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> {
+    if formats.is_empty() {
         return Vec::new();
     }
 
     let width = opts.width_override.unwrap_or_else(detect_width);
     let compact = opts.compact.unwrap_or(width < 80);
     let columns = all_columns();
-    let budget = compute_budget(&columns, width, compact, rows);
+    let budget = compute_budget(&columns, width, compact, formats);
 
-    rows.iter()
-        .map(|row| {
+    formats
+        .iter()
+        .map(|fmt| {
             let cells: Vec<String> = budget
                 .selected_indices
                 .iter()
                 .enumerate()
                 .map(|(i, &col_idx)| {
                     let col = &columns[col_idx];
-                    let raw = (col.extract)(row);
-                    truncate::pad_to_width(raw, budget.widths[i], col.align == Align::Right)
+                    let raw = (col.extract)(fmt);
+                    truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
                 })
                 .collect();
             if compact {
@@ -186,54 +181,51 @@ pub fn render_format_rows(rows: &[FormatRow], opts: &TableOpts) -> Vec<String> {
 mod tests {
     use super::*;
     use console::measure_text_width;
+    use rdlp_types::protocol::DownloadProtocol;
 
-    fn sample_rows() -> Vec<FormatRow> {
+    fn make_format(note: &str, width: u32, height: u32, ext: &str) -> Format {
+        let mut f = Format::new(
+            "id",
+            "https://example.com/video",
+            ext,
+            DownloadProtocol::Https,
+        );
+        f.format_note = Some(note.to_string());
+        f.width = Some(width);
+        f.height = Some(height);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.fps = Some(30.0);
+        f.abr = Some(128.0);
+        f.vbr = Some(5000.0);
+        f.filesize = Some(878_000_000);
+        f
+    }
+
+    fn sample_formats() -> Vec<Format> {
         vec![
-            FormatRow {
-                quality: "1080p".to_string(),
-                resolution: "1920x1080".to_string(),
-                format_type: "MP4".to_string(),
-                size: "837.9 MB".to_string(),
-                codecs: "h264/aac".to_string(),
-                fps: "30".to_string(),
-                abr: "128".to_string(),
-                vbr: "5000".to_string(),
-                note: String::new(),
-            },
-            FormatRow {
-                quality: "720p".to_string(),
-                resolution: "1280x720".to_string(),
-                format_type: "MP4".to_string(),
-                size: "450.2 MB".to_string(),
-                codecs: "h264/aac".to_string(),
-                fps: "30".to_string(),
-                abr: "128".to_string(),
-                vbr: "3000".to_string(),
-                note: String::new(),
-            },
-            FormatRow {
-                quality: "480p".to_string(),
-                resolution: "854x480".to_string(),
-                format_type: "WebM".to_string(),
-                size: "220.0 MB".to_string(),
-                codecs: "vp9 (video only)".to_string(),
-                fps: "30".to_string(),
-                abr: String::new(),
-                vbr: "1500".to_string(),
-                note: String::new(),
+            make_format("1080p", 1920, 1080, "mp4"),
+            make_format("720p", 1280, 720, "mp4"),
+            {
+                let mut f = make_format("480p", 854, 480, "webm");
+                f.vcodec = Some("vp9".to_string());
+                f.acodec = Some("none".to_string());
+                f.filesize = Some(230_000_000);
+                f
             },
         ]
     }
 
     #[test]
     fn test_render_wide_includes_all_columns() {
-        let rows = sample_rows();
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(160),
             color: ColorMode::Never,
             compact: None,
         };
-        let output = render_formats_table(&rows, &opts);
+        let output = render_formats_table(&refs, &opts);
         assert!(output.contains("Quality"));
         assert!(output.contains("Resolution"));
         assert!(output.contains("Type"));
@@ -244,33 +236,31 @@ mod tests {
 
     #[test]
     fn test_render_narrow_hides_low_priority() {
-        let rows = sample_rows();
-        // 60 chars compact: Quality(7) + Resolution(10) + Type(4) + Size(8) + 4*2=8 overhead = 37.
-        // Codecs(10)+2 = 49, FPS(3)+2=54, ABR(5)+2=61 won't fit — ABR and higher optional cols dropped.
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(60),
             color: ColorMode::Never,
             compact: Some(true),
         };
-        let output = render_formats_table(&rows, &opts);
-        // Core columns must exist
+        let output = render_formats_table(&refs, &opts);
         assert!(output.contains("Quality"));
         assert!(output.contains("Type"));
-        // Low priority should be hidden
         assert!(!output.contains("Note"));
         assert!(!output.contains("VBR"));
     }
 
     #[test]
     fn test_no_line_exceeds_width() {
-        let rows = sample_rows();
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         for width in [60, 80, 100, 120] {
             let opts = TableOpts {
                 width_override: Some(width),
                 color: ColorMode::Never,
                 compact: None,
             };
-            let output = render_formats_table(&rows, &opts);
+            let output = render_formats_table(&refs, &opts);
             for line in output.lines() {
                 let line_width = measure_text_width(line);
                 assert!(
@@ -283,13 +273,14 @@ mod tests {
 
     #[test]
     fn test_right_alignment_renders_without_error() {
-        let rows = sample_rows();
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(120),
             color: ColorMode::Never,
             compact: None,
         };
-        let output = render_formats_table(&rows, &opts);
+        let output = render_formats_table(&refs, &opts);
         assert!(!output.is_empty());
     }
 
@@ -301,20 +292,19 @@ mod tests {
             compact: None,
         };
         let output = render_formats_table(&[], &opts);
-        // Should produce empty string for empty input.
         assert!(output.is_empty());
     }
 
     #[test]
     fn test_compact_uses_blank_style() {
-        let rows = sample_rows();
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(60),
             color: ColorMode::Never,
             compact: Some(true),
         };
-        let output = render_formats_table(&rows, &opts);
-        // Blank style has no box-drawing characters.
+        let output = render_formats_table(&refs, &opts);
         assert!(!output.contains('│'));
         assert!(!output.contains('─'));
         assert!(!output.contains('╭'));
@@ -322,14 +312,14 @@ mod tests {
 
     #[test]
     fn test_normal_uses_rounded_style() {
-        let rows = sample_rows();
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(120),
             color: ColorMode::Never,
             compact: Some(false),
         };
-        let output = render_formats_table(&rows, &opts);
-        // Rounded style uses box-drawing chars.
+        let output = render_formats_table(&refs, &opts);
         assert!(output.contains('│') || output.contains('─'));
     }
 }

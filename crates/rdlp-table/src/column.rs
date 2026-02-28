@@ -6,6 +6,7 @@
 //! first.
 
 use console::measure_text_width;
+use rdlp_types::Format;
 
 /// Horizontal alignment for a column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,33 +15,6 @@ pub enum Align {
     Left,
     /// Right-align cell content (pad left).
     Right,
-}
-
-/// Pre-extracted row data for table rendering.
-///
-/// Callers convert their format type into this struct before passing
-/// to the renderer. This keeps `rdlp-table` free of `rdlp-types` as
-/// a dependency (which would create a circular crate dependency).
-#[derive(Debug, Clone, Default)]
-pub struct FormatRow {
-    /// Quality label (e.g. "1080p", "720p60").
-    pub quality: String,
-    /// Resolution string (e.g. "1920x1080") or "N/A".
-    pub resolution: String,
-    /// Format type (e.g. "HLS", "MP4").
-    pub format_type: String,
-    /// Human-readable size text (e.g. "837.9 MB", "50:16 (754 seg)").
-    pub size: String,
-    /// Codec description (e.g. "h264/aac", "vp9 (video only)").
-    pub codecs: String,
-    /// Frames per second as a string (e.g. "60"), or empty string.
-    pub fps: String,
-    /// Audio bitrate in kbps as a string (e.g. "128"), or empty string.
-    pub abr: String,
-    /// Video bitrate in kbps as a string (e.g. "5000"), or empty string.
-    pub vbr: String,
-    /// Extra notes (e.g. "HDR, en", "Dolby Vision"), or empty string.
-    pub note: String,
 }
 
 /// Definition of a single table column.
@@ -55,44 +29,81 @@ pub struct ColumnDef {
     pub priority: u8,
     /// Text alignment within the column.
     pub align: Align,
-    /// Extract cell text from a `FormatRow`.
-    pub extract: fn(&FormatRow) -> &str,
+    /// Extract cell text from a [`Format`].
+    pub extract: fn(&Format) -> String,
 }
 
-fn extract_quality(r: &FormatRow) -> &str {
-    &r.quality
+fn extract_quality(f: &Format) -> String {
+    let base = f.format_note.as_deref().unwrap_or("unknown");
+    match f.fps {
+        Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => format!("{base}{fps:.0}"),
+        _ => base.to_string(),
+    }
 }
 
-fn extract_resolution(r: &FormatRow) -> &str {
-    &r.resolution
+fn extract_resolution(f: &Format) -> String {
+    match (f.width, f.height) {
+        (Some(w), Some(h)) => format!("{w}x{h}"),
+        _ => "N/A".to_string(),
+    }
 }
 
-fn extract_type(r: &FormatRow) -> &str {
-    &r.format_type
+fn extract_type(f: &Format) -> String {
+    if f.is_hls() {
+        "HLS".to_string()
+    } else {
+        f.ext.to_ascii_uppercase()
+    }
 }
 
-fn extract_size(r: &FormatRow) -> &str {
-    &r.size
+fn extract_size(f: &Format) -> String {
+    f.size_text()
 }
 
-fn extract_codecs(r: &FormatRow) -> &str {
-    &r.codecs
+fn extract_codecs(f: &Format) -> String {
+    let codecs = match (&f.vcodec, &f.acodec) {
+        (Some(v), Some(a)) if v != "none" && a != "none" => format!("{v}/{a}"),
+        (Some(v), _) if v != "none" => format!("{v} (video only)"),
+        (_, Some(a)) if a != "none" => format!("{a} (audio only)"),
+        _ => "Unknown".to_string(),
+    };
+    if f.has_drm.unwrap_or(false) {
+        format!("{codecs} [DRM]")
+    } else {
+        codecs
+    }
 }
 
-fn extract_fps(r: &FormatRow) -> &str {
-    &r.fps
+fn extract_fps(f: &Format) -> String {
+    match f.fps {
+        Some(fps) if fps > 0.0 => format!("{fps:.0}"),
+        _ => String::new(),
+    }
 }
 
-fn extract_abr(r: &FormatRow) -> &str {
-    &r.abr
+fn extract_abr(f: &Format) -> String {
+    match f.abr {
+        Some(abr) if abr > 0.0 => format!("{abr:.0}"),
+        _ => String::new(),
+    }
 }
 
-fn extract_vbr(r: &FormatRow) -> &str {
-    &r.vbr
+fn extract_vbr(f: &Format) -> String {
+    match f.vbr {
+        Some(vbr) if vbr > 0.0 => format!("{vbr:.0}"),
+        _ => String::new(),
+    }
 }
 
-fn extract_note(r: &FormatRow) -> &str {
-    &r.note
+fn extract_note(f: &Format) -> String {
+    let mut parts = Vec::new();
+    if let Some(dr) = &f.dynamic_range {
+        parts.push(dr.clone());
+    }
+    if let Some(lang) = &f.language {
+        parts.push(lang.clone());
+    }
+    parts.join(", ")
 }
 
 /// All available columns in display order.
@@ -210,13 +221,13 @@ pub struct ColumnBudget {
 /// * `columns` - All available column definitions
 /// * `available_width` - Terminal width in display columns
 /// * `compact` - Whether compact (blank) style is used
-/// * `rows` - The actual row data (used to compute natural column widths)
+/// * `formats` - The actual format data (used to compute natural column widths)
 #[must_use]
 pub fn compute_budget(
     columns: &[ColumnDef],
     available_width: usize,
     compact: bool,
-    rows: &[FormatRow],
+    formats: &[&Format],
 ) -> ColumnBudget {
     // Start with all columns, sorted by display order (preserving index).
     let mut candidates: Vec<(usize, &ColumnDef)> = columns.iter().enumerate().collect();
@@ -256,9 +267,9 @@ pub fn compute_budget(
         .iter()
         .map(|(_, col)| {
             let header_w = measure_text_width(col.header);
-            let max_cell = rows
+            let max_cell = formats
                 .iter()
-                .map(|r| measure_text_width((col.extract)(r)))
+                .map(|f| measure_text_width(&(col.extract)(f)))
                 .max()
                 .unwrap_or(0);
             header_w.max(max_cell)
@@ -301,6 +312,25 @@ pub fn compute_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdlp_types::protocol::DownloadProtocol;
+
+    fn make_format(note: &str, width: u32, height: u32, ext: &str) -> Format {
+        let mut f = Format::new(
+            "id",
+            "https://example.com/video",
+            ext,
+            DownloadProtocol::Https,
+        );
+        f.format_note = Some(note.to_string());
+        f.width = Some(width);
+        f.height = Some(height);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.fps = Some(30.0);
+        f.abr = Some(128.0);
+        f.vbr = Some(5000.0);
+        f
+    }
 
     #[test]
     fn test_all_columns_count() {
@@ -363,8 +393,10 @@ mod tests {
 
     #[test]
     fn test_budget_widths_at_least_minimum() {
+        let f1 = make_format("1080p", 1920, 1080, "mp4");
+        let f2 = make_format("720p", 1280, 720, "mp4");
         let columns = all_columns();
-        let budget = compute_budget(&columns, 120, false, &[]);
+        let budget = compute_budget(&columns, 120, false, &[&f1, &f2]);
         for (i, &idx) in budget.selected_indices.iter().enumerate() {
             assert!(
                 budget.widths[i] >= columns[idx].min_width,

@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+rdlp-types = { path = "../rdlp-types" }
 tabled = { workspace = true }
 console = { workspace = true }
 terminal_size = { workspace = true }
