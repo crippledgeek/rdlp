@@ -1,8 +1,8 @@
-//! Column layout constants for backward compatibility.
+//! Legacy column layout constants for backward compatibility.
 //!
-//! These constants were the original `rdlp-table` API, used by
-//! `Format::table_row()` in `rdlp-types` and the CLI header.
-//! They are preserved for any code that still references them directly.
+//! These constants were the original `rdlp-table` API. They are preserved
+//! for any external code that references them directly. The active table
+//! renderer uses `column::ColumnDef` definitions instead.
 
 /// Width of the Quality column (e.g. `"1080p60     "`).
 pub const QUALITY_WIDTH: usize = 12;
