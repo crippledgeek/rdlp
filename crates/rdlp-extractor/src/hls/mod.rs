@@ -86,10 +86,7 @@ mod tests {
     fn test_infer_muxed_audio_video_only_no_audio_group() {
         // AV1 with no declared audio and no separate audio rendition
         // → should infer muxed AAC
-        assert_eq!(
-            infer_muxed_audio(Some("av1"), None, false),
-            Some("aac"),
-        );
+        assert_eq!(infer_muxed_audio(Some("av1"), None, false), Some("aac"),);
     }
 
     #[test]
@@ -113,28 +110,19 @@ mod tests {
     #[test]
     fn test_infer_muxed_audio_separate_audio_group() {
         // Video only with separate AUDIO rendition → should NOT infer
-        assert_eq!(
-            infer_muxed_audio(Some("av1"), None, true),
-            None,
-        );
+        assert_eq!(infer_muxed_audio(Some("av1"), None, true), None,);
     }
 
     #[test]
     fn test_infer_muxed_audio_no_video() {
         // Audio-only stream (no video) → should NOT infer
-        assert_eq!(
-            infer_muxed_audio(None, Some("aac"), false),
-            Some("aac"),
-        );
+        assert_eq!(infer_muxed_audio(None, Some("aac"), false), Some("aac"),);
     }
 
     #[test]
     fn test_infer_muxed_audio_no_codecs() {
         // No codecs declared at all → should NOT infer
-        assert_eq!(
-            infer_muxed_audio(None, None, false),
-            None,
-        );
+        assert_eq!(infer_muxed_audio(None, None, false), None,);
     }
 
     /// End-to-end: parse a master playlist with AV1-only CODECS and verify

@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+tabled = { workspace = true }
+console = { workspace = true }
+terminal_size = { workspace = true }
 
 [lints]
 workspace = true

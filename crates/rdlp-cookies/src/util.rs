@@ -78,18 +78,16 @@ where
 
     // Chrome's cookie DB doesn't have a .db extension, so use suffix
     // approach: Cookies-wal, Cookies-shm
-    let wal_src2 = db_path.with_file_name(
-        format!("{}-wal", db_path.file_name().unwrap_or_default().to_string_lossy())
-    );
-    let shm_src2 = db_path.with_file_name(
-        format!("{}-shm", db_path.file_name().unwrap_or_default().to_string_lossy())
-    );
-    let wal_dst2 = temp_db.with_file_name(
-        format!("{}-wal", temp_name)
-    );
-    let shm_dst2 = temp_db.with_file_name(
-        format!("{}-shm", temp_name)
-    );
+    let wal_src2 = db_path.with_file_name(format!(
+        "{}-wal",
+        db_path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let shm_src2 = db_path.with_file_name(format!(
+        "{}-shm",
+        db_path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let wal_dst2 = temp_db.with_file_name(format!("{}-wal", temp_name));
+    let shm_dst2 = temp_db.with_file_name(format!("{}-shm", temp_name));
 
     // Try both naming patterns; ignore errors (files may not exist)
     for (src, dst) in [
@@ -143,8 +141,8 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
     };
 
     // GENERIC_READ = 0x80000000 — not re-exported by windows-sys FileSystem

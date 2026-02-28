@@ -22,13 +22,11 @@ pub(crate) fn infer_muxed_audio<'a>(
     audio_codec: Option<&'a str>,
     has_separate_audio_group: bool,
 ) -> Option<&'a str> {
-    audio_codec.or(
-        if video_codec.is_some() && !has_separate_audio_group {
-            Some("aac")
-        } else {
-            None
-        },
-    )
+    audio_codec.or(if video_codec.is_some() && !has_separate_audio_group {
+        Some("aac")
+    } else {
+        None
+    })
 }
 
 impl HlsSizeDetector {
@@ -253,8 +251,7 @@ impl HlsSizeDetector {
                 .as_deref()
                 .map(rdlp_core::parse_hls_codecs)
                 .unwrap_or((None, None));
-            let audio_codec =
-                infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
+            let audio_codec = infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
 
             variants.push(HlsVariantInfo {
                 media_playlist_url: media_url,

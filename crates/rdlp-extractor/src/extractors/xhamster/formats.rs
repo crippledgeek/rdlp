@@ -22,7 +22,6 @@ fn get_height(s: &str) -> Option<u32> {
     BaseExtractor::parse_quality_height(s)
 }
 
-
 /// Detect vcodec from URL by checking for `.av1.` or `.h264.` in the path.
 fn detect_vcodec(url: &str) -> Option<&'static str> {
     [(".av1.", "av1"), (".h264.", "h264")]
@@ -217,8 +216,8 @@ pub async fn extract_from_initials(
                         // CDN-blocked (403) even after decryption. HLS URLs
                         // that appear in the standard section (media=hls4)
                         // are the only ones that work.
-                        let is_hls = deciphered.contains("m3u8")
-                            || deciphered.contains("media=hls");
+                        let is_hls =
+                            deciphered.contains("m3u8") || deciphered.contains("media=hls");
                         if !is_hls {
                             debug!(
                                 "[XHamster] Skipping standard direct URL {} (CDN-blocked)",
@@ -516,10 +515,24 @@ mod tests {
         )
         .await;
         assert_eq!(formats.len(), 2);
-        let f720 = formats.iter().find(|f| f.format_id.contains("720")).unwrap();
-        let f1080 = formats.iter().find(|f| f.format_id.contains("1080")).unwrap();
-        assert_eq!(f720.filesize, Some(50_000_000), "720p should have download size");
-        assert_eq!(f1080.filesize, Some(100_000_000), "1080p should have download size");
+        let f720 = formats
+            .iter()
+            .find(|f| f.format_id.contains("720"))
+            .unwrap();
+        let f1080 = formats
+            .iter()
+            .find(|f| f.format_id.contains("1080"))
+            .unwrap();
+        assert_eq!(
+            f720.filesize,
+            Some(50_000_000),
+            "720p should have download size"
+        );
+        assert_eq!(
+            f1080.filesize,
+            Some(100_000_000),
+            "1080p should have download size"
+        );
     }
 
     #[tokio::test]
@@ -545,7 +558,10 @@ mod tests {
             None,
         )
         .await;
-        assert_eq!(formats.len(), 0, "Direct URLs should be skipped (CDN-blocked)");
+        assert_eq!(
+            formats.len(),
+            0,
+            "Direct URLs should be skipped (CDN-blocked)"
+        );
     }
-
 }
