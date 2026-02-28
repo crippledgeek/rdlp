@@ -21,10 +21,17 @@ impl FFmpegRunner {
         output: &Path,
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
-        Self::dispatch_normalize_sync(input, output, opts.salvage, |inp, out, ext, resilient| {
-            Self::peak_encode_audio_only(inp, out, ext, analysis, opts, resilient)
-        })
+        Self::dispatch_normalize_sync(
+            input,
+            output,
+            opts.salvage,
+            progress_fn,
+            |inp, out, ext, resilient, pfn| {
+                Self::peak_encode_audio_only(inp, out, ext, analysis, opts, resilient, pfn)
+            },
+        )
     }
 
     /// Encode peak-normalized audio to an output file (video streams discarded).
@@ -35,6 +42,7 @@ impl FFmpegRunner {
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
         resilient: bool,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         let gain_db = opts.target_peak_db - analysis.peak_db;
         let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
@@ -44,6 +52,7 @@ impl FFmpegRunner {
             final_output_ext,
             "peak encode",
             resilient,
+            progress_fn,
             |fmt, rate, ch_layout| {
                 let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
                     let rate_4x = rate * 4;
@@ -67,10 +76,17 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
-        Self::dispatch_normalize_sync(input, output, opts.salvage, |inp, out, ext, resilient| {
-            Self::loudnorm_encode_audio_only(inp, out, ext, opts, measurements, resilient)
-        })
+        Self::dispatch_normalize_sync(
+            input,
+            output,
+            opts.salvage,
+            progress_fn,
+            |inp, out, ext, resilient, pfn| {
+                Self::loudnorm_encode_audio_only(inp, out, ext, opts, measurements, resilient, pfn)
+            },
+        )
     }
 
     /// Encode loudnorm-normalized audio to an output file (video streams discarded).
@@ -81,6 +97,7 @@ impl FFmpegRunner {
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
         resilient: bool,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
         let limiter = build_alimiter_spec(opts.target_tp);
@@ -90,6 +107,7 @@ impl FFmpegRunner {
             final_output_ext,
             "loudnorm pass 2",
             resilient,
+            progress_fn,
             |fmt, rate, ch_layout| {
                 format!(
                     "aformat=sample_fmts=dbl,{loudnorm_core},aresample,\
@@ -110,7 +128,8 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         salvage: bool,
-        encode_fn: impl Fn(&Path, &Path, &str, bool) -> Result<()>,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        encode_fn: impl Fn(&Path, &Path, &str, bool, Option<&(dyn Fn(f64) + Send + Sync)>) -> Result<()>,
     ) -> Result<()> {
         crate::ffmpeg::ensure_init()?;
 
@@ -139,25 +158,26 @@ impl FFmpegRunner {
 
             if salvage {
                 with_mux_retry(input, &temp_audio, |effective_input, resilient| {
-                    encode_fn(effective_input, &temp_audio, ext, resilient)
+                    encode_fn(effective_input, &temp_audio, ext, resilient, progress_fn)
                 })?;
             } else {
-                encode_fn(input, &temp_audio, ext, false)?;
+                encode_fn(input, &temp_audio, ext, false, progress_fn)?;
             }
             let merge_result = Self::merge_sync(
                 input,
                 &temp_audio,
                 output,
                 &super::super::RemuxOptions::default(),
+                None,
             );
             let _ = std::fs::remove_file(&temp_audio);
             merge_result
         } else if salvage {
             with_mux_retry(input, output, |effective_input, resilient| {
-                encode_fn(effective_input, output, ext, resilient)
+                encode_fn(effective_input, output, ext, resilient, progress_fn)
             })
         } else {
-            encode_fn(input, output, ext, false)
+            encode_fn(input, output, ext, false, progress_fn)
         }
     }
 }

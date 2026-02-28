@@ -5,6 +5,8 @@
 //! sample format/rate conversion.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use log::{debug, info};
 
@@ -27,6 +29,7 @@ impl FFmpegRunner {
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         opts: &AudioExtractOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -34,7 +37,8 @@ impl FFmpegRunner {
         Self::spawn_blocking("extract_audio", move || {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, true)?;
 
-            let result = Self::extract_audio_sync(&effective_input, &output, &opts);
+            let result =
+                Self::extract_audio_sync(&effective_input, &output, &opts, progress_fn.as_deref());
 
             if let Some(ref temp) = salvage_temp {
                 let _ = std::fs::remove_file(temp);
@@ -46,18 +50,27 @@ impl FFmpegRunner {
     }
 
     /// Extract audio synchronously (dispatches to copy or transcode).
-    fn extract_audio_sync(input: &Path, output: &Path, opts: &AudioExtractOptions) -> Result<()> {
+    fn extract_audio_sync(
+        input: &Path,
+        output: &Path,
+        opts: &AudioExtractOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> Result<()> {
         if opts.copy {
-            Self::extract_audio_copy_sync(input, output)
+            Self::extract_audio_copy_sync(input, output, progress_fn)
         } else {
-            Self::extract_audio_transcode_sync(input, output, opts)
+            Self::extract_audio_transcode_sync(input, output, opts, progress_fn)
         }
     }
 
     /// Extract audio by stream copy (no re-encoding).
     ///
     /// Maps only the best audio stream from input to output without transcoding.
-    fn extract_audio_copy_sync(input: &Path, output: &Path) -> Result<()> {
+    fn extract_audio_copy_sync(
+        input: &Path,
+        output: &Path,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> Result<()> {
         ensure_init()?;
 
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
@@ -65,6 +78,8 @@ impl FFmpegRunner {
                 message: format!("failed to open input {}: {e}", input.display()),
             }
         })?;
+
+        let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
         let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
             PostProcessError::FFmpegLibraryError {
@@ -110,6 +125,9 @@ impl FFmpegRunner {
                 message: format!("failed to write output header: {e}"),
             })?;
 
+        let mut last_progress = Instant::now();
+        let throttle = Duration::from_millis(100);
+
         // Copy only audio packets
         for result in ictx.packets() {
             let (stream, mut packet) =
@@ -118,6 +136,18 @@ impl FFmpegRunner {
                 })?;
             if stream.index() != ist_index {
                 continue;
+            }
+            // PTS-based progress
+            if let Some(ref progress) = progress_fn {
+                if input_duration_us > 0 && last_progress.elapsed() >= throttle {
+                    if let Some(pts) = packet.pts() {
+                        let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
+                            / i64::from(ist_time_base.denominator());
+                        let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                        progress(frac);
+                        last_progress = Instant::now();
+                    }
+                }
             }
             let ost_time_base = octx
                 .stream(0)
@@ -131,6 +161,10 @@ impl FFmpegRunner {
                     message: format!("failed to write packet: {e}"),
                 }
             })?;
+        }
+
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
         }
 
         octx.write_trailer()
@@ -150,6 +184,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         opts: &AudioExtractOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
 
@@ -159,6 +194,8 @@ impl FFmpegRunner {
                 message: format!("failed to open input {}: {e}", input.display()),
             }
         })?;
+
+        let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
         let ist_index = ictx
             .streams()
@@ -339,6 +376,9 @@ impl FFmpegRunner {
             ..Default::default()
         };
 
+        let mut last_progress = Instant::now();
+        let progress_throttle = Duration::from_millis(100);
+
         // Transcode loop: read -> decode -> filter -> encode -> write
         for result in ictx.packets() {
             let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
@@ -346,6 +386,18 @@ impl FFmpegRunner {
             })?;
             if stream.index() != ist_index {
                 continue;
+            }
+            // PTS-based progress
+            if let Some(ref progress) = progress_fn {
+                if input_duration_us > 0 && last_progress.elapsed() >= progress_throttle {
+                    if let Some(pts) = packet.pts() {
+                        let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
+                            / i64::from(ist_time_base.denominator());
+                        let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                        progress(frac);
+                        last_progress = Instant::now();
+                    }
+                }
             }
             decoder.send_packet(&packet)?;
             Self::receive_and_process_audio(
@@ -357,6 +409,10 @@ impl FFmpegRunner {
                 enc_time_base,
                 &mut timing,
             )?;
+        }
+        // Emit final 1.0 on completion
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
         }
 
         // Flush decoder

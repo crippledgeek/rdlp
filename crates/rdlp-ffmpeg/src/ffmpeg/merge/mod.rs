@@ -8,6 +8,8 @@ mod mkv_raw_ffi;
 mod raw_ffi_helpers;
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use log::info;
 
@@ -29,13 +31,20 @@ impl FFmpegRunner {
         audio_input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         opts: &RemuxOptions,
+        progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     ) -> Result<()> {
         let video_input = video_input.as_ref().to_path_buf();
         let audio_input = audio_input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
         Self::spawn_blocking("merge", move || {
-            Self::merge_sync(&video_input, &audio_input, &output, &opts)
+            Self::merge_sync(
+                &video_input,
+                &audio_input,
+                &output,
+                &opts,
+                progress_fn.as_deref(),
+            )
         })
         .await
     }
@@ -46,6 +55,7 @@ impl FFmpegRunner {
         audio_input: &Path,
         output: &Path,
         opts: &RemuxOptions,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
 
@@ -55,7 +65,7 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Self::merge_mkv_raw_ffi(video_input, audio_input, output);
+            return Self::merge_mkv_raw_ffi(video_input, audio_input, output, progress_fn);
         }
 
         let mut ictx_video = ffmpeg_the_third::format::input(video_input).map_err(|e| {
@@ -150,6 +160,17 @@ impl FFmpegRunner {
 
         info!("Merge: video=stream#{video_ost_index}, audio=stream#{audio_ost_index} (DEFAULT)");
 
+        // Byte-based progress: sum input file sizes before starting
+        let total_input_bytes = std::fs::metadata(video_input)
+            .map(|m| m.len())
+            .unwrap_or(0)
+            + std::fs::metadata(audio_input)
+                .map(|m| m.len())
+                .unwrap_or(0);
+        let mut bytes_written: u64 = 0;
+        let mut last_progress = Instant::now();
+        let throttle = Duration::from_millis(100);
+
         // Two-way timestamp-interleaved merge: read packets from both inputs
         // and write them in DTS order to avoid ENOMEM from buffering an entire
         // stream while waiting for the other.
@@ -183,6 +204,7 @@ impl FFmpegRunner {
                 match (have_video, have_audio) {
                     (false, false) => break,
                     (true, false) => {
+                        bytes_written += vpkt.size as u64;
                         rescale_and_write_raw(
                             &mut vpkt,
                             in_video_stream,
@@ -193,6 +215,7 @@ impl FFmpegRunner {
                         have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
                     }
                     (false, true) => {
+                        bytes_written += apkt.size as u64;
                         rescale_and_write_raw(
                             &mut apkt,
                             in_audio_stream,
@@ -218,6 +241,7 @@ impl FFmpegRunner {
                         };
 
                         if write_video {
+                            bytes_written += vpkt.size as u64;
                             rescale_and_write_raw(
                                 &mut vpkt,
                                 in_video_stream,
@@ -227,6 +251,7 @@ impl FFmpegRunner {
                             ffi::av_packet_unref(&mut vpkt);
                             have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
                         } else {
+                            bytes_written += apkt.size as u64;
                             rescale_and_write_raw(
                                 &mut apkt,
                                 in_audio_stream,
@@ -238,11 +263,26 @@ impl FFmpegRunner {
                         }
                     }
                 }
+
+                // Report byte-based progress (throttled to 10 updates/sec)
+                if let Some(ref progress) = progress_fn {
+                    if total_input_bytes > 0 && last_progress.elapsed() >= throttle {
+                        let frac =
+                            (bytes_written as f64 / total_input_bytes as f64).clamp(0.0, 1.0);
+                        progress(frac);
+                        last_progress = Instant::now();
+                    }
+                }
             }
 
             // Clean up any unreleased packets
             ffi::av_packet_unref(&mut vpkt);
             ffi::av_packet_unref(&mut apkt);
+        }
+
+        // Emit final 1.0 on completion
+        if let Some(ref progress) = progress_fn {
+            progress(1.0);
         }
 
         octx.write_trailer()
