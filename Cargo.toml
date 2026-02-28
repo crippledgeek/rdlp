@@ -72,7 +72,12 @@ boa_engine = "0.21"
 # CLI
 clap = { version = "4.5", features = ["derive", "cargo"] }
 indicatif = "0.18.3"
-dialoguer = "0.12.0"
+inquire = "0.9"
+
+# Table rendering
+tabled = "0.20"
+console = "0.16"
+terminal_size = "0.4"
 
 # Logging
 log = { version = "0.4", features = ["kv"] }

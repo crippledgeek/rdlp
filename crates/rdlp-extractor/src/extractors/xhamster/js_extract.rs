@@ -500,8 +500,7 @@ mod tests {
     async fn test_full_extraction_player_js_unavailable() {
         let engine = BoaJsEngine::new();
         // Use an HLS URL — standard direct URLs are CDN-blocked and skipped
-        let encrypted =
-            encrypt_test_vector(2, 42, "https://cdn.example.com/media=hls4/video.m3u8");
+        let encrypted = encrypt_test_vector(2, 42, "https://cdn.example.com/media=hls4/video.m3u8");
 
         let initials = serde_json::json!({
             "videoModel": {
@@ -651,7 +650,10 @@ mod tests {
         // Hex segment shorter than 12 chars — should not match the URL pattern
         let url = "https://cdn.example.com/abcd1234/path.m3u8";
         let result = try_bundled_decrypt(url, &engine).await;
-        assert!(result.is_none(), "Short hex in URL should not be deciphered");
+        assert!(
+            result.is_none(),
+            "Short hex in URL should not be deciphered"
+        );
     }
 
     #[tokio::test]

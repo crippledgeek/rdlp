@@ -1,17 +1,17 @@
-//! CLI-specific interactive callback using dialoguer.
+//! CLI-specific interactive callback using inquire.
 //!
 //! [`DialoguerCallback`] implements [`InteractiveCallback`] from `rdlp-api`
-//! using dialoguer's `Select`, `MultiSelect`, and `Confirm` widgets.
+//! using inquire's `Select`, `MultiSelect`, and `Confirm` widgets.
 //! All blocking terminal I/O is wrapped in `spawn_blocking` to avoid
 //! blocking the Tokio runtime.
 
 use async_trait::async_trait;
-use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
 use log::info;
 use rdlp_api::InteractiveCallback;
 use rdlp_core::{Format, InfoDict};
+use rdlp_table::{ColorMode, TableOpts, render_table_and_rows};
 
-/// CLI interactive callback backed by dialoguer.
+/// CLI interactive callback backed by inquire.
 pub struct DialoguerCallback;
 
 #[async_trait]
@@ -21,44 +21,31 @@ impl InteractiveCallback for DialoguerCallback {
             return None;
         }
 
-        // Warn about live streams
         if info.is_live.unwrap_or(false) {
             info!("LIVE stream detected — download may be incomplete");
         }
 
-        // Compute dynamic size column width
-        let size_width = formats
-            .iter()
-            .map(|f| f.size_text().len())
-            .max()
-            .unwrap_or(4)
-            .max(4);
+        let opts = TableOpts {
+            width_override: None,
+            color: ColorMode::Auto,
+            compact: None,
+        };
 
-        // Build menu items with format details
-        let items: Vec<String> = formats.iter().map(|f| f.table_row(size_width)).collect();
+        let refs: Vec<&Format> = formats.iter().collect();
 
-        info!("Available formats:");
-        info!(
-            "{:<qw$} | {:<rw$} | {:<size_width$} | {:<tw$} | Codecs",
-            "Quality",
-            "Resolution",
-            "Size",
-            "Type",
-            qw = rdlp_table::QUALITY_WIDTH,
-            rw = rdlp_table::RESOLUTION_WIDTH,
-            tw = rdlp_table::TYPE_WIDTH,
-        );
-        info!("{}", "-".repeat(rdlp_table::separator_width(size_width)));
+        // Compute budget once for both header line and menu items.
+        let (header, items) = render_table_and_rows(&refs, &opts);
 
         tokio::task::spawn_blocking(move || {
-            Select::with_theme(&ColorfulTheme::default())
-                .with_prompt("Select a format to download (ESC to cancel)")
-                .items(&items)
-                .default(0)
-                .interact_opt()
+            // Print header line above the select menu so column names are visible.
+            eprintln!("{header}");
+            inquire::Select::new("Select a format:", items)
+                .raw_prompt_skippable()
+                .ok()
+                .flatten()
+                .map(|opt| opt.index)
         })
         .await
-        .ok()?
         .ok()?
     }
 
@@ -68,19 +55,24 @@ impl InteractiveCallback for DialoguerCallback {
         }
 
         let items_owned: Vec<String> = items.to_vec();
-        let defaults_owned: Vec<bool> = defaults.to_vec();
+        let default_indices: Vec<usize> = defaults
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &d)| if d { Some(i) } else { None })
+            .collect();
 
         tokio::task::spawn_blocking(move || {
-            MultiSelect::with_theme(&ColorfulTheme::default())
-                .with_prompt(
-                    "Select subtitle languages (SPACE to toggle, ENTER to confirm, ESC to cancel)",
-                )
-                .items(&items_owned)
-                .defaults(&defaults_owned)
-                .interact_opt()
+            inquire::MultiSelect::new(
+                "Select subtitle languages (SPACE to toggle, ENTER to confirm):",
+                items_owned,
+            )
+            .with_default(&default_indices)
+            .raw_prompt_skippable()
+            .ok()
+            .flatten()
+            .map(|selected| selected.iter().map(|opt| opt.index).collect())
         })
         .await
-        .ok()?
         .ok()?
     }
 
@@ -92,14 +84,13 @@ impl InteractiveCallback for DialoguerCallback {
         let options_owned: Vec<String> = options.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            Select::with_theme(&ColorfulTheme::default())
-                .with_prompt("Select audio type (ESC to skip)")
-                .items(&options_owned)
-                .default(0)
-                .interact_opt()
+            inquire::Select::new("Select audio type:", options_owned)
+                .raw_prompt_skippable()
+                .ok()
+                .flatten()
+                .map(|opt| opt.index)
         })
         .await
-        .ok()?
         .ok()?
     }
 
@@ -107,10 +98,9 @@ impl InteractiveCallback for DialoguerCallback {
         let prompt_owned = prompt.to_string();
 
         tokio::task::spawn_blocking(move || {
-            Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(prompt_owned)
-                .default(true)
-                .interact()
+            inquire::Confirm::new(&prompt_owned)
+                .with_default(true)
+                .prompt()
                 .unwrap_or(false)
         })
         .await

@@ -1,10 +1,9 @@
 //! Interactive format and container selection menus.
 //!
-//! Provides dialoguer-based selection prompts for remux containers,
+//! Provides inquire-based selection prompts for remux containers,
 //! audio formats, and video recode formats.
 
 use anyhow::Result;
-use dialoguer::{Select, theme::ColorfulTheme};
 use rdlp_core::{AudioFormat, ContainerFormat};
 
 /// Interactive remux container selection
@@ -59,13 +58,10 @@ pub(crate) fn select_remux_container() -> Result<Option<ContainerFormat>> {
         .map(|(fmt, desc)| format!("{:<6} {desc}", fmt.as_ext()))
         .collect();
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select remux container (ESC to cancel)")
-        .items(&items)
-        .default(0)
-        .interact_opt()?;
+    let selection =
+        inquire::Select::new("Select remux container:", items).raw_prompt_skippable()?;
 
-    Ok(selection.map(|idx| containers[idx].0))
+    Ok(selection.map(|opt| containers[opt.index].0))
 }
 
 /// Interactive audio format selection
@@ -92,13 +88,9 @@ pub(crate) fn select_audio_format() -> Result<Option<AudioFormat>> {
         .map(|(fmt, desc)| format!("{:<8} {desc}", fmt.as_ext()))
         .collect();
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select audio format (ESC to cancel)")
-        .items(&items)
-        .default(0)
-        .interact_opt()?;
+    let selection = inquire::Select::new("Select audio format:", items).raw_prompt_skippable()?;
 
-    Ok(selection.map(|idx| formats[idx].0))
+    Ok(selection.map(|opt| formats[opt.index].0))
 }
 
 /// Interactive video recode format selection
@@ -121,11 +113,7 @@ pub(crate) fn select_recode_video() -> Result<Option<ContainerFormat>> {
         .map(|(fmt, codec, desc)| format!("{:<6} [{codec}] {desc}", fmt.as_ext()))
         .collect();
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select video format (ESC to cancel)")
-        .items(&items)
-        .default(0)
-        .interact_opt()?;
+    let selection = inquire::Select::new("Select video format:", items).raw_prompt_skippable()?;
 
-    Ok(selection.map(|idx| formats[idx].0))
+    Ok(selection.map(|opt| formats[opt.index].0))
 }

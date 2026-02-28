@@ -1,6 +1,6 @@
 //! Callback trait for interactive user input.
 //!
-//! CLI provides a `dialoguer`-based implementation. Tauri/Leptos
+//! CLI provides an `inquire`-based implementation. Tauri/Leptos
 //! provide their own. The orchestrator calls these methods when
 //! interactive mode is enabled.
 

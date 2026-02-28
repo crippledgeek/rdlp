@@ -1,9 +1,6 @@
 //! Display and table formatting methods for [`Format`].
 //!
-//! Contains the cached description builder, size text formatter,
-//! and the interactive selection table row renderer.
-
-use std::fmt::Write;
+//! Contains the cached description builder and size text formatter.
 
 use super::Format;
 
@@ -44,30 +41,32 @@ impl Format {
     }
 
     /// Returns the size column text for this format (e.g. `"837.9 MB"`, `"50:16 (754 seg)"`)
-    ///
-    /// Call this on every format to compute `max` width, then pass that to [`Self::table_row`].
     #[must_use]
     pub fn size_text(&self) -> String {
         if self.is_hls() {
-            let seg_count = self
-                .fragments
-                .as_ref()
-                .map(|f| f.len() as u64)
-                .or(self.filesize_approx);
+            let seg_count = self.fragments.as_ref().map(|f| f.len() as u64);
+            let size = self.filesize.or(self.filesize_approx);
+            let dur_str = self.duration.map(|dur| {
+                let mins = dur as u64 / 60;
+                let secs = dur as u64 % 60;
+                format!("{mins}:{secs:02}")
+            });
+            let size_str = size.map(|s| {
+                let mb = s as f64 / (1024.0 * 1024.0);
+                if mb >= 1024.0 {
+                    format!("{:.1} GB", mb / 1024.0)
+                } else {
+                    format!("{mb:.0} MB")
+                }
+            });
 
-            match (self.duration, seg_count) {
-                (Some(dur), Some(segs)) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    format!("{mins}:{secs:02} ({segs} seg)")
-                }
-                (Some(dur), None) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    format!("{mins}:{secs:02}")
-                }
-                (None, Some(segs)) => format!("{segs} segments"),
-                (None, None) => "HLS stream".to_string(),
+            match (dur_str, seg_count, size_str) {
+                (Some(d), Some(s), _) => format!("{d} ({s} seg)"),
+                (Some(d), None, Some(sz)) => format!("{d} (~{sz})"),
+                (Some(d), None, None) => d,
+                (None, Some(s), _) => format!("{s} segments"),
+                (None, None, Some(sz)) => format!("~{sz}"),
+                (None, None, None) => "HLS stream".to_string(),
             }
         } else if let Some(filesize) = self.filesize {
             let dur_suffix = self
@@ -88,97 +87,5 @@ impl Format {
         } else {
             "Unknown".to_string()
         }
-    }
-
-    /// Format as table row for interactive selection UI
-    ///
-    /// Returns a formatted string suitable for display in selection menus:
-    /// `"720p         | 1280x720   | 245.3 MB     | MP4    | h264/aac"`
-    ///
-    /// `size_width` controls the size column padding (use [`Self::size_text`] across
-    /// all formats to compute the appropriate value).
-    ///
-    /// Optimized to minimize heap allocations using pre-allocated buffer.
-    pub fn table_row(&self, size_width: usize) -> String {
-        // Pre-allocate buffer for typical row length (~80 chars)
-        let mut buf = String::with_capacity(80);
-
-        // Quality column: append fps when non-standard (e.g. "1080p60")
-        let quality_base = self.format_note.as_deref().unwrap_or("unknown");
-        let col_start = buf.len();
-        match self.fps {
-            Some(fps) if fps > 0.0 && (fps - 30.0).abs() > 1.0 => {
-                let _ = write!(buf, "{quality_base}{fps:.0}");
-                let col_len = buf.len() - col_start;
-                for _ in col_len..rdlp_table::QUALITY_WIDTH {
-                    buf.push(' ');
-                }
-                buf.push_str(" | ");
-            }
-            _ => {
-                let _ = write!(buf, "{quality_base:<w$} | ", w = rdlp_table::QUALITY_WIDTH);
-            }
-        }
-
-        // Resolution: avoid intermediate String allocation
-        match (self.width, self.height) {
-            (Some(w), Some(h)) => {
-                let res_start = buf.len();
-                let _ = write!(buf, "{w}x{h}");
-                let res_len = buf.len() - res_start;
-                for _ in res_len..rdlp_table::RESOLUTION_WIDTH {
-                    buf.push(' ');
-                }
-            }
-            _ => {
-                let _ = write!(buf, "{:<w$}", "N/A", w = rdlp_table::RESOLUTION_WIDTH);
-            }
-        }
-        buf.push_str(" | ");
-
-        // Size column: write directly, pad to dynamic width
-        let size_start = buf.len();
-        buf.push_str(&self.size_text());
-        let size_len = buf.len() - size_start;
-        for _ in size_len..size_width {
-            buf.push(' ');
-        }
-        buf.push_str(" | ");
-
-        // Format type column: avoid to_uppercase() allocation for HLS
-        let format_start = buf.len();
-        if self.is_hls() {
-            buf.push_str("HLS");
-        } else {
-            // Write uppercase directly
-            for c in self.ext.chars() {
-                buf.push(c.to_ascii_uppercase());
-            }
-        }
-        let format_len = buf.len() - format_start;
-        for _ in format_len..rdlp_table::TYPE_WIDTH {
-            buf.push(' ');
-        }
-        buf.push_str(" | ");
-
-        // Codecs column: write directly
-        match (&self.vcodec, &self.acodec) {
-            (Some(v), Some(a)) => {
-                let _ = write!(buf, "{v}/{a}");
-            }
-            (Some(v), None) => {
-                let _ = write!(buf, "{v} (video only)");
-            }
-            (None, Some(a)) => {
-                let _ = write!(buf, "{a} (audio only)");
-            }
-            (None, None) => buf.push_str("Unknown"),
-        }
-
-        if self.has_drm.unwrap_or(false) {
-            buf.push_str(" [DRM]");
-        }
-
-        buf
     }
 }
