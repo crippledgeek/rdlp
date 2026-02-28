@@ -1,7 +1,35 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::{AudioFormat, ContainerFormat, InfoDict, Result};
+
+/// Callback for reporting post-processing progress.
+///
+/// Implementations receive progress updates (0.0–1.0) during FFmpeg
+/// post-processing stages. Used to bridge synchronous FFmpeg loops
+/// to the async event system.
+///
+/// # Arguments
+/// * `progress` - Progress fraction in \[0.0, 1.0\]
+///
+/// # Example
+///
+/// ```rust
+/// use rdlp_core::PostProcessCallback;
+/// use std::sync::Arc;
+///
+/// struct PrintProgress;
+/// impl PostProcessCallback for PrintProgress {
+///     fn on_progress(&self, progress: f64) {
+///         println!("Progress: {:.0}%", progress * 100.0);
+///     }
+/// }
+/// ```
+pub trait PostProcessCallback: Send + Sync {
+    /// Report progress as a fraction in \[0.0, 1.0\].
+    fn on_progress(&self, progress: f64);
+}
 
 /// Post-processing operations on downloaded files
 ///
@@ -18,6 +46,7 @@ pub trait PostProcessor: Send + Sync {
     /// * `info` - Video metadata
     /// * `files` - List of downloaded file paths to process
     /// * `config` - Post-processing configuration
+    /// * `callback` - Optional progress callback (0.0–1.0) for heavy operations
     ///
     /// # Returns
     /// Updated InfoDict and potentially new file paths after processing
@@ -26,6 +55,7 @@ pub trait PostProcessor: Send + Sync {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult>;
 
     /// Check if this post-processor should run based on config
