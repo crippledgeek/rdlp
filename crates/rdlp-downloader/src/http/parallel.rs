@@ -281,8 +281,6 @@ impl HttpDownloader {
         let buffer_factor = self.config.concurrent_fragments * 2;
 
         let results: Vec<(u64, PathBuf, u64)> = {
-            let ctrl_clone = controller.clone();
-            let sem_clone = sem.clone();
             let downloader = self.clone();
             let url_arc = url_shared.clone();
             let progress = progress_counter.clone();
@@ -290,65 +288,62 @@ impl HttpDownloader {
             let filename_owned = filename.to_string();
             let suffix_owned = suffix.to_string();
 
-            stream::unfold((ctrl_clone, 0u64), move |(ctrl, chunk_id)| {
-                let ctrl2 = ctrl.clone();
-                async move {
-                    ctrl.next_chunk()
-                        .map(|chunk| ((chunk_id, chunk), (ctrl2, chunk_id + 1)))
-                }
-            })
-            .map(move |(chunk_id, chunk)| {
-                let permit_future = {
-                    let sem = sem_clone.clone();
-                    async move {
-                        sem.acquire_owned()
-                            .await
-                            .map_err(|_| RdlpError::Download("Semaphore closed".to_string()))
-                    }
-                };
-
+            stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
+                let sem = sem.clone();
                 let downloader = downloader.clone();
                 let url = url_arc.clone();
                 let progress = progress.clone();
-                let controller = controller.clone();
+                let ctrl_report = ctrl.clone();
                 let chunk_path = temp_dir_owned.join(format!(
                     "{}.{}.{}{}",
                     filename_owned, download_id, suffix_owned, chunk_id
                 ));
+                let ctrl_next = ctrl.clone();
 
                 async move {
-                    let _permit = permit_future.await?;
-                    let start_time = Instant::now();
-                    let abs_start = byte_offset + chunk.start;
-                    // end is exclusive in ChunkRequest, but HTTP Range is inclusive
-                    let abs_end = byte_offset + chunk.end - 1;
+                    let chunk = match ctrl.next_chunk() {
+                        Some(c) => c,
+                        None => return Ok(None),
+                    };
 
-                    let result = downloader
-                        .download_range_with_progress(
-                            &url,
-                            abs_start,
-                            abs_end,
-                            &chunk_path,
-                            Some(progress),
-                        )
-                        .await;
+                    let download_fut = async move {
+                        let _permit = sem.acquire_owned().await.map_err(|_| {
+                            RdlpError::Download("Semaphore closed".to_string())
+                        })?;
+                        let start_time = Instant::now();
+                        let abs_start = byte_offset + chunk.start;
+                        // end is exclusive in ChunkRequest, but HTTP Range is inclusive
+                        let abs_end = byte_offset + chunk.end - 1;
 
-                    match &result {
-                        Ok(bytes) => {
-                            controller.report_chunk_complete(*bytes, start_time.elapsed());
+                        let result = downloader
+                            .download_range_with_progress(
+                                &url,
+                                abs_start,
+                                abs_end,
+                                &chunk_path,
+                                Some(progress),
+                            )
+                            .await;
+
+                        match &result {
+                            Ok(bytes) => {
+                                ctrl_report
+                                    .report_chunk_complete(*bytes, start_time.elapsed());
+                            }
+                            Err(e) => {
+                                error!("Adaptive chunk {chunk_id} failed: {e}");
+                            }
                         }
-                        Err(e) => {
-                            error!("Adaptive chunk {chunk_id} failed: {e}");
-                        }
-                    }
 
-                    result.map(|bytes| (chunk_id, chunk_path, bytes))
+                        result.map(|bytes| (chunk_id, chunk_path, bytes))
+                    };
+
+                    Ok(Some((download_fut, (ctrl_next, chunk_id + 1))))
                 }
             })
-            .buffer_unordered(buffer_factor)
+            .try_buffer_unordered(buffer_factor)
             .try_collect()
-            .await
-            .map_err(|e: rdlp_core::RdlpError| e)?
+            .await?
         };
 
         // Sort by chunk_id to ensure correct merge order.
