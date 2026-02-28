@@ -6,10 +6,11 @@
 //! video and audio separately (like HLS/DASH streams).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use rdlp_ffmpeg::RemuxOptions;
 
@@ -77,6 +78,7 @@ impl PostProcessor for FFmpegMerger {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.len() < 2 {
             // Nothing to merge
@@ -127,8 +129,12 @@ impl PostProcessor for FFmpegMerger {
             faststart: matches!(output_format, "mp4" | "mov"),
             ..Default::default()
         };
+        let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac| cb.on_progress(frac))
+            });
         self.ffmpeg
-            .merge(video_file, audio_file, &output_path, &opts)
+            .merge(video_file, audio_file, &output_path, &opts, progress_fn)
             .await?;
 
         debug!(output:? = output_path.display(); "Merged output");

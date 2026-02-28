@@ -6,10 +6,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use rdlp_ffmpeg::ChapterEntry;
 
@@ -134,6 +135,7 @@ impl PostProcessor for FFmpegMetadata {
         info: &InfoDict,
         files: Vec<PathBuf>,
         _config: &PostProcessConfig,
+        _callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));

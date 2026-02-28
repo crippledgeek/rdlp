@@ -127,7 +127,7 @@ impl Orchestrator {
 
         // Run the full post-processing pipeline
         match registry
-            .process(info, result_files.clone(), &pp_config)
+            .process(info, result_files.clone(), &pp_config, None)
             .await
         {
             Ok(result) => {

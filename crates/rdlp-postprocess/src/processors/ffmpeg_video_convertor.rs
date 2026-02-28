@@ -4,10 +4,11 @@
 //! containers using `ffmpeg-the-third` library bindings (no CLI process spawning).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 use rdlp_ffmpeg::PostProcessError;
 use rdlp_ffmpeg::VideoConvertOptions;
@@ -164,6 +165,7 @@ impl PostProcessor for FFmpegVideoConvertor {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -226,8 +228,12 @@ impl PostProcessor for FFmpegVideoConvertor {
         let opts = Self::build_convert_options(target_format, can_remux);
 
         // Convert via library bindings
+        let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
+            callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                Arc::new(move |frac| cb.on_progress(frac))
+            });
         self.ffmpeg
-            .convert_video(input_file, &output_path, &opts)
+            .convert_video(input_file, &output_path, &opts, progress_fn)
             .await?;
 
         info!(output:? = output_path.display(); "Converted");

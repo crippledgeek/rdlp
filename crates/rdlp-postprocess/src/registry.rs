@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, trace, warn};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
+use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor};
 
 use crate::processors::*;
 use rdlp_ffmpeg::error::Result;
@@ -48,11 +48,15 @@ use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 #[async_trait]
 pub trait PostProcessorRegistryTrait: Send + Sync {
     /// Process files through all applicable post-processors.
+    ///
+    /// The `callback` is called by each processor with progress in `[0.0, 1.0]`.
+    /// It is reset per-processor (each starts at 0.0 and completes at 1.0).
     async fn process(
         &self,
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> anyhow::Result<PostProcessResult>;
 
     /// Remux a file with faststart enabled (stream copy, no re-encoding).
@@ -164,6 +168,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> anyhow::Result<PostProcessResult> {
         let mut current_info = info.clone();
         let mut current_files = files;
@@ -180,7 +185,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             info!(name:? = processor.name(); "Running post-processor");
 
             match processor
-                .process(&current_info, current_files.clone(), config)
+                .process(&current_info, current_files.clone(), config, callback.clone())
                 .await
             {
                 Ok(result) => {
@@ -230,7 +235,7 @@ impl PostProcessorRegistryTrait for PostProcessorRegistry {
             faststart: true,
             ..Default::default()
         };
-        self.ffmpeg.remux(input, output, &opts).await?;
+        self.ffmpeg.remux(input, output, &opts, None).await?;
         Ok(())
     }
 

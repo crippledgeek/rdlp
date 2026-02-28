@@ -10,10 +10,11 @@
 //! `{stem}.{lang}.{ext}` where `ext` is one of: srt, vtt, ass, ssa, lrc.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
 
 /// Subtitle file extensions to search for.
 const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
@@ -178,6 +179,7 @@ impl PostProcessor for EmbedSubtitles {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
+        _callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
