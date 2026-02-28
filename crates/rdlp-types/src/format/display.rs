@@ -44,25 +44,29 @@ impl Format {
     #[must_use]
     pub fn size_text(&self) -> String {
         if self.is_hls() {
-            let seg_count = self
-                .fragments
-                .as_ref()
-                .map(|f| f.len() as u64)
-                .or(self.filesize_approx);
+            let seg_count = self.fragments.as_ref().map(|f| f.len() as u64);
+            let size = self.filesize.or(self.filesize_approx);
+            let dur_str = self.duration.map(|dur| {
+                let mins = dur as u64 / 60;
+                let secs = dur as u64 % 60;
+                format!("{mins}:{secs:02}")
+            });
+            let size_str = size.map(|s| {
+                let mb = s as f64 / (1024.0 * 1024.0);
+                if mb >= 1024.0 {
+                    format!("{:.1} GB", mb / 1024.0)
+                } else {
+                    format!("{mb:.0} MB")
+                }
+            });
 
-            match (self.duration, seg_count) {
-                (Some(dur), Some(segs)) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    format!("{mins}:{secs:02} ({segs} seg)")
-                }
-                (Some(dur), None) => {
-                    let mins = dur as u64 / 60;
-                    let secs = dur as u64 % 60;
-                    format!("{mins}:{secs:02}")
-                }
-                (None, Some(segs)) => format!("{segs} segments"),
-                (None, None) => "HLS stream".to_string(),
+            match (dur_str, seg_count, size_str) {
+                (Some(d), Some(s), _) => format!("{d} ({s} seg)"),
+                (Some(d), None, Some(sz)) => format!("{d} (~{sz})"),
+                (Some(d), None, None) => d,
+                (None, Some(s), _) => format!("{s} segments"),
+                (None, None, Some(sz)) => format!("~{sz}"),
+                (None, None, None) => "HLS stream".to_string(),
             }
         } else if let Some(filesize) = self.filesize {
             let dur_suffix = self
