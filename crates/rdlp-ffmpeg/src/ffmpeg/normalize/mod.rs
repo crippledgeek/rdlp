@@ -55,18 +55,12 @@ impl FFmpegRunner {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, opts.salvage)?;
 
             let result = match opts.mode {
-                AudioNormMode::Peak => Self::normalize_peak_sync(
-                    &effective_input,
-                    &output,
-                    &opts,
-                    progress_fn.clone(),
-                ),
-                AudioNormMode::Loudnorm => Self::normalize_loudnorm_sync(
-                    &effective_input,
-                    &output,
-                    &opts,
-                    progress_fn,
-                ),
+                AudioNormMode::Peak => {
+                    Self::normalize_peak_sync(&effective_input, &output, &opts, progress_fn.clone())
+                }
+                AudioNormMode::Loudnorm => {
+                    Self::normalize_loudnorm_sync(&effective_input, &output, &opts, progress_fn)
+                }
             };
 
             // Clean up salvage temp file regardless of success/failure
@@ -112,13 +106,7 @@ impl FFmpegRunner {
             progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
                 Arc::new(move |frac: f64| p(0.3 + frac * 0.7))
             });
-        Self::apply_peak_gain_sync(
-            input,
-            output,
-            &analysis,
-            opts,
-            encode_progress.as_deref(),
-        )
+        Self::apply_peak_gain_sync(input, output, &analysis, opts, encode_progress.as_deref())
     }
 
     /// EBU R128 loudnorm two-pass normalization.

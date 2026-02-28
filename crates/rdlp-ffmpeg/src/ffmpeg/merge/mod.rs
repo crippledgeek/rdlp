@@ -161,12 +161,8 @@ impl FFmpegRunner {
         info!("Merge: video=stream#{video_ost_index}, audio=stream#{audio_ost_index} (DEFAULT)");
 
         // Byte-based progress: sum input file sizes before starting
-        let total_input_bytes = std::fs::metadata(video_input)
-            .map(|m| m.len())
-            .unwrap_or(0)
-            + std::fs::metadata(audio_input)
-                .map(|m| m.len())
-                .unwrap_or(0);
+        let total_input_bytes = std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
+            + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0);
         let mut bytes_written: u64 = 0;
         let mut last_progress = Instant::now();
         let throttle = Duration::from_millis(100);
@@ -265,13 +261,13 @@ impl FFmpegRunner {
                 }
 
                 // Report byte-based progress (throttled to 10 updates/sec)
-                if let Some(ref progress) = progress_fn {
-                    if total_input_bytes > 0 && last_progress.elapsed() >= throttle {
-                        let frac =
-                            (bytes_written as f64 / total_input_bytes as f64).clamp(0.0, 1.0);
-                        progress(frac);
-                        last_progress = Instant::now();
-                    }
+                if let Some(ref progress) = progress_fn
+                    && total_input_bytes > 0
+                    && last_progress.elapsed() >= throttle
+                {
+                    let frac = (bytes_written as f64 / total_input_bytes as f64).clamp(0.0, 1.0);
+                    progress(frac);
+                    last_progress = Instant::now();
                 }
             }
 

@@ -4,9 +4,50 @@
 
 use super::{Orchestrator, Result};
 use crate::events::Event;
+use crate::handle::DownloadId;
 use log::{debug, warn};
-use rdlp_core::PostProcessConfig;
+use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory, PostProcessConfig};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+/// Bridges post-processor progress into [`Event::PostProcessProgress`] events.
+///
+/// One instance is created per post-processing stage. Progress values in
+/// `[0.0, 1.0]` are forwarded to the event channel via `try_send`.
+struct PostProcessBridge {
+    event_tx: mpsc::Sender<Event>,
+    download_id: DownloadId,
+    stage: String,
+}
+
+impl PostProcessCallback for PostProcessBridge {
+    fn on_progress(&self, progress: f64) {
+        let _ = self.event_tx.try_send(Event::PostProcessProgress {
+            id: self.download_id,
+            stage: self.stage.clone(),
+            progress,
+        });
+    }
+}
+
+/// Build a [`PostProcessCallbackFactory`] that emits progress events for the
+/// given download.
+///
+/// The factory is called once per post-processing stage with the stage name,
+/// returning a fresh bridge for that stage.
+fn make_callback_factory(
+    event_tx: mpsc::Sender<Event>,
+    download_id: DownloadId,
+) -> PostProcessCallbackFactory {
+    Arc::new(move |stage_name: &str| -> Arc<dyn PostProcessCallback> {
+        Arc::new(PostProcessBridge {
+            event_tx: event_tx.clone(),
+            download_id,
+            stage: stage_name.to_string(),
+        })
+    })
+}
 
 impl Orchestrator {
     /// Convert Config to PostProcessConfig
@@ -125,9 +166,15 @@ impl Orchestrator {
             files.clone()
         };
 
+        // Build a per-stage progress callback factory for the pipeline.
+        let callback_factory = Some(make_callback_factory(
+            self.event_tx.clone(),
+            self.download_id,
+        ));
+
         // Run the full post-processing pipeline
         match registry
-            .process(info, result_files.clone(), &pp_config, None)
+            .process(info, result_files.clone(), &pp_config, callback_factory)
             .await
         {
             Ok(result) => {

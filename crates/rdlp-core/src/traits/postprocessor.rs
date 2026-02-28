@@ -77,6 +77,14 @@ pub trait PostProcessor: Send + Sync {
     }
 }
 
+/// Factory for creating per-stage post-processing callbacks.
+///
+/// Receives the processor/stage name and returns a fresh callback that
+/// will receive progress updates (0.0–1.0) for that specific stage.
+/// Used by the registry to create a callback for each processor run.
+pub type PostProcessCallbackFactory =
+    Arc<dyn Fn(&str) -> Arc<dyn PostProcessCallback> + Send + Sync>;
+
 /// Result of post-processing
 #[derive(Debug, Clone)]
 pub struct PostProcessResult {

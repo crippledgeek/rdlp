@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 
 use rdlp_ffmpeg::RemuxOptions;
 

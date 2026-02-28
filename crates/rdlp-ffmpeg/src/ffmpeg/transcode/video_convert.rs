@@ -295,18 +295,17 @@ impl FFmpegRunner {
 
             if ist_index == video_ist_index {
                 // PTS-based progress from video stream
-                if let Some(ref progress) = progress_fn {
-                    if input_duration_us > 0 && last_progress.elapsed() >= progress_throttle {
-                        if let Some(pts) = packet.pts() {
-                            let tb = video_ist_time_base;
-                            let pts_us = pts * i64::from(tb.numerator()) * 1_000_000
-                                / i64::from(tb.denominator());
-                            let frac =
-                                (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
-                            progress(frac);
-                            last_progress = Instant::now();
-                        }
-                    }
+                if let Some(ref progress) = progress_fn
+                    && input_duration_us > 0
+                    && last_progress.elapsed() >= progress_throttle
+                    && let Some(pts) = packet.pts()
+                {
+                    let tb = video_ist_time_base;
+                    let pts_us =
+                        pts * i64::from(tb.numerator()) * 1_000_000 / i64::from(tb.denominator());
+                    let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                    progress(frac);
+                    last_progress = Instant::now();
                 }
                 // Video: decode -> filter -> encode -> write
                 video_decoder.send_packet(&packet)?;

@@ -161,22 +161,17 @@ impl FFmpegRunner {
             let ost_idx = ost_idx as usize;
 
             // Report PTS-based progress (throttled to 10 updates/sec)
-            if let Some(ref progress) = progress_fn {
-                if input_duration_us > 0 {
-                    if let Some(pts) = packet.pts() {
-                        if last_progress.elapsed() >= throttle {
-                            let ist_tb = ist_time_bases[ist_index];
-                            let pts_us = pts
-                                * i64::from(ist_tb.numerator())
-                                * 1_000_000
-                                / i64::from(ist_tb.denominator());
-                            let frac =
-                                (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
-                            progress(frac);
-                            last_progress = Instant::now();
-                        }
-                    }
-                }
+            if let Some(ref progress) = progress_fn
+                && input_duration_us > 0
+                && let Some(pts) = packet.pts()
+                && last_progress.elapsed() >= throttle
+            {
+                let ist_tb = ist_time_bases[ist_index];
+                let pts_us = pts * i64::from(ist_tb.numerator()) * 1_000_000
+                    / i64::from(ist_tb.denominator());
+                let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                progress(frac);
+                last_progress = Instant::now();
             }
 
             // Apply PTS offset to normalize timestamps to start at 0
@@ -478,17 +473,19 @@ impl FFmpegRunner {
                 let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
 
                 // Report PTS-based progress using AV_TIME_BASE (throttled)
-                if let Some(ref progress) = progress_fn {
-                    if input_duration_us > 0
-                        && pkt.pts != ffi::AV_NOPTS_VALUE
-                        && last_progress_mkv.elapsed() >= throttle_mkv
-                    {
-                        let av_time_base = ffi::AVRational { num: 1, den: 1_000_000 };
-                        let pts_us = ffi::av_rescale_q(pkt.pts, (*in_stream).time_base, av_time_base);
-                        let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
-                        progress(frac);
-                        last_progress_mkv = Instant::now();
-                    }
+                if let Some(ref progress) = progress_fn
+                    && input_duration_us > 0
+                    && pkt.pts != ffi::AV_NOPTS_VALUE
+                    && last_progress_mkv.elapsed() >= throttle_mkv
+                {
+                    let av_time_base = ffi::AVRational {
+                        num: 1,
+                        den: 1_000_000,
+                    };
+                    let pts_us = ffi::av_rescale_q(pkt.pts, (*in_stream).time_base, av_time_base);
+                    let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                    progress(frac);
+                    last_progress_mkv = Instant::now();
                 }
 
                 // Guard against AV_NOPTS_VALUE before rescaling

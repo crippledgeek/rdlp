@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 use rdlp_ffmpeg::RemuxOptions;
 
 /// Supported thumbnail formats.
@@ -184,7 +186,11 @@ impl PostProcessor for EmbedThumbnail {
                 faststart: true,
                 ..Default::default()
             };
-            match self.ffmpeg.remux(media_file, &remuxed_path, &opts, None).await {
+            match self
+                .ffmpeg
+                .remux(media_file, &remuxed_path, &opts, None)
+                .await
+            {
                 Ok(()) => {
                     // Track original file as temp for cleanup
                     temp_files.push(media_file.clone());

@@ -138,16 +138,16 @@ impl FFmpegRunner {
                 continue;
             }
             // PTS-based progress
-            if let Some(ref progress) = progress_fn {
-                if input_duration_us > 0 && last_progress.elapsed() >= throttle {
-                    if let Some(pts) = packet.pts() {
-                        let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
-                            / i64::from(ist_time_base.denominator());
-                        let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
-                        progress(frac);
-                        last_progress = Instant::now();
-                    }
-                }
+            if let Some(ref progress) = progress_fn
+                && input_duration_us > 0
+                && last_progress.elapsed() >= throttle
+                && let Some(pts) = packet.pts()
+            {
+                let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
+                    / i64::from(ist_time_base.denominator());
+                let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                progress(frac);
+                last_progress = Instant::now();
             }
             let ost_time_base = octx
                 .stream(0)
@@ -388,16 +388,16 @@ impl FFmpegRunner {
                 continue;
             }
             // PTS-based progress
-            if let Some(ref progress) = progress_fn {
-                if input_duration_us > 0 && last_progress.elapsed() >= progress_throttle {
-                    if let Some(pts) = packet.pts() {
-                        let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
-                            / i64::from(ist_time_base.denominator());
-                        let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
-                        progress(frac);
-                        last_progress = Instant::now();
-                    }
-                }
+            if let Some(ref progress) = progress_fn
+                && input_duration_us > 0
+                && last_progress.elapsed() >= progress_throttle
+                && let Some(pts) = packet.pts()
+            {
+                let pts_us = pts * i64::from(ist_time_base.numerator()) * 1_000_000
+                    / i64::from(ist_time_base.denominator());
+                let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                progress(frac);
+                last_progress = Instant::now();
             }
             decoder.send_packet(&packet)?;
             Self::receive_and_process_audio(

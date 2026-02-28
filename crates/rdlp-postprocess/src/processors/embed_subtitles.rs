@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
+use rdlp_core::{
+    InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
+};
 
 /// Subtitle file extensions to search for.
 const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
