@@ -20,7 +20,7 @@ pub(crate) struct ResolvedInteractiveValues {
     pub remux_container: Option<ContainerFormat>,
 }
 
-/// Resolve interactive CLI values (dialoguer prompts) before config merge.
+/// Resolve interactive CLI values (inquire prompts) before config merge.
 ///
 /// Returns `None` values for fields that weren't set to "interactive".
 fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> {
