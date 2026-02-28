@@ -233,6 +233,15 @@ pub fn compute_budget(
     // Start with all columns, sorted by display order (preserving index).
     let mut candidates: Vec<(usize, &ColumnDef)> = columns.iter().enumerate().collect();
 
+    // Drop columns where ALL cells are empty (no data to show).
+    if !formats.is_empty() {
+        candidates.retain(|(_, col)| {
+            formats
+                .iter()
+                .any(|f| !((col.extract)(f)).is_empty())
+        });
+    }
+
     loop {
         let overhead = border_overhead(candidates.len(), compact);
         let min_total: usize =
@@ -297,7 +306,8 @@ pub fn compute_budget(
                 } else {
                     0
                 };
-                col.min_width + bonus
+                // Cap at natural width so extra space isn't wasted as padding.
+                (col.min_width + bonus).min(natural_widths[i]).max(col.min_width)
             })
             .collect()
     };
@@ -407,5 +417,43 @@ mod tests {
                 columns[idx].min_width
             );
         }
+    }
+
+    #[test]
+    fn test_empty_columns_hidden() {
+        // Format with no fps, abr, vbr, or note — those columns should be dropped.
+        let mut f = Format::new(
+            "id",
+            "https://example.com/video",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        f.format_note = Some("720p".into());
+        f.width = Some(1280);
+        f.height = Some(720);
+        f.vcodec = Some("h264".into());
+        f.acodec = Some("aac".into());
+        // fps, abr, vbr not set → extract returns empty string
+        // dynamic_range, language not set → extract_note returns empty string
+
+        let columns = all_columns();
+        let budget = compute_budget(&columns, 120, false, &[&f]);
+        let selected: Vec<&str> = budget
+            .selected_indices
+            .iter()
+            .map(|&i| columns[i].header)
+            .collect();
+
+        // Core + Size + Codecs should be present.
+        assert!(selected.contains(&"Quality"));
+        assert!(selected.contains(&"Resolution"));
+        assert!(selected.contains(&"Type"));
+        assert!(selected.contains(&"Codecs"));
+
+        // All-empty columns should be hidden.
+        assert!(!selected.contains(&"FPS"));
+        assert!(!selected.contains(&"ABR"));
+        assert!(!selected.contains(&"VBR"));
+        assert!(!selected.contains(&"Note"));
     }
 }

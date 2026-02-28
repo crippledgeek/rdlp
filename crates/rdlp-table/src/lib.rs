@@ -181,19 +181,19 @@ pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> 
         .collect()
 }
 
-/// Render both the header table and per-row strings in a single pass.
+/// Render a header line and per-row strings in a single pass.
 ///
-/// Computes the column budget once and returns both the styled table
-/// (for display) and the per-row strings (for `inquire::Select` items).
-/// Use this instead of calling `render_formats_table` + `render_format_rows`
-/// separately when you need both outputs.
+/// Computes the column budget once and returns a header line (column names
+/// with a separator underline) plus per-row strings for `inquire::Select`.
+/// The header and rows use identical column widths and separators so they
+/// align visually.
 ///
 /// # Arguments
 /// * `formats` - Format references to display
 /// * `opts` - Rendering options (width, color, compact)
 ///
 /// # Returns
-/// A tuple of (table string, row strings). Both are empty if `formats` is empty.
+/// A tuple of (header string, row strings). Both are empty if `formats` is empty.
 #[must_use]
 pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, Vec<String>) {
     if formats.is_empty() {
@@ -209,11 +209,11 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
         return (String::new(), Vec::new());
     }
 
-    // Build the tabled grid.
-    let mut builder = Builder::new();
+    let sep = if compact { "  " } else { " │ " };
+    let dash_sep = if compact { "  " } else { "─┼─" };
 
-    // Header row.
-    let headers: Vec<String> = budget
+    // Header line: column names padded to budget widths.
+    let header_cells: Vec<String> = budget
         .selected_indices
         .iter()
         .enumerate()
@@ -222,38 +222,17 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
             truncate::pad_to_width(col.header, budget.widths[i], col.align == Align::Right)
         })
         .collect();
-    builder.push_record(headers);
+    let header_line = header_cells.join(sep);
 
-    // Data rows.
-    for fmt in formats {
-        let cells: Vec<String> = budget
-            .selected_indices
-            .iter()
-            .enumerate()
-            .map(|(i, &col_idx)| {
-                let col = &columns[col_idx];
-                let raw = (col.extract)(fmt);
-                truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
-            })
-            .collect();
-        builder.push_record(cells);
-    }
+    // Separator line: dashes matching each column width.
+    let dash_cells: Vec<String> = budget
+        .widths
+        .iter()
+        .map(|&w| "─".repeat(w))
+        .collect();
+    let dash_line = dash_cells.join(dash_sep);
 
-    let mut table = builder.build();
-
-    if compact {
-        table.with(Style::blank());
-    } else {
-        table.with(Style::rounded());
-    }
-
-    for (i, &col_idx) in budget.selected_indices.iter().enumerate() {
-        if columns[col_idx].align == Align::Right {
-            table.modify(Columns::one(i), Alignment::right());
-        }
-    }
-
-    let table_str = table.to_string();
+    let header_str = format!("{header_line}\n{dash_line}");
 
     // Build row strings using the same budget.
     let rows = formats
@@ -269,15 +248,11 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
                     truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
                 })
                 .collect();
-            if compact {
-                cells.join("  ")
-            } else {
-                cells.join(" │ ")
-            }
+            cells.join(sep)
         })
         .collect();
 
-    (table_str, rows)
+    (header_str, rows)
 }
 
 #[cfg(test)]
@@ -425,4 +400,5 @@ mod tests {
         let output = render_formats_table(&refs, &opts);
         assert!(output.contains('│') || output.contains('─'));
     }
+
 }

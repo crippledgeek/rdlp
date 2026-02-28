@@ -33,12 +33,13 @@ impl InteractiveCallback for DialoguerCallback {
 
         let refs: Vec<&Format> = formats.iter().collect();
 
-        // Compute budget once for both header table and menu items.
-        let (table, items) = render_table_and_rows(&refs, &opts);
-        info!("Available formats:\n{table}");
+        // Compute budget once for both header line and menu items.
+        let (header, items) = render_table_and_rows(&refs, &opts);
 
         tokio::task::spawn_blocking(move || {
-            inquire::Select::new("Select a format to download:", items)
+            // Print header line above the select menu so column names are visible.
+            eprintln!("{header}");
+            inquire::Select::new("Select a format:", items)
                 .raw_prompt_skippable()
                 .ok()
                 .flatten()
