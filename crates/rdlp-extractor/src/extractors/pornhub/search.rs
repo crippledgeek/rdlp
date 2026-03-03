@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::search_patterns;
 
 /// Top-level API response from `pornhub.com/webmasters/search`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub(crate) struct ApiSearchResponse {
     /// List of video objects. May be absent when no results found.
     #[serde(default)]
@@ -21,7 +21,7 @@ pub(crate) struct ApiSearchResponse {
 ///
 /// Unlike RedTube, PornHub's API returns videos directly (not wrapped in
 /// `{ "video": {...} }`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub(crate) struct ApiVideo {
     /// Video ID (e.g. "ph5a1..." or numeric string).
     pub video_id: String,
@@ -63,21 +63,21 @@ pub(crate) struct ApiVideo {
 }
 
 /// A single tag entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ApiTag {
     #[allow(dead_code)]
     pub tag_name: String,
 }
 
 /// A single pornstar entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ApiPornstar {
     #[allow(dead_code)]
     pub pornstar_name: String,
 }
 
 /// A single category entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ApiCategory {
     #[allow(dead_code)]
     pub category: String,

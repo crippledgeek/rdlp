@@ -8,6 +8,8 @@
 //! - `patterns` - URL patterns and regex definitions
 //! - `formats` - Format extraction from various sources
 //! - `playlist` - Playlist pagination and extraction
+//! - `search` - Search result parsing and filter validation
+//! - `search_patterns` - URL builders and constants for search API
 //! - `utils` - Helper functions for parsing and validation
 //!
 //! # Supported URLs
@@ -34,7 +36,7 @@ use rdlp_core::{
 };
 use scraper::Html;
 
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
 use crate::hls::detect_format_sizes;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
@@ -42,8 +44,9 @@ pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 /// Rate limit between search page fetches (milliseconds).
 const SEARCH_RATE_LIMIT_MS: u64 = 500;
 
-/// Maximum number of results to collect across all pages.
-const MAX_PLAYLIST_SIZE: usize = 4000;
+/// Expected number of results per API page. Used to detect the last page:
+/// if a page returns fewer than this, there are no more pages.
+const API_RESULTS_PER_PAGE: usize = 20;
 
 /// PornHub extractor
 ///
@@ -107,19 +110,22 @@ impl PornHubExtractor {
 
     /// Fetch a single HTML search page (fallback).
     ///
-    /// Returns an empty vec — the API is the primary source. A full HTML parser
-    /// can be added later if the API becomes unreliable.
+    /// HTML parsing is not yet implemented — returns an error so callers
+    /// propagate the original API failure instead of silently returning
+    /// empty results. A full HTML parser can be added later if the API
+    /// becomes unreliable.
     ///
     /// # Arguments
-    /// * `url` - HTML search URL.
-    /// * `ctx` - Extraction context.
+    /// * `_url` - HTML search URL (unused until HTML parsing is implemented).
+    /// * `_ctx` - Extraction context (unused until HTML parsing is implemented).
     async fn fetch_html_search_page(
         &self,
-        url: &str,
-        ctx: &ExtractionContext,
+        _url: &str,
+        _ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let _webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
-        Ok(Vec::new())
+        Err(RdlpError::Extraction(
+            "PornHub HTML search fallback not yet implemented".to_string(),
+        ))
     }
 
     /// Paginated search across all pages, collecting up to `max_results` results.
@@ -150,7 +156,7 @@ impl PornHubExtractor {
                 search_patterns::build_api_search_url_page(&base_url, page)
             };
 
-            debug!(page; "[PornHub] Fetching search page");
+            debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[PornHub] Fetching search page");
 
             let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
                 Ok(results) => results,
@@ -247,7 +253,7 @@ impl SearchExtractor for PornHubExtractor {
             }
         };
 
-        let has_more = !page_results.is_empty();
+        let has_more = !page_results.is_empty() && page_results.len() >= API_RESULTS_PER_PAGE;
 
         Ok(SearchPageResponse {
             results: page_results,

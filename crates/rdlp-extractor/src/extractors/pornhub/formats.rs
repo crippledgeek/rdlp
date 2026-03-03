@@ -60,21 +60,26 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
         ));
     }
 
-    // Ensure format_ids are unique — two different CDN URLs at the same quality
-    // (e.g., both "1080p") would cause the desktop UI to highlight both rows on
-    // single selection. Append "-2", "-3", etc. for duplicates.
+    dedup_format_ids(&mut all_formats);
+
+    debug!(count = all_formats.len(); "[PornHub] Total unique formats");
+
+    Ok(all_formats)
+}
+
+/// Ensure format_ids are unique by appending "-2", "-3", etc. for duplicates.
+///
+/// Two different CDN URLs at the same quality (e.g., both "1080p") would cause
+/// the desktop UI to highlight both rows on single selection.
+fn dedup_format_ids(formats: &mut [Format]) {
     let mut id_counts: HashMap<String, u32> = HashMap::new();
-    for format in &mut all_formats {
+    for format in formats.iter_mut() {
         let count = id_counts.entry(format.format_id.clone()).or_insert(0);
         *count += 1;
         if *count > 1 {
             format.format_id = format!("{}-{}", format.format_id, count);
         }
     }
-
-    debug!(count = all_formats.len(); "[PornHub] Total unique formats");
-
-    Ok(all_formats)
 }
 
 /// Extract formats from flashvars JavaScript object
@@ -331,15 +336,7 @@ mod tests {
             build_format("https://cdn3.example.com/720.mp4", Some(720), 4),
         ];
 
-        // Simulate the dedup logic from extract_all_formats
-        let mut id_counts: HashMap<String, u32> = HashMap::new();
-        for format in &mut formats {
-            let count = id_counts.entry(format.format_id.clone()).or_insert(0);
-            *count += 1;
-            if *count > 1 {
-                format.format_id = format!("{}-{}", format.format_id, count);
-            }
-        }
+        dedup_format_ids(&mut formats);
 
         assert_eq!(formats[0].format_id, "1080p");
         assert_eq!(formats[1].format_id, "1080p-2");

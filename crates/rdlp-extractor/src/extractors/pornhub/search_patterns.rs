@@ -165,12 +165,12 @@ fn category_values() -> Vec<SearchFilterValue> {
 /// Defines four filters:
 /// - `ordering`: sort order (enum — 4 values)
 /// - `period`: time period (enum — 3 values)
-/// - `category`: category (dropdown + free-text — 66 common values, API accepts any)
+/// - `category`: category (dropdown + free-text — 64 common values, API accepts any)
 /// - `tags`: comma-separated tags (free-text only — 445k+ tags exist)
 ///
 /// # Returns
 /// Vector of filter descriptors.
-pub fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
+pub(crate) fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
     vec![
         SearchFilterDescriptor {
             key: "ordering".to_string(),
