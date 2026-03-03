@@ -307,9 +307,10 @@ impl HttpDownloader {
                     };
 
                     let download_fut = async move {
-                        let _permit = sem.acquire_owned().await.map_err(|_| {
-                            RdlpError::Download("Semaphore closed".to_string())
-                        })?;
+                        let _permit = sem
+                            .acquire_owned()
+                            .await
+                            .map_err(|_| RdlpError::Download("Semaphore closed".to_string()))?;
                         let start_time = Instant::now();
                         let abs_start = byte_offset + chunk.start;
                         // end is exclusive in ChunkRequest, but HTTP Range is inclusive
@@ -327,8 +328,7 @@ impl HttpDownloader {
 
                         match &result {
                             Ok(bytes) => {
-                                ctrl_report
-                                    .report_chunk_complete(*bytes, start_time.elapsed());
+                                ctrl_report.report_chunk_complete(*bytes, start_time.elapsed());
                             }
                             Err(e) => {
                                 error!("Adaptive chunk {chunk_id} failed: {e}");

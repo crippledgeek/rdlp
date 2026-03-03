@@ -91,9 +91,8 @@ pub(crate) struct ApiCategory {
 /// # Returns
 /// A vector of search result previews.
 pub(crate) fn parse_api_search_results(json: &str) -> Result<Vec<SearchResultPreview>> {
-    let response: ApiSearchResponse = serde_json::from_str(json).map_err(|e| {
-        RdlpError::Extraction(format!("Failed to parse PornHub API response: {e}"))
-    })?;
+    let response: ApiSearchResponse = serde_json::from_str(json)
+        .map_err(|e| RdlpError::Extraction(format!("Failed to parse PornHub API response: {e}")))?;
 
     let results: Vec<SearchResultPreview> = response
         .videos
@@ -191,8 +190,11 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
 
                 let valid = desc.allowed_values.iter().any(|v| v.value == filter.value);
                 if !valid {
-                    let allowed: Vec<&str> =
-                        desc.allowed_values.iter().map(|v| v.value.as_str()).collect();
+                    let allowed: Vec<&str> = desc
+                        .allowed_values
+                        .iter()
+                        .map(|v| v.value.as_str())
+                        .collect();
                     return Err(RdlpError::Extraction(format!(
                         "Invalid value '{}' for filter '{}'. Allowed: {}",
                         filter.value,

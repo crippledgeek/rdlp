@@ -90,12 +90,10 @@ impl PornHubExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let response = ctx
-            .http_client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| RdlpError::Network(format!("Failed to fetch PornHub search API: {e}")))?;
+        let response =
+            ctx.http_client.get(url).send().await.map_err(|e| {
+                RdlpError::Network(format!("Failed to fetch PornHub search API: {e}"))
+            })?;
 
         rdlp_core::check_http_response(&response)?;
 
@@ -159,8 +157,7 @@ impl PornHubExtractor {
                 Err(e) => {
                     if page == 1 {
                         debug!("[PornHub] API search failed, trying HTML fallback: {e}");
-                        let html_url =
-                            search_patterns::build_html_search_url(&query.query, 1);
+                        let html_url = search_patterns::build_html_search_url(&query.query, 1);
                         match self.fetch_html_search_page(&html_url, ctx).await {
                             Ok(results) => results,
                             Err(html_err) => {
