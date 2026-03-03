@@ -12,6 +12,7 @@ use log::{debug, info};
 
 use crate::error::{PostProcessError, Result};
 
+use super::super::log_capture::LogSuppressGuard;
 use super::super::salvage::prepare_input_with_salvage;
 use super::super::{AudioExtractOptions, FFmpegRunner, ensure_init};
 use super::mux_timing::{MuxTimingState, flush_interleave_queue};
@@ -72,6 +73,9 @@ impl FFmpegRunner {
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
+
+        // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
+        let _log_suppress = LogSuppressGuard::error_level();
 
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
             PostProcessError::FFmpegLibraryError {
@@ -187,6 +191,9 @@ impl FFmpegRunner {
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
+
+        // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
+        let _log_suppress = LogSuppressGuard::error_level();
 
         // Open input and find audio stream
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
