@@ -17,14 +17,6 @@ const HTML_SEARCH_BASE: &str = "https://www.pornhub.com/video/search";
 ///
 /// # Returns
 /// Full API URL string with query parameters.
-///
-/// # Example
-///
-/// ```
-/// use rdlp_extractor::extractors::pornhub::search_patterns;
-/// let url = search_patterns::build_api_search_url("test", &[]);
-/// assert!(url.contains("search=test"));
-/// ```
 pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let mut url = format!("{API_BASE}?search={encoded_query}&output=json&thumbsize=large");
