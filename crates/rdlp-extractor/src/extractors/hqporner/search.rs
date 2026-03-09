@@ -14,6 +14,19 @@ use super::parse_duration;
 static TOTAL_COUNT_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d+)\s+HD movies").expect("Valid total count pattern"));
 
+/// Selector for search result title links.
+static LINK_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h3.meta-data-title a").expect("Valid link selector"));
+
+/// Selector for search result thumbnail images.
+static THUMB_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a.image img, a.atfib img").expect("Valid thumb selector"));
+
+/// Selector for search result duration spans.
+static DURATION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("span.fa-clock-o.meta-data").expect("Valid duration selector")
+});
+
 /// Parse search/listing page HTML into search result previews.
 ///
 /// # Arguments
@@ -24,13 +37,9 @@ static TOTAL_COUNT_PATTERN: LazyLock<Regex> =
 pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let document = Html::parse_document(html);
 
-    let link_sel = Selector::parse("h3.meta-data-title a").unwrap();
-    let thumb_sel = Selector::parse("a.image img, a.atfib img").unwrap();
-    let duration_sel = Selector::parse("span.fa-clock-o.meta-data").unwrap();
-
-    let titles: Vec<_> = document.select(&link_sel).collect();
-    let thumbs: Vec<_> = document.select(&thumb_sel).collect();
-    let durations: Vec<_> = document.select(&duration_sel).collect();
+    let titles: Vec<_> = document.select(&LINK_SELECTOR).collect();
+    let thumbs: Vec<_> = document.select(&THUMB_SELECTOR).collect();
+    let durations: Vec<_> = document.select(&DURATION_SELECTOR).collect();
 
     let mut results = Vec::new();
 

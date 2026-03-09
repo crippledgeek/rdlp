@@ -27,11 +27,10 @@ pub(crate) fn build_search_url(query: &str, page: u32) -> String {
     }
 }
 
-/// Build the next listing page URL from the current URL and page HTML.
+/// Extract the next listing page URL from pagination HTML.
 ///
 /// Parses the pagination links to find the "Next" page href.
-pub(crate) fn next_listing_page_url(current_url: &str, webpage: &str) -> String {
-    let _ = current_url;
+pub(crate) fn next_listing_page_url(webpage: &str) -> String {
     NEXT_PAGE_PATTERN
         .captures(webpage)
         .and_then(|c| c.get(1))
@@ -71,21 +70,21 @@ mod tests {
     #[test]
     fn test_next_listing_page_url() {
         let html = r#"<a href="/?q=massage&p=3" class="button mobile-pagi pagi-btn">Next</a>"#;
-        let next = next_listing_page_url("https://hqporner.com/?q=massage&p=2", html);
+        let next = next_listing_page_url(html);
         assert_eq!(next, "https://hqporner.com/?q=massage&p=3");
     }
 
     #[test]
     fn test_next_listing_page_url_category() {
         let html = r#"<a href="/category/amateur/3" class="button mobile-hide pagi-btn">Next</a>"#;
-        let next = next_listing_page_url("https://hqporner.com/category/amateur/2", html);
+        let next = next_listing_page_url(html);
         assert_eq!(next, "https://hqporner.com/category/amateur/3");
     }
 
     #[test]
     fn test_next_listing_page_url_no_next() {
         let html = r#"<span class="pagi-btn-alt">5</span>"#;
-        let next = next_listing_page_url("https://hqporner.com/?q=test", html);
+        let next = next_listing_page_url(html);
         assert!(next.is_empty());
     }
 }

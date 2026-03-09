@@ -99,9 +99,30 @@ pub(super) fn parse_duration(text: &str) -> Option<f64> {
     })
 }
 
+// --- Lazy selectors for metadata extraction ---
+
+static TITLE_SELECTOR: LazyLock<scraper::Selector> =
+    LazyLock::new(|| scraper::Selector::parse("h1.main-h1").expect("Valid title selector"));
+
+static DURATION_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse("li.icon.fa-clock-o").expect("Valid duration selector")
+});
+
+static ACTRESS_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse("a[href^='/actress/']").expect("Valid actress selector")
+});
+
+static CATEGORY_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse("a.tag-link[href^='/category/']").expect("Valid category selector")
+});
+
+static DESCRIPTION_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse("meta[name='description']").expect("Valid description selector")
+});
+
 /// Extract the video title from an HQPorner page.
 fn extract_title(html: &Html) -> String {
-    html.select(&scraper::Selector::parse("h1.main-h1").expect("Valid selector"))
+    html.select(&TITLE_SELECTOR)
         .next()
         .map(|el| el.text().collect::<String>().trim().to_string())
         .unwrap_or_default()
@@ -109,24 +130,22 @@ fn extract_title(html: &Html) -> String {
 
 /// Extract the video duration from an HQPorner page.
 fn extract_duration_from_html(html: &Html) -> Option<f64> {
-    html.select(&scraper::Selector::parse("li.icon.fa-clock-o").expect("Valid selector"))
-        .next()
-        .and_then(|el| {
-            let text = el.text().collect::<String>();
-            parse_duration(&text)
-        })
+    html.select(&DURATION_SELECTOR).next().and_then(|el| {
+        let text = el.text().collect::<String>();
+        parse_duration(&text)
+    })
 }
 
 /// Extract the actress name from an HQPorner page.
 fn extract_actress(html: &Html) -> Option<String> {
-    html.select(&scraper::Selector::parse("a[href^='/actress/']").expect("Valid selector"))
+    html.select(&ACTRESS_SELECTOR)
         .next()
         .map(|el| el.text().collect::<String>().trim().to_string())
 }
 
 /// Extract the actress profile URL from an HQPorner page.
 fn extract_actress_url(html: &Html) -> Option<String> {
-    html.select(&scraper::Selector::parse("a[href^='/actress/']").expect("Valid selector"))
+    html.select(&ACTRESS_SELECTOR)
         .next()
         .and_then(|el| el.value().attr("href"))
         .map(|href| format!("https://hqporner.com{href}"))
@@ -134,18 +153,15 @@ fn extract_actress_url(html: &Html) -> Option<String> {
 
 /// Extract category tags from an HQPorner page.
 fn extract_categories(html: &Html) -> Vec<String> {
-    html.select(
-        &scraper::Selector::parse("a.tag-link[href^='/category/']").expect("Valid selector"),
-    )
-    .map(|el| el.text().collect::<String>().trim().to_string())
-    .filter(|s| !s.is_empty())
-    .collect()
+    html.select(&CATEGORY_SELECTOR)
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
-/// Extract the meta description from the raw HTML.
-fn extract_description(webpage: &str) -> Option<String> {
-    let html = Html::parse_document(webpage);
-    html.select(&scraper::Selector::parse("meta[name='description']").expect("Valid selector"))
+/// Extract the meta description from an HQPorner page.
+fn extract_description(html: &Html) -> Option<String> {
+    html.select(&DESCRIPTION_SELECTOR)
         .next()
         .and_then(|el| el.value().attr("content"))
         .map(|s| s.to_string())
@@ -175,15 +191,13 @@ impl InfoExtractor for HQPornerExtractor {
 
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
-        // Extract iframe URL before parsing HTML (avoids borrow issues)
+        // Extract iframe URL from raw HTML (regex, before DOM parse)
         let iframe_url = extract_iframe_url(&webpage).ok_or_else(|| {
             RdlpError::Extraction("No mydaddy.cc iframe found on page".to_string())
         })?;
 
-        let description = extract_description(&webpage);
-
-        // Parse HTML for metadata
-        let (title, duration, actress, actress_url, categories) = {
+        // Parse HTML once for all metadata extraction
+        let (title, duration, actress, actress_url, categories, description) = {
             let html = Html::parse_document(&webpage);
             (
                 extract_title(&html),
@@ -191,6 +205,7 @@ impl InfoExtractor for HQPornerExtractor {
                 extract_actress(&html),
                 extract_actress_url(&html),
                 extract_categories(&html),
+                extract_description(&html),
             )
         };
 
@@ -275,7 +290,7 @@ impl InfoExtractor for HQPornerExtractor {
             }
 
             // Build next page URL
-            page_url = search_patterns::next_listing_page_url(url, &webpage);
+            page_url = search_patterns::next_listing_page_url(&webpage);
             if page_url.is_empty() {
                 break;
             }
