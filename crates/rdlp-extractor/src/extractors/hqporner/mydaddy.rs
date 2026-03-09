@@ -57,7 +57,24 @@ pub(crate) async fn resolve_formats(
     let sanitized = rdlp_security::sanitize_for_logging(&full_url);
     debug!("[HQPorner] Resolving mydaddy.cc embed: {sanitized}");
 
-    let html = fetch_embed(&full_url, ctx).await?;
+    // Build alt URL upfront for fallback on both fetch failure and empty formats
+    let alt_url = if full_url.ends_with('/') {
+        format!("{full_url}&alt")
+    } else {
+        format!("{full_url}/&alt")
+    };
+
+    // Try primary embed, fall back to alt on fetch failure
+    let html = match fetch_embed(&full_url, ctx).await {
+        Ok(h) => h,
+        Err(e) => {
+            debug!(
+                "[HQPorner] Primary embed fetch failed ({e}), trying alt player: {}",
+                rdlp_security::sanitize_for_logging(&alt_url)
+            );
+            return resolve_from_html(&fetch_embed(&alt_url, ctx).await?);
+        }
+    };
 
     // Check for blocked response
     if html.contains("This domain has been blocked") {
@@ -69,35 +86,31 @@ pub(crate) async fn resolve_formats(
     let formats = parse_formats(&html);
 
     if formats.is_empty() {
-        // Try alt player fallback
-        let alt_url = if full_url.ends_with('/') {
-            format!("{full_url}&alt")
-        } else {
-            format!("{full_url}/&alt")
-        };
         debug!(
             "[HQPorner] No formats found, trying alt player: {}",
             rdlp_security::sanitize_for_logging(&alt_url)
         );
 
         let alt_html = fetch_embed(&alt_url, ctx).await?;
-        let alt_formats = parse_formats(&alt_html);
-
-        if alt_formats.is_empty() {
-            return Err(RdlpError::Extraction(
-                "No video formats found in mydaddy.cc embed or alt player".to_string(),
-            ));
-        }
-
-        let thumbnail = extract_thumbnail(&alt_html);
-        return Ok(MyDaddyResult {
-            formats: alt_formats,
-            thumbnail,
-        });
+        return resolve_from_html(&alt_html);
     }
 
     let thumbnail = extract_thumbnail(&html);
 
+    Ok(MyDaddyResult { formats, thumbnail })
+}
+
+/// Parse formats and thumbnail from already-fetched embed HTML.
+fn resolve_from_html(html: &str) -> Result<MyDaddyResult> {
+    let formats = parse_formats(html);
+
+    if formats.is_empty() {
+        return Err(RdlpError::Extraction(
+            "No video formats found in mydaddy.cc embed or alt player".to_string(),
+        ));
+    }
+
+    let thumbnail = extract_thumbnail(html);
     Ok(MyDaddyResult { formats, thumbnail })
 }
 

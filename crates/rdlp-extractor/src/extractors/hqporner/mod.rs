@@ -46,9 +46,10 @@ pub use patterns::HQPORNER_VIDEO_PATTERN;
 /// Rate limit between listing/search page fetches (milliseconds).
 const PAGE_RATE_LIMIT_MS: u64 = 500;
 
-/// Pattern to extract duration from text like "26m 52s" or "1h 6m 39s".
-static DURATION_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:(\d+)h\s*)?(\d+)m\s*(\d+)s").expect("Valid duration pattern"));
+/// Pattern to extract duration from text like "26m 52s", "1h 6m 39s", or "45s".
+static DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s").expect("Valid duration pattern")
+});
 
 /// HQPorner extractor.
 ///
@@ -269,7 +270,7 @@ impl InfoExtractor for HQPornerExtractor {
             }
 
             // Check for "Next" pagination link
-            if !webpage.contains("pagi-btn\">Next") {
+            if !search::has_next_page(&webpage) {
                 break;
             }
 
@@ -398,6 +399,11 @@ mod tests {
     #[test]
     fn test_parse_duration_hours_minutes_seconds() {
         assert_eq!(parse_duration("1h 6m 39s"), Some(3999.0));
+    }
+
+    #[test]
+    fn test_parse_duration_seconds_only() {
+        assert_eq!(parse_duration("45s"), Some(45.0));
     }
 
     #[test]
