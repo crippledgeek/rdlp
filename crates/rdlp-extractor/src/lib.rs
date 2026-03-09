@@ -238,6 +238,7 @@ mod tests {
         assert!(extractors.contains(&"XTits"));
         assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
+        assert!(extractors.contains(&"HQPorner"));
     }
 
     #[test]
@@ -317,7 +318,20 @@ mod tests {
         assert!(nine_anime.is_some());
         assert_eq!(nine_anime.unwrap().name(), "9anime");
 
+        let hqporner =
+            registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
+        assert!(hqporner.is_some());
+        assert_eq!(hqporner.unwrap().name(), "HQPorner");
+
         let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
         assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn test_find_search_extractor_hqporner() {
+        let registry = ExtractorRegistry::new();
+        let extractor = registry.find_search_extractor("hqporner");
+        assert!(extractor.is_some());
+        assert_eq!(extractor.unwrap().name(), "HQPorner");
     }
 }
