@@ -29,8 +29,11 @@ mod search_patterns;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use log::warn;
-use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
+use log::{debug, warn};
+use rdlp_core::{
+    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
+    SearchPageResponse, SearchQuery, SearchResultPreview,
+};
 use regex::Regex;
 use scraper::Html;
 use std::sync::LazyLock;
@@ -291,6 +294,82 @@ impl InfoExtractor for HQPornerExtractor {
     }
 }
 
+#[async_trait]
+impl SearchExtractor for HQPornerExtractor {
+    fn name(&self) -> &str {
+        "HQPorner"
+    }
+
+    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+        // HQPorner search has no sort/filter options
+        vec![]
+    }
+
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>> {
+        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
+        let mut all_results = Vec::new();
+        let mut page = 1_u32;
+
+        loop {
+            let page_url = search_patterns::build_search_url(&query.query, page);
+            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
+            debug!("[HQPorner] Fetching search page {page}: {sanitized}");
+
+            let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+            let page_results = search::parse_search_results(&webpage);
+
+            if page_results.is_empty() {
+                break;
+            }
+
+            all_results.extend(page_results);
+
+            if all_results.len() >= max_results {
+                all_results.truncate(max_results);
+                break;
+            }
+
+            if !search::has_next_page(&webpage) {
+                break;
+            }
+
+            page += 1;
+            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
+        }
+
+        debug!(
+            "[HQPorner] Search complete: {} results across {page} pages",
+            all_results.len()
+        );
+        Ok(all_results)
+    }
+
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        let page = query.page.unwrap_or(1);
+        let page_url = search_patterns::build_search_url(&query.query, page);
+
+        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+        let page_results = search::parse_search_results(&webpage);
+        let has_more = search::has_next_page(&webpage);
+        let total_estimate = search::extract_total_count(&webpage);
+
+        Ok(SearchPageResponse {
+            results: page_results,
+            page,
+            has_more,
+            total_estimate,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +448,17 @@ full body massage</h1></body></html>"#;
     #[test]
     fn test_extract_iframe_url_missing() {
         assert_eq!(extract_iframe_url("<html>no iframe here</html>"), None);
+    }
+
+    #[test]
+    fn test_hqporner_implements_search_extractor() {
+        let extractor = HQPornerExtractor::new();
+        let filters =
+            <HQPornerExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
+        assert!(filters.is_empty(), "HQPorner has no search filters");
+        assert_eq!(
+            <HQPornerExtractor as rdlp_core::SearchExtractor>::name(&extractor),
+            "HQPorner"
+        );
     }
 }

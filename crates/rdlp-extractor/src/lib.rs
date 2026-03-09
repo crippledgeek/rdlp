@@ -121,6 +121,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(PornHubExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(HQPornerExtractor::new()));
 
         registry
     }

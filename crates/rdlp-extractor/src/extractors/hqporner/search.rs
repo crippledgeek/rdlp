@@ -3,10 +3,6 @@
 //! Parses search result HTML into `SearchResultPreview` items.
 //! Each result card contains a title, video URL, thumbnail, and duration.
 
-// Functions are pub(crate) but not yet called from the SearchExtractor impl
-// (wired in a later task). Allow dead_code until then.
-#![allow(dead_code)]
-
 use rdlp_core::SearchResultPreview;
 use regex::Regex;
 use scraper::{Html, Selector};
