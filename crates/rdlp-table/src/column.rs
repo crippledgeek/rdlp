@@ -235,11 +235,7 @@ pub fn compute_budget(
 
     // Drop columns where ALL cells are empty (no data to show).
     if !formats.is_empty() {
-        candidates.retain(|(_, col)| {
-            formats
-                .iter()
-                .any(|f| !((col.extract)(f)).is_empty())
-        });
+        candidates.retain(|(_, col)| formats.iter().any(|f| !((col.extract)(f)).is_empty()));
     }
 
     loop {
@@ -307,7 +303,9 @@ pub fn compute_budget(
                     0
                 };
                 // Cap at natural width so extra space isn't wasted as padding.
-                (col.min_width + bonus).min(natural_widths[i]).max(col.min_width)
+                (col.min_width + bonus)
+                    .min(natural_widths[i])
+                    .max(col.min_width)
             })
             .collect()
     };

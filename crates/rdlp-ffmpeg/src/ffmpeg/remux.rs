@@ -8,6 +8,7 @@ use log::debug;
 
 use crate::error::{PostProcessError, Result};
 
+use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
 impl FFmpegRunner {
@@ -44,6 +45,10 @@ impl FFmpegRunner {
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> Result<()> {
         ensure_init()?;
+
+        // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block"
+        // messages) while keeping actual errors visible.
+        let _log_suppress = LogSuppressGuard::error_level();
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility.
         // The key is copying avg_frame_rate which sets Matroska's "Default duration" element.

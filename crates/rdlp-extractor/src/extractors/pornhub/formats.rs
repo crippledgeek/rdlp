@@ -11,7 +11,7 @@ use super::patterns::{
     QUALITY_ITEMS_PATTERN,
 };
 use crate::base::common::BaseExtractor;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Extend `dest` with `formats`, skipping URLs already in `seen`.
 fn extend_deduped(dest: &mut Vec<Format>, seen: &mut HashSet<String>, formats: Vec<Format>) {
@@ -60,9 +60,26 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
         ));
     }
 
+    dedup_format_ids(&mut all_formats);
+
     debug!(count = all_formats.len(); "[PornHub] Total unique formats");
 
     Ok(all_formats)
+}
+
+/// Ensure format_ids are unique by appending "-2", "-3", etc. for duplicates.
+///
+/// Two different CDN URLs at the same quality (e.g., both "1080p") would cause
+/// the desktop UI to highlight both rows on single selection.
+fn dedup_format_ids(formats: &mut [Format]) {
+    let mut id_counts: HashMap<String, u32> = HashMap::new();
+    for format in formats.iter_mut() {
+        let count = id_counts.entry(format.format_id.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            format.format_id = format!("{}-{}", format.format_id, count);
+        }
+    }
 }
 
 /// Extract formats from flashvars JavaScript object
@@ -307,5 +324,24 @@ mod tests {
         assert_eq!(format.height, Some(1080));
         assert_eq!(format.width, Some(1920));
         assert_eq!(format.vcodec, Some("h264".to_string()));
+    }
+
+    #[test]
+    fn test_duplicate_format_ids_get_suffixed() {
+        let mut formats = vec![
+            build_format("https://cdn1.example.com/1080.mp4", Some(1080), 0),
+            build_format("https://cdn2.example.com/1080.mp4", Some(1080), 1),
+            build_format("https://cdn1.example.com/720.mp4", Some(720), 2),
+            build_format("https://cdn2.example.com/720.mp4", Some(720), 3),
+            build_format("https://cdn3.example.com/720.mp4", Some(720), 4),
+        ];
+
+        dedup_format_ids(&mut formats);
+
+        assert_eq!(formats[0].format_id, "1080p");
+        assert_eq!(formats[1].format_id, "1080p-2");
+        assert_eq!(formats[2].format_id, "720p");
+        assert_eq!(formats[3].format_id, "720p-2");
+        assert_eq!(formats[4].format_id, "720p-3");
     }
 }

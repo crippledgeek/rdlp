@@ -225,11 +225,7 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
     let header_line = header_cells.join(sep);
 
     // Separator line: dashes matching each column width.
-    let dash_cells: Vec<String> = budget
-        .widths
-        .iter()
-        .map(|&w| "─".repeat(w))
-        .collect();
+    let dash_cells: Vec<String> = budget.widths.iter().map(|&w| "─".repeat(w)).collect();
     let dash_line = dash_cells.join(dash_sep);
 
     let header_str = format!("{header_line}\n{dash_line}");
@@ -400,5 +396,4 @@ mod tests {
         let output = render_formats_table(&refs, &opts);
         assert!(output.contains('│') || output.contains('─'));
     }
-
 }

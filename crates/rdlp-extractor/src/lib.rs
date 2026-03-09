@@ -115,6 +115,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(TNAFlixSearchExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(PornHubExtractor::new()));
 
         registry
     }
@@ -252,6 +255,14 @@ mod tests {
         let extractor = registry.find_search_extractor("tnaflix");
         assert!(extractor.is_some());
         assert_eq!(extractor.unwrap().name(), "TNAFlix");
+    }
+
+    #[test]
+    fn test_find_search_extractor_pornhub() {
+        let registry = ExtractorRegistry::new();
+        let extractor = registry.find_search_extractor("pornhub");
+        assert!(extractor.is_some());
+        assert_eq!(extractor.unwrap().name(), "PornHub");
     }
 
     #[test]
