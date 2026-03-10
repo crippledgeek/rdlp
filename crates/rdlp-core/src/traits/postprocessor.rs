@@ -200,4 +200,7 @@ pub struct PostProcessConfig {
 
     /// Gain in dB for limiter-boost fallback (default 12.0 when None)
     pub normalize_boost_db: Option<f64>,
+
+    /// Enable verbose FFmpeg logging (forward muxer trace to callback).
+    pub verbose: bool,
 }

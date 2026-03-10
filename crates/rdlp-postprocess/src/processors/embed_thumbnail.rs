@@ -225,10 +225,12 @@ impl PostProcessor for EmbedThumbnail {
         // Create temp output file
         let temp_output = media_file.with_extension(format!("thumb.{extension}"));
 
-        // Embed via library bindings
+        // Embed via library bindings.
+        // Only forward FFmpeg C-level logs when verbose mode is enabled.
+        let log_callback = if config.verbose { callback } else { None };
         match self
             .ffmpeg
-            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension, callback)
+            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension, log_callback)
             .await
         {
             Ok(()) => {

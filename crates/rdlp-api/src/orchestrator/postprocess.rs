@@ -92,6 +92,7 @@ impl Orchestrator {
             loudnorm_precompress: self.config.loudnorm_precompress,
             normalize_boost: self.config.normalize_boost,
             normalize_boost_db: self.config.normalize_boost_db,
+            verbose: self.config.verbose,
         }
     }
 
