@@ -230,7 +230,13 @@ impl PostProcessor for EmbedThumbnail {
         let log_callback = if config.verbose { callback } else { None };
         match self
             .ffmpeg
-            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension, log_callback)
+            .embed_thumbnail(
+                &media_file,
+                &thumbnail_file,
+                &temp_output,
+                &extension,
+                log_callback,
+            )
             .await
         {
             Ok(()) => {

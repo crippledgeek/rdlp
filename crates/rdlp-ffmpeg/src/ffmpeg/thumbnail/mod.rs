@@ -40,13 +40,7 @@ impl FFmpegRunner {
         let output = output.as_ref().to_path_buf();
         let container = container.to_string();
         Self::spawn_blocking("embed_thumbnail", move || {
-            Self::embed_thumbnail_sync(
-                &media,
-                &thumbnail,
-                &output,
-                &container,
-                callback.as_deref(),
-            )
+            Self::embed_thumbnail_sync(&media, &thumbnail, &output, &container, callback.as_deref())
         })
         .await
     }
