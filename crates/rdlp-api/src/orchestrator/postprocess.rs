@@ -35,12 +35,19 @@ impl PostProcessCallback for PostProcessBridge {
 /// given download.
 ///
 /// The factory is called once per post-processing stage with the stage name,
-/// returning a fresh bridge for that stage.
+/// returning a fresh bridge for that stage. It also emits an
+/// [`Event::PostProcessing`] when each stage starts so the frontend can
+/// display stage names in the log panel.
 fn make_callback_factory(
     event_tx: mpsc::Sender<Event>,
     download_id: DownloadId,
 ) -> PostProcessCallbackFactory {
     Arc::new(move |stage_name: &str| -> Arc<dyn PostProcessCallback> {
+        // Notify the frontend that a new post-processing stage has started.
+        let _ = event_tx.try_send(Event::PostProcessing {
+            id: download_id,
+            stage: stage_name.to_string(),
+        });
         Arc::new(PostProcessBridge {
             event_tx: event_tx.clone(),
             download_id,
@@ -161,6 +168,10 @@ impl Orchestrator {
         // Run FFmpeg remux to fix container (faststart, timestamps)
         // Applied to both HLS and HTTP downloads for consistent output
         let result_files = if !self.config.extract_audio {
+            self.emit(Event::PostProcessing {
+                id: self.download_id,
+                stage: "Remuxing container".into(),
+            });
             self.ffmpeg_remux(&files).await.unwrap_or(files.clone())
         } else {
             files.clone()
