@@ -137,7 +137,7 @@ impl PostProcessor for FFmpegMetadata {
         info: &InfoDict,
         files: Vec<PathBuf>,
         _config: &PostProcessConfig,
-        _callback: Option<Arc<dyn PostProcessCallback>>,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -166,7 +166,7 @@ impl PostProcessor for FFmpegMetadata {
 
         // Embed via library bindings (stream copy + metadata + chapters)
         self.ffmpeg
-            .embed_metadata(input_file, &temp_output, &metadata, &chapters)
+            .embed_metadata(input_file, &temp_output, &metadata, &chapters, callback)
             .await?;
 
         // Replace original with temp

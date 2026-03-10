@@ -160,7 +160,7 @@ impl PostProcessor for EmbedThumbnail {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
-        _callback: Option<Arc<dyn PostProcessCallback>>,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -228,7 +228,7 @@ impl PostProcessor for EmbedThumbnail {
         // Embed via library bindings
         match self
             .ffmpeg
-            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension)
+            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension, callback)
             .await
         {
             Ok(()) => {

@@ -9,6 +9,9 @@
 mod mkv_raw_ffi;
 
 use std::path::Path;
+use std::sync::Arc;
+
+use rdlp_core::PostProcessCallback;
 
 use crate::error::{PostProcessError, Result};
 
@@ -20,19 +23,30 @@ impl FFmpegRunner {
     /// Opens both the media file and thumbnail image, copies all media streams,
     /// and adds the thumbnail as a video stream with `ATTACHED_PIC` disposition.
     /// Container-specific handling for MKV (attachment) and MP3 (ID3v2).
+    ///
+    /// When `callback` is provided, FFmpeg C-level log messages are captured
+    /// and forwarded via [`PostProcessCallback::on_log`] instead of being
+    /// suppressed. When `None`, muxer trace is silently suppressed.
     pub async fn embed_thumbnail(
         &self,
         media: impl AsRef<Path>,
         thumbnail: impl AsRef<Path>,
         output: impl AsRef<Path>,
         container: &str,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<()> {
         let media = media.as_ref().to_path_buf();
         let thumbnail = thumbnail.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let container = container.to_string();
         Self::spawn_blocking("embed_thumbnail", move || {
-            Self::embed_thumbnail_sync(&media, &thumbnail, &output, &container)
+            Self::embed_thumbnail_sync(
+                &media,
+                &thumbnail,
+                &output,
+                &container,
+                callback.as_deref(),
+            )
         })
         .await
     }
@@ -49,16 +63,30 @@ impl FFmpegRunner {
         thumbnail: &Path,
         output: &Path,
         container: &str,
+        callback: Option<&dyn PostProcessCallback>,
     ) -> Result<()> {
         ensure_init()?;
 
-        // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block")
-        let _log_suppress = super::log_capture::LogSuppressGuard::error_level();
+        // When a callback is provided, capture FFmpeg logs and forward them;
+        // otherwise suppress muxer trace/debug spam.
+        let capture = if callback.is_some() {
+            Some(super::log_capture::LogCaptureGuard::begin()?)
+        } else {
+            None
+        };
+        let _suppress = if callback.is_none() {
+            Some(super::log_capture::LogSuppressGuard::error_level())
+        } else {
+            None
+        };
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility
         let is_mkv = container.eq_ignore_ascii_case("mkv") || container.eq_ignore_ascii_case("mka");
         if is_mkv {
-            return Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output);
+            let result = Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output);
+            // Forward captured logs before returning
+            Self::forward_captured_logs(&capture, callback);
+            return result;
         }
 
         // Open media input
@@ -236,6 +264,26 @@ impl FFmpegRunner {
                 message: format!("failed to write output trailer: {e}"),
             })?;
 
+        // Forward captured FFmpeg logs to the callback
+        Self::forward_captured_logs(&capture, callback);
+
         Ok(())
+    }
+
+    /// Drain captured FFmpeg C-level log messages and forward via callback.
+    fn forward_captured_logs(
+        capture: &Option<super::log_capture::LogCaptureGuard>,
+        callback: Option<&dyn PostProcessCallback>,
+    ) {
+        if let (Some(guard), Some(cb)) = (capture, callback)
+            && let Ok(logs) = guard.take_captured()
+        {
+            for line in logs {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    cb.on_log(trimmed);
+                }
+            }
+        }
     }
 }
