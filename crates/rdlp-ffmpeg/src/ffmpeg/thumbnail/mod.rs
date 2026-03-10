@@ -52,6 +52,9 @@ impl FFmpegRunner {
     ) -> Result<()> {
         ensure_init()?;
 
+        // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block")
+        let _log_suppress = super::log_capture::LogSuppressGuard::error_level();
+
         // MKV: use raw FFI with proper stream property copying for VLC compatibility
         let is_mkv = container.eq_ignore_ascii_case("mkv") || container.eq_ignore_ascii_case("mka");
         if is_mkv {

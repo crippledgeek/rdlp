@@ -45,6 +45,9 @@ impl FFmpegRunner {
     ) -> Result<()> {
         ensure_init()?;
 
+        // Suppress FFmpeg's internal muxer trace/debug spam
+        let _log_suppress = super::log_capture::LogSuppressGuard::error_level();
+
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
             PostProcessError::FFmpegLibraryError {
                 message: format!("failed to open input {}: {e}", input.display()),
