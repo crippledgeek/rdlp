@@ -188,10 +188,15 @@ impl Orchestrator {
 
         info!(site = extractor_name, query = query.query.as_str(); "Starting search");
 
-        let results = extractor
-            .search(query, &self.extraction_context)
-            .await
-            .map_err(OrchestratorError::ExtractionFailed)?;
+        let results = tokio::select! {
+            res = extractor.search(query, &self.extraction_context) => {
+                res.map_err(OrchestratorError::ExtractionFailed)?
+            }
+            () = self.cancel_token.cancelled() => {
+                debug!("Search cancelled by token");
+                return Err(OrchestratorError::UserCancelled);
+            }
+        };
 
         info!(site = extractor_name, count = results.len(); "Search complete");
 
@@ -218,10 +223,15 @@ impl Orchestrator {
 
         info!(site = extractor_name, query = query.query.as_str(); "Starting paginated search");
 
-        let response = extractor
-            .search_page(query, &self.extraction_context)
-            .await
-            .map_err(OrchestratorError::ExtractionFailed)?;
+        let response = tokio::select! {
+            res = extractor.search_page(query, &self.extraction_context) => {
+                res.map_err(OrchestratorError::ExtractionFailed)?
+            }
+            () = self.cancel_token.cancelled() => {
+                debug!("Paginated search cancelled by token");
+                return Err(OrchestratorError::UserCancelled);
+            }
+        };
 
         info!(site = extractor_name, count = response.results.len(), page = response.page; "Search page complete");
 

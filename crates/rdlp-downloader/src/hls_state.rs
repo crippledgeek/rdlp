@@ -187,6 +187,14 @@ impl HlsDownloadState {
         Ok(())
     }
 
+    /// Serialize the state to JSON bytes (for writing outside a lock)
+    ///
+    /// # Errors
+    /// Returns a serde error if serialization fails.
+    pub fn to_json_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+
     /// Mark a segment as completed
     pub fn mark_completed(&mut self, segment_index: usize, bytes: u64) {
         self.completed_segments.insert(segment_index);

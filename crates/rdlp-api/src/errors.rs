@@ -230,6 +230,9 @@ impl From<OrchestratorError> for RdlpApiError {
                 message: io_err.to_string(),
             },
             OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
+            OrchestratorError::InteractiveNotConfigured => Self::InvalidInput {
+                message: "Interactive selection not configured".into(),
+            },
         }
     }
 }

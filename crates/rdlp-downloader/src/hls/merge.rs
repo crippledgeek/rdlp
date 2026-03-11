@@ -406,8 +406,10 @@ pub(crate) async fn cleanup_segments(segment_paths: &[PathBuf]) {
 
     let mut deleted = 0;
     for path in segment_paths {
-        if tokio::fs::remove_file(path).await.is_ok() {
-            deleted += 1;
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => deleted += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!(path:? = path; "Failed to delete segment file: {e}"),
         }
     }
 

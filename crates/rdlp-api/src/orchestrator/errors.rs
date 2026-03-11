@@ -84,6 +84,10 @@ pub enum OrchestratorError {
     /// with stdout").
     #[error("{0}")]
     Configuration(String),
+
+    /// Interactive callback not configured but interactive mode was requested
+    #[error("Interactive format selection requested but no interactive callback is configured")]
+    InteractiveNotConfigured,
 }
 
 /// Check if an error warrants re-extracting fresh URLs.

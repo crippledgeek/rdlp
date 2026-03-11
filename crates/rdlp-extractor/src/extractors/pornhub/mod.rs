@@ -31,8 +31,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{
-    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
-    SearchPageResponse, SearchQuery, SearchResultPreview,
+    ExponentialBuilder, ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, Retryable,
+    SearchExtractor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 use scraper::Html;
 
@@ -93,10 +93,15 @@ impl PornHubExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let response =
-            ctx.http_client.get(url).send().await.map_err(|e| {
-                RdlpError::Network(format!("Failed to fetch PornHub search API: {e}"))
-            })?;
+        let response = (|| async { ctx.http_client.get(url).send().await })
+            .retry(
+                ExponentialBuilder::default()
+                    .with_max_times(2)
+                    .with_min_delay(Duration::from_millis(500)),
+            )
+            .when(|e| e.is_timeout() || e.is_connect())
+            .await
+            .map_err(|e| RdlpError::Network(format!("Failed to fetch PornHub search API: {e}")))?;
 
         rdlp_core::check_http_response(&response)?;
 

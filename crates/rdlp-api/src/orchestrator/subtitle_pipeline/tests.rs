@@ -177,40 +177,58 @@ fn test_strict_subs_passes_when_all_found() {
 
 // -- URL validation tests --
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_validate_urls_keeps_reachable() {
-    let mut server = mockito::Server::new_async().await;
+    let opts = mockito::ServerOpts {
+        host: "127.0.0.1",
+        ..Default::default()
+    };
+    let mut server = mockito::Server::new_with_opts_async(opts).await;
+    let base_url = server.url();
     let _mock = server
         .mock("HEAD", "/en.vtt")
         .with_status(200)
+        .expect(1)
         .create_async()
         .await;
 
     let mut t = track("en", "vtt", false);
-    t.url = server.url() + "/en.vtt";
+    t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
     let validated = validate_subtitle_urls(result, &client).await;
 
     assert_eq!(validated.tracks.len(), 1);
     assert_eq!(validated.status, SubtitleStatus::Available);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_validate_urls_filters_unreachable() {
-    let mut server = mockito::Server::new_async().await;
+    let opts = mockito::ServerOpts {
+        host: "127.0.0.1",
+        ..Default::default()
+    };
+    let mut server = mockito::Server::new_with_opts_async(opts).await;
+    let base_url = server.url();
     let _mock = server
         .mock("HEAD", "/en.vtt")
         .with_status(404)
+        .expect(1)
         .create_async()
         .await;
 
     let mut t = track("en", "vtt", false);
-    t.url = server.url() + "/en.vtt";
+    t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
     let validated = validate_subtitle_urls(result, &client).await;
 
     assert!(validated.tracks.is_empty());
@@ -222,20 +240,29 @@ async fn test_validate_urls_filters_unreachable() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_validate_urls_auth_reason_on_403() {
-    let mut server = mockito::Server::new_async().await;
+    let opts = mockito::ServerOpts {
+        host: "127.0.0.1",
+        ..Default::default()
+    };
+    let mut server = mockito::Server::new_with_opts_async(opts).await;
+    let base_url = server.url();
     let _mock = server
         .mock("HEAD", "/en.vtt")
         .with_status(403)
+        .expect(1)
         .create_async()
         .await;
 
     let mut t = track("en", "vtt", false);
-    t.url = server.url() + "/en.vtt";
+    t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
     let validated = validate_subtitle_urls(result, &client).await;
 
     assert!(validated.tracks.is_empty());

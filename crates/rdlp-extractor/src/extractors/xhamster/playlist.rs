@@ -7,7 +7,10 @@ use super::patterns;
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
 use log::{debug, info};
-use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result, check_http_response};
+use rdlp_core::{
+    ExponentialBuilder, ExtractionContext, InfoDict, RdlpError, Result, Retryable,
+    check_http_response,
+};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -42,9 +45,17 @@ impl XHamsterExtractor {
 
             debug!(page, url:? = page_url; "[XHamster] Fetching user page");
 
-            let response = ctx.http_client.get(&page_url).send().await.map_err(|e| {
-                RdlpError::Network(format!("Failed to fetch user page {page}: {e}"))
-            })?;
+            let response = (|| async { ctx.http_client.get(&page_url).send().await })
+                .retry(
+                    ExponentialBuilder::default()
+                        .with_max_times(2)
+                        .with_min_delay(Duration::from_millis(500)),
+                )
+                .when(|e| e.is_timeout() || e.is_connect())
+                .await
+                .map_err(|e| {
+                    RdlpError::Network(format!("Failed to fetch user page {page}: {e}"))
+                })?;
 
             check_http_response(&response)?;
 
