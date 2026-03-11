@@ -8,7 +8,7 @@ use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::chunking::calculate_chunks;
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,8 +49,10 @@ async fn cleanup_chunk_files(
     let mut deleted = 0;
     for chunk_id in 0..total_chunks {
         let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
-        if tokio::fs::remove_file(&chunk_path).await.is_ok() {
-            deleted += 1;
+        match tokio::fs::remove_file(&chunk_path).await {
+            Ok(()) => deleted += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!(path:? = chunk_path; "Failed to delete chunk file: {e}"),
         }
     }
     debug!(deleted; "Chunk cleanup complete");
@@ -471,8 +473,10 @@ async fn merge_chunks_ordered(
                 .await
                 .map_err(RdlpError::Io)?;
 
-            if tokio::fs::remove_file(chunk_path).await.is_ok() {
-                deleted_chunks += 1;
+            match tokio::fs::remove_file(chunk_path).await {
+                Ok(()) => deleted_chunks += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!(path:? = chunk_path; "Failed to delete chunk file: {e}"),
             }
 
             if (idx + 1) % 100 == 0 || idx == total - 1 {

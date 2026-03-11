@@ -215,26 +215,21 @@ pub(crate) async fn download_segments_with_resume(
                             Some(seg_duration),
                         );
 
-                        // Update state on success; serialize inside lock, write outside
-                        let save_bytes = {
+                        // Update state on success; clone if periodic save needed
+                        let snapshot = {
                             let mut guard = state.lock().await;
                             guard.mark_completed(idx, *bytes);
                             if guard.completed_segments.len() % 50 == 0 {
-                                guard.to_json_bytes().ok()
+                                Some(guard.clone())
                             } else {
                                 None
                             }
                         };
-                        // Write outside the lock to avoid holding it across I/O
-                        if let Some(bytes_to_write) = save_bytes {
-                            let state_path = HlsDownloadState::state_file_path(&output_path);
-                            let temp_path = state_path.with_extension("json.tmp");
-                            if let Err(e) = tokio::fs::write(&temp_path, &bytes_to_write)
-                                .await
-                                .and(tokio::fs::rename(&temp_path, &state_path).await)
-                            {
-                                warn!("Failed to save HLS state: {e}");
-                            }
+                        // Save outside the lock to avoid holding it across I/O
+                        if let Some(snapshot) = snapshot
+                            && let Err(e) = snapshot.save(&output_path).await
+                        {
+                            warn!("Failed to save HLS state: {e}");
                         }
 
                         segments.fetch_add(1, Ordering::Relaxed);
@@ -414,7 +409,7 @@ pub(crate) async fn cleanup_segments(segment_paths: &[PathBuf]) {
         match tokio::fs::remove_file(path).await {
             Ok(()) => deleted += 1,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => warn!(path:? = path; "Failed to clean up segment file: {e}"),
+            Err(e) => warn!(path:? = path; "Failed to delete segment file: {e}"),
         }
     }
 
