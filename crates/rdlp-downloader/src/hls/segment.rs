@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use reqwest::header::HeaderMap;
 use std::time::Duration;
 
 use backon::Retryable;
@@ -45,22 +47,24 @@ pub(crate) async fn download_segment_with_retry(
     let http_client = http_downloader.client().clone();
     let rate_limiter = http_downloader.rate_limiter.clone();
     let backoff = retry_config.to_backoff();
-    let hdrs = http_downloader.headers();
+    let url: Arc<str> = Arc::from(url.as_str());
+    let segment_path: Arc<Path> = Arc::from(segment_path.as_path());
+    let hdrs: Arc<HeaderMap> = Arc::new(http_downloader.headers());
 
     // Use backon for retry with exponential backoff and jitter
     (|| {
         let client = http_client.clone();
-        let url = url.clone();
-        let segment_path = segment_path.clone();
-        let progress = progress.clone();
+        let url = Arc::clone(&url);
+        let segment_path = Arc::clone(&segment_path);
+        let progress = Arc::clone(&progress);
         let rate_limiter = rate_limiter.clone();
-        let hdrs = hdrs.clone();
+        let hdrs = Arc::clone(&hdrs);
 
         async move {
             // Download segment to file
             let response = client
-                .get(&url)
-                .headers(hdrs)
+                .get(url.as_ref())
+                .headers((*hdrs).clone())
                 .timeout(Duration::from_secs(30)) // 30 second timeout per segment
                 .send()
                 .await
@@ -82,7 +86,7 @@ pub(crate) async fn download_segment_with_retry(
             }
 
             // Stream segment to file with progress tracking
-            let file = File::create(&segment_path).await.map_err(RdlpError::Io)?;
+            let file = File::create(&*segment_path).await.map_err(RdlpError::Io)?;
             let mut writer = BufWriter::with_capacity(buffer_size, file);
             let mut stream = response.bytes_stream();
             let mut downloaded = 0u64;
@@ -104,7 +108,7 @@ pub(crate) async fn download_segment_with_retry(
 
             writer.flush().await.map_err(RdlpError::Io)?;
 
-            Ok((idx, segment_path, downloaded))
+            Ok((idx, PathBuf::from(&*segment_path), downloaded))
         }
     })
     .retry(backoff)
@@ -128,20 +132,20 @@ pub(crate) async fn download_init_segment(
 ) -> Result<()> {
     let client = http_downloader.client().clone();
     let backoff = retry_config.to_backoff();
-    let url = init.url.clone();
+    let url: Arc<str> = Arc::from(init.url.as_str());
     let byte_range = init.byte_range;
-    let dest = dest.to_path_buf();
-    let hdrs = http_downloader.headers();
+    let dest: Arc<Path> = Arc::from(dest);
+    let hdrs: Arc<HeaderMap> = Arc::new(http_downloader.headers());
 
     (|| {
         let client = client.clone();
-        let url = url.clone();
-        let dest = dest.clone();
-        let hdrs = hdrs.clone();
+        let url = Arc::clone(&url);
+        let dest = Arc::clone(&dest);
+        let hdrs = Arc::clone(&hdrs);
         async move {
             let mut req = client
-                .get(&url)
-                .headers(hdrs)
+                .get(url.as_ref())
+                .headers((*hdrs).clone())
                 .timeout(Duration::from_secs(30));
 
             // Apply Range header when EXT-X-MAP specifies BYTERANGE
@@ -169,7 +173,7 @@ pub(crate) async fn download_init_segment(
                 .await
                 .map_err(|e| RdlpError::Network(format!("Init segment read error: {e}")))?;
 
-            tokio::fs::write(&dest, &bytes)
+            tokio::fs::write(&*dest, &bytes)
                 .await
                 .map_err(RdlpError::Io)?;
             debug!(bytes = bytes.len(); "Init segment downloaded");
