@@ -180,21 +180,21 @@ async fn async_main() -> Result<()> {
         match client.search(site, &search_query).await {
             Ok(results) => {
                 if results.is_empty() {
-                    println!("No results found for '{query_text}'.");
+                    eprintln!("No results found for '{query_text}'.");
                 } else {
-                    println!("Found {} results:\n", results.len());
+                    eprintln!("Found {} results:\n", results.len());
                     for (i, r) in results.iter().enumerate() {
-                        println!("{:>3}. {}", i + 1, r.title);
-                        println!("     {}", r.video_url);
+                        eprintln!("{:>3}. {}", i + 1, r.title);
+                        eprintln!("     {}", r.video_url);
                         if let Some(d) = r.duration {
                             let mins = d as u32 / 60;
                             let secs = d as u32 % 60;
-                            print!("     Duration: {mins}:{secs:02}");
+                            eprint!("     Duration: {mins}:{secs:02}");
                         }
                         if let Some(views) = r.view_count {
-                            print!("  Views: {views}");
+                            eprint!("  Views: {views}");
                         }
-                        println!();
+                        eprintln!();
                     }
                 }
             }
