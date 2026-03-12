@@ -1,5 +1,4 @@
-import { render, screen, waitFor, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { QueuePage } from "./QueuePage";
 import { queryKeys } from "../query/queryKeys";
@@ -169,7 +168,7 @@ describe("QueuePage — cancel", () => {
         setInvokeHandler("cancel_download", cancelHandler);
         const jobs = [makeJob({ id: "job-abc", status: "running", progress: 0.5 })];
         render(<QueuePage />, { queryClient: seededClient(jobs) });
-        await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+        fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
         await waitFor(() => expect(cancelHandler).toHaveBeenCalled());
         const args = cancelHandler.mock.calls[0][0] as { jobId: string };
         expect(args.jobId).toBe("job-abc");
@@ -186,7 +185,7 @@ describe("QueuePage — remove", () => {
         setInvokeHandler("remove_job", removeHandler);
         const jobs = [makeJob({ id: "job-xyz", status: "completed" })];
         render(<QueuePage />, { queryClient: seededClient(jobs) });
-        await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+        fireEvent.click(screen.getByRole("button", { name: /remove/i }));
         await waitFor(() => expect(removeHandler).toHaveBeenCalled());
         const args = removeHandler.mock.calls[0][0] as { jobId: string };
         expect(args.jobId).toBe("job-xyz");
@@ -224,7 +223,7 @@ describe("QueuePage — retry", () => {
             }),
         ];
         render(<QueuePage />, { queryClient: seededClient(jobs) });
-        await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+        fireEvent.click(screen.getByRole("button", { name: /retry/i }));
         await waitFor(() => expect(startHandler).toHaveBeenCalled());
     });
 });
@@ -256,7 +255,7 @@ describe("QueuePage — Clear All", () => {
             makeJob({ id: "j2", status: "failed", error: "Error" }),
         ];
         render(<QueuePage />, { queryClient: seededClient(jobs) });
-        await userEvent.click(screen.getByRole("button", { name: /clear all/i }));
+        fireEvent.click(screen.getByRole("button", { name: /clear all/i }));
         await waitFor(() => expect(clearHandler).toHaveBeenCalled());
     });
 });

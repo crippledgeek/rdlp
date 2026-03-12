@@ -1,5 +1,4 @@
-import { render, screen, act, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, act, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { StatusBar } from "./StatusBar";
 import { resetSearchParams } from "../stores/searchParamsStore";
@@ -59,17 +58,17 @@ describe("StatusBar", () => {
         expect(screen.getByRole("button", { name: /grid view/i })).toBeInTheDocument();
     });
 
-    it("calls onViewModeChange with 'grid' when Grid view is clicked", async () => {
+    it("calls onViewModeChange with 'grid' when Grid view is clicked", () => {
         const onViewModeChange = vi.fn();
         renderStatusBar({ onViewModeChange });
-        await userEvent.click(screen.getByRole("button", { name: /grid view/i }));
+        fireEvent.click(screen.getByRole("button", { name: /grid view/i }));
         expect(onViewModeChange).toHaveBeenCalledWith("grid");
     });
 
-    it("calls onViewModeChange with 'list' when List view is clicked", async () => {
+    it("calls onViewModeChange with 'list' when List view is clicked", () => {
         const onViewModeChange = vi.fn();
         renderStatusBar({ viewMode: "grid", onViewModeChange });
-        await userEvent.click(screen.getByRole("button", { name: /list view/i }));
+        fireEvent.click(screen.getByRole("button", { name: /list view/i }));
         expect(onViewModeChange).toHaveBeenCalledWith("list");
     });
 
@@ -79,7 +78,7 @@ describe("StatusBar", () => {
         expect(screen.queryByTitle(/switch to queue/i)).not.toBeInTheDocument();
     });
 
-    it("calls onSwitchToQueue when active download link is clicked", async () => {
+    it("calls onSwitchToQueue when active download link is clicked", () => {
         const onSwitchToQueue = vi.fn();
         const activeJob: DownloadJob = {
             id: "job-1",
@@ -99,7 +98,7 @@ describe("StatusBar", () => {
         };
         renderStatusBar({ onSwitchToQueue }, [activeJob]);
         const link = screen.getByTitle(/switch to queue/i);
-        await userEvent.click(link);
+        fireEvent.click(link);
         expect(onSwitchToQueue).toHaveBeenCalledTimes(1);
     });
 });

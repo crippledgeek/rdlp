@@ -1,5 +1,4 @@
-import { render, screen, waitFor, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { DownloadPage } from "./DownloadPage";
 import { queryKeys } from "../query/queryKeys";
@@ -65,24 +64,20 @@ describe("DownloadPage", () => {
     });
 
     it("shows validation error for non-URL input", async () => {
-        const user = userEvent.setup();
         render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.click(input);
-        await user.paste("not a url");
-        await user.click(screen.getByRole("button", { name: /download/i }));
+        fireEvent.change(input, { target: { value: "not a url" } });
+        fireEvent.click(screen.getByRole("button", { name: /download/i }));
         expect(screen.getByText(/enter a valid url/i)).toBeInTheDocument();
     });
 
     it("calls start_download with a valid URL", async () => {
         const startHandler = vi.fn(() => "job-123");
         setInvokeHandler("start_download", startHandler);
-        const user = userEvent.setup();
         render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.click(input);
-        await user.paste("https://example.com/video");
-        await user.click(screen.getByRole("button", { name: /download/i }));
+        fireEvent.change(input, { target: { value: "https://example.com/video" } });
+        fireEvent.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(startHandler).toHaveBeenCalled();
         });
@@ -90,12 +85,10 @@ describe("DownloadPage", () => {
 
     it("clears the input after successful download start", async () => {
         setInvokeHandler("start_download", () => "job-123");
-        const user = userEvent.setup();
         render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.click(input);
-        await user.paste("https://example.com/video");
-        await user.click(screen.getByRole("button", { name: /download/i }));
+        fireEvent.change(input, { target: { value: "https://example.com/video" } });
+        fireEvent.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(input).toHaveValue("");
         });
@@ -105,12 +98,10 @@ describe("DownloadPage", () => {
         setInvokeHandler("start_download", () => {
             throw { kind: "InvalidInput", data: { message: "URL blocked by security policy" } };
         });
-        const user = userEvent.setup();
         render(<DownloadPage />, { queryClient: seededClient() });
         const input = screen.getByPlaceholderText(/paste a video url/i);
-        await user.click(input);
-        await user.paste("https://evil.local/video");
-        await user.click(screen.getByRole("button", { name: /download/i }));
+        fireEvent.change(input, { target: { value: "https://evil.local/video" } });
+        fireEvent.click(screen.getByRole("button", { name: /download/i }));
         await waitFor(() => {
             expect(screen.getByText(/failed to start download/i)).toBeInTheDocument();
         });

@@ -1,5 +1,4 @@
-import { render, screen } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, fireEvent } from "@/test/test-utils";
 import {
     createColumnHelper,
     getCoreRowModel,
@@ -168,12 +167,11 @@ describe("FormatGroupSection", () => {
         expect(rows[2].className).toContain("bg-foreground/15");
     });
 
-    it("fires onRowClick with the format id", async () => {
+    it("fires onRowClick with the format id", () => {
         const onClick = vi.fn();
-        const user = userEvent.setup();
         render(<TestHarness data={[fmt1080hls]} onRowClick={onClick} />);
         const rows = screen.getAllByRole("row");
-        await user.click(rows[1]); // row 0 = header, row 1 = data
+        fireEvent.click(rows[1]); // row 0 = header, row 1 = data
         expect(onClick).toHaveBeenCalledWith("1080", expect.any(Object));
     });
 

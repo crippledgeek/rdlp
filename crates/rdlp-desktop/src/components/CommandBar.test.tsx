@@ -1,5 +1,4 @@
 import { render, screen, act, fireEvent, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
 import { CommandBar } from "./CommandBar";
 import { searchParamsAtom, resetSearchParams } from "../stores/searchParamsStore";
 import { queryKeys } from "../query/queryKeys";
@@ -69,12 +68,12 @@ describe("CommandBar", () => {
         expect(screen.getByRole("button", { name: /^search$/i })).not.toBeDisabled();
     });
 
-    it("calls onSearch when form is submitted with non-empty query", async () => {
+    it("calls onSearch when form is submitted with non-empty query", () => {
         const onSearch = vi.fn();
         renderCommandBar({ onSearch });
         const input = screen.getByPlaceholderText("Search videos...");
         fireEvent.change(input, { target: { value: "cats" } });
-        await userEvent.click(screen.getByRole("button", { name: /^search$/i }));
+        fireEvent.click(screen.getByRole("button", { name: /^search$/i }));
         expect(onSearch).toHaveBeenCalledTimes(1);
     });
 
@@ -85,11 +84,11 @@ describe("CommandBar", () => {
         expect(screen.getByRole("button", { name: /clear search/i })).toBeInTheDocument();
     });
 
-    it("clears the query when clear button is clicked", async () => {
+    it("clears the query when clear button is clicked", () => {
         renderCommandBar();
         const input = screen.getByPlaceholderText("Search videos...");
         fireEvent.change(input, { target: { value: "dogs" } });
-        await userEvent.click(screen.getByRole("button", { name: /clear search/i }));
+        fireEvent.click(screen.getByRole("button", { name: /clear search/i }));
         expect(input).toHaveValue("");
     });
 
