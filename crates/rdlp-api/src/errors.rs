@@ -101,8 +101,7 @@ impl RdlpApiError {
                 status: Some(429),
             } => Cow::Owned(format!("Rate limited by server. {message}")),
             Self::NetworkError {
-                status: Some(404),
-                ..
+                status: Some(404), ..
             } => Cow::Borrowed("Content not found — it may have been removed"),
             Self::NetworkError {
                 message,
