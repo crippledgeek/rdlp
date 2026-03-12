@@ -1,5 +1,4 @@
 import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { SettingsPage } from "./SettingsPage";
 import { queryKeys } from "../query/queryKeys";
@@ -82,7 +81,7 @@ describe("SettingsPage", () => {
         setInvokeHandler("update_settings", updateHandler);
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
     });
@@ -93,7 +92,7 @@ describe("SettingsPage", () => {
         });
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -130,7 +129,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient() });
         const normalizeLabel = screen.getByText(/normalize audio/i);
         const checkbox = normalizeLabel.closest("div")?.querySelector('button[role="checkbox"]');
-        await userEvent.click(checkbox!);
+        fireEvent.click(checkbox!);
         await waitFor(() => {
             expect(screen.getByText(/ebu r128 loudnorm/i)).toBeInTheDocument();
         });
@@ -160,7 +159,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByLabelText(/loudness target/i), { target: { value: "5" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -172,7 +171,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByLabelText(/true peak limit/i), { target: { value: "1" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -184,7 +183,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByPlaceholderText("12.0"), { target: { value: "50" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -201,7 +200,7 @@ describe("SettingsPage", () => {
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, loudnorm_preset: "broadcast" };
 
         render(<SettingsPage />, { queryClient: seededClient(settings) });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
@@ -215,7 +214,7 @@ describe("SettingsPage", () => {
         setInvokeHandler("update_settings", updateHandler);
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
