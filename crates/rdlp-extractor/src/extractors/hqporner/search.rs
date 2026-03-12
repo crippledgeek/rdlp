@@ -57,13 +57,18 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         let video_url = format!("https://hqporner.com{href}");
 
         let thumbnail_url = thumbs.get(i).and_then(|el| {
-            el.value().attr("src").map(|s| {
-                if s.starts_with("//") {
-                    format!("https:{s}")
-                } else {
-                    s.to_string()
-                }
-            })
+            el.value()
+                .attr("data-src")
+                .filter(|s| !s.is_empty())
+                .or_else(|| el.value().attr("src"))
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    if s.starts_with("//") {
+                        format!("https:{s}")
+                    } else {
+                        s.to_string()
+                    }
+                })
         });
 
         let duration = durations.get(i).and_then(|el| {
@@ -201,5 +206,51 @@ mod tests {
     #[test]
     fn test_has_next_page_false() {
         assert!(!has_next_page(sample_last_page_html()));
+    }
+
+    #[test]
+    fn test_parse_thumbnail_data_src_lazy_loaded() {
+        let html = r#"<html><body>
+<div class="4u">
+    <section class="box feature">
+        <a href="/hdporn/999-lazy.html" class="image featured atfib">
+            <div><img data-src="//fastporndelivery.hqporner.com/imgs/lazy/main.jpg" src="" /></div>
+        </a>
+        <div id="span-case">
+            <h3 class="meta-data-title"><a href="/hdporn/999-lazy.html" class="click-trigger">lazy loaded video</a></h3>
+            <span class="icon fa-clock-o meta-data">10m 00s</span>
+        </div>
+    </section>
+</div>
+</body></html>"#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://fastporndelivery.hqporner.com/imgs/lazy/main.jpg")
+        );
+    }
+
+    #[test]
+    fn test_parse_thumbnail_src_fallback() {
+        let html = r#"<html><body>
+<div class="4u">
+    <section class="box feature">
+        <a href="/hdporn/888-srconly.html" class="image featured atfib">
+            <div><img src="//fastporndelivery.hqporner.com/imgs/src/main.jpg" /></div>
+        </a>
+        <div id="span-case">
+            <h3 class="meta-data-title"><a href="/hdporn/888-srconly.html" class="click-trigger">src only video</a></h3>
+            <span class="icon fa-clock-o meta-data">5m 00s</span>
+        </div>
+    </section>
+</div>
+</body></html>"#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://fastporndelivery.hqporner.com/imgs/src/main.jpg")
+        );
     }
 }

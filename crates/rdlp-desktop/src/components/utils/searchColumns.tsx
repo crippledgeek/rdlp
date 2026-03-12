@@ -84,6 +84,7 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
                             className="w-full h-full object-cover"
                             src={row.original.thumbnail_url}
                             alt=""
+                            referrerPolicy="no-referrer"
                         />
                     ) : (
                         <div className="w-full h-full bg-muted" />
