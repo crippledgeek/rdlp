@@ -98,6 +98,21 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
 
+      # --- Fast linker (rust-lld bundled with Rust, lld via apt) ---
+
+      - name: Configure fast linker (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get install -y lld
+          mkdir -p .cargo
+          printf '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-Clink-arg=-fuse-ld=lld"]\n' >> .cargo/config.toml
+
+      - name: Configure fast linker (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          mkdir -p .cargo
+          printf '[target.x86_64-pc-windows-msvc]\nlinker = "rust-lld"\n' >> .cargo/config.toml
+
       # --- Workspace lint & test (default members: libs + CLI) ---
 
       - name: Clippy (workspace)
