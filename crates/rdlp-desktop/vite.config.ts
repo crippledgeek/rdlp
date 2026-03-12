@@ -53,30 +53,11 @@ export default defineConfig(async () => ({
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-radix": [
-            "@radix-ui/react-checkbox",
-            "@radix-ui/react-collapsible",
-            "@radix-ui/react-dialog",
-            "@radix-ui/react-dropdown-menu",
-            "@radix-ui/react-label",
-            "@radix-ui/react-popover",
-            "@radix-ui/react-progress",
-            "@radix-ui/react-radio-group",
-            "@radix-ui/react-scroll-area",
-            "@radix-ui/react-select",
-            "@radix-ui/react-separator",
-            "@radix-ui/react-slot",
-            "@radix-ui/react-toggle",
-            "@radix-ui/react-toggle-group",
-            "@radix-ui/react-tooltip",
-          ],
-          "vendor-tanstack": [
-            "@tanstack/react-query",
-            "@tanstack/react-table",
-            "@tanstack/react-store",
-          ],
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (/[\\/](react|react-dom)[\\/]/.test(id)) return "vendor-react";
+            if (id.includes("@tanstack")) return "vendor-tanstack";
+          }
         },
       },
     },

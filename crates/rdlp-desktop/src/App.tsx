@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Search, Download, ArrowDownToLine, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
 import { QueuePage } from "./pages/QueuePage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { DownloadPage } from "./pages/DownloadPage";
+
+const SettingsPage = lazy(() =>
+    import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+const DownloadPage = lazy(() =>
+    import("./pages/DownloadPage").then((m) => ({ default: m.DownloadPage })),
+);
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { queryClient } from "./query/queryClient";
@@ -177,8 +182,16 @@ function AppContent() {
                         <SearchPage activeTab={activeTab} viewMode={viewMode} />
                     )}
                     {activeTab === "queue" && <QueuePage />}
-                    {activeTab === "download" && <DownloadPage />}
-                    {activeTab === "settings" && <SettingsPage />}
+                    {activeTab === "download" && (
+                        <Suspense>
+                            <DownloadPage />
+                        </Suspense>
+                    )}
+                    {activeTab === "settings" && (
+                        <Suspense>
+                            <SettingsPage />
+                        </Suspense>
+                    )}
                 </main>
             </div>
 
