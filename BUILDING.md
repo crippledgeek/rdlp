@@ -107,6 +107,33 @@ cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
+## Faster Builds
+
+The workspace ships with a tuned `[profile.dev]` in `Cargo.toml` that
+reduces debug info and optimizes third-party dependencies. This is active
+by default for all developers.
+
+For an additional speedup on Windows, create `.cargo/config.toml` (gitignored)
+and enable the bundled `rust-lld` linker:
+
+```toml
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+```
+
+On Linux, use `mold` instead:
+
+```toml
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-Clink-arg=-fuse-ld=mold"]
+```
+
+On macOS, the default linker is already fast; no override is needed.
+
+With these settings, incremental rebuilds of a single crate take 2–6 seconds
+instead of ~50 seconds.
+
 ## Troubleshooting
 
 **FFmpeg not found (Windows)**

@@ -118,3 +118,18 @@ tempfile = "3.14"
 
 [workspace.lints.clippy]
 must_use_candidate = "warn"
+
+# ── Dev profile: prioritize compile speed ──────────────────────────────
+[profile.dev]
+# Line-tables-only: enough for backtraces, much less data than full debug info
+debug = "line-tables-only"
+# Split debug info into separate files for faster incremental linking
+split-debuginfo = "unpacked"
+
+# Optimize third-party deps even in dev — they rarely change, so the
+# one-time cost pays back via faster runtime and smaller link inputs.
+# Workspace members inherit [profile.dev] (opt-level 0) and are NOT
+# affected by this wildcard override.
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
