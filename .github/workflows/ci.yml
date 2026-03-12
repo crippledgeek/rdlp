@@ -109,6 +109,7 @@ jobs:
 
       - name: Configure fast linker (Windows)
         if: matrix.platform == 'windows-latest'
+        shell: bash
         run: |
           mkdir -p .cargo
           printf '[target.x86_64-pc-windows-msvc]\nlinker = "rust-lld"\n' >> .cargo/config.toml
