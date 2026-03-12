@@ -175,6 +175,45 @@
     background-color: var(--color-muted);
 }
 
+/* Settings module panel with left accent bar. */
+@utility settings-panel {
+    position: relative;
+    padding: 1rem 1.25rem;
+    background-color: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-left-width: 2px;
+    border-left-color: oklch(from var(--color-primary) l c h / 0.35);
+    border-radius: var(--radius-lg);
+    margin-bottom: 0.75rem;
+    transition-property: border-left-color;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+}
+.settings-panel:hover {
+    border-left-color: var(--color-primary);
+}
+
+/* Settings panel heading — teal uppercase with icon. */
+@utility settings-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.875rem;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-primary);
+}
+
+/* Recessed toggle rows inside panels. */
+.settings-panel .settings-toggle-row {
+    background-color: hsl(var(--background));
+}
+.settings-panel .settings-toggle-row:hover {
+    background-color: var(--color-muted);
+}
+
 /* Sidebar collapsible section trigger button. */
 @utility sidebar-section-btn {
     display: flex;

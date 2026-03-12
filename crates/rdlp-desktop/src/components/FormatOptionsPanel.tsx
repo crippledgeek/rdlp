@@ -293,6 +293,8 @@ export function FormatOptionsPanel({
                 </Select>
             </div>
 
+            <div className="border-t border-white/[0.04] my-0.5" />
+
             <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                     <Checkbox
