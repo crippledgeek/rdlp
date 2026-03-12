@@ -190,72 +190,24 @@ describe("activePreset (via PRESETS constant)", () => {
 describe("Audio Normalization Select — displayed value", () => {
     /** Helper: get the combobox for Audio Normalization. */
     function getNormSelect() {
-        // The Audio Normalization label is immediately above its combobox.
-        // There are multiple comboboxes (Remux, Extract Audio, Audio Normalization).
-        // We rely on the label text to identify the right trigger.
         const label = screen.getByText(/audio normalization/i);
-        // The trigger is the next sibling combobox; use closest parent container.
         const container = label.closest("div.flex-col")!;
         return container.querySelector('[role="combobox"]') as HTMLElement;
     }
 
-    it("normalizeAudio null shows 'Use Settings Default'", () => {
-        renderPanel({ ...defaultOptions, normalizeAudio: null });
-        expect(getNormSelect()).toHaveTextContent(/use settings default/i);
-    });
-
-    it("normalizeAudio false shows 'Off'", () => {
-        renderPanel({ ...defaultOptions, normalizeAudio: false, loudnorm: false });
-        expect(getNormSelect()).toHaveTextContent(/^off$/i);
-    });
-
-    it("normalizeAudio true, loudnorm false shows 'Peak'", () => {
-        renderPanel({
-            ...defaultOptions,
-            normalizeAudio: true,
-            loudnorm: false,
-        });
-        expect(getNormSelect()).toHaveTextContent(/^peak$/i);
-    });
-
-    it("normalizeAudio true, loudnorm true, preset 'streaming' shows loudnorm streaming", () => {
-        renderPanel({
-            ...defaultOptions,
-            normalizeAudio: true,
-            loudnorm: true,
-            loudnormPreset: "streaming",
-        });
-        expect(getNormSelect()).toHaveTextContent(/loudnorm.*streaming/i);
-    });
-
-    it("normalizeAudio true, loudnorm true, preset 'broadcast' shows loudnorm broadcast", () => {
-        renderPanel({
-            ...defaultOptions,
-            normalizeAudio: true,
-            loudnorm: true,
-            loudnormPreset: "broadcast",
-        });
-        expect(getNormSelect()).toHaveTextContent(/loudnorm.*broadcast/i);
-    });
-
-    it("normalizeAudio true, loudnorm true, preset 'loud' shows loudnorm loud", () => {
-        renderPanel({
-            ...defaultOptions,
-            normalizeAudio: true,
-            loudnorm: true,
-            loudnormPreset: "loud",
-        });
-        expect(getNormSelect()).toHaveTextContent(/loudnorm.*loud/i);
-    });
-
-    it("normalizeAudio true, loudnorm true, preset null defaults to loudnorm streaming (bugfix case)", () => {
-        renderPanel({
-            ...defaultOptions,
-            normalizeAudio: true,
-            loudnorm: true,
-            loudnormPreset: null,
-        });
-        expect(getNormSelect()).toHaveTextContent(/loudnorm.*streaming/i);
+    // Each case needs its own render (different props), but we use test.each
+    // to share boilerplate and reduce per-test overhead.
+    it.each([
+        { name: "normalizeAudio null shows 'Use Settings Default'", props: { normalizeAudio: null as null }, expected: /use settings default/i },
+        { name: "normalizeAudio false shows 'Off'", props: { normalizeAudio: false, loudnorm: false }, expected: /^off$/i },
+        { name: "normalizeAudio true, loudnorm false shows 'Peak'", props: { normalizeAudio: true, loudnorm: false }, expected: /^peak$/i },
+        { name: "loudnorm streaming", props: { normalizeAudio: true, loudnorm: true, loudnormPreset: "streaming" }, expected: /loudnorm.*streaming/i },
+        { name: "loudnorm broadcast", props: { normalizeAudio: true, loudnorm: true, loudnormPreset: "broadcast" }, expected: /loudnorm.*broadcast/i },
+        { name: "loudnorm loud", props: { normalizeAudio: true, loudnorm: true, loudnormPreset: "loud" }, expected: /loudnorm.*loud/i },
+        { name: "preset null defaults to streaming", props: { normalizeAudio: true, loudnorm: true, loudnormPreset: null as null }, expected: /loudnorm.*streaming/i },
+    ])("$name", ({ props, expected }) => {
+        renderPanel({ ...defaultOptions, ...props });
+        expect(getNormSelect()).toHaveTextContent(expected);
     });
 });
 
@@ -417,34 +369,18 @@ describe("Remux Select", () => {
         expect(getRemuxSelect()).toHaveTextContent(/^none$/i);
     });
 
-    it("selecting MP4 calls onChange with remux: 'mp4'", () => {
+    it.each([
+        { name: "selecting MP4", option: /^mp4$/i, initial: null as null, field: "remux", expected: "mp4" },
+        { name: "selecting MKV", option: /^mkv$/i, initial: null as null, field: "remux", expected: "mkv" },
+        { name: "selecting None", option: /^none$/i, initial: "mp4" as string | null, field: "remux", expected: null },
+    ])("$name calls onChange with remux: $expected", ({ option, initial, field, expected }) => {
         const onChange = vi.fn();
-        renderPanel({ ...defaultOptions, remux: null }, onChange);
+        renderPanel({ ...defaultOptions, [field]: initial }, onChange);
         fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
-        fireEvent.click(screen.getByRole("option", { name: /^mp4$/i }));
+        fireEvent.click(screen.getByRole("option", { name: option }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
-        expect(called.remux).toBe("mp4");
-    });
-
-    it("selecting MKV calls onChange with remux: 'mkv'", () => {
-        const onChange = vi.fn();
-        renderPanel({ ...defaultOptions, remux: null }, onChange);
-        fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
-        fireEvent.click(screen.getByRole("option", { name: /^mkv$/i }));
-        expect(onChange).toHaveBeenCalledTimes(1);
-        const called = onChange.mock.calls[0][0] as DownloadOptions;
-        expect(called.remux).toBe("mkv");
-    });
-
-    it("selecting None calls onChange with remux: null", () => {
-        const onChange = vi.fn();
-        renderPanel({ ...defaultOptions, remux: "mp4" }, onChange);
-        fireEvent.pointerDown(getRemuxSelect(), { button: 0, pointerType: "mouse" });
-        fireEvent.click(screen.getByRole("option", { name: /^none$/i }));
-        expect(onChange).toHaveBeenCalledTimes(1);
-        const called = onChange.mock.calls[0][0] as DownloadOptions;
-        expect(called.remux).toBeNull();
+        expect(called[field as keyof DownloadOptions]).toBe(expected);
     });
 });
 
@@ -460,23 +396,16 @@ describe("Extract Audio Select", () => {
         expect(getAudioSelect()).toHaveTextContent(/^none$/i);
     });
 
-    it("selecting MP3 calls onChange with extractAudio: 'mp3'", () => {
+    it.each([
+        { name: "selecting MP3", option: /^mp3$/i, expected: "mp3" },
+        { name: "selecting Opus", option: /^opus$/i, expected: "opus" },
+    ])("$name calls onChange with extractAudio: $expected", ({ option, expected }) => {
         const onChange = vi.fn();
         renderPanel({ ...defaultOptions, extractAudio: null }, onChange);
         fireEvent.pointerDown(getAudioSelect(), { button: 0, pointerType: "mouse" });
-        fireEvent.click(screen.getByRole("option", { name: /^mp3$/i }));
+        fireEvent.click(screen.getByRole("option", { name: option }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
-        expect(called.extractAudio).toBe("mp3");
-    });
-
-    it("selecting Opus calls onChange with extractAudio: 'opus'", () => {
-        const onChange = vi.fn();
-        renderPanel({ ...defaultOptions, extractAudio: null }, onChange);
-        fireEvent.pointerDown(getAudioSelect(), { button: 0, pointerType: "mouse" });
-        fireEvent.click(screen.getByRole("option", { name: /^opus$/i }));
-        expect(onChange).toHaveBeenCalledTimes(1);
-        const called = onChange.mock.calls[0][0] as DownloadOptions;
-        expect(called.extractAudio).toBe("opus");
+        expect(called.extractAudio).toBe(expected);
     });
 });

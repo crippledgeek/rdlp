@@ -61,19 +61,12 @@ describe("SettingsPage", () => {
         expect(screen.getByText(/loading settings/i)).toBeInTheDocument();
     });
 
-    it("renders the settings form after loading", () => {
+    it("renders correctly after loading", () => {
         render(<SettingsPage />, { queryClient: seededClient() });
         expect(screen.getByRole("heading", { name: /settings/i })).toBeInTheDocument();
-    });
-
-    it("displays the output directory value", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
         expect(screen.getByDisplayValue("/home/user/Videos")).toBeInTheDocument();
-    });
-
-    it("renders the Save Settings button", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
         expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     });
 
     it("calls update_settings invoke when Save is clicked", () => {
@@ -99,23 +92,15 @@ describe("SettingsPage", () => {
         });
     });
 
-    it("embed thumbnails checkbox reflects current setting", () => {
+    it("checkbox defaults reflect settings", () => {
         render(<SettingsPage />, { queryClient: seededClient() });
+        // Embed thumbnails is true by default
         const checkboxes = screen.getAllByRole("checkbox");
-        const thumbnailCheckbox = checkboxes[0];
-        expect(thumbnailCheckbox).toBeChecked();
-    });
-
-    it("verbose logging checkbox unchecked by default", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
+        expect(checkboxes[0]).toBeChecked();
+        // Verbose logging is false by default
         const verboseLabel = screen.getByText(/verbose logging/i);
         const checkbox = verboseLabel.closest("div")?.querySelector('button[role="checkbox"]');
         expect(checkbox).toHaveAttribute("aria-checked", "false");
-    });
-
-    it("renders Browse button for output directory", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
-        expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     });
 
     // -----------------------------------------------------------------------
