@@ -136,8 +136,8 @@ impl PostProcessor for FFmpegMetadata {
         &self,
         info: &InfoDict,
         files: Vec<PathBuf>,
-        _config: &PostProcessConfig,
-        _callback: Option<Arc<dyn PostProcessCallback>>,
+        config: &PostProcessConfig,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -164,9 +164,11 @@ impl PostProcessor for FFmpegMetadata {
         let metadata = Self::build_metadata(info);
         let chapters = Self::build_chapters(info);
 
-        // Embed via library bindings (stream copy + metadata + chapters)
+        // Embed via library bindings (stream copy + metadata + chapters).
+        // Only forward FFmpeg C-level logs when verbose mode is enabled.
+        let log_callback = if config.verbose { callback } else { None };
         self.ffmpeg
-            .embed_metadata(input_file, &temp_output, &metadata, &chapters)
+            .embed_metadata(input_file, &temp_output, &metadata, &chapters, log_callback)
             .await?;
 
         // Replace original with temp

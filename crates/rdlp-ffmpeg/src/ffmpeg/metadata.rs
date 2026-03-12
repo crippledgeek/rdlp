@@ -2,8 +2,10 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use log::debug;
+use rdlp_core::PostProcessCallback;
 
 use crate::error::{PostProcessError, Result};
 
@@ -15,19 +17,24 @@ impl FFmpegRunner {
     /// Copies all streams without re-encoding, sets format-level metadata via
     /// `Dictionary`, and adds chapters via `add_chapter()`. No temporary
     /// FFMETADATA1 file is needed.
+    ///
+    /// When `callback` is provided, FFmpeg C-level log messages are captured
+    /// and forwarded via [`PostProcessCallback::on_log`] instead of being
+    /// suppressed. When `None`, muxer trace is silently suppressed.
     pub async fn embed_metadata(
         &self,
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         metadata: &HashMap<String, String>,
         chapters: &[ChapterEntry],
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let metadata = metadata.clone();
         let chapters = chapters.to_vec();
         Self::spawn_blocking("embed_metadata", move || {
-            Self::embed_metadata_sync(&input, &output, &metadata, &chapters)
+            Self::embed_metadata_sync(&input, &output, &metadata, &chapters, callback.as_deref())
         })
         .await
     }
@@ -42,8 +49,22 @@ impl FFmpegRunner {
         output: &Path,
         metadata: &HashMap<String, String>,
         chapters: &[ChapterEntry],
+        callback: Option<&dyn PostProcessCallback>,
     ) -> Result<()> {
         ensure_init()?;
+
+        // When a callback is provided, capture FFmpeg logs and forward them;
+        // otherwise suppress muxer trace/debug spam.
+        let capture = if callback.is_some() {
+            Some(super::log_capture::LogCaptureGuard::begin()?)
+        } else {
+            None
+        };
+        let _suppress = if callback.is_none() {
+            Some(super::log_capture::LogSuppressGuard::error_level())
+        } else {
+            None
+        };
 
         let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
             PostProcessError::FFmpegLibraryError {
@@ -166,6 +187,18 @@ impl FFmpegRunner {
             .map_err(|e| PostProcessError::FFmpegLibraryError {
                 message: format!("failed to write output trailer: {e}"),
             })?;
+
+        // Forward captured FFmpeg logs to the callback
+        if let (Some(guard), Some(cb)) = (&capture, callback)
+            && let Ok(logs) = guard.take_captured()
+        {
+            for line in logs {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    cb.on_log(trimmed);
+                }
+            }
+        }
 
         Ok(())
     }

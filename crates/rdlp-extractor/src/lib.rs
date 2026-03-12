@@ -40,7 +40,7 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor,
+    HQPornerExtractor, NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor,
     TNAFlixSearchExtractor, XHamsterExtractor, XTitsExtractor,
 };
 
@@ -105,6 +105,9 @@ impl ExtractorRegistry {
         // Register 9anime extractor
         registry.register(Arc::new(NineAnimeExtractor::new()));
 
+        // Register HQPorner extractor
+        registry.register(Arc::new(HQPornerExtractor::new()));
+
         // Register search extractors
         registry
             .search_extractors
@@ -118,6 +121,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(PornHubExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(HQPornerExtractor::new()));
 
         registry
     }
@@ -232,6 +238,7 @@ mod tests {
         assert!(extractors.contains(&"XTits"));
         assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
+        assert!(extractors.contains(&"HQPorner"));
     }
 
     #[test]
@@ -311,7 +318,20 @@ mod tests {
         assert!(nine_anime.is_some());
         assert_eq!(nine_anime.unwrap().name(), "9anime");
 
+        let hqporner =
+            registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
+        assert!(hqporner.is_some());
+        assert_eq!(hqporner.unwrap().name(), "HQPorner");
+
         let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
         assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn test_find_search_extractor_hqporner() {
+        let registry = ExtractorRegistry::new();
+        let extractor = registry.find_search_extractor("hqporner");
+        assert!(extractor.is_some());
+        assert_eq!(extractor.unwrap().name(), "HQPorner");
     }
 }

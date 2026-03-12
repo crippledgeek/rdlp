@@ -29,6 +29,12 @@ use crate::{AudioFormat, ContainerFormat, InfoDict, Result};
 pub trait PostProcessCallback: Send + Sync {
     /// Report progress as a fraction in \[0.0, 1.0\].
     fn on_progress(&self, progress: f64);
+
+    /// Forward a log message from the post-processing stage.
+    ///
+    /// Used to surface FFmpeg C-level log output (e.g. matroska muxer trace)
+    /// to the frontend when verbose/trace mode is enabled. Default is a no-op.
+    fn on_log(&self, _message: &str) {}
 }
 
 /// Post-processing operations on downloaded files
@@ -194,4 +200,7 @@ pub struct PostProcessConfig {
 
     /// Gain in dB for limiter-boost fallback (default 12.0 when None)
     pub normalize_boost_db: Option<f64>,
+
+    /// Enable verbose FFmpeg logging (forward muxer trace to callback).
+    pub verbose: bool,
 }

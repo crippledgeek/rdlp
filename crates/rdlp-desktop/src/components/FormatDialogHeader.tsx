@@ -21,6 +21,7 @@ export function FormatDialogHeader({ title, thumbnailUrl }: FormatDialogHeaderPr
                         src={thumbnailUrl}
                         alt=""
                         className="w-12 h-[27px] object-cover rounded-sm shrink-0 bg-muted"
+                        referrerPolicy="no-referrer"
                     />
                 )}
                 <div className="min-w-0 flex-1">

@@ -160,7 +160,7 @@ impl PostProcessor for EmbedThumbnail {
         info: &InfoDict,
         files: Vec<PathBuf>,
         config: &PostProcessConfig,
-        _callback: Option<Arc<dyn PostProcessCallback>>,
+        callback: Option<Arc<dyn PostProcessCallback>>,
     ) -> Result<PostProcessResult> {
         if files.is_empty() {
             return Ok(PostProcessResult::new(info.clone(), files));
@@ -225,10 +225,18 @@ impl PostProcessor for EmbedThumbnail {
         // Create temp output file
         let temp_output = media_file.with_extension(format!("thumb.{extension}"));
 
-        // Embed via library bindings
+        // Embed via library bindings.
+        // Only forward FFmpeg C-level logs when verbose mode is enabled.
+        let log_callback = if config.verbose { callback } else { None };
         match self
             .ffmpeg
-            .embed_thumbnail(&media_file, &thumbnail_file, &temp_output, &extension)
+            .embed_thumbnail(
+                &media_file,
+                &thumbnail_file,
+                &temp_output,
+                &extension,
+                log_callback,
+            )
             .await
         {
             Ok(()) => {
