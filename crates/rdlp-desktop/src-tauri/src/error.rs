@@ -91,6 +91,11 @@ impl From<RdlpApiError> for AppError {
                 message: err.user_message().into_owned(),
             },
             RdlpApiError::NetworkError {
+                status: Some(404), ..
+            } => AppError::ExtractionFailed {
+                message: err.user_message().into_owned(),
+            },
+            RdlpApiError::NetworkError {
                 status: Some(429), ..
             } => AppError::RateLimited {
                 retry_after_ms: Some(5000),
@@ -153,6 +158,22 @@ mod tests {
                 assert_eq!(retry_after_ms, Some(5000));
             }
             other => panic!("Expected RateLimited, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_network_404_maps_to_extraction_failed() {
+        let api_err = RdlpApiError::NetworkError {
+            message: "Not Found".into(),
+            status: Some(404),
+        };
+        let app_err = AppError::from(api_err);
+        match app_err {
+            AppError::ExtractionFailed { message } => {
+                assert!(message.contains("not found"), "message: {message}");
+                assert!(message.contains("removed"), "message: {message}");
+            }
+            other => panic!("Expected ExtractionFailed, got: {other:?}"),
         }
     }
 
