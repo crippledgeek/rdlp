@@ -1,5 +1,4 @@
-import { render, screen, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, fireEvent, createTestQueryClient } from "@/test/test-utils";
 import { ResultCard } from "./ResultCard";
 import { queryKeys } from "../query/queryKeys";
 import type { SearchResultPreview } from "../types";
@@ -88,7 +87,7 @@ describe("ResultCard", () => {
         expect(screen.getByText("12.5K views")).toBeInTheDocument();
     });
 
-    it("calls onDownload with video_url and title when Download button is clicked", async () => {
+    it("calls onDownload with video_url and title when Download button is clicked", () => {
         const onDownload = vi.fn();
         render(
             <ResultCard
@@ -99,14 +98,14 @@ describe("ResultCard", () => {
             />,
             { queryClient: seededClient() },
         );
-        await userEvent.click(screen.getByRole("button", { name: /^download$/i }));
+        fireEvent.click(screen.getByRole("button", { name: /^download$/i }));
         expect(onDownload).toHaveBeenCalledWith(
             "https://example.com/video.mp4",
             "Sample Video Title",
         );
     });
 
-    it("calls onOpenFormatDialog when Choose Format is clicked", async () => {
+    it("calls onOpenFormatDialog when Choose Format is clicked", () => {
         const onOpenFormatDialog = vi.fn();
         render(
             <ResultCard
@@ -117,7 +116,7 @@ describe("ResultCard", () => {
             />,
             { queryClient: seededClient() },
         );
-        await userEvent.click(screen.getByRole("button", { name: /choose format/i }));
+        fireEvent.click(screen.getByRole("button", { name: /choose format/i }));
         expect(onOpenFormatDialog).toHaveBeenCalledWith("https://example.com/video.mp4");
     });
 

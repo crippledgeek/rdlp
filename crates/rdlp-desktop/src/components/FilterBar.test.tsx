@@ -66,11 +66,6 @@ describe("FilterBar", () => {
     it("renders filter selects once descriptors load", () => {
         renderFilterBar();
         expect(screen.getByRole("combobox", { name: /sort/i })).toBeInTheDocument();
-    });
-
-    it("renders all default filter chips", () => {
-        renderFilterBar();
-        expect(screen.getByRole("combobox", { name: /sort/i })).toBeInTheDocument();
         expect(screen.getByRole("combobox", { name: /period/i })).toBeInTheDocument();
     });
 

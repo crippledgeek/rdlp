@@ -1,5 +1,4 @@
-import { render, screen, waitFor } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { JobCard } from "./JobCard";
 import type { DownloadJob } from "../types";
@@ -74,7 +73,7 @@ describe("JobCard", () => {
         expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
     });
 
-    it("calls onCancel with job id when Cancel is clicked", async () => {
+    it("calls onCancel with job id when Cancel is clicked", () => {
         const onCancel = vi.fn();
         render(
             <JobCard
@@ -84,7 +83,7 @@ describe("JobCard", () => {
                 onRetry={vi.fn()}
             />,
         );
-        await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+        fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
         expect(onCancel).toHaveBeenCalledWith("job-1");
     });
 
@@ -100,7 +99,7 @@ describe("JobCard", () => {
         expect(screen.getByText("75.0%")).toBeInTheDocument();
     });
 
-    it("shows Remove button for terminal statuses", async () => {
+    it("shows Remove button for terminal statuses", () => {
         const onRemove = vi.fn();
         render(
             <JobCard
@@ -111,11 +110,11 @@ describe("JobCard", () => {
             />,
         );
         const removeBtn = screen.getByRole("button", { name: /remove/i });
-        await userEvent.click(removeBtn);
+        fireEvent.click(removeBtn);
         expect(onRemove).toHaveBeenCalledWith("job-1");
     });
 
-    it("shows Retry button for retryable failed jobs", async () => {
+    it("shows Retry button for retryable failed jobs", () => {
         const onRetry = vi.fn();
         render(
             <JobCard
@@ -125,7 +124,7 @@ describe("JobCard", () => {
                 onRetry={onRetry}
             />,
         );
-        await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+        fireEvent.click(screen.getByRole("button", { name: /retry/i }));
         // onRetry now receives the full job object so the caller can preserve options
         expect(onRetry).toHaveBeenCalledWith(
             expect.objectContaining({ url: "https://example.com/video" }),
@@ -192,7 +191,7 @@ describe("JobCard", () => {
                 onRetry={vi.fn()}
             />,
         );
-        await userEvent.click(screen.getByRole("button", { name: /reveal in folder/i }));
+        fireEvent.click(screen.getByRole("button", { name: /reveal in folder/i }));
         await waitFor(() => {
             expect(screen.getByText(/could not reveal file/i)).toBeInTheDocument();
         });
@@ -235,7 +234,7 @@ describe("JobCard", () => {
         expect(screen.getByText("Logs (2)")).toBeInTheDocument();
     });
 
-    it("renders all log messages in the panel", async () => {
+    it("renders all log messages in the panel", () => {
         render(
             <JobCard
                 job={makeJob({
@@ -247,7 +246,7 @@ describe("JobCard", () => {
             />,
         );
         // Open the details element
-        await userEvent.click(screen.getByText("Logs (3)"));
+        fireEvent.click(screen.getByText("Logs (3)"));
         expect(screen.getByText("First message")).toBeInTheDocument();
         expect(screen.getByText("Second message")).toBeInTheDocument();
         expect(screen.getByText("Third message")).toBeInTheDocument();
