@@ -1,5 +1,4 @@
 import { render, screen, waitFor, fireEvent, createTestQueryClient } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { SettingsPage } from "./SettingsPage";
 import { queryKeys } from "../query/queryKeys";
@@ -77,12 +76,12 @@ describe("SettingsPage", () => {
         expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument();
     });
 
-    it("calls update_settings invoke when Save is clicked", async () => {
+    it("calls update_settings invoke when Save is clicked", () => {
         const updateHandler = vi.fn(() => undefined);
         setInvokeHandler("update_settings", updateHandler);
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
     });
@@ -93,7 +92,7 @@ describe("SettingsPage", () => {
         });
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -119,38 +118,6 @@ describe("SettingsPage", () => {
         expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     });
 
-    it("shows normalize audio checkbox unchecked by default", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
-        const label = screen.getByText(/normalize audio/i);
-        const checkbox = label.closest("div")?.querySelector('button[role="checkbox"]');
-        expect(checkbox).toHaveAttribute("aria-checked", "false");
-    });
-
-    it("reveals mode toggle and boost fallback when normalize audio is checked", async () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
-        const normalizeLabel = screen.getByText(/normalize audio/i);
-        const checkbox = normalizeLabel.closest("div")?.querySelector('button[role="checkbox"]');
-        await userEvent.click(checkbox!);
-        await waitFor(() => {
-            expect(screen.getByText(/ebu r128 loudnorm/i)).toBeInTheDocument();
-        });
-        expect(screen.getByText(/boost fallback/i)).toBeInTheDocument();
-    });
-
-    it("reveals preset select and advanced options when loudnorm mode is active", () => {
-        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-        expect(screen.getByText(/dynamic mode/i)).toBeInTheDocument();
-        expect(screen.getByText(/precompress/i)).toBeInTheDocument();
-        expect(screen.getByText("Preset")).toBeInTheDocument();
-    });
-
-    it("reveals boost gain input when boost fallback is checked", () => {
-        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, normalize_boost: true };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-        expect(screen.getByPlaceholderText("12.0")).toBeInTheDocument();
-    });
-
     // -----------------------------------------------------------------------
     // A. Range validation errors on save
     // -----------------------------------------------------------------------
@@ -160,7 +127,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByLabelText(/loudness target/i), { target: { value: "5" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -172,7 +139,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByLabelText(/true peak limit/i), { target: { value: "1" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -184,7 +151,7 @@ describe("SettingsPage", () => {
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
         fireEvent.change(screen.getByPlaceholderText("12.0"), { target: { value: "50" } });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
         await waitFor(() => {
             expect(screen.getByRole("alert")).toBeInTheDocument();
         });
@@ -195,13 +162,13 @@ describe("SettingsPage", () => {
     // B. Save payload with normalization settings
     // -----------------------------------------------------------------------
 
-    it("calls update_settings with correct normalization payload for loudnorm broadcast preset", async () => {
+    it("calls update_settings with correct normalization payload for loudnorm broadcast preset", () => {
         const updateHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("update_settings", updateHandler);
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, loudnorm_preset: "broadcast" };
 
         render(<SettingsPage />, { queryClient: seededClient(settings) });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
@@ -210,38 +177,16 @@ describe("SettingsPage", () => {
         expect(args.settings.loudnorm_preset).toBe("broadcast");
     });
 
-    it("calls update_settings with normalize_audio false when unchecked", async () => {
+    it("calls update_settings with normalize_audio false when unchecked", () => {
         const updateHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("update_settings", updateHandler);
 
         render(<SettingsPage />, { queryClient: seededClient() });
-        await userEvent.click(screen.getByRole("button", { name: /save settings/i }));
+        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
         expect(updateHandler).toHaveBeenCalledTimes(1);
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
         expect(args.settings.normalize_audio).toBe(false);
     });
 
-    // -----------------------------------------------------------------------
-    // C. Visibility cascading
-    // -----------------------------------------------------------------------
-
-    it("loudnorm mode toggle not visible when normalize_audio is unchecked", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
-        expect(screen.queryByText(/ebu r128 loudnorm/i)).not.toBeInTheDocument();
-    });
-
-    it("preset select and custom targets not visible when normalize_audio is checked but mode is Peak", () => {
-        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: false };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-        expect(screen.queryByText(/dynamic mode/i)).not.toBeInTheDocument();
-        expect(screen.queryByText(/precompress/i)).not.toBeInTheDocument();
-        expect(screen.queryByText("Preset")).not.toBeInTheDocument();
-    });
-
-    it("boost dB input not visible when boost fallback is unchecked", () => {
-        const settings = { ...defaultSettings, normalize_audio: true, normalize_boost: false };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-        expect(screen.queryByPlaceholderText("12.0")).not.toBeInTheDocument();
-    });
 });

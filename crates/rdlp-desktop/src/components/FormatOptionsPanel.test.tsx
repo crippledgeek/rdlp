@@ -1,5 +1,4 @@
 import { render, screen, fireEvent } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
 import {
     FormatOptionsPanel,
     buildDefaultOptions,
@@ -353,30 +352,30 @@ describe("Audio Normalization Select — onChange branches", () => {
 // ---------------------------------------------------------------------------
 
 describe("Quality preset radio buttons", () => {
-    it("clicking a preset calls onChange with the preset's selector string", async () => {
+    it("clicking a preset calls onChange with the preset's selector string", () => {
         const onChange = vi.fn();
         renderPanel(defaultOptions, onChange);
-        await userEvent.click(screen.getByRole("radio", { name: /720p/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /720p/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         const preset = PRESETS.find((p) => p.id === "720p")!;
         expect(called.format).toBe(preset.selector);
     });
 
-    it("clicking 'Best Quality' preset calls onChange with best selector", async () => {
+    it("clicking 'Best Quality' preset calls onChange with best selector", () => {
         const onChange = vi.fn();
         renderPanel(defaultOptions, onChange);
-        await userEvent.click(screen.getByRole("radio", { name: /best quality/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /best quality/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         const preset = PRESETS.find((p) => p.id === "best")!;
         expect(called.format).toBe(preset.selector);
     });
 
-    it("clicking 'Audio Only' preset calls onChange with audio-only selector", async () => {
+    it("clicking 'Audio Only' preset calls onChange with audio-only selector", () => {
         const onChange = vi.fn();
         renderPanel(defaultOptions, onChange);
-        await userEvent.click(screen.getByRole("radio", { name: /audio only/i }));
+        fireEvent.click(screen.getByRole("radio", { name: /audio only/i }));
         expect(onChange).toHaveBeenCalledTimes(1);
         const called = onChange.mock.calls[0][0] as DownloadOptions;
         const preset = PRESETS.find((p) => p.id === "audio-only")!;

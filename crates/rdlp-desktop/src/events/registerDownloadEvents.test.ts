@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Tests for registerDownloadEvents — verifying cache mutations per event type.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
