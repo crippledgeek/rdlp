@@ -67,6 +67,12 @@ describe("SettingsPage", () => {
         expect(screen.getByDisplayValue("/home/user/Videos")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /save settings/i })).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
+        // Checkbox defaults
+        const checkboxes = screen.getAllByRole("checkbox");
+        expect(checkboxes[0]).toBeChecked(); // embed thumbnail
+        const verboseLabel = screen.getByText(/verbose logging/i);
+        const checkbox = verboseLabel.closest("div")?.querySelector('button[role="checkbox"]');
+        expect(checkbox).toHaveAttribute("aria-checked", "false");
     });
 
     it("calls update_settings invoke when Save is clicked", () => {
@@ -92,22 +98,9 @@ describe("SettingsPage", () => {
         });
     });
 
-    it("checkbox defaults reflect settings", () => {
-        render(<SettingsPage />, { queryClient: seededClient() });
-        // Embed thumbnails is true by default
-        const checkboxes = screen.getAllByRole("checkbox");
-        expect(checkboxes[0]).toBeChecked();
-        // Verbose logging is false by default
-        const verboseLabel = screen.getByText(/verbose logging/i);
-        const checkbox = verboseLabel.closest("div")?.querySelector('button[role="checkbox"]');
-        expect(checkbox).toHaveAttribute("aria-checked", "false");
-    });
-
-    // -----------------------------------------------------------------------
-    // A. Range validation errors on save
-    // -----------------------------------------------------------------------
-
-    it("shows error when loudnorm_target_i is out of range (above 0)", async () => {
+    // Validation range errors are tested as pure functions in settingsValidation.test.ts.
+    // This single integration test verifies the wiring from validation → UI error display.
+    it("shows validation error on save when a field is out of range", async () => {
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
         render(<SettingsPage />, { queryClient: seededClient(settings) });
 
@@ -119,35 +112,7 @@ describe("SettingsPage", () => {
         expect(screen.getByRole("alert")).toHaveTextContent(/loudness target/i);
     });
 
-    it("shows error when loudnorm_target_tp is out of range (above 0)", async () => {
-        const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-
-        fireEvent.change(screen.getByLabelText(/true peak limit/i), { target: { value: "1" } });
-        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
-        await waitFor(() => {
-            expect(screen.getByRole("alert")).toBeInTheDocument();
-        });
-        expect(screen.getByRole("alert")).toHaveTextContent(/true peak/i);
-    });
-
-    it("shows error when normalize_boost_db is out of range (above 30)", async () => {
-        const settings = { ...defaultSettings, normalize_audio: true, normalize_boost: true };
-        render(<SettingsPage />, { queryClient: seededClient(settings) });
-
-        fireEvent.change(screen.getByPlaceholderText("12.0"), { target: { value: "50" } });
-        fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
-        await waitFor(() => {
-            expect(screen.getByRole("alert")).toBeInTheDocument();
-        });
-        expect(screen.getByRole("alert")).toHaveTextContent(/boost gain/i);
-    });
-
-    // -----------------------------------------------------------------------
-    // B. Save payload with normalization settings
-    // -----------------------------------------------------------------------
-
-    it("calls update_settings with correct normalization payload for loudnorm broadcast preset", () => {
+    it("calls update_settings with correct normalization payload", () => {
         const updateHandler = vi.fn((_args?: Record<string, unknown>) => undefined);
         setInvokeHandler("update_settings", updateHandler);
         const settings = { ...defaultSettings, normalize_audio: true, loudnorm: true, loudnorm_preset: "broadcast" };
@@ -173,5 +138,4 @@ describe("SettingsPage", () => {
         const args = updateHandler.mock.calls[0][0] as { settings: AppSettings };
         expect(args.settings.normalize_audio).toBe(false);
     });
-
 });

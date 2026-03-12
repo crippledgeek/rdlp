@@ -115,7 +115,7 @@ interface FormatOptionsPanelProps {
 }
 
 /** Derive which preset ID matches the current format selector, if any. */
-function activePreset(format: string | null): string | null {
+export function activePreset(format: string | null): string | null {
     if (!format) return null;
     return PRESETS.find((p) => p.selector === format)?.id ?? null;
 }

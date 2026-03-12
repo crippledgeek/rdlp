@@ -33,6 +33,23 @@ import { AudioNormalizationSection } from "@/components/AudioNormalizationSectio
 /** Sentinel value for "no selection" since Radix Select does not support empty string values. */
 const NONE_SENTINEL = "none";
 
+/** Validate settings before save. Returns error message or null if valid. */
+export function validateSettings(draft: AppSettings): string | null {
+    if (draft.loudnorm_target_i !== null && (draft.loudnorm_target_i < -70 || draft.loudnorm_target_i > 0)) {
+        return "Loudness Target must be between -70 and 0 LUFS.";
+    }
+    if (draft.loudnorm_target_tp !== null && (draft.loudnorm_target_tp < -9 || draft.loudnorm_target_tp > 0)) {
+        return "True Peak Limit must be between -9 and 0 dBTP.";
+    }
+    if (draft.loudnorm_target_lra !== null && (draft.loudnorm_target_lra < 1 || draft.loudnorm_target_lra > 30)) {
+        return "Loudness Range must be between 1 and 30 LU.";
+    }
+    if (draft.normalize_boost_db !== null && (draft.normalize_boost_db < 0 || draft.normalize_boost_db > 30)) {
+        return "Boost Gain must be between 0 and 30 dB.";
+    }
+    return null;
+}
+
 export function SettingsPage() {
     const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
     const { data: providers = [] } = useQuery(providersQueryOptions());
@@ -50,21 +67,9 @@ export function SettingsPage() {
     }
 
     const handleSave = async () => {
-        // Range validation for loudnorm numeric fields
-        if (draft.loudnorm_target_i !== null && (draft.loudnorm_target_i < -70 || draft.loudnorm_target_i > 0)) {
-            setSaveError("Loudness Target must be between -70 and 0 LUFS.");
-            return;
-        }
-        if (draft.loudnorm_target_tp !== null && (draft.loudnorm_target_tp < -9 || draft.loudnorm_target_tp > 0)) {
-            setSaveError("True Peak Limit must be between -9 and 0 dBTP.");
-            return;
-        }
-        if (draft.loudnorm_target_lra !== null && (draft.loudnorm_target_lra < 1 || draft.loudnorm_target_lra > 30)) {
-            setSaveError("Loudness Range must be between 1 and 30 LU.");
-            return;
-        }
-        if (draft.normalize_boost_db !== null && (draft.normalize_boost_db < 0 || draft.normalize_boost_db > 30)) {
-            setSaveError("Boost Gain must be between 0 and 30 dB.");
+        const validationError = validateSettings(draft);
+        if (validationError) {
+            setSaveError(validationError);
             return;
         }
         try {
