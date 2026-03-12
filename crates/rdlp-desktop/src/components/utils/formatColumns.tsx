@@ -1,8 +1,5 @@
 // TanStack Table column definitions for the format selection table.
-//
-// Extracted as a hook because it uses useMemo for stable column references.
 
-import { useMemo } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
@@ -20,9 +17,9 @@ interface FormatColumnsResult {
 
 /** Stable column definitions and total width for the format table. */
 export function useFormatColumns(): FormatColumnsResult {
-    const columnHelper = useMemo(() => createColumnHelper<FormatInfo>(), []);
+    const columnHelper = createColumnHelper<FormatInfo>();
 
-    const columns = useMemo(() => [
+    const columns: ColumnDef<FormatInfo, any>[] = [ // eslint-disable-line @typescript-eslint/no-explicit-any
         columnHelper.accessor((row) => row.height ?? undefined, {
             id: "height",
             header: "Resolution",
@@ -110,12 +107,9 @@ export function useFormatColumns(): FormatColumnsResult {
             },
             meta: { align: "center" as const },
         }),
-    ], [columnHelper]);
+    ];
 
-    const totalColumnSize = useMemo(
-        () => columns.reduce((sum, col) => sum + (col.size ?? 0), 0),
-        [columns],
-    );
+    const totalColumnSize = columns.reduce((sum, col) => sum + (col.size ?? 0), 0);
 
     return { columns, totalColumnSize };
 }

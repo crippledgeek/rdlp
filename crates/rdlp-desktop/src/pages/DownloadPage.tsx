@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowDown, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -39,7 +39,7 @@ export function DownloadPage() {
     const trimmedUrl = url.trim();
     const isValidUrl = URL_PATTERN.test(trimmedUrl);
 
-    const handleQuickDownload = useCallback(async () => {
+    const handleQuickDownload = async () => {
         if (!trimmedUrl) return;
         if (!isValidUrl) {
             setError("Please enter a valid URL starting with http:// or https://");
@@ -56,19 +56,16 @@ export function DownloadPage() {
         } finally {
             setIsStarting(false);
         }
-    }, [trimmedUrl, isValidUrl, settings]);
+    };
 
-    const handleKeyDown = useCallback(
-        (e: React.KeyboardEvent) => {
-            if (e.key === "Enter" && trimmedUrl && !isStarting) {
-                e.preventDefault();
-                void handleQuickDownload();
-            }
-        },
-        [handleQuickDownload, trimmedUrl, isStarting],
-    );
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === "Enter" && trimmedUrl && !isStarting) {
+            e.preventDefault();
+            void handleQuickDownload();
+        }
+    };
 
-    const handleChooseFormat = useCallback(() => {
+    const handleChooseFormat = () => {
         if (!trimmedUrl) return;
         if (!isValidUrl) {
             setError("Please enter a valid URL starting with http:// or https://");
@@ -76,22 +73,19 @@ export function DownloadPage() {
         }
         setError(null);
         setFormatDialogUrl(trimmedUrl);
-    }, [trimmedUrl, isValidUrl]);
+    };
 
-    const handleFormatConfirm = useCallback(
-        (options: DownloadOptions, title?: string) => {
-            if (!formatDialogUrl) return;
-            void startDownload(formatDialogUrl, options, title)
-                .then(() => {
-                    setUrl("");
-                    setFormatDialogUrl(null);
-                })
-                .catch(() => {
-                    setError("Failed to start download.");
-                });
-        },
-        [formatDialogUrl],
-    );
+    const handleFormatConfirm = (options: DownloadOptions, title?: string) => {
+        if (!formatDialogUrl) return;
+        void startDownload(formatDialogUrl, options, title)
+            .then(() => {
+                setUrl("");
+                setFormatDialogUrl(null);
+            })
+            .catch(() => {
+                setError("Failed to start download.");
+            });
+    };
 
     const handleCancel = (id: string) => {
         cancelDownload(id).catch((e) => console.error("Failed to cancel", e));

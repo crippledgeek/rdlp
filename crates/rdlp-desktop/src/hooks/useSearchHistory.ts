@@ -3,7 +3,6 @@
 // Stores the last 30 searches grouped by site. Supports add, remove,
 // clear, and restore operations. Deduplicates by query+site.
 
-import { useCallback, useMemo } from "react";
 import { useLocalStorage } from "usehooks-ts";
 
 const STORAGE_KEY = "rdlp-search-history";
@@ -44,33 +43,30 @@ function groupBySite(entries: SearchHistoryEntry[]): SiteGroup[] {
 export function useSearchHistory() {
     const [entries, setEntries] = useLocalStorage<SearchHistoryEntry[]>(STORAGE_KEY, []);
 
-    const addEntry = useCallback(
-        (entry: Omit<SearchHistoryEntry, "timestamp">) => {
-            setEntries((current) => {
-                const filtered = current.filter(
-                    (e) => !(e.query === entry.query && e.site === entry.site),
-                );
-                const newEntry: SearchHistoryEntry = {
-                    ...entry,
-                    timestamp: Date.now(),
-                };
-                return [newEntry, ...filtered].slice(0, MAX_ENTRIES);
-            });
-        },
-        [setEntries],
-    );
+    const addEntry = (entry: Omit<SearchHistoryEntry, "timestamp">) => {
+        setEntries((current) => {
+            const filtered = current.filter(
+                (e) => !(e.query === entry.query && e.site === entry.site),
+            );
+            const newEntry: SearchHistoryEntry = {
+                ...entry,
+                timestamp: Date.now(),
+            };
+            return [newEntry, ...filtered].slice(0, MAX_ENTRIES);
+        });
+    };
 
-    const removeEntry = useCallback((query: string, site: string) => {
+    const removeEntry = (query: string, site: string) => {
         setEntries((current) =>
             current.filter((e) => !(e.query === query && e.site === site)),
         );
-    }, [setEntries]);
+    };
 
-    const clearAll = useCallback(() => {
+    const clearAll = () => {
         setEntries([]);
-    }, [setEntries]);
+    };
 
-    const grouped = useMemo(() => groupBySite(entries), [entries]);
+    const grouped = groupBySite(entries);
 
     return { entries, grouped, addEntry, removeEntry, clearAll };
 }
