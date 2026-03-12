@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for searchUtils.ts — formatDuration, formatCompactDate, formatViews.
 
 import { describe, test, expect } from "vitest";
