@@ -1,9 +1,8 @@
 // Full-screen modal for format selection with hero table, presets, and collapsed options.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-    useReactTable,
     getCoreRowModel,
     getSortedRowModel,
 } from "@tanstack/react-table";
@@ -20,6 +19,7 @@ import { FormatDialogHeader } from "./FormatDialogHeader";
 import { FormatTableSection } from "./FormatTableSection";
 import { DownloadOptionsPanel } from "./DownloadOptionsPanel";
 import { useFormatColumns } from "./utils/formatColumns";
+import { useTable } from "../hooks/useTable";
 import { groupRows } from "./utils/tableHelpers";
 import type { DownloadOptions } from "../types";
 
@@ -105,7 +105,7 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
 
     // -- TanStack Table instance ----------------------------------------
 
-    const table = useReactTable({
+    const table = useTable({
         data: filtered,
         columns,
         state: { sorting },
@@ -116,22 +116,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         enableMultiSort: false,
     });
 
-    const groups = useMemo(
-        () => groupRows(table.getSortedRowModel().rows),
-        [table],
-    );
+    const groups = groupRows(table.getSortedRowModel().rows);
 
-    const subtitleLangs = useMemo(
-        () => formatData?.subtitles.map((s) => s.lang) ?? [],
-        [formatData],
-    );
-
-    // NOTE: useReactTable causes React Compiler to bail out of this entire component,
-    // so all callbacks and derived values must be manually memoized.
+    const subtitleLangs = formatData?.subtitles.map((s) => s.lang) ?? [];
 
     // -- Handlers -----------------------------------------------------
 
-    const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
+    const handleRowClick = (id: string, e: React.MouseEvent) => {
         if (e.shiftKey && selectedId !== null && selectedId !== id) {
             setMergeId(id);
         } else {
@@ -141,9 +132,9 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         // Clear preset when manually selecting
         setPresetId(null);
         setOptions((prev) => ({ ...prev, format: null }));
-    }, [selectedId]);
+    };
 
-    const handlePresetSelect = useCallback((newPresetId: string) => {
+    const handlePresetSelect = (newPresetId: string) => {
         if (!newPresetId) {
             setPresetId(null);
             setOptions((prev) => ({ ...prev, format: null }));
@@ -155,14 +146,14 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         setSelectedId(null);
         setMergeId(null);
         setOptions((prev) => ({ ...prev, format: preset.selector }));
-    }, []);
+    };
 
-    const handleClearSelection = useCallback(() => {
+    const handleClearSelection = () => {
         setSelectedId(null);
         setMergeId(null);
-    }, []);
+    };
 
-    const handleExprChange = useCallback((value: string) => {
+    const handleExprChange = (value: string) => {
         setExpr(value);
         if (exprTimerRef.current) clearTimeout(exprTimerRef.current);
         if (value.trim() === "") {
@@ -170,14 +161,16 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
             setExprMatches(new Set());
             return;
         }
+        // Optional chaining moved outside try — compiler bails out on ?. inside try/catch.
+        const formats = formatData?.formats ?? [];
         exprTimerRef.current = setTimeout(async () => {
             try {
-                const fmts = formatData?.formats.map((f) => ({
+                const fmts = formats.map((f) => ({
                     format_id: f.format_id, ext: f.ext, width: f.width,
                     height: f.height, fps: f.fps, tbr: f.tbr,
                     vcodec: f.vcodec, acodec: f.acodec, filesize: f.filesize,
                     vbr: f.vbr, abr: f.abr, asr: f.asr, protocol: f.protocol,
-                })) ?? [];
+                }));
                 const matches = await invokeTyped<string[]>(
                     "validate_format_expression",
                     { expression: value, formats: fmts },
@@ -194,26 +187,26 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                 setExprMatches(new Set());
             }
         }, 400);
-    }, [formatData]);
+    };
 
-    const buildFormatSelector = useCallback((): string | null => {
+    const buildFormatSelector = (): string | null => {
         if (expertMode && expr.trim()) return expr.trim();
         if (selectedId && mergeId) return `${selectedId}+${mergeId}`;
         if (selectedId) return selectedId;
         return options.format;
-    }, [expertMode, expr, selectedId, mergeId, options.format]);
+    };
 
-    const handleConfirm = useCallback(() => {
+    const handleConfirm = () => {
         const format = buildFormatSelector();
         onConfirm({ ...options, format }, formatData?.title);
-    }, [buildFormatSelector, onConfirm, options, formatData?.title]);
+    };
 
-    const handleBrowseDir = useCallback(async () => {
+    const handleBrowseDir = async () => {
         const dir = await pickDirectory();
         if (dir) setOptions((prev) => ({ ...prev, outputDir: dir }));
-    }, []);
+    };
 
-    const handleSubLangSelect = useCallback((lang: string) => {
+    const handleSubLangSelect = (lang: string) => {
         setOptions((prev) => {
             const current = prev.subtitleLangs;
             const next = current.includes(lang)
@@ -221,14 +214,11 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                 : [...current, lang];
             return { ...prev, subtitleLangs: next };
         });
-    }, []);
+    };
 
     // -- Lookup helpers -----------------------------------------------
 
-    const findFormat = useCallback(
-        (id: string) => formatData?.formats.find((f) => f.format_id === id),
-        [formatData],
-    );
+    const findFormat = (id: string) => formatData?.formats.find((f) => f.format_id === id);
 
     // -- Render -------------------------------------------------------
 

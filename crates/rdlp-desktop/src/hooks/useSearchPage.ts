@@ -1,10 +1,9 @@
 // Custom hook encapsulating all SearchPage state, queries, and callbacks.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
-    useReactTable,
     getCoreRowModel,
     getSortedRowModel,
 } from "@tanstack/react-table";
@@ -25,6 +24,7 @@ import {
 import { useSearchHistory } from "./useSearchHistory";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
+import { useTable } from "./useTable";
 import { useSearchColumns } from "../components/utils/searchColumns";
 import type { DownloadOptions, SearchResultPreview } from "../types";
 
@@ -106,10 +106,7 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
     }, [results]);
 
     // Merge: data defaults overridden by explicit user toggles
-    const columnVisibility = useMemo(
-        () => ({ ...dataColumnVisibility, ...userColumnVisibility }),
-        [dataColumnVisibility, userColumnVisibility],
-    );
+    const columnVisibility = { ...dataColumnVisibility, ...userColumnVisibility };
 
     // Reset table state when query/site/filters change (not on Load More page appends)
     useEffect(() => {
@@ -135,55 +132,54 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
         }
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // NOTE: useReactTable causes React Compiler to bail out of this entire hook,
-    // so all callbacks and derived values must be manually memoized.
+    // --- Handlers ---
 
-    const handleSearch = useCallback(() => {
+    const handleSearch = () => {
         refetch().catch((e) => console.error("Refetch failed:", e));
-    }, [refetch]);
+    };
 
-    const handleDownload = useCallback((url: string, title?: string) => {
+    const handleDownload = (url: string, title?: string) => {
         const opts = buildDefaultOptions(settings);
         apiStartDownload(url, opts, title).catch((e) =>
             console.error("Download failed:", e),
         );
-    }, [settings]);
+    };
 
-    const handleDownloadWithOptions = useCallback((url: string, title: string, options: Partial<DownloadOptions>) => {
+    const handleDownloadWithOptions = (url: string, title: string, options: Partial<DownloadOptions>) => {
         const defaults = buildDefaultOptions(settings);
         apiStartDownload(url, { ...defaults, ...options }, title).catch((e) =>
             console.error("Download failed:", e),
         );
-    }, [settings]);
+    };
 
-    const handleOpenFormatDialog = useCallback((url: string) => {
+    const handleOpenFormatDialog = (url: string) => {
         setFormatDialogUrl(url);
-    }, []);
+    };
 
-    const handleFormatDialogConfirm = useCallback((options: DownloadOptions, title?: string) => {
+    const handleFormatDialogConfirm = (options: DownloadOptions, title?: string) => {
         if (formatDialogUrl) {
             apiStartDownload(formatDialogUrl, options, title).catch((e) =>
                 console.error("Download failed:", e),
             );
         }
         setFormatDialogUrl(null);
-    }, [formatDialogUrl]);
+    };
 
     // Keyboard nav callbacks (by index, resolved through table rows via ref)
-    const handleDownloadByIndex = useCallback((index: number) => {
+    const handleDownloadByIndex = (index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) handleDownload(row.original.video_url, row.original.title);
-    }, [handleDownload]);
+    };
 
-    const handleFormatByIndex = useCallback((index: number) => {
+    const handleFormatByIndex = (index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) handleOpenFormatDialog(row.original.video_url);
-    }, [handleOpenFormatDialog]);
+    };
 
-    const handleOpenInBrowser = useCallback((index: number) => {
+    const handleOpenInBrowser = (index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) window.open(row.original.video_url, "_blank");
-    }, []);
+    };
 
     // focusIndex is managed by keyboard nav; initialized to -1
     const [focusIndex, setFocusIndex] = useState(-1);
@@ -195,7 +191,7 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
         focusIndex,
     });
 
-    const table = useReactTable({
+    const table = useTable({
         data: results,
         columns,
         state: {
@@ -212,8 +208,8 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
         enableRowSelection: true,
     });
 
-    // Keep ref current for index-based callbacks
-    tableRef.current = table;
+    // Keep ref current for index-based callbacks (in effect, not render)
+    useEffect(() => { tableRef.current = table; });
 
     useKeyboardNavigation({
         focusIndex,
@@ -228,19 +224,19 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
 
     const selectedCount = Object.keys(rowSelection).length;
 
-    const handleBatchDownload = useCallback(() => {
+    const handleBatchDownload = () => {
         const selectedRows = table.getSelectedRowModel().rows;
         for (const row of selectedRows) {
             handleDownload(row.original.video_url, row.original.title);
         }
         setRowSelection({});
-    }, [table, handleDownload]);
+    };
 
-    const handleClearSelection = useCallback(() => {
+    const handleClearSelection = () => {
         setRowSelection({});
-    }, []);
+    };
 
-    const handleRestoreSearch = useCallback((q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
+    const handleRestoreSearch = (q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
         setSearchParam("query", q);
         setSearchParam("site", s);
         if (restoredFilters.length > 0) {
@@ -251,21 +247,21 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
             }));
         }
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    }, [refetch]);
+    };
 
-    const handleQuickSearch = useCallback((q: string) => {
+    const handleQuickSearch = (q: string) => {
         setSearchParam("query", q);
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    }, [refetch]);
+    };
 
-    const handleResetFiltersAndSearch = useCallback(() => {
+    const handleResetFiltersAndSearch = () => {
         searchParamsAtom.setState((prev) => ({
             ...prev,
             filters: [],
             hasUserFilters: false,
         }));
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    }, [refetch]);
+    };
 
     return {
         // State
