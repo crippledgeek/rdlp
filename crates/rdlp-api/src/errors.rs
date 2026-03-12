@@ -101,6 +101,10 @@ impl RdlpApiError {
                 status: Some(429),
             } => Cow::Owned(format!("Rate limited by server. {message}")),
             Self::NetworkError {
+                status: Some(404),
+                ..
+            } => Cow::Borrowed("Content not found — it may have been removed"),
+            Self::NetworkError {
                 message,
                 status: Some(s),
             } if *s >= 500 => Cow::Owned(format!("Server error ({s}). {message}")),
@@ -257,6 +261,17 @@ mod tests {
         };
         let msg = err.user_message();
         assert!(msg.contains("Rate limited"));
+    }
+
+    #[test]
+    fn test_user_message_network_404() {
+        let err = RdlpApiError::NetworkError {
+            message: "Not Found".into(),
+            status: Some(404),
+        };
+        let msg = err.user_message();
+        assert!(msg.contains("not found"), "message: {msg}");
+        assert!(msg.contains("removed"), "message: {msg}");
     }
 
     #[test]

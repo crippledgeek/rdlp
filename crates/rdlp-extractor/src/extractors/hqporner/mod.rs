@@ -189,7 +189,12 @@ impl InfoExtractor for HQPornerExtractor {
         let video_id = patterns::extract_video_id(url)
             .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
 
-        let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
+        let webpage = BaseExtractor::fetch_webpage_with_headers(
+            url,
+            &[("Referer", "https://hqporner.com/")],
+            ctx,
+        )
+        .await?;
 
         // Extract iframe URL from raw HTML (regex, before DOM parse)
         let iframe_url = extract_iframe_url(&webpage).ok_or_else(|| {
@@ -255,7 +260,12 @@ impl InfoExtractor for HQPornerExtractor {
         let mut page_url = url.to_string();
 
         loop {
-            let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+            let webpage = BaseExtractor::fetch_webpage_with_headers(
+                &page_url,
+                &[("Referer", "https://hqporner.com/")],
+                ctx,
+            )
+            .await?;
 
             let video_urls: Vec<String> = patterns::VIDEO_LINK_PATTERN
                 .captures_iter(&webpage)
@@ -335,7 +345,12 @@ impl SearchExtractor for HQPornerExtractor {
             let sanitized = rdlp_security::sanitize_for_logging(&page_url);
             debug!("[HQPorner] Fetching search page {page}: {sanitized}");
 
-            let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+            let webpage = BaseExtractor::fetch_webpage_with_headers(
+                &page_url,
+                &[("Referer", "https://hqporner.com/")],
+                ctx,
+            )
+            .await?;
             let page_results = search::parse_search_results(&webpage);
 
             if page_results.is_empty() {
@@ -372,7 +387,12 @@ impl SearchExtractor for HQPornerExtractor {
         let page = query.page.unwrap_or(1);
         let page_url = search_patterns::build_search_url(&query.query, page);
 
-        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
+        let webpage = BaseExtractor::fetch_webpage_with_headers(
+            &page_url,
+            &[("Referer", "https://hqporner.com/")],
+            ctx,
+        )
+        .await?;
         let page_results = search::parse_search_results(&webpage);
         let has_more = search::has_next_page(&webpage);
         let total_estimate = search::extract_total_count(&webpage);
