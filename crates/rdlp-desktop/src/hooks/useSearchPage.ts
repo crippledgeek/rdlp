@@ -1,6 +1,6 @@
 // Custom hook encapsulating all SearchPage state, queries, and callbacks.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -106,7 +106,10 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
     }, [results]);
 
     // Merge: data defaults overridden by explicit user toggles
-    const columnVisibility = { ...dataColumnVisibility, ...userColumnVisibility };
+    const columnVisibility = useMemo(
+        () => ({ ...dataColumnVisibility, ...userColumnVisibility }),
+        [dataColumnVisibility, userColumnVisibility],
+    );
 
     // Reset table state when query/site/filters change (not on Load More page appends)
     useEffect(() => {
@@ -132,52 +135,55 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
         }
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleSearch = () => {
-        refetch().catch((e) => console.error("Refetch failed:", e));
-    };
+    // NOTE: useReactTable causes React Compiler to bail out of this entire hook,
+    // so all callbacks and derived values must be manually memoized.
 
-    const handleDownload = (url: string, title?: string) => {
+    const handleSearch = useCallback(() => {
+        refetch().catch((e) => console.error("Refetch failed:", e));
+    }, [refetch]);
+
+    const handleDownload = useCallback((url: string, title?: string) => {
         const opts = buildDefaultOptions(settings);
         apiStartDownload(url, opts, title).catch((e) =>
             console.error("Download failed:", e),
         );
-    };
+    }, [settings]);
 
-    const handleDownloadWithOptions = (url: string, title: string, options: Partial<DownloadOptions>) => {
+    const handleDownloadWithOptions = useCallback((url: string, title: string, options: Partial<DownloadOptions>) => {
         const defaults = buildDefaultOptions(settings);
         apiStartDownload(url, { ...defaults, ...options }, title).catch((e) =>
             console.error("Download failed:", e),
         );
-    };
+    }, [settings]);
 
-    const handleOpenFormatDialog = (url: string) => {
+    const handleOpenFormatDialog = useCallback((url: string) => {
         setFormatDialogUrl(url);
-    };
+    }, []);
 
-    const handleFormatDialogConfirm = (options: DownloadOptions, title?: string) => {
+    const handleFormatDialogConfirm = useCallback((options: DownloadOptions, title?: string) => {
         if (formatDialogUrl) {
             apiStartDownload(formatDialogUrl, options, title).catch((e) =>
                 console.error("Download failed:", e),
             );
         }
         setFormatDialogUrl(null);
-    };
+    }, [formatDialogUrl]);
 
     // Keyboard nav callbacks (by index, resolved through table rows via ref)
-    const handleDownloadByIndex = (index: number) => {
+    const handleDownloadByIndex = useCallback((index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) handleDownload(row.original.video_url, row.original.title);
-    };
+    }, [handleDownload]);
 
-    const handleFormatByIndex = (index: number) => {
+    const handleFormatByIndex = useCallback((index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) handleOpenFormatDialog(row.original.video_url);
-    };
+    }, [handleOpenFormatDialog]);
 
-    const handleOpenInBrowser = (index: number) => {
+    const handleOpenInBrowser = useCallback((index: number) => {
         const row = tableRef.current?.getRowModel().rows[index];
         if (row) window.open(row.original.video_url, "_blank");
-    };
+    }, []);
 
     // focusIndex is managed by keyboard nav; initialized to -1
     const [focusIndex, setFocusIndex] = useState(-1);
@@ -222,19 +228,19 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
 
     const selectedCount = Object.keys(rowSelection).length;
 
-    const handleBatchDownload = () => {
+    const handleBatchDownload = useCallback(() => {
         const selectedRows = table.getSelectedRowModel().rows;
         for (const row of selectedRows) {
             handleDownload(row.original.video_url, row.original.title);
         }
         setRowSelection({});
-    };
+    }, [table, handleDownload]);
 
-    const handleClearSelection = () => {
+    const handleClearSelection = useCallback(() => {
         setRowSelection({});
-    };
+    }, []);
 
-    const handleRestoreSearch = (q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
+    const handleRestoreSearch = useCallback((q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
         setSearchParam("query", q);
         setSearchParam("site", s);
         if (restoredFilters.length > 0) {
@@ -244,25 +250,22 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
                 hasUserFilters: true,
             }));
         }
-        // Trigger search after atom updates propagate
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    };
+    }, [refetch]);
 
-    const handleQuickSearch = (q: string) => {
+    const handleQuickSearch = useCallback((q: string) => {
         setSearchParam("query", q);
-        // Trigger search after atom update propagates
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    };
+    }, [refetch]);
 
-    /** Reset filters to descriptor defaults then re-search. */
-    const handleResetFiltersAndSearch = () => {
+    const handleResetFiltersAndSearch = useCallback(() => {
         searchParamsAtom.setState((prev) => ({
             ...prev,
             filters: [],
             hasUserFilters: false,
         }));
         setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    };
+    }, [refetch]);
 
     return {
         // State

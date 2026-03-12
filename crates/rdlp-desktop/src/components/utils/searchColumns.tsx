@@ -3,6 +3,7 @@
 // Mirrors the formatColumns.tsx pattern: a hook returning stable column
 // definitions and the total column size for percentage-based layout.
 
+import { useMemo } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import type { ColumnDef, Row } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,6 +28,10 @@ interface SearchColumnsResult {
 /** Stable column definitions for the search results table. */
 export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumnsResult {
     const { onDownload, onDownloadWithOptions, onOpenFormatDialog, focusIndex } = callbacks;
+
+    // NOTE: React Compiler silently skips this hook (no React primitives to optimize),
+    // so columns must be manually memoized for TanStack Table stability.
+    return useMemo(() => {
     const columnHelper = createColumnHelper<SearchResultPreview>();
 
     const ageSortFn = (rowA: Row<SearchResultPreview>, rowB: Row<SearchResultPreview>) => {
@@ -162,4 +167,5 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
     const totalColumnSize = columns.reduce((sum, col) => sum + (col.size ?? 0), 0);
 
     return { columns, totalColumnSize };
+    }, [onDownload, onDownloadWithOptions, onOpenFormatDialog, focusIndex]);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ArrowDown, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -39,7 +39,10 @@ export function DownloadPage() {
     const trimmedUrl = url.trim();
     const isValidUrl = URL_PATTERN.test(trimmedUrl);
 
-    const handleQuickDownload = async () => {
+    // NOTE: try/finally causes React Compiler to bail out of this component,
+    // so all callbacks and derived values must be manually memoized.
+
+    const handleQuickDownload = useCallback(async () => {
         if (!trimmedUrl) return;
         if (!isValidUrl) {
             setError("Please enter a valid URL starting with http:// or https://");
@@ -56,16 +59,16 @@ export function DownloadPage() {
         } finally {
             setIsStarting(false);
         }
-    };
+    }, [trimmedUrl, isValidUrl, settings]);
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
+    const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
         if (e.key === "Enter" && trimmedUrl && !isStarting) {
             e.preventDefault();
             void handleQuickDownload();
         }
-    };
+    }, [trimmedUrl, isStarting, handleQuickDownload]);
 
-    const handleChooseFormat = () => {
+    const handleChooseFormat = useCallback(() => {
         if (!trimmedUrl) return;
         if (!isValidUrl) {
             setError("Please enter a valid URL starting with http:// or https://");
@@ -73,9 +76,9 @@ export function DownloadPage() {
         }
         setError(null);
         setFormatDialogUrl(trimmedUrl);
-    };
+    }, [trimmedUrl, isValidUrl]);
 
-    const handleFormatConfirm = (options: DownloadOptions, title?: string) => {
+    const handleFormatConfirm = useCallback((options: DownloadOptions, title?: string) => {
         if (!formatDialogUrl) return;
         void startDownload(formatDialogUrl, options, title)
             .then(() => {
@@ -85,25 +88,30 @@ export function DownloadPage() {
             .catch(() => {
                 setError("Failed to start download.");
             });
-    };
+    }, [formatDialogUrl]);
 
-    const handleCancel = (id: string) => {
+    const handleCancel = useCallback((id: string) => {
         cancelDownload(id).catch((e) => console.error("Failed to cancel", e));
-    };
-    const handleRemove = (id: string) => {
+    }, []);
+
+    const handleRemove = useCallback((id: string) => {
         removeJob(id).catch((e) => console.error("Failed to remove", e));
-    };
-    const handleRetry = (job: DownloadJob) => {
+    }, []);
+
+    const handleRetry = useCallback((job: DownloadJob) => {
         const options = job.options ?? buildDefaultOptions(settings);
         startDownload(job.url, options).catch((e) =>
             console.error("Failed to retry", e),
         );
-    };
+    }, [settings]);
 
     // Show last 5 jobs (most recent first)
-    const recentJobs = [...jobs]
-        .sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))
-        .slice(0, 5);
+    const recentJobs = useMemo(
+        () => [...jobs]
+            .sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))
+            .slice(0, 5),
+        [jobs],
+    );
 
     return (
         <div className="max-w-2xl mx-auto">

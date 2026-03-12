@@ -1,6 +1,6 @@
 // Full-screen modal for format selection with hero table, presets, and collapsed options.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
     useReactTable,
@@ -116,13 +116,22 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         enableMultiSort: false,
     });
 
-    const groups = groupRows(table.getSortedRowModel().rows);
+    const groups = useMemo(
+        () => groupRows(table.getSortedRowModel().rows),
+        [table],
+    );
 
-    const subtitleLangs = formatData?.subtitles.map((s) => s.lang) ?? [];
+    const subtitleLangs = useMemo(
+        () => formatData?.subtitles.map((s) => s.lang) ?? [],
+        [formatData],
+    );
+
+    // NOTE: useReactTable causes React Compiler to bail out of this entire component,
+    // so all callbacks and derived values must be manually memoized.
 
     // -- Handlers -----------------------------------------------------
 
-    const handleRowClick = (id: string, e: React.MouseEvent) => {
+    const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
         if (e.shiftKey && selectedId !== null && selectedId !== id) {
             setMergeId(id);
         } else {
@@ -132,9 +141,9 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         // Clear preset when manually selecting
         setPresetId(null);
         setOptions((prev) => ({ ...prev, format: null }));
-    };
+    }, [selectedId]);
 
-    const handlePresetSelect = (newPresetId: string) => {
+    const handlePresetSelect = useCallback((newPresetId: string) => {
         if (!newPresetId) {
             setPresetId(null);
             setOptions((prev) => ({ ...prev, format: null }));
@@ -146,14 +155,14 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         setSelectedId(null);
         setMergeId(null);
         setOptions((prev) => ({ ...prev, format: preset.selector }));
-    };
+    }, []);
 
-    const handleClearSelection = () => {
+    const handleClearSelection = useCallback(() => {
         setSelectedId(null);
         setMergeId(null);
-    };
+    }, []);
 
-    const handleExprChange = (value: string) => {
+    const handleExprChange = useCallback((value: string) => {
         setExpr(value);
         if (exprTimerRef.current) clearTimeout(exprTimerRef.current);
         if (value.trim() === "") {
@@ -185,26 +194,26 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                 setExprMatches(new Set());
             }
         }, 400);
-    };
+    }, [formatData]);
 
-    const buildFormatSelector = (): string | null => {
+    const buildFormatSelector = useCallback((): string | null => {
         if (expertMode && expr.trim()) return expr.trim();
         if (selectedId && mergeId) return `${selectedId}+${mergeId}`;
         if (selectedId) return selectedId;
         return options.format;
-    };
+    }, [expertMode, expr, selectedId, mergeId, options.format]);
 
-    const handleConfirm = () => {
+    const handleConfirm = useCallback(() => {
         const format = buildFormatSelector();
         onConfirm({ ...options, format }, formatData?.title);
-    };
+    }, [buildFormatSelector, onConfirm, options, formatData?.title]);
 
-    const handleBrowseDir = async () => {
+    const handleBrowseDir = useCallback(async () => {
         const dir = await pickDirectory();
         if (dir) setOptions((prev) => ({ ...prev, outputDir: dir }));
-    };
+    }, []);
 
-    const handleSubLangSelect = (lang: string) => {
+    const handleSubLangSelect = useCallback((lang: string) => {
         setOptions((prev) => {
             const current = prev.subtitleLangs;
             const next = current.includes(lang)
@@ -212,11 +221,14 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
                 : [...current, lang];
             return { ...prev, subtitleLangs: next };
         });
-    };
+    }, []);
 
     // -- Lookup helpers -----------------------------------------------
 
-    const findFormat = (id: string) => formatData?.formats.find((f) => f.format_id === id);
+    const findFormat = useCallback(
+        (id: string) => formatData?.formats.find((f) => f.format_id === id),
+        [formatData],
+    );
 
     // -- Render -------------------------------------------------------
 
