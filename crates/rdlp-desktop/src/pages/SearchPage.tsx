@@ -6,7 +6,7 @@ import {
     getCoreRowModel,
     getSortedRowModel,
 } from "@tanstack/react-table";
-import type { ColumnResizeMode, RowSelectionState, SortingState, Table } from "@tanstack/react-table";
+import type { ColumnResizeMode, RowSelectionState, SortingState } from "@tanstack/react-table";
 import { WifiOff, AlertCircle, Loader2 } from "lucide-react";
 import { CommandBar } from "../components/CommandBar";
 import { FilterBar } from "../components/FilterBar";
@@ -19,22 +19,18 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
     searchParamsAtom,
-    setSearchParam,
 } from "../stores/searchParamsStore";
 import {
     providersQueryOptions,
     searchInfiniteQueryOptions,
 } from "../api/search";
 import { settingsQueryOptions } from "../api/settings";
-import {
-    startDownload as apiStartDownload,
-    buildDefaultOptions,
-} from "../api/downloads";
 import { useSearchHistory } from "../hooks/useSearchHistory";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useKeyboardNavigation } from "../hooks/useKeyboardNavigation";
+import { useSearchActions } from "../hooks/useSearchActions";
 import { useSearchColumns } from "../components/utils/searchColumns";
-import type { DownloadOptions, SearchResultPreview, ViewMode } from "../types";
+import type { ViewMode } from "../types";
 
 interface SearchPageProps {
     activeTab: string;
@@ -94,10 +90,26 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const { addEntry } = useSearchHistory();
     const isOnline = useOnlineStatus();
 
-    const [formatDialogUrl, setFormatDialogUrl] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
-    const tableRef = useRef<Table<SearchResultPreview> | null>(null);
     const allResultsLoadedRef = useRef<HTMLParagraphElement>(null);
+
+    // --- Actions (downloads, format dialog, search navigation) ---
+    const {
+        tableRef,
+        formatDialogUrl,
+        handleSearch,
+        handleDownload,
+        handleDownloadWithOptions,
+        handleOpenFormatDialog,
+        handleFormatDialogConfirm,
+        handleCloseFormatDialog,
+        handleDownloadByIndex,
+        handleFormatByIndex,
+        handleOpenInBrowser,
+        handleRestoreSearch,
+        handleQuickSearch,
+        handleResetFiltersAndSearch,
+    } = useSearchActions({ settings, refetch });
 
     // --- TanStack Table state ---
     const [sorting, setSorting] = useState<SortingState>([]);
@@ -126,7 +138,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         setUserColumnVisibility({});
     }, [query, site, filters]);
 
-    // Focus "All results loaded" message when Load More button disappears (fix 8)
+    // Focus "All results loaded" message when Load More button disappears
     useEffect(() => {
         if (!hasNextPage && !isFetchingNextPage && isSuccess && results.length > 0) {
             allResultsLoadedRef.current?.focus();
@@ -142,72 +154,6 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
             addEntry({ query, site, siteDisplayName: displayName, filters: [] });
         }
     }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    const handleSearch = useCallback(() => {
-        refetch().catch((e) => console.error("Refetch failed:", e));
-    }, [refetch]);
-
-    const handleDownload = useCallback(
-        (url: string, title?: string) => {
-            const opts = buildDefaultOptions(settings);
-            apiStartDownload(url, opts, title).catch((e) =>
-                console.error("Download failed:", e),
-            );
-        },
-        [settings],
-    );
-
-    const handleDownloadWithOptions = useCallback(
-        (url: string, title: string, options: Partial<DownloadOptions>) => {
-            const defaults = buildDefaultOptions(settings);
-            apiStartDownload(url, { ...defaults, ...options }, title).catch((e) =>
-                console.error("Download failed:", e),
-            );
-        },
-        [settings],
-    );
-
-    const handleOpenFormatDialog = useCallback(
-        (url: string) => { setFormatDialogUrl(url); },
-        [],
-    );
-
-    const handleFormatDialogConfirm = useCallback(
-        (options: DownloadOptions, title?: string) => {
-            if (formatDialogUrl) {
-                apiStartDownload(formatDialogUrl, options, title).catch((e) =>
-                    console.error("Download failed:", e),
-                );
-            }
-            setFormatDialogUrl(null);
-        },
-        [formatDialogUrl],
-    );
-
-    // Keyboard nav callbacks (by index, resolved through table rows via ref)
-    const handleDownloadByIndex = useCallback(
-        (index: number) => {
-            const row = tableRef.current?.getRowModel().rows[index];
-            if (row) handleDownload(row.original.video_url, row.original.title);
-        },
-        [handleDownload],
-    );
-
-    const handleFormatByIndex = useCallback(
-        (index: number) => {
-            const row = tableRef.current?.getRowModel().rows[index];
-            if (row) handleOpenFormatDialog(row.original.video_url);
-        },
-        [handleOpenFormatDialog],
-    );
-
-    const handleOpenInBrowser = useCallback(
-        (index: number) => {
-            const row = tableRef.current?.getRowModel().rows[index];
-            if (row) window.open(row.original.video_url, "_blank");
-        },
-        [],
-    );
 
     // focusIndex is managed by keyboard nav; initialized to -1
     const [focusIndex, setFocusIndex] = useState(-1);
@@ -263,42 +209,6 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
     const handleClearSelection = useCallback(() => {
         setRowSelection({});
     }, []);
-
-    const handleRestoreSearch = useCallback(
-        (q: string, s: string, restoredFilters: Array<{ key: string; value: string }>) => {
-            setSearchParam("query", q);
-            setSearchParam("site", s);
-            if (restoredFilters.length > 0) {
-                searchParamsAtom.setState((prev) => ({
-                    ...prev,
-                    filters: restoredFilters,
-                    hasUserFilters: true,
-                }));
-            }
-            // Trigger search after atom updates propagate
-            setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-        },
-        [refetch],
-    );
-
-    const handleQuickSearch = useCallback(
-        (q: string) => {
-            setSearchParam("query", q);
-            // Trigger search after atom update propagates
-            setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-        },
-        [refetch],
-    );
-
-    /** Reset filters to descriptor defaults then re-search. */
-    const handleResetFiltersAndSearch = useCallback(() => {
-        searchParamsAtom.setState((prev) => ({
-            ...prev,
-            filters: [],
-            hasUserFilters: false,
-        }));
-        setTimeout(() => { refetch().catch((e) => console.error("Refetch failed:", e)); }, 0);
-    }, [refetch]);
 
     return (
         <div className="flex flex-col h-full">
@@ -446,7 +356,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                 <FormatDialog
                     url={formatDialogUrl}
                     onConfirm={handleFormatDialogConfirm}
-                    onClose={() => setFormatDialogUrl(null)}
+                    onClose={handleCloseFormatDialog}
                 />
             )}
         </div>
