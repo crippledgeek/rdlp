@@ -19,6 +19,8 @@ rdlp-api = { path = "../../rdlp-api", features = ["serde"] }
 rdlp-types = { path = "../../rdlp-types" }
 rdlp-core = { path = "../../rdlp-core" }
 rdlp-security = { path = "../../rdlp-security" }
+reqwest = { workspace = true }
+url = { workspace = true }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
@@ -35,6 +37,9 @@ dirs = { workspace = true }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+mockito = { workspace = true }
 
 [lints]
 workspace = true
