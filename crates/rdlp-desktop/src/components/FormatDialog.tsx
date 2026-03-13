@@ -98,8 +98,8 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         const all = formatData?.formats ?? [];
         if (!presetId || presetId === "best") return all;
         if (presetId === "audio-only") return all.filter((f) => !f.has_video);
-        if (presetId === "1080p") return all.filter((f) => !f.has_video || (f.height !== null && f.height <= 1080));
-        if (presetId === "720p") return all.filter((f) => !f.has_video || (f.height !== null && f.height <= 720));
+        if (presetId === "1080p") return all.filter((f) => !f.has_video || f.height === null || f.height <= 1080);
+        if (presetId === "720p") return all.filter((f) => !f.has_video || f.height === null || f.height <= 720);
         return all;
     }, [formatData, presetId]);
 
