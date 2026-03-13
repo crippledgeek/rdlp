@@ -7,6 +7,7 @@ import { settingsQueryOptions } from "../api/settings";
 import { FormatOptionsPanel, buildDefaultOptions } from "./FormatOptionsPanel";
 import { Button } from "@/components/ui/button";
 import { cn, parseUploadTimestamp } from "@/lib/utils";
+import { Thumbnail } from "./Thumbnail";
 import type {
     DownloadOptions,
     SearchResultPreview,
@@ -78,12 +79,11 @@ export function ResultCard({
         )}>
             <div className="relative aspect-video bg-background overflow-hidden">
                 {result.thumbnail_url ? (
-                    <img
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
+                    <Thumbnail
                         src={result.thumbnail_url}
                         alt={result.title}
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
                         decoding="async"
-                        referrerPolicy="no-referrer"
                     />
                 ) : (
                     <div className="flex items-center justify-center h-full text-muted-foreground text-xs uppercase tracking-wider">

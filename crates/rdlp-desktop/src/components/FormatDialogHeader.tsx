@@ -5,6 +5,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import { Thumbnail } from "./Thumbnail";
 
 interface FormatDialogHeaderProps {
     title: string | undefined;
@@ -17,11 +18,10 @@ export function FormatDialogHeader({ title, thumbnailUrl }: FormatDialogHeaderPr
         <DialogHeader className="px-5 pt-4 pb-3 border-b border-border shrink-0">
             <div className="flex items-center gap-3">
                 {thumbnailUrl && (
-                    <img
+                    <Thumbnail
                         src={thumbnailUrl}
                         alt=""
                         className="w-12 h-[27px] object-cover rounded-sm shrink-0 bg-muted"
-                        referrerPolicy="no-referrer"
                     />
                 )}
                 <div className="min-w-0 flex-1">

@@ -7,6 +7,7 @@ import { createColumnHelper } from "@tanstack/react-table";
 import type { ColumnDef, Row } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { parseUploadTimestamp } from "@/lib/utils";
+import { Thumbnail } from "../Thumbnail";
 import { ResultRowActions } from "../ResultRowActions";
 import { formatDuration, formatCompactDate, formatViews } from "./searchUtils";
 import type { DownloadOptions, SearchResultPreview } from "../../types";
@@ -75,16 +76,11 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
             enableResizing: false,
             cell: ({ row }) => (
                 <div className="w-16 h-9 shrink-0 rounded-sm overflow-hidden bg-background">
-                    {row.original.thumbnail_url ? (
-                        <img
-                            className="w-full h-full object-cover"
-                            src={row.original.thumbnail_url}
-                            alt=""
-                            referrerPolicy="no-referrer"
-                        />
-                    ) : (
-                        <div className="w-full h-full bg-muted" />
-                    )}
+                    <Thumbnail
+                        src={row.original.thumbnail_url}
+                        alt=""
+                        className="w-full h-full object-cover"
+                    />
                 </div>
             ),
         }),
