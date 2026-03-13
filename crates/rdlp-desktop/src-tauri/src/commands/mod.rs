@@ -11,3 +11,5 @@ pub mod formats;
 pub mod search;
 /// Application settings commands.
 pub mod settings;
+/// Thumbnail proxy command.
+pub mod thumbnail;

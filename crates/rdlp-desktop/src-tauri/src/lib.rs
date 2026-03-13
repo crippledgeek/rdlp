@@ -42,6 +42,7 @@ pub fn run() {
             commands::settings::update_settings,
             commands::settings::pick_directory,
             commands::settings::reveal_in_folder,
+            commands::thumbnail::proxy_thumbnail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
