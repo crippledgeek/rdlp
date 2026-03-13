@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for queryKeys.ts — deterministic key generation.
 
 import { describe, test, expect } from "vitest";

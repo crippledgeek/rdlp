@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for lib/utils.ts — cn() and parseUploadTimestamp().
 
 import { describe, test, expect } from "vitest";

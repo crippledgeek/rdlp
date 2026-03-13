@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Search, Download, ArrowDownToLine, Settings } from "lucide-react";
 import { SearchPage } from "./pages/SearchPage";
@@ -47,43 +47,40 @@ function AppContent() {
     ).length;
 
     // Persist view mode
-    const handleViewModeChange = useCallback((mode: ViewMode) => {
+    const handleViewModeChange = (mode: ViewMode) => {
         setViewMode(mode);
         localStorage.setItem(VIEW_MODE_KEY, mode);
-    }, []);
+    };
 
     // Persist sidebar state
-    const toggleSidebar = useCallback(() => {
+    const toggleSidebar = () => {
         setSidebarCollapsed((prev) => {
             const next = !prev;
             localStorage.setItem(SIDEBAR_KEY, String(next));
             return next;
         });
-    }, []);
+    };
 
     // Restore search from sidebar history
-    const handleRestoreSearch = useCallback(
-        (restoredQuery: string, restoredSite: string, restoredFilters: SearchFilter[]) => {
-            setSearchParam("query", restoredQuery);
-            setSearchParam("site", restoredSite);
-            if (restoredFilters.length > 0) {
-                searchParamsAtom.setState((prev) => ({
-                    ...prev,
-                    filters: restoredFilters,
-                    hasUserFilters: true,
-                }));
-            }
-            setActiveTab("search");
-            // Invalidate the search query to trigger a re-fetch after atom updates propagate
-            setTimeout(() => {
-                void queryClient.invalidateQueries({
-                    queryKey: queryKeys.search.params(restoredQuery, restoredSite, restoredFilters),
-                    refetchType: "all",
-                });
-            }, 0);
-        },
-        [],
-    );
+    const handleRestoreSearch = (restoredQuery: string, restoredSite: string, restoredFilters: SearchFilter[]) => {
+        setSearchParam("query", restoredQuery);
+        setSearchParam("site", restoredSite);
+        if (restoredFilters.length > 0) {
+            searchParamsAtom.setState((prev) => ({
+                ...prev,
+                filters: restoredFilters,
+                hasUserFilters: true,
+            }));
+        }
+        setActiveTab("search");
+        // Invalidate the search query to trigger a re-fetch after atom updates propagate
+        setTimeout(() => {
+            void queryClient.invalidateQueries({
+                queryKey: queryKeys.search.params(restoredQuery, restoredSite, restoredFilters),
+                refetchType: "all",
+            });
+        }, 0);
+    };
 
     // Register all Tauri download event listeners (single wiring point)
     useEffect(() => {

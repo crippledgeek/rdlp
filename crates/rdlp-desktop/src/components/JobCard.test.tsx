@@ -1,5 +1,4 @@
-import { render, screen, waitFor } from "@/test/test-utils";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
 import { setInvokeHandler, clearInvokeHandlers } from "@/test/tauri-mock";
 import { JobCard } from "./JobCard";
 import type { DownloadJob } from "../types";
@@ -25,158 +24,74 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
     };
 }
 
+const noop = vi.fn();
+
 describe("JobCard", () => {
     it("renders job title when provided", () => {
-        render(
-            <JobCard
-                job={makeJob({ title: "My Video" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ title: "My Video" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("My Video")).toBeInTheDocument();
     });
 
     it("falls back to URL when title is null", () => {
-        render(
-            <JobCard
-                job={makeJob({ title: null, url: "https://example.com/fallback" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ title: null, url: "https://example.com/fallback" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("https://example.com/fallback")).toBeInTheDocument();
     });
 
     it("renders status badge", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "running" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "running" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("running")).toBeInTheDocument();
     });
 
     it("shows Cancel button while running", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "running", progress: 0.5 })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5 })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
     });
 
-    it("calls onCancel with job id when Cancel is clicked", async () => {
+    it("calls onCancel with job id when Cancel is clicked", () => {
         const onCancel = vi.fn();
-        render(
-            <JobCard
-                job={makeJob({ status: "running", progress: 0.3 })}
-                onCancel={onCancel}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
-        await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+        render(<JobCard job={makeJob({ status: "running", progress: 0.3 })} onCancel={onCancel} onRemove={noop} onRetry={noop} />);
+        fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
         expect(onCancel).toHaveBeenCalledWith("job-1");
     });
 
     it("shows progress percentage while running", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "running", progress: 0.75 })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "running", progress: 0.75 })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("75.0%")).toBeInTheDocument();
     });
 
-    it("shows Remove button for terminal statuses", async () => {
+    it("shows Remove button for terminal statuses", () => {
         const onRemove = vi.fn();
-        render(
-            <JobCard
-                job={makeJob({ status: "completed" })}
-                onCancel={vi.fn()}
-                onRemove={onRemove}
-                onRetry={vi.fn()}
-            />,
-        );
-        const removeBtn = screen.getByRole("button", { name: /remove/i });
-        await userEvent.click(removeBtn);
+        render(<JobCard job={makeJob({ status: "completed" })} onCancel={noop} onRemove={onRemove} onRetry={noop} />);
+        fireEvent.click(screen.getByRole("button", { name: /remove/i }));
         expect(onRemove).toHaveBeenCalledWith("job-1");
     });
 
-    it("shows Retry button for retryable failed jobs", async () => {
+    it("shows Retry button for retryable failed jobs", () => {
         const onRetry = vi.fn();
-        render(
-            <JobCard
-                job={makeJob({ status: "failed", retryable: true, error: "Network error" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={onRetry}
-            />,
-        );
-        await userEvent.click(screen.getByRole("button", { name: /retry/i }));
-        // onRetry now receives the full job object so the caller can preserve options
+        render(<JobCard job={makeJob({ status: "failed", retryable: true, error: "Network error" })} onCancel={noop} onRemove={noop} onRetry={onRetry} />);
+        fireEvent.click(screen.getByRole("button", { name: /retry/i }));
         expect(onRetry).toHaveBeenCalledWith(
             expect.objectContaining({ url: "https://example.com/video" }),
         );
     });
 
     it("displays error message for failed jobs", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "failed", error: "Download timed out" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "failed", error: "Download timed out" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("Download timed out")).toBeInTheDocument();
     });
 
     it("shows Reveal in Folder button for completed jobs with output_path", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "completed", output_path: "/tmp/video.mp4" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/video.mp4" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByRole("button", { name: /reveal in folder/i })).toBeInTheDocument();
     });
 
     it("does not show Reveal in Folder button when output_path is null", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "completed", output_path: null })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "completed", output_path: null })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.queryByRole("button", { name: /reveal in folder/i })).not.toBeInTheDocument();
     });
 
     it("does not show Reveal in Folder button when output_path is empty string", () => {
-        render(
-            <JobCard
-                job={makeJob({ status: "completed", output_path: "" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ status: "completed", output_path: "" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.queryByRole("button", { name: /reveal in folder/i })).not.toBeInTheDocument();
     });
 
@@ -184,15 +99,8 @@ describe("JobCard", () => {
         setInvokeHandler("reveal_in_folder", () => {
             throw { kind: "Internal", data: { message: "File not found" } };
         });
-        render(
-            <JobCard
-                job={makeJob({ status: "completed", output_path: "/tmp/missing.mp4" })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
-        await userEvent.click(screen.getByRole("button", { name: /reveal in folder/i }));
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/missing.mp4" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
+        fireEvent.click(screen.getByRole("button", { name: /reveal in folder/i }));
         await waitFor(() => {
             expect(screen.getByText(/could not reveal file/i)).toBeInTheDocument();
         });
@@ -200,54 +108,28 @@ describe("JobCard", () => {
     });
 
     it("does not render log panel when logMessages is undefined", () => {
-        render(
-            <JobCard
-                job={makeJob({ logMessages: undefined })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ logMessages: undefined })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.queryByText(/^logs/i)).not.toBeInTheDocument();
     });
 
     it("does not render log panel when logMessages is empty", () => {
-        render(
-            <JobCard
-                job={makeJob({ logMessages: [] })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ logMessages: [] })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.queryByText(/^logs/i)).not.toBeInTheDocument();
     });
 
     it("renders log panel summary with message count", () => {
-        render(
-            <JobCard
-                job={makeJob({ logMessages: ["Starting download", "Fetching metadata"] })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
-            />,
-        );
+        render(<JobCard job={makeJob({ logMessages: ["Starting download", "Fetching metadata"] })} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.getByText("Logs (2)")).toBeInTheDocument();
     });
 
-    it("renders all log messages in the panel", async () => {
+    it("renders all log messages in the panel", () => {
         render(
             <JobCard
-                job={makeJob({
-                    logMessages: ["First message", "Second message", "Third message"],
-                })}
-                onCancel={vi.fn()}
-                onRemove={vi.fn()}
-                onRetry={vi.fn()}
+                job={makeJob({ logMessages: ["First message", "Second message", "Third message"] })}
+                onCancel={noop} onRemove={noop} onRetry={noop}
             />,
         );
-        // Open the details element
-        await userEvent.click(screen.getByText("Logs (3)"));
+        fireEvent.click(screen.getByText("Logs (3)"));
         expect(screen.getByText("First message")).toBeInTheDocument();
         expect(screen.getByText("Second message")).toBeInTheDocument();
         expect(screen.getByText("Third message")).toBeInTheDocument();

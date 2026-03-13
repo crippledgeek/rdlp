@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for searchParamsStore.ts — state transitions via setSearchParam
 // and resetSearchParams.
 

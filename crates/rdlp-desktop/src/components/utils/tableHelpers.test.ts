@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for tableHelpers.ts — groupRows and optionsSummary.
 
 import { describe, test, expect } from "vitest";

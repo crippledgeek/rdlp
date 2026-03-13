@@ -115,7 +115,7 @@ interface FormatOptionsPanelProps {
 }
 
 /** Derive which preset ID matches the current format selector, if any. */
-function activePreset(format: string | null): string | null {
+export function activePreset(format: string | null): string | null {
     if (!format) return null;
     return PRESETS.find((p) => p.selector === format)?.id ?? null;
 }
@@ -292,6 +292,8 @@ export function FormatOptionsPanel({
                     </SelectContent>
                 </Select>
             </div>
+
+            <div className="border-t border-white/[0.04] my-0.5" />
 
             <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">

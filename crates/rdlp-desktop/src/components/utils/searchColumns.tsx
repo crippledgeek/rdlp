@@ -3,7 +3,6 @@
 // Mirrors the formatColumns.tsx pattern: a hook returning stable column
 // definitions and the total column size for percentage-based layout.
 
-import { useMemo, useCallback } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import type { ColumnDef, Row } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,26 +27,23 @@ interface SearchColumnsResult {
 /** Stable column definitions for the search results table. */
 export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumnsResult {
     const { onDownload, onDownloadWithOptions, onOpenFormatDialog, focusIndex } = callbacks;
-    const columnHelper = useMemo(() => createColumnHelper<SearchResultPreview>(), []);
+    const columnHelper = createColumnHelper<SearchResultPreview>();
 
-    const ageSortFn = useCallback(
-        (rowA: Row<SearchResultPreview>, rowB: Row<SearchResultPreview>) => {
-            const a = rowA.original.upload_date;
-            const b = rowB.original.upload_date;
-            if (a === null && b === null) return 0;
-            if (a === null) return 1;
-            if (b === null) return -1;
-            const dateA = parseUploadTimestamp(a);
-            const dateB = parseUploadTimestamp(b);
-            if (dateA === null && dateB === null) return 0;
-            if (dateA === null) return 1;
-            if (dateB === null) return -1;
-            return dateA.getTime() - dateB.getTime();
-        },
-        [],
-    );
+    const ageSortFn = (rowA: Row<SearchResultPreview>, rowB: Row<SearchResultPreview>) => {
+        const a = rowA.original.upload_date;
+        const b = rowB.original.upload_date;
+        if (a === null && b === null) return 0;
+        if (a === null) return 1;
+        if (b === null) return -1;
+        const dateA = parseUploadTimestamp(a);
+        const dateB = parseUploadTimestamp(b);
+        if (dateA === null && dateB === null) return 0;
+        if (dateA === null) return 1;
+        if (dateB === null) return -1;
+        return dateA.getTime() - dateB.getTime();
+    };
 
-    const columns = useMemo(() => [
+    const columns: ColumnDef<SearchResultPreview, any>[] = [ // eslint-disable-line @typescript-eslint/no-explicit-any
         columnHelper.display({
             id: "select",
             size: 40,
@@ -161,12 +157,9 @@ export function useSearchColumns(callbacks: SearchColumnCallbacks): SearchColumn
                 />
             ),
         }),
-    ], [columnHelper, ageSortFn, focusIndex, onDownload, onDownloadWithOptions, onOpenFormatDialog]);
+    ];
 
-    const totalColumnSize = useMemo(
-        () => columns.reduce((sum, col) => sum + (col.size ?? 0), 0),
-        [columns],
-    );
+    const totalColumnSize = columns.reduce((sum, col) => sum + (col.size ?? 0), 0);
 
     return { columns, totalColumnSize };
 }

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Unit tests for formatUtils.ts — formatBrief, formatSize, formatBitrate,
 // formatResolution, formatType.
 
