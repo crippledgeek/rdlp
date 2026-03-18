@@ -15,7 +15,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,7 +37,7 @@ jobs:
         platform: [ubuntu-22.04, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # --- System dependencies (platform-specific) ---
 
@@ -66,7 +66,7 @@ jobs:
       - name: Cache FFmpeg (Windows)
         if: matrix.platform == 'windows-latest'
         id: ffmpeg-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\ffmpeg
           key: ffmpeg-win64-shared-7
@@ -88,7 +88,7 @@ jobs:
 
       # --- Toolchain setup ---
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: lts/*
 
