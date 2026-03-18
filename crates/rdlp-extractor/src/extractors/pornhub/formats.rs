@@ -11,7 +11,7 @@ use super::patterns::{
     QUALITY_ITEMS_PATTERN,
 };
 use crate::base::common::BaseExtractor;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Extend `dest` with `formats`, skipping URLs already in `seen`.
 fn extend_deduped(dest: &mut Vec<Format>, seen: &mut HashSet<String>, formats: Vec<Format>) {
@@ -69,17 +69,9 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
 
 /// Ensure format_ids are unique by appending "-2", "-3", etc. for duplicates.
 ///
-/// Two different CDN URLs at the same quality (e.g., both "1080p") would cause
-/// the desktop UI to highlight both rows on single selection.
+/// Delegates to [`BaseExtractor::dedup_format_ids`].
 fn dedup_format_ids(formats: &mut [Format]) {
-    let mut id_counts: HashMap<String, u32> = HashMap::new();
-    for format in formats.iter_mut() {
-        let count = id_counts.entry(format.format_id.clone()).or_insert(0);
-        *count += 1;
-        if *count > 1 {
-            format.format_id = format!("{}-{}", format.format_id, count);
-        }
-    }
+    BaseExtractor::dedup_format_ids(formats);
 }
 
 /// Extract formats from flashvars JavaScript object
