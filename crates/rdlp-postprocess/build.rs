@@ -39,20 +39,23 @@ fn detect_ffmpeg() -> Option<PathBuf> {
         println!("cargo:warning=FFMPEG_DIR={dir} is set but missing include/ or lib/");
     }
 
-    // 2. Search common installation paths (Windows)
-    if cfg!(target_os = "windows")
-        && let Some(dir) = search_windows_paths()
-    {
-        println!("cargo:warning=Auto-detected FFmpeg at: {}", dir.display());
+    // 2. Derive from PKG_CONFIG_PATH (finds custom FFmpeg builds on Linux)
+    if let Some(dir) = derive_from_pkg_config_path() {
+        eprintln!("FFmpeg detected via PKG_CONFIG_PATH: {}", dir.display());
         return Some(dir);
     }
 
-    // 3. Derive from ffmpeg.exe in PATH
+    // 3. Search common installation paths (Windows)
+    if cfg!(target_os = "windows")
+        && let Some(dir) = search_windows_paths()
+    {
+        eprintln!("FFmpeg auto-detected at: {}", dir.display());
+        return Some(dir);
+    }
+
+    // 4. Derive from ffmpeg in PATH
     if let Some(dir) = derive_from_path() {
-        println!(
-            "cargo:warning=Derived FFmpeg dir from PATH: {}",
-            dir.display()
-        );
+        eprintln!("FFmpeg derived from PATH: {}", dir.display());
         return Some(dir);
     }
 
@@ -130,6 +133,30 @@ fn search_windows_paths() -> Option<PathBuf> {
         let ffmpeg_dir = PathBuf::from(pf).join("FFmpeg");
         if is_valid_ffmpeg_dir(&ffmpeg_dir) {
             return Some(ffmpeg_dir);
+        }
+    }
+
+    None
+}
+
+/// Try to derive the FFmpeg directory from `PKG_CONFIG_PATH`.
+///
+/// Searches each directory in `PKG_CONFIG_PATH` for `libavcodec.pc` and derives
+/// the parent directory (e.g., `.../lib/pkgconfig/libavcodec.pc` → `...`).
+fn derive_from_pkg_config_path() -> Option<PathBuf> {
+    let pkg_path = std::env::var("PKG_CONFIG_PATH").ok()?;
+
+    for dir in pkg_path.split(':') {
+        let pc_file = PathBuf::from(dir).join("libavcodec.pc");
+        if pc_file.is_file() {
+            // .../lib/pkgconfig -> .../lib -> ...
+            if let Some(pkgconfig_dir) = pc_file.parent()
+                && let Some(lib_dir) = pkgconfig_dir.parent()
+                && let Some(parent) = lib_dir.parent()
+                && is_valid_ffmpeg_dir(parent)
+            {
+                return Some(parent.to_path_buf());
+            }
         }
     }
 

@@ -5,7 +5,7 @@
 //          which injects the correct Referer header for CDNs like CDN77.
 // Layer 3: Placeholder <div> if proxy also fails.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,29 @@ interface ThumbnailProps {
 /** Thumbnail with automatic proxy fallback for CDNs requiring Referer. */
 export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     const [directFailed, setDirectFailed] = useState(false);
+    const imgRef = useRef<HTMLImageElement>(null);
     const { data: proxyUrl, isError: proxyFailed } = useProxyThumbnail(src, directFailed);
+
+    // Detect broken images that WebKitGTK doesn't fire onError for.
+    // Check naturalWidth after mount — a broken image has naturalWidth === 0.
+    const handleLoad = useCallback(() => {
+        if (imgRef.current && imgRef.current.naturalWidth === 0) {
+            setDirectFailed(true);
+        }
+    }, []);
+
+    const handleError = useCallback(() => setDirectFailed(true), []);
+
+    // Also check on mount in case the image was already cached/broken before
+    // React attached event handlers (WebKitGTK race condition).
+    useEffect(() => {
+        const img = imgRef.current;
+        if (img && img.complete) {
+            if (img.naturalWidth === 0) {
+                setDirectFailed(true);
+            }
+        }
+    }, [src]);
 
     // Revoke Blob URL on unmount or when proxyUrl changes.
     useEffect(() => {
@@ -64,13 +86,15 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     // Default: try direct load
     return (
         <img
+            ref={imgRef}
             src={src}
             alt={alt}
             className={className}
             loading="lazy"
             decoding={decoding}
             referrerPolicy="no-referrer"
-            onError={() => setDirectFailed(true)}
+            onLoad={handleLoad}
+            onError={handleError}
         />
     );
 }

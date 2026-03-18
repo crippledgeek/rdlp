@@ -15,7 +15,7 @@ log = { workspace = true }
 serde = { workspace = true }
 
 # FFmpeg library bindings (FFmpeg 5-8)
-ffmpeg-the-third = "4.0"
+ffmpeg-the-third = "4.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
