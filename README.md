@@ -18,7 +18,7 @@ post-processes with FFmpeg library bindings. Inspired by
 
 ## Supported Sites
 
-PornHub, XHamster, RedTube, XTits, TNAFlix, EMPFlix, MovieFap.
+PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap.
 
 See `rdlp --list-extractors` for the current list.
 
@@ -87,3 +87,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODING_RULES.md](CODING_RULES.md).
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### FFmpeg licensing note
+
+rdlp links against FFmpeg shared libraries at build time via
+[ffmpeg-the-third](https://crates.io/crates/ffmpeg-the-third). The Rust
+source code in this repository is MIT-licensed and does not contain any
+GPL or nonfree code.
+
+**Release binaries** are built against LGPL-only FFmpeg (system packages)
+and can be freely distributed.
+
+**Local builds** may link against a custom FFmpeg compiled with
+`--enable-gpl` or `--enable-nonfree` (e.g., libfdk-aac). Binaries built
+this way are subject to FFmpeg's license terms and **must not be
+redistributed** if nonfree codecs are included. See the
+[FFmpeg Legal page](https://www.ffmpeg.org/legal.html) for details.
