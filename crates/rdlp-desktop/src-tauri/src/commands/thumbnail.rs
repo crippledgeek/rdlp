@@ -158,8 +158,7 @@ mod tests {
             .await;
 
         // mockito uses http://, so test inner logic directly (proxy_thumbnail requires https)
-        let referer = derive_referer(&format!("{}/image.jpg", server.url()))
-            .unwrap_or_default();
+        let referer = derive_referer(&format!("{}/image.jpg", server.url())).unwrap_or_default();
         let client = reqwest::Client::new();
         let resp = client
             .get(format!("{}/image.jpg", server.url()))

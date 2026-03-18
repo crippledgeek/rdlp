@@ -4,11 +4,17 @@
 #   cp .cargo/config.toml.example .cargo/config.toml
 
 [env]
+# --- Linux ---
+# Point pkg-config at a custom FFmpeg build (lib/pkgconfig/ must contain libav*.pc files).
+# Uncomment and adjust the path below:
+#PKG_CONFIG_PATH = { value = "/path/to/ffmpeg/lib/pkgconfig", force = true }
+
+# --- Windows ---
 # Path to FFmpeg shared build with include/ and lib/ subdirectories.
-# Required for building the ffmpeg-the-third dev-dependency (used in tests).
+# Required for building the ffmpeg-the-third dependency.
 #
 # Windows (WinGet):  winget install Gyan.FFmpeg.Shared
 # Windows (Choco):   choco install ffmpeg-shared
 #
 # Then set the path below to the directory containing include/ and lib/:
-FFMPEG_DIR = "C:/path/to/ffmpeg-shared"
+#FFMPEG_DIR = "C:/path/to/ffmpeg-shared"
