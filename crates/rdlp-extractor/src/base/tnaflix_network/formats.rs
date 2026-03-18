@@ -163,6 +163,7 @@ pub(crate) async fn build_formats(
         formats.push(format);
     }
 
+    BaseExtractor::dedup_format_ids(&mut formats);
     formats
 }
 

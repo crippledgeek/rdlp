@@ -116,7 +116,13 @@ export function FormatDialog({ url, onConfirm, onClose }: FormatDialogProps) {
         enableMultiSort: false,
     });
 
-    const groups = groupRows(table.getSortedRowModel().rows);
+    // Explicit deps required: React Compiler can't track TanStack Table's
+    // internal state mutations (stable object ref, mutated internals).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const groups = useMemo(
+        () => groupRows(table.getSortedRowModel().rows),
+        [filtered, sorting],
+    );
 
     const subtitleLangs = formatData?.subtitles.map((s) => s.lang) ?? [];
 

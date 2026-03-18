@@ -263,6 +263,7 @@ pub async fn extract_from_initials(
 
     debug!("[XHamster] Total formats extracted: {}", formats.len());
     fixup_formats(&mut formats);
+    crate::base::common::BaseExtractor::dedup_format_ids(&mut formats);
     formats
 }
 
@@ -320,6 +321,7 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
     }
 
     fixup_formats(&mut formats);
+    crate::base::common::BaseExtractor::dedup_format_ids(&mut formats);
     formats
 }
 

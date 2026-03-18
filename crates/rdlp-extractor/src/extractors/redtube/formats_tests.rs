@@ -15,9 +15,9 @@ fn test_extract_from_sources() {
     let formats = extract_from_sources(webpage);
     assert_eq!(formats.len(), 2);
 
-    // Check that we got both formats
-    assert!(formats.iter().any(|f| f.format_id == "720"));
-    assert!(formats.iter().any(|f| f.format_id == "1080"));
+    // Check that we got both formats (ID includes format type for uniqueness)
+    assert!(formats.iter().any(|f| f.format_id == "720-mp4"));
+    assert!(formats.iter().any(|f| f.format_id == "1080-mp4"));
 
     // Check format_note is set
     assert!(
@@ -36,7 +36,7 @@ fn test_extract_from_sources() {
 fn test_build_format_with_numeric_quality() {
     let format = build_format("720", "https://example.com/video.mp4".to_string(), "mp4");
 
-    assert_eq!(format.format_id, "720");
+    assert_eq!(format.format_id, "720-mp4");
     assert_eq!(format.height, Some(720));
     assert_eq!(format.width, Some(1280));
     assert_eq!(format.format_note, Some("720p".to_string()));
@@ -47,7 +47,7 @@ fn test_build_format_with_numeric_quality() {
 fn test_build_format_with_string_quality() {
     let format = build_format("hd", "https://example.com/video.mp4".to_string(), "mp4");
 
-    assert_eq!(format.format_id, "hd");
+    assert_eq!(format.format_id, "hd-mp4");
     assert_eq!(format.height, None);
     assert_eq!(format.format_note, Some("hd".to_string()));
 }

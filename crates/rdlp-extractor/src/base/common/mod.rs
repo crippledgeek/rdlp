@@ -478,4 +478,20 @@ impl BaseExtractor {
 
         format
     }
+
+    /// Ensure format_ids are unique by appending "-2", "-3", etc. for duplicates.
+    ///
+    /// The desktop UI uses `format_id` for row selection (`===` comparison),
+    /// so duplicate IDs cause multiple rows to highlight on a single click.
+    pub fn dedup_format_ids(formats: &mut [Format]) {
+        let mut id_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for format in formats.iter_mut() {
+            let count = id_counts.entry(format.format_id.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                format.format_id = format!("{}-{}", format.format_id, count);
+            }
+        }
+    }
 }
