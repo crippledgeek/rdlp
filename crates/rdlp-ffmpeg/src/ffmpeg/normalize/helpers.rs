@@ -207,6 +207,9 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 }
 
 /// Select the appropriate audio encoder for a container extension.
+///
+/// For AAC-compatible containers, returns the best available AAC encoder
+/// via [`preferred_aac_encoder()`] (`libfdk_aac` when available, `aac` otherwise).
 pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
     if ext.eq_ignore_ascii_case("mp4")
         || ext.eq_ignore_ascii_case("m4a")
@@ -217,7 +220,7 @@ pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
         || ext.eq_ignore_ascii_case("mpg")
         || ext.eq_ignore_ascii_case("flv")
     {
-        "aac"
+        crate::ffmpeg::audio_codecs::preferred_aac_encoder()
     } else if ext.eq_ignore_ascii_case("webm")
         || ext.eq_ignore_ascii_case("ogg")
         || ext.eq_ignore_ascii_case("opus")
@@ -232,14 +235,14 @@ pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
     } else if ext.eq_ignore_ascii_case("wav") {
         "pcm_s16le"
     } else {
-        "aac"
+        crate::ffmpeg::audio_codecs::preferred_aac_encoder()
     }
 }
 
 /// Get a sensible default bitrate (in bps) for an encoder.
 pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
     match encoder {
-        "aac" => 128_000,
+        "aac" | "libfdk_aac" => 128_000,
         "libmp3lame" => 192_000,
         "libopus" => 128_000,
         "flac" | "pcm_s16le" => 0,

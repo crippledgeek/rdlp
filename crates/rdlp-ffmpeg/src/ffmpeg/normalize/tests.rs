@@ -5,24 +5,28 @@ use super::helpers::*;
 
 #[test]
 fn test_select_audio_encoder_for_container() {
-    assert_eq!(select_audio_encoder_for_container("mp4"), "aac");
-    assert_eq!(select_audio_encoder_for_container("m4a"), "aac");
-    assert_eq!(select_audio_encoder_for_container("mov"), "aac");
+    // AAC-compatible containers return the preferred AAC encoder
+    // (libfdk_aac if available, built-in aac otherwise)
+    let aac = crate::ffmpeg::audio_codecs::preferred_aac_encoder();
+    assert_eq!(select_audio_encoder_for_container("mp4"), aac);
+    assert_eq!(select_audio_encoder_for_container("m4a"), aac);
+    assert_eq!(select_audio_encoder_for_container("mov"), aac);
     assert_eq!(select_audio_encoder_for_container("webm"), "libopus");
     assert_eq!(select_audio_encoder_for_container("mkv"), "libopus");
     assert_eq!(select_audio_encoder_for_container("avi"), "libmp3lame");
     assert_eq!(select_audio_encoder_for_container("mp3"), "libmp3lame");
     assert_eq!(select_audio_encoder_for_container("flac"), "flac");
     assert_eq!(select_audio_encoder_for_container("wav"), "pcm_s16le");
-    assert_eq!(select_audio_encoder_for_container("ts"), "aac");
+    assert_eq!(select_audio_encoder_for_container("ts"), aac);
     assert_eq!(select_audio_encoder_for_container("ogg"), "libopus");
-    assert_eq!(select_audio_encoder_for_container("flv"), "aac");
-    assert_eq!(select_audio_encoder_for_container("xyz"), "aac");
+    assert_eq!(select_audio_encoder_for_container("flv"), aac);
+    assert_eq!(select_audio_encoder_for_container("xyz"), aac);
 }
 
 #[test]
 fn test_default_bitrate_for_encoder() {
     assert_eq!(default_bitrate_for_encoder("aac"), 128_000);
+    assert_eq!(default_bitrate_for_encoder("libfdk_aac"), 128_000);
     assert_eq!(default_bitrate_for_encoder("libmp3lame"), 192_000);
     assert_eq!(default_bitrate_for_encoder("libopus"), 128_000);
     assert_eq!(default_bitrate_for_encoder("flac"), 0);
