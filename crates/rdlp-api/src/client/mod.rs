@@ -438,6 +438,78 @@ impl RdlpClient {
             .collect()
     }
 
+    /// Post-process a local file without downloading.
+    ///
+    /// Applies the configured post-processing pipeline (normalization, remux,
+    /// audio extraction, etc.) to an existing local file. Returns a
+    /// [`DownloadHandle`] with the same event/progress interface as `download()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the local file to process.
+    #[must_use]
+    pub fn process_local_file(&self, path: std::path::PathBuf) -> DownloadHandle {
+        let id = DownloadId::next();
+        let (tx, rx) = mpsc::channel::<Event>(256);
+        let cancel_token = CancellationToken::new();
+        let config = Arc::clone(&self.config);
+        let token = cancel_token.clone();
+
+        let join_handle = tokio::spawn(async move {
+            let orchestrator = Orchestrator::new(config, tx.clone(), id, token, None);
+
+            // Build a minimal InfoDict from the file path
+            let file_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let info = rdlp_core::InfoDict::new(&file_name, &file_name, "local", format!("file://{}", path.display()));
+            let _ = tx
+                .send(Event::PostProcessing {
+                    id,
+                    stage: "Starting post-processing".to_string(),
+                })
+                .await;
+
+            if !path.exists() {
+                let err = RdlpApiError::IoError {
+                    message: format!("File not found: {}", path.display()),
+                };
+                let _ = tx.send(Event::Failed { id, error: err.clone() }).await;
+                return Err(err);
+            }
+
+            match orchestrator
+                .run_postprocessing(&info, vec![path], false)
+                .await
+            {
+                Ok(output_files) => {
+                    let result = crate::DownloadResult {
+                        id,
+                        output_files,
+                        info,
+                        stats: rdlp_core::DownloadStats::new(0, std::time::Duration::ZERO, 0),
+                    };
+                    let _ = tx
+                        .send(Event::Completed {
+                            id,
+                            result: Box::new(result.clone()),
+                        })
+                        .await;
+                    Ok(result)
+                }
+                Err(e) => {
+                    let err = RdlpApiError::from(e);
+                    let _ = tx.send(Event::Failed { id, error: err.clone() }).await;
+                    Err(err)
+                }
+            }
+        });
+
+        DownloadHandle::new(id, rx, cancel_token, join_handle)
+    }
+
     /// Merge request options into a Config, applying overrides from the request.
     fn build_config(&self, request: &DownloadRequest) -> Config {
         let mut config = (*self.config).clone();

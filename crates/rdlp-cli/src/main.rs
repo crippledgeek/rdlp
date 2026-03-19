@@ -273,6 +273,28 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
+    // Local file path: skip extraction/download, run post-processing only
+    let local_path = std::path::Path::new(&url);
+    if !url.contains("://") && local_path.exists() {
+        info!("Processing local file: {}", local_path.display());
+        let mut handle = client.process_local_file(local_path.to_path_buf());
+        let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
+
+        while let Some(event) = handle.events().recv().await {
+            event_handler.handle_event(&event);
+        }
+
+        return match handle.wait().await {
+            Ok(result) => {
+                if let Some(path) = result.output_files.first() {
+                    info!("Success! Processed file: {}", path.display());
+                }
+                Ok(())
+            }
+            Err(e) => fail_with(e, verbose),
+        };
+    }
+
     // Build download request from config
     let request = rdlp_api::DownloadRequest {
         url: url.clone(),

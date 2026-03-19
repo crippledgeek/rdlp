@@ -117,7 +117,7 @@ impl Orchestrator {
     /// # Returns
     /// * `Ok(paths)` - Processed file paths (may differ from input if conversion occurred)
     /// * `Err(e)` - Post-processing failed
-    pub(super) async fn run_postprocessing(
+    pub(crate) async fn run_postprocessing(
         &self,
         info: &rdlp_core::InfoDict,
         files: Vec<PathBuf>,
