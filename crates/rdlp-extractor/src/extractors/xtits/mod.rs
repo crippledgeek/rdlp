@@ -211,7 +211,7 @@ impl InfoExtractor for XTitsExtractor {
 
         // Detect file sizes for all formats
         let (formats_with_size, _hls_flags) =
-            crate::hls::detect_format_sizes(video_formats, ctx, self.name()).await;
+            crate::hls::detect_format_sizes_lazy(video_formats, ctx, self.name()).await;
 
         // Extract metadata from HTML (drop Html before any await)
         let (

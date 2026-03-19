@@ -121,8 +121,10 @@ async fn enrich_single_hls_format(
 /// Detect file sizes and segment counts for all formats in parallel
 ///
 /// This is a shared utility function used by multiple extractors to avoid code
-/// duplication. HLS formats get fast segment counting (no size fetching), while
-/// other formats get file size detection via HEAD requests.
+/// duplication. HLS formats get variant expansion and metadata enrichment, while
+/// non-HLS formats get file size detection via HEAD requests only when
+/// `detect_sizes` is true. Passing `false` skips HEAD requests entirely,
+/// deferring size detection to after format selection for faster startup.
 ///
 /// # Arguments
 /// * `formats` - Vector of formats to detect sizes for
@@ -135,6 +137,25 @@ pub async fn detect_format_sizes(
     formats: Vec<rdlp_core::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
+) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
+    detect_format_sizes_inner(formats, ctx, extractor_name, true).await
+}
+
+/// Like [`detect_format_sizes`] but skips HEAD requests for non-HLS formats
+/// when `detect_sizes` is false. HLS variant expansion always runs regardless.
+pub async fn detect_format_sizes_lazy(
+    formats: Vec<rdlp_core::Format>,
+    ctx: &rdlp_core::ExtractionContext,
+    extractor_name: &str,
+) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
+    detect_format_sizes_inner(formats, ctx, extractor_name, false).await
+}
+
+async fn detect_format_sizes_inner(
+    formats: Vec<rdlp_core::Format>,
+    ctx: &rdlp_core::ExtractionContext,
+    extractor_name: &str,
+    detect_sizes: bool,
 ) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
     use futures::future::join_all;
     use std::time::Duration;
@@ -263,16 +284,18 @@ pub async fn detect_format_sizes(
 
                     expanded
                 } else {
-                    // Non-HLS: HEAD request for file size
+                    // Non-HLS: HEAD request for file size (skipped when lazy)
                     let mut format = format;
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        BaseExtractor::detect_file_size(&url, &http_client, None),
-                    )
-                    .await;
+                    if detect_sizes {
+                        let result = timeout(
+                            Duration::from_secs(5),
+                            BaseExtractor::detect_file_size(&url, &http_client, None),
+                        )
+                        .await;
 
-                    if let Ok(Some(size)) = result {
-                        format.filesize = Some(size);
+                        if let Ok(Some(size)) = result {
+                            format.filesize = Some(size);
+                        }
                     }
 
                     vec![(format, None, None)]

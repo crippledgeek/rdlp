@@ -39,7 +39,7 @@ use scraper::Html;
 use std::sync::LazyLock;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
-use crate::hls::detect_format_sizes;
+use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::HQPORNER_VIDEO_PATTERN;
 
@@ -226,7 +226,7 @@ impl InfoExtractor for HQPornerExtractor {
         // Detect file sizes
         let extractor_name = InfoExtractor::name(self);
         let (formats_with_size, hls_flags) =
-            detect_format_sizes(mydaddy_result.formats, ctx, extractor_name).await;
+            detect_format_sizes_lazy(mydaddy_result.formats, ctx, extractor_name).await;
 
         let mut info = InfoDict::new(&video_id, &title, extractor_name, url);
         info.description = description;
