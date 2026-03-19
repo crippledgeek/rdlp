@@ -40,62 +40,64 @@ export function SidebarHistory({ onRestoreSearch }: SidebarHistoryProps) {
             </CollapsibleTrigger>
 
             <CollapsibleContent>
-                <ScrollArea className="max-h-[300px]">
-                    {grouped.length === 0 ? (
-                        <div className="py-1.5 text-center text-[11px] text-muted-foreground">
-                            No recent searches
-                        </div>
-                    ) : (
-                        <div className="flex flex-col gap-0.5 py-0.5">
-                            {grouped.map((group) => (
-                                <div key={group.site}>
-                                    <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                                        {group.displayName}
-                                    </div>
-                                    {group.entries.map((entry) => (
-                                        <div
-                                            key={`${entry.site}-${entry.query}`}
-                                            className="group flex items-center gap-0.5"
-                                        >
-                                            <button
-                                                className="flex-1 truncate rounded-md px-2 py-1 text-left text-[11px] text-foreground transition-colors hover:bg-white/[0.04]"
-                                                onClick={() =>
-                                                    onRestoreSearch(
-                                                        entry.query,
-                                                        entry.site,
-                                                        entry.filters,
-                                                    )
-                                                }
-                                                title={`Search "${entry.query}" on ${group.displayName}`}
-                                            >
-                                                &middot; &ldquo;{entry.query}&rdquo;
-                                            </button>
-                                            <button
-                                                className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-white/[0.04] hover:text-foreground group-hover:opacity-100"
-                                                onClick={() =>
-                                                    removeEntry(entry.query, entry.site)
-                                                }
-                                                aria-label={`Remove "${entry.query}"`}
-                                                title="Remove"
-                                            >
-                                                <X className="h-3 w-3" />
-                                            </button>
+                {grouped.length === 0 ? (
+                    <div className="py-1.5 text-center text-[11px] text-muted-foreground">
+                        No recent searches
+                    </div>
+                ) : (
+                    <>
+                        <ScrollArea className="max-h-[300px]">
+                            <div className="flex flex-col gap-0.5 py-0.5">
+                                {grouped.map((group) => (
+                                    <div key={group.site}>
+                                        <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                                            {group.displayName}
                                         </div>
-                                    ))}
-                                </div>
-                            ))}
+                                        {group.entries.map((entry) => (
+                                            <div
+                                                key={`${entry.site}-${entry.query}`}
+                                                className="group flex items-center gap-0.5"
+                                            >
+                                                <button
+                                                    className="flex-1 truncate rounded-md px-2 py-1 text-left text-[11px] text-foreground transition-colors hover:bg-white/[0.04]"
+                                                    onClick={() =>
+                                                        onRestoreSearch(
+                                                            entry.query,
+                                                            entry.site,
+                                                            entry.filters,
+                                                        )
+                                                    }
+                                                    title={`Search "${entry.query}" on ${group.displayName}`}
+                                                >
+                                                    &middot; &ldquo;{entry.query}&rdquo;
+                                                </button>
+                                                <button
+                                                    className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-white/[0.04] hover:text-foreground group-hover:opacity-100"
+                                                    onClick={() =>
+                                                        removeEntry(entry.query, entry.site)
+                                                    }
+                                                    aria-label={`Remove "${entry.query}"`}
+                                                    title="Remove"
+                                                >
+                                                    <X className="h-3 w-3" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        </ScrollArea>
 
-                            <Separator className="my-1" />
+                        <Separator className="my-1" />
 
-                            <button
-                                className="ml-auto rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
-                                onClick={clearAll}
-                            >
-                                Clear All
-                            </button>
-                        </div>
-                    )}
-                </ScrollArea>
+                        <button
+                            className="ml-auto block rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
+                            onClick={clearAll}
+                        >
+                            Clear All
+                        </button>
+                    </>
+                )}
             </CollapsibleContent>
         </Collapsible>
     );
