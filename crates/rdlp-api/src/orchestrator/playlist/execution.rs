@@ -145,7 +145,10 @@ impl Orchestrator {
     ) -> usize {
         const MAX_RETRY_WAVES: usize = 3;
         const RETRY_WAVE_DELAYS: [u64; MAX_RETRY_WAVES] = [60, 120, 180];
-        const DOWNLOAD_CONCURRENCY: usize = 2;
+        // Higher concurrency for retries: failures are often transient (CDN
+        // token expiry, rate limits), so retrying with more parallelism across
+        // different server paths recovers faster.
+        const DOWNLOAD_CONCURRENCY: usize = 4;
         let mut retried_ok = 0usize;
 
         if *interrupted || failed.is_empty() {
