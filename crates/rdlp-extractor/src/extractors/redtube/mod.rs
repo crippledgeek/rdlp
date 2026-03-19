@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
-use crate::hls::detect_format_sizes;
+use crate::hls::detect_format_sizes_lazy;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
 
@@ -244,7 +244,7 @@ impl InfoExtractor for RedTubeExtractor {
 
         // Fetch sizes/segments for all formats in parallel
         let (formats, hls_flags) =
-            detect_format_sizes(formats, ctx, InfoExtractor::name(self)).await;
+            detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;
 
         // Build InfoDict — prefer API metadata, fall back to HTML scrape
         let info = if let Ok(api_meta) = api_metadata {

@@ -37,7 +37,7 @@ use rdlp_core::{
 use scraper::Html;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
-use crate::hls::detect_format_sizes;
+use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
@@ -338,7 +338,7 @@ impl InfoExtractor for PornHubExtractor {
         // Detect file sizes and segment counts
         let extractor_name = InfoExtractor::name(self);
         let (formats_with_size, hls_flags) =
-            detect_format_sizes(formats, ctx, extractor_name).await;
+            detect_format_sizes_lazy(formats, ctx, extractor_name).await;
 
         // Build InfoDict with all metadata
         let mut info = InfoDict::new(video_id, title, extractor_name, url);

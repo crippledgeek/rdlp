@@ -35,7 +35,7 @@ use rdlp_core::{
 use std::time::Duration;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
-use crate::hls::detect_format_sizes;
+use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 
@@ -166,7 +166,7 @@ impl XHamsterExtractor {
 
         // Detect file sizes and segment counts for HLS
         let (formats_with_size, hls_flags) =
-            detect_format_sizes(formats, ctx, InfoExtractor::name(self)).await;
+            detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;
 
         info.formats = formats_with_size;
         info.propagate_duration();

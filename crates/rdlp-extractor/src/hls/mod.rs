@@ -43,7 +43,7 @@ mod variants;
 
 // Re-export public API unchanged
 pub use detector::HlsSizeDetector;
-pub use format_detection::detect_format_sizes;
+pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
 #[cfg(test)]

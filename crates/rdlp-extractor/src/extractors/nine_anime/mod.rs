@@ -44,7 +44,7 @@ use scraper::Html;
 use std::collections::HashMap;
 
 use crate::base::common::BaseExtractor;
-use crate::hls::{HlsStreamFlags, detect_format_sizes};
+use crate::hls::{HlsStreamFlags, detect_format_sizes_lazy};
 
 /// 9anime episode extractor.
 ///
@@ -221,7 +221,7 @@ pub(crate) async fn resolve_episode_formats(
     }
 
     // Enrich HLS formats with resolution, codecs, duration, segments
-    let (mut all_formats, hls_flags) = detect_format_sizes(all_formats, ctx, "9anime").await;
+    let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, "9anime").await;
 
     // Restore audio type label in format_note (enrichment overwrites it)
     for f in &mut all_formats {
