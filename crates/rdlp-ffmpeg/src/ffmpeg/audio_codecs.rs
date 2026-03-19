@@ -2,6 +2,15 @@
 //!
 //! Provides `AudioCodecConfig` and `AUDIO_CODECS` for mapping codec names
 //! to encoder names, file extensions, quality scale ranges, and bitrate ranges.
+//!
+//! When `libfdk_aac` is available (custom FFmpeg build with `--enable-nonfree`),
+//! it is automatically preferred over the built-in `aac` encoder for better
+//! quality at equivalent bitrates. Use [`preferred_aac_encoder()`] to resolve
+//! the best available AAC encoder at runtime.
+
+use std::sync::OnceLock;
+
+use log::info;
 
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,4 +162,59 @@ pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|(_, config)| config)
+}
+
+/// Returns the best available AAC encoder name.
+///
+/// Checks once (cached via `OnceLock`) whether `libfdk_aac` is available in the
+/// linked FFmpeg build. If so, returns `"libfdk_aac"` (Fraunhofer FDK AAC —
+/// better quality, HE-AAC support); otherwise falls back to the built-in `"aac"`.
+///
+/// This function requires [`super::ensure_init`] to have been called first.
+#[must_use]
+pub fn preferred_aac_encoder() -> &'static str {
+    static PREFERRED: OnceLock<&'static str> = OnceLock::new();
+    PREFERRED.get_or_init(|| {
+        if ffmpeg_the_third::codec::encoder::find_by_name("libfdk_aac").is_some() {
+            info!("Using libfdk_aac (Fraunhofer FDK) as AAC encoder");
+            "libfdk_aac"
+        } else {
+            info!("Using built-in aac encoder (libfdk_aac not available)");
+            "aac"
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preferred_aac_encoder_returns_valid_name() {
+        // Must be one of the two known AAC encoders
+        let enc = preferred_aac_encoder();
+        assert!(
+            enc == "aac" || enc == "libfdk_aac",
+            "unexpected encoder: {enc}"
+        );
+    }
+
+    #[test]
+    fn test_get_audio_codec_aac() {
+        let config = get_audio_codec("aac").unwrap();
+        assert_eq!(config.extension, "m4a");
+        assert!(config.encoder.is_some());
+    }
+
+    #[test]
+    fn test_get_audio_codec_case_insensitive() {
+        assert!(get_audio_codec("AAC").is_some());
+        assert!(get_audio_codec("Mp3").is_some());
+        assert!(get_audio_codec("FLAC").is_some());
+    }
+
+    #[test]
+    fn test_get_audio_codec_unknown() {
+        assert!(get_audio_codec("nonexistent").is_none());
+    }
 }

@@ -152,6 +152,21 @@ impl FFmpegRunner {
 
         set_single_thread_codec(unsafe { audio_encoder.as_mut_ptr() });
 
+        // Enable afterburner for libfdk_aac (higher quality, ~10% slower)
+        if enc_name == "libfdk_aac" {
+            unsafe {
+                let key = std::ffi::CString::new("afterburner").unwrap();
+                let val = std::ffi::CString::new("1").unwrap();
+                ffmpeg_the_third::ffi::av_opt_set(
+                    audio_encoder.as_mut_ptr().cast(),
+                    key.as_ptr(),
+                    val.as_ptr(),
+                    ffmpeg_the_third::ffi::AV_OPT_SEARCH_CHILDREN,
+                );
+            }
+            debug!("[{label}] libfdk_aac: afterburner enabled");
+        }
+
         let mut audio_encoder =
             audio_encoder
                 .open_as(enc_codec)
