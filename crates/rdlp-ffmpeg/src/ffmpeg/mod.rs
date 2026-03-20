@@ -40,6 +40,7 @@ mod remux;
 pub(crate) mod salvage;
 mod thumbnail;
 mod transcode;
+pub mod video_codecs;
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -55,6 +56,10 @@ pub use normalize_types::{
 };
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
 pub use probe::{MediaInfo, StreamInfo};
+pub use video_codecs::{
+    VideoCodecInfo, VideoEncoderInfo, available_encoders_for_codec, is_encoder_available,
+    list_available_codecs, preferred_video_encoder, resolve_encoder,
+};
 
 /// Global initialization state for the FFmpeg library.
 /// Ensures `ffmpeg_the_third::init()` is called exactly once.

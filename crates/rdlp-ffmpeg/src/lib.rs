@@ -50,5 +50,5 @@ pub use error::{CorruptionKind, PostProcessError, Result};
 pub use ffmpeg::{
     AudioExtractOptions, AudioNormMode, ChapterEntry, FFmpegRunner, LoudnormMeasurements,
     LoudnormPreset, MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo,
-    VideoConvertOptions, set_verbose,
+    VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, set_verbose,
 };
