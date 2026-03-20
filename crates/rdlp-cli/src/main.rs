@@ -138,6 +138,18 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
+    if args.list_encoders {
+        rdlp_ffmpeg::ffmpeg::ensure_init()
+            .map_err(|e| anyhow::anyhow!("FFmpeg init failed: {e}"))?;
+        for codec in rdlp_ffmpeg::ffmpeg::video_codecs::list_available_codecs() {
+            eprintln!("{}:", codec.display_name);
+            for enc in &codec.encoders {
+                eprintln!("  {} — {}", enc.encoder_name, enc.display_name);
+            }
+        }
+        return Ok(());
+    }
+
     // === Search mode ===
     if let Some(ref query_text) = args.search {
         let site = args.search_site.as_deref().unwrap_or_else(|| {

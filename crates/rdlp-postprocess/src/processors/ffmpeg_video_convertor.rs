@@ -17,27 +17,6 @@ use rdlp_ffmpeg::VideoConvertOptions;
 
 use rdlp_core::ContainerFormat;
 
-/// Supported video codecs for transcoding.
-const VIDEO_CODECS: &[(&str, &str)] = &[
-    ("h264", "libx264"),
-    ("h265", "libx265"),
-    ("hevc", "libx265"),
-    ("vp9", "libvpx-vp9"),
-    ("vp8", "libvpx"),
-    ("av1", "libaom-av1"),
-    ("vvc", "libvvenc"),
-    ("h266", "libvvenc"),
-    ("mpeg1", "mpeg1video"),
-    ("mpeg2", "mpeg2video"),
-    ("mpeg4", "mpeg4"),
-    ("theora", "libtheora"),
-    ("prores", "prores_ks"),
-    ("dnxhd", "dnxhd"),
-    ("wmv2", "wmv2"),
-    ("ffv1", "ffv1"),
-    ("xvid", "libxvid"),
-];
-
 ffmpeg_processor!(
     FFmpegVideoConvertor,
     "FFmpegVideoConvertor",
@@ -58,10 +37,7 @@ impl FFmpegVideoConvertor {
 
     /// Get the FFmpeg encoder for a codec.
     fn get_encoder(codec: &str) -> Option<&'static str> {
-        VIDEO_CODECS
-            .iter()
-            .find(|(c, _)| c.eq_ignore_ascii_case(codec))
-            .map(|(_, e)| *e)
+        rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder(codec)
     }
 
     /// Determine if we can remux (copy) or need to transcode.
@@ -262,9 +238,9 @@ mod tests {
 
     #[test]
     fn test_get_encoder() {
-        assert_eq!(FFmpegVideoConvertor::get_encoder("h264"), Some("libx264"));
-        assert_eq!(FFmpegVideoConvertor::get_encoder("vp9"), Some("libvpx-vp9"));
-        assert_eq!(FFmpegVideoConvertor::get_encoder("unknown"), None);
+        assert!(FFmpegVideoConvertor::get_encoder("h264").is_some());
+        assert!(FFmpegVideoConvertor::get_encoder("vp9").is_some());
+        assert!(FFmpegVideoConvertor::get_encoder("unknown").is_none());
     }
 
     #[test]
@@ -295,7 +271,7 @@ mod tests {
     fn test_build_convert_options_transcode_mp4() {
         let opts = FFmpegVideoConvertor::build_convert_options("mp4", false);
         assert!(!opts.remux_only);
-        assert_eq!(opts.video_codec, Some("libx264".to_string()));
+        assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, Some("medium".to_string()));
         assert_eq!(opts.crf, Some(23));
         assert!(opts.audio_copy);
@@ -305,7 +281,7 @@ mod tests {
     fn test_build_convert_options_transcode_webm() {
         let opts = FFmpegVideoConvertor::build_convert_options("webm", false);
         assert!(!opts.remux_only);
-        assert_eq!(opts.video_codec, Some("libvpx-vp9".to_string()));
+        assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, None); // VP9 has no preset
         assert_eq!(opts.crf, Some(30));
         assert!(opts.audio_copy);

@@ -158,6 +158,11 @@ pub struct Config {
     /// Video format to recode to
     pub recode_video: Option<ContainerFormat>,
 
+    /// Explicit video encoder override (e.g., "libsvtav1").
+    /// When None, the best available encoder for the codec is auto-selected.
+    #[serde(default)]
+    pub video_encoder: Option<String>,
+
     /// Remux to container format for better seeking
     pub remux_container: Option<ContainerFormat>,
 
@@ -358,6 +363,7 @@ impl Default for Config {
             audio_format: None,
             audio_quality: None,
             recode_video: None,
+            video_encoder: None,
             remux_container: None,
             embed_thumbnail: true,
             embed_metadata: false,
