@@ -103,6 +103,7 @@ export function buildDefaultOptions(
         normalizeBoost: settings?.normalize_boost ?? false,
         normalizeBoostDb: settings?.normalize_boost_db ?? null,
         embedSubtitles: settings?.embed_subtitles ?? false,
+        videoEncoder: null,
     };
 }
 

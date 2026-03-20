@@ -3,7 +3,9 @@
 // Contains save directory, remux, audio extraction, subtitles, and thumbnail controls.
 
 import { cn } from "@/lib/utils";
+import { useState } from "react";
 import { ChevronUp, ChevronDown, FolderOpen, Settings2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -21,18 +23,23 @@ import {
 import {
     Select,
     SelectContent,
+    SelectGroup,
     SelectItem,
+    SelectLabel,
+    SelectSeparator,
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
 import { optionsSummary } from "./utils/tableHelpers";
 import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
 import { NormalizationCustomControls } from "./NormalizationCustomControls";
+import { codecsQueryOptions } from "../api/codecs";
 import type {
     AppSettings,
     AudioFormat,
     ContainerFormat,
     DownloadOptions,
+    VideoCodecInfo,
 } from "../types";
 
 // -- Constants --------------------------------------------------------
@@ -43,11 +50,11 @@ const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
     { value: "webm", label: "WebM" },
 ];
 
-const RECODE_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
-    { value: "mp4", label: "MP4" },
-    { value: "mkv", label: "MKV" },
-    { value: "webm", label: "WebM" },
-];
+/** Codec-level value prefix used in the Recode Select when Expert Mode is off. */
+const CODEC_VALUE_PREFIX = "codec:";
+
+/** Encoder-level value prefix used in the Recode Select when Expert Mode is on. */
+const ENCODER_VALUE_PREFIX = "encoder:";
 
 const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "mp3", label: "MP3" },
@@ -71,6 +78,27 @@ interface DownloadOptionsPanelProps {
     onSubLangSelect: (lang: string) => void;
 }
 
+/**
+ * Derive the current Select value for the Recode dropdown from options state.
+ * Returns "none", "codec:<name>", or "encoder:<name>" depending on expert mode.
+ */
+function getRecodeSelectValue(
+    options: DownloadOptions,
+    codecs: VideoCodecInfo[],
+    expertMode: boolean,
+): string {
+    if (!options.recodeVideo) return NONE_SENTINEL;
+    if (!expertMode) return `${CODEC_VALUE_PREFIX}${options.recodeVideo}`;
+    // In expert mode: if videoEncoder is set return encoder value, else fall back to codec value
+    if (options.videoEncoder) return `${ENCODER_VALUE_PREFIX}${options.videoEncoder}`;
+    // Try to find a matching codec by the recodeVideo container field used as codec key
+    const matchingCodec = codecs.find((c) => c.codec === options.recodeVideo);
+    if (matchingCodec && matchingCodec.encoders.length > 0) {
+        return `${ENCODER_VALUE_PREFIX}${matchingCodec.encoders[0].encoderName}`;
+    }
+    return `${CODEC_VALUE_PREFIX}${options.recodeVideo}`;
+}
+
 /** Zone 3: Collapsible download options with save directory, remux, audio, subtitles, thumbnail. */
 export function DownloadOptionsPanel({
     options,
@@ -82,6 +110,37 @@ export function DownloadOptionsPanel({
     onBrowseDir,
     onSubLangSelect,
 }: DownloadOptionsPanelProps) {
+    const { data: codecs = [] } = useQuery(codecsQueryOptions());
+    const [expertMode, setExpertMode] = useState(false);
+
+    // Only include codecs that have at least one available encoder
+    const availableCodecs = codecs.filter((c) => c.encoders.length > 0);
+
+    const recodeSelectValue = getRecodeSelectValue(options, availableCodecs, expertMode);
+
+    const handleRecodeChange = (val: string) => {
+        setOptions((prev) => {
+            if (val === NONE_SENTINEL) {
+                return { ...prev, recodeVideo: null, videoEncoder: null, remux: prev.remux };
+            }
+            if (val.startsWith(CODEC_VALUE_PREFIX)) {
+                // Codec-level selection: clear videoEncoder, use codec as recodeVideo key
+                const codec = val.slice(CODEC_VALUE_PREFIX.length) as ContainerFormat;
+                return { ...prev, recodeVideo: codec, videoEncoder: null, remux: null };
+            }
+            if (val.startsWith(ENCODER_VALUE_PREFIX)) {
+                // Encoder-level selection: find the parent codec and set both fields
+                const encoderName = val.slice(ENCODER_VALUE_PREFIX.length);
+                const parentCodec = availableCodecs.find((c) =>
+                    c.encoders.some((e) => e.encoderName === encoderName)
+                );
+                const recodeVideo = parentCodec ? (parentCodec.codec as ContainerFormat) : prev.recodeVideo;
+                return { ...prev, recodeVideo, videoEncoder: encoderName, remux: null };
+            }
+            return prev;
+        });
+    };
+
     return (
         <div className="border-t border-border shrink-0">
             <Collapsible open={showOptions} onOpenChange={setShowOptions}>
@@ -158,29 +217,63 @@ export function DownloadOptionsPanel({
                         </Label>
                         <div className="flex flex-col gap-0.5">
                             <Select
-                                value={options.recodeVideo ?? NONE_SENTINEL}
-                                onValueChange={(val) => setOptions((prev) => {
-                                    const recodeVideo = val === NONE_SENTINEL ? null : (val as ContainerFormat);
-                                    return {
-                                        ...prev,
-                                        recodeVideo,
-                                        remux: recodeVideo !== null ? null : prev.remux,
-                                    };
-                                })}
+                                value={recodeSelectValue}
+                                onValueChange={handleRecodeChange}
                             >
                                 <SelectTrigger className={cn("h-7 text-xs", options.recodeVideo && "select-active")}>
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value={NONE_SENTINEL}>None</SelectItem>
-                                    {RECODE_OPTIONS.map((o) => (
-                                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                                    ))}
+                                    {!expertMode ? (
+                                        // Default mode: one entry per codec (display name only)
+                                        availableCodecs.map((codec) => (
+                                            <SelectItem
+                                                key={codec.codec}
+                                                value={`${CODEC_VALUE_PREFIX}${codec.codec}`}
+                                            >
+                                                {codec.displayName}
+                                            </SelectItem>
+                                        ))
+                                    ) : (
+                                        // Expert mode: entries grouped by codec, showing encoder names
+                                        availableCodecs.map((codec, idx) => (
+                                            <SelectGroup key={codec.codec}>
+                                                {idx > 0 && <SelectSeparator />}
+                                                <SelectLabel>{codec.displayName}</SelectLabel>
+                                                {codec.encoders.map((enc) => (
+                                                    <SelectItem
+                                                        key={enc.encoderName}
+                                                        value={`${ENCODER_VALUE_PREFIX}${enc.encoderName}`}
+                                                    >
+                                                        {enc.encoderName}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectGroup>
+                                        ))
+                                    )}
                                 </SelectContent>
                             </Select>
-                            <p className="text-[10px] text-muted-foreground">
-                                Re-encode video — use when remux fails.
-                            </p>
+                            <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-muted-foreground">
+                                    Re-encode video — use when remux fails.
+                                </p>
+                                <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        className="size-2.5 accent-primary"
+                                        checked={expertMode}
+                                        onChange={(e) => {
+                                            setExpertMode(e.target.checked);
+                                            // Switching off expert mode clears the encoder override
+                                            if (!e.target.checked) {
+                                                setOptions((prev) => ({ ...prev, videoEncoder: null }));
+                                            }
+                                        }}
+                                    />
+                                    Expert
+                                </label>
+                            </div>
                         </div>
 
                         {/* Extract Audio */}

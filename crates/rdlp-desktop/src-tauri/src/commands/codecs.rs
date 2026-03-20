@@ -7,6 +7,7 @@ use rdlp_ffmpeg::{VideoCodecInfo, ffmpeg::video_codecs::list_available_codecs};
 /// Returns only codecs with at least one available encoder in the
 /// linked FFmpeg build.
 #[tauri::command]
+#[must_use]
 pub fn get_available_codecs() -> Vec<VideoCodecInfo> {
     rdlp_ffmpeg::ffmpeg::ensure_init().ok();
     list_available_codecs()

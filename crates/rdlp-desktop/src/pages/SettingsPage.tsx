@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings, pickDirectory } from "../api/settings";
 import { providersQueryOptions } from "../api/search";
+import { codecsQueryOptions } from "../api/codecs";
 import type {
     AppSettings,
     AudioFormat,
@@ -35,6 +36,7 @@ import {
     Search,
     KeyRound,
     Globe,
+    Cpu,
 } from "lucide-react";
 
 /** Sentinel value for "no selection" since Radix Select does not support empty string values. */
@@ -60,6 +62,7 @@ export function validateSettings(draft: AppSettings): string | null {
 export function SettingsPage() {
     const { data: settings, isLoading: settingsLoading } = useQuery(settingsQueryOptions());
     const { data: providers = [] } = useQuery(providersQueryOptions());
+    const { data: codecs = [] } = useQuery(codecsQueryOptions());
     const [draft, setDraft] = useState<AppSettings | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -446,6 +449,24 @@ export function SettingsPage() {
                     onChange={(update) => setDraft({ ...draft, ...update })}
                 />
             </div>
+
+            {/* ── System Info ───────────────────────────────────── */}
+            {codecs.length > 0 && (
+                <section className="settings-panel" aria-labelledby="system-info-heading">
+                    <h3 id="system-info-heading" className="settings-panel-title">
+                        <Cpu className="size-3.5" />
+                        System Info
+                    </h3>
+                    <div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                            <span className="font-medium text-foreground">FFmpeg encoders: </span>
+                            {codecs
+                                .flatMap((c) => c.encoders.map((e) => e.encoderName))
+                                .join(", ")}
+                        </p>
+                    </div>
+                </section>
+            )}
 
             {/* ── Save ──────────────────────────────────────────── */}
             {saveError && (
