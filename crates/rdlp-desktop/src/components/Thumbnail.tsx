@@ -11,6 +11,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/query/queryKeys";
 
+/** URLs known to fail direct load — skip straight to proxy on remount. */
+const directFailCache = new Set<string>();
+
 /**
  * Fetch a thumbnail via the Rust proxy, returning a Blob URL.
  *
@@ -41,7 +44,8 @@ interface ThumbnailProps {
 
 /** Thumbnail with automatic proxy fallback for CDNs requiring Referer. */
 export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
-    const [directFailed, setDirectFailed] = useState(false);
+    // Check module-level cache so remounted components skip the direct attempt
+    const [directFailed, setDirectFailed] = useState(() => !!src && directFailCache.has(src));
     const imgRef = useRef<HTMLImageElement>(null);
     const { data: proxyUrl, isError: proxyFailed } = useProxyThumbnail(src, directFailed);
 
@@ -49,11 +53,15 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     // Check naturalWidth after mount — a broken image has naturalWidth === 0.
     const handleLoad = useCallback(() => {
         if (imgRef.current && imgRef.current.naturalWidth === 0) {
+            if (src) directFailCache.add(src);
             setDirectFailed(true);
         }
-    }, []);
+    }, [src]);
 
-    const handleError = useCallback(() => setDirectFailed(true), []);
+    const handleError = useCallback(() => {
+        if (src) directFailCache.add(src);
+        setDirectFailed(true);
+    }, [src]);
 
     // Also check on mount in case the image was already cached/broken before
     // React attached event handlers (WebKitGTK race condition).

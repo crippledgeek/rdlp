@@ -1,7 +1,7 @@
 // Search results table with TanStack Table: column visibility toggle, sortable
 // headers with resize handles, checkbox selection, and result count footer.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Table as TanStackTable, ColumnDef } from "@tanstack/react-table";
 import { flexRender } from "@tanstack/react-table";
 import { ChevronUp, ChevronDown, Columns3 } from "lucide-react";
@@ -23,6 +23,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import type { SortingState } from "@tanstack/react-table";
 import type { SearchResultPreview } from "../types";
 
 interface ResultsTableSectionProps {
@@ -32,6 +33,9 @@ interface ResultsTableSectionProps {
     totalColumnSize: number;
     focusIndex: number;
     resultCount: number;
+    /** Passed explicitly so the React Compiler detects sorting changes
+     *  (TanStack Table's stable object ref hides internal state mutations). */
+    sorting: SortingState;
 }
 
 /** Non-hideable column IDs (always visible). */
@@ -44,8 +48,15 @@ export function ResultsTableSection({
     totalColumnSize,
     focusIndex,
     resultCount,
+    sorting,
 }: ResultsTableSectionProps) {
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
+
+    // Explicit deps: React Compiler can't track TanStack Table's internal
+    // state mutations (stable object ref). Without this, sorting clicks
+    // update internal state but the component skips re-rendering.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const rows = useMemo(() => table.getRowModel().rows, [sorting, table]);
 
     // Compute total size from visible columns only (so percentages stay correct when columns hide).
     // totalColumnSize is kept in props for potential future use by parent; suppress lint here.
@@ -142,8 +153,8 @@ export function ResultsTableSection({
                         ))}
                     </TableHeader>
                     <TableBody>
-                        {table.getRowModel().rows.length > 0 ? (
-                            table.getRowModel().rows.map((row) => (
+                        {rows.length > 0 ? (
+                            rows.map((row) => (
                                 <TableRow
                                     key={row.id}
                                     ref={(el) => {
