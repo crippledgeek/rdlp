@@ -16,6 +16,7 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 rdlp-api = { path = "../../rdlp-api", features = ["serde"] }
+rdlp-ffmpeg = { path = "../../rdlp-ffmpeg" }
 rdlp-types = { path = "../../rdlp-types" }
 rdlp-core = { path = "../../rdlp-core" }
 rdlp-security = { path = "../../rdlp-security" }

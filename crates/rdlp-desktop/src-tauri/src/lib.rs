@@ -27,6 +27,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::codecs::get_available_codecs,
             commands::search::search_content,
             commands::search::get_search_providers,
             commands::search::get_search_filters,

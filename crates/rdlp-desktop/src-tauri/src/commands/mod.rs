@@ -3,6 +3,8 @@
 //! Each submodule groups related commands that are registered with
 //! [`tauri::generate_handler!`] in [`crate::run`].
 
+/// Video codec availability command.
+pub mod codecs;
 /// Download lifecycle commands (start, cancel, queue).
 pub mod download;
 /// Format listing commands.

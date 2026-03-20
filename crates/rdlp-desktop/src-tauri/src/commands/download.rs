@@ -83,6 +83,10 @@ pub struct DownloadOptions {
     pub output_template: Option<String>,
     /// Embed subtitles into the output container. `None` = use settings default.
     pub embed_subtitles: Option<bool>,
+    /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
+    /// `None` = auto-select best available encoder for the target codec.
+    #[serde(default)]
+    pub video_encoder: Option<String>,
 }
 
 /// Start a new download for the given URL.
@@ -225,6 +229,7 @@ pub async fn start_download(
             remux,
             extract_audio,
             recode_video: options.recode_video,
+            video_encoder: options.video_encoder,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             write_thumbnail: write_thumbnail_resolved.then_some(true),
@@ -414,6 +419,7 @@ mod tests {
             rate_limit: None,
             output_template: None,
             embed_subtitles: None,
+            video_encoder: None,
         }
     }
 

@@ -133,6 +133,9 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(v) = self.recode_video {
             config.recode_video = Some(v);
         }
+        if let Some(ref v) = self.video_encoder {
+            config.video_encoder = Some(v.clone());
+        }
     }
 }
 
