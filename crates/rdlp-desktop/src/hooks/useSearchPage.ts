@@ -285,6 +285,7 @@ export function useSearchPage({ activeTab }: UseSearchPageOptions) {
         table,
         columns,
         totalColumnSize,
+        sorting,
 
         // Actions
         handleSearch,

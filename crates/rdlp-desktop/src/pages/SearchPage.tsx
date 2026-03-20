@@ -39,6 +39,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
         table,
         columns,
         totalColumnSize,
+        sorting,
         handleSearch,
         handleDownload,
         handleDownloadWithOptions,
@@ -137,6 +138,7 @@ export function SearchPage({ activeTab, viewMode }: SearchPageProps) {
                     totalColumnSize={totalColumnSize}
                     focusIndex={focusIndex}
                     resultCount={results.length}
+                    sorting={sorting}
                 />
             )}
 

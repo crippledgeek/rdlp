@@ -15,15 +15,34 @@ const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
 /// Timeout for the thumbnail fetch request.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Derive the origin (scheme + host) from a URL string for use as Referer.
+/// Derive the site origin from a URL string for use as Referer.
+///
+/// CDN subdomains (e.g. `fastporndelivery.hqporner.com`, `cdn77.phncdn.com`)
+/// are stripped to the registrable domain so the Referer matches what the
+/// CDN expects (e.g. `https://hqporner.com`).
 fn derive_referer(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?;
     let scheme = parsed.scheme();
-    match parsed.port() {
-        Some(port) => Some(format!("{scheme}://{host}:{port}")),
-        None => Some(format!("{scheme}://{host}")),
+
+    // For IP addresses, keep as-is (including port)
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return match parsed.port() {
+            Some(port) => Some(format!("{scheme}://{host}:{port}")),
+            None => Some(format!("{scheme}://{host}")),
+        };
     }
+
+    // Strip CDN subdomains: keep last 2 segments
+    // e.g. fastporndelivery.hqporner.com → hqporner.com
+    let parts: Vec<&str> = host.split('.').collect();
+    let site_host = if parts.len() > 2 {
+        parts[parts.len() - 2..].join(".")
+    } else {
+        host.to_string()
+    };
+
+    Some(format!("{scheme}://{site_host}"))
 }
 
 /// Fetch a thumbnail image from `url` with a derived `Referer` header
@@ -107,14 +126,21 @@ mod tests {
 
     #[test]
     fn test_derive_referer_standard_url() {
+        // CDN subdomain stripped to registrable domain
         let referer = derive_referer("https://di.phncdn.com/videos/abc/thumb.jpg");
-        assert_eq!(referer.as_deref(), Some("https://di.phncdn.com"));
+        assert_eq!(referer.as_deref(), Some("https://phncdn.com"));
     }
 
     #[test]
-    fn test_derive_referer_with_port() {
-        let referer = derive_referer("https://example.com:8443/image.jpg");
-        assert_eq!(referer.as_deref(), Some("https://example.com:8443"));
+    fn test_derive_referer_cdn_subdomain() {
+        let referer = derive_referer("https://fastporndelivery.hqporner.com/imgs/123/thumb.jpg");
+        assert_eq!(referer.as_deref(), Some("https://hqporner.com"));
+    }
+
+    #[test]
+    fn test_derive_referer_no_subdomain() {
+        let referer = derive_referer("https://example.com/image.jpg");
+        assert_eq!(referer.as_deref(), Some("https://example.com"));
     }
 
     #[test]
@@ -148,6 +174,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_proxy_sends_referer_and_returns_bytes() {
         let mut server = mockito::Server::new_async().await;
+        // mockito URL is http://127.0.0.1:PORT — IP addresses are preserved as-is
         let expected_referer = server.url();
         let mock = server
             .mock("GET", "/image.jpg")
