@@ -89,7 +89,7 @@ describe("Thumbnail", () => {
         });
 
         const { container } = render(
-            <Thumbnail src="https://cdn.example.com/thumb.jpg" alt="fail test" />,
+            <Thumbnail src="https://cdn.example.com/fail-both.jpg" alt="fail test" />,
             { wrapper: createWrapper() },
         );
 
@@ -99,7 +99,8 @@ describe("Thumbnail", () => {
             fireEvent.error(directImg);
         });
 
-        // Wait for proxy query to fail and placeholder to appear
+        // After direct fails, shows pulsing placeholder while proxy loads,
+        // then static placeholder when proxy also fails
         await waitFor(() => {
             expect(screen.queryByRole("img")).toBeNull();
             const placeholder = container.firstElementChild;
@@ -108,7 +109,7 @@ describe("Thumbnail", () => {
         });
     });
 
-    it("revokes blob URL on unmount", async () => {
+    it("does not revoke blob URL on unmount (cached by TanStack Query)", async () => {
         const fakeImageBytes = new Uint8Array([0x89, 0x50]).buffer;
         setInvokeHandler("proxy_thumbnail", () => fakeImageBytes);
 
@@ -117,7 +118,7 @@ describe("Thumbnail", () => {
         const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
 
         const { unmount } = render(
-            <Thumbnail src="https://cdn.example.com/thumb.jpg" alt="cleanup" />,
+            <Thumbnail src="https://cdn.example.com/no-revoke.jpg" alt="cleanup" />,
             { wrapper: createWrapper() },
         );
 
@@ -130,9 +131,10 @@ describe("Thumbnail", () => {
             expect(screen.getByRole("img")).toHaveAttribute("src", mockBlobUrl);
         });
 
-        // Unmount should revoke the blob URL
+        // Unmount should NOT revoke — blob URL is cached by TanStack Query
+        // and must remain valid for remounted components (e.g. after sort)
         unmount();
-        expect(revokeObjectURL).toHaveBeenCalledWith(mockBlobUrl);
+        expect(revokeObjectURL).not.toHaveBeenCalled();
 
         vi.restoreAllMocks();
     });
