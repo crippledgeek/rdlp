@@ -22,3 +22,19 @@ export const queryClient = new QueryClient({
         },
     },
 });
+
+// Revoke Blob URLs when thumbnail proxy queries are garbage collected.
+// Blob URLs are NOT revoked on component unmount (they must stay valid
+// for TanStack Query cache hits on remount, e.g. after table sort).
+// Instead, we clean them up here when the query is actually removed
+// from the cache after gcTime expires.
+queryClient.getQueryCache().subscribe((event) => {
+    if (
+        event.type === "removed" &&
+        event.query.queryKey[0] === "proxy-thumbnail" &&
+        typeof event.query.state.data === "string" &&
+        event.query.state.data.startsWith("blob:")
+    ) {
+        URL.revokeObjectURL(event.query.state.data);
+    }
+});
