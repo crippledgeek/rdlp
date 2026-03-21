@@ -57,7 +57,9 @@ impl FileTracker {
     #[must_use]
     pub fn temp_path(&self, base: &Path, ext: &str) -> PathBuf {
         let dir = base.parent().unwrap_or(Path::new("."));
-        let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+        let raw_stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+        // Strip any existing .rdlp-tmp-{uuid} suffixes to prevent stacking
+        let stem = raw_stem.split(".rdlp-tmp-").next().unwrap_or(raw_stem);
         let id = Uuid::new_v4().simple().to_string();
         let filename = format!("{stem}.rdlp-tmp-{id}.{ext}");
         let path = dir.join(filename);
@@ -88,6 +90,31 @@ impl FileTracker {
                 && let Err(e) = std::fs::remove_file(&path)
             {
                 log::warn!("FileTracker: failed to delete temp {}: {e}", path.display());
+            }
+        }
+
+        // Rename current files from UUID temp names back to clean names
+        for file in &mut self.current_files {
+            if let Some(name) = file.file_name().and_then(|n| n.to_str()) {
+                if let Some(idx) = name.find(".rdlp-tmp-") {
+                    let clean_stem = &name[..idx];
+                    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+                    let clean_name = format!("{clean_stem}.{ext}");
+                    let clean_path = file.with_file_name(&clean_name);
+                    match std::fs::rename(&file, &clean_path) {
+                        Ok(()) => {
+                            self.temp_registry.release(file);
+                            *file = clean_path;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "FileTracker: failed to rename {} → {}: {e}",
+                                file.display(),
+                                clean_name,
+                            );
+                        }
+                    }
+                }
             }
         }
     }
