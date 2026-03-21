@@ -455,6 +455,14 @@ impl DownloadPhase {
                     .await?;
                 let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
+                // Verify the output file actually exists
+                if !final_path.exists() {
+                    warn!(
+                        "Output file missing after post-processing: {}",
+                        final_path.display()
+                    );
+                }
+
                 // Delete session state on successful completion
                 let sanitized = orchestrator.sanitize_filename(&info.title);
                 let state_path = session_state::single_video_state_path(
