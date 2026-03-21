@@ -113,9 +113,7 @@ impl PipelineStage for AudioExtractStage {
             );
         }
 
-        let output_path = msg
-            .tracker
-            .temp_path(&input_file, codec_config.extension);
+        let output_path = msg.tracker.temp_path(&input_file, codec_config.extension);
 
         let opts = Self::build_extract_options(
             codec_config,
@@ -123,13 +121,9 @@ impl PipelineStage for AudioExtractStage {
             msg.config.audio_quality.as_deref(),
         );
 
-        let callback = msg
-            .callback_factory
-            .as_ref()
-            .map(|f| f(self.name()))
-            .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac| cb.on_progress(frac))
-            });
+        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
+        );
 
         self.ffmpeg
             .extract_audio(&input_file, &output_path, &opts, callback)

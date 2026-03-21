@@ -8,7 +8,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::{debug, info};
 
-use rdlp_ffmpeg::{AudioNormMode, FFmpegRunner, LoudnormPreset, NormalizeOptions, PostProcessError};
+use rdlp_ffmpeg::{
+    AudioNormMode, FFmpegRunner, LoudnormPreset, NormalizeOptions, PostProcessError,
+};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -100,13 +102,9 @@ impl PipelineStage for NormalizeStage {
 
         let output_path = msg.tracker.temp_path(&input_file, ext);
 
-        let callback = msg
-            .callback_factory
-            .as_ref()
-            .map(|f| f(self.name()))
-            .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac| cb.on_progress(frac))
-            });
+        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
+        );
 
         self.ffmpeg
             .normalize_audio(&input_file, &output_path, &opts, callback)
