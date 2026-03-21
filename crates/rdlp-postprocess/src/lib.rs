@@ -1,37 +1,41 @@
 //! # rdlp-postprocess
 //!
-//! Post-processing pipeline for rdlp, providing FFmpeg-based media transformations.
+//! Channel-based post-processing pipeline for rdlp.
 //!
-//! This crate provides post-processors for:
-//! - **Stream merging**: Combine separate video and audio streams
-//! - **Audio extraction**: Extract and convert audio to various formats
-//! - **Video conversion**: Remux or transcode video files
-//! - **Metadata embedding**: Embed title, artist, chapters, etc.
-//! - **Thumbnail embedding**: Embed cover art into media files
-//!
-//! ## Architecture
-//!
-//! The post-processing system follows a pipeline architecture where multiple
-//! processors can be chained together. Each processor:
-//!
-//! 1. Checks if it should run based on configuration
-//! 2. Processes the input files
-//! 3. Returns output files and any temporary files for cleanup
-//!
-//! Processors are executed in priority order (highest priority first).
+//! This crate provides an 8-stage pipeline for FFmpeg-based media transformations:
+//! - **MergeStage**: Combine separate video and audio streams
+//! - **AudioExtractStage**: Extract and convert audio to various formats
+//! - **NormalizeStage**: Peak / EBU R128 loudnorm audio normalization
+//! - **RemuxStage**: Remux to a target container (HLS TS → MP4, etc.)
+//! - **RecodeStage**: Transcode video to a different container/codec
+//! - **SubtitleStage**: Embed subtitle files into video containers
+//! - **MetadataStage**: Embed title, artist, chapters, etc.
+//! - **ThumbnailStage**: Embed cover art (FFmpeg + MP4 covr atom)
 //!
 //! ## Quick Start
 //!
 //! ```no_run
-//! use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
+//! use rdlp_postprocess::{Pipeline, TempRegistry};
+//! use rdlp_postprocess::pipeline::PipelineStage;
+//! use rdlp_postprocess::{MergeStage, RemuxStage, MetadataStage, ThumbnailStage};
+//! use rdlp_postprocess::FFmpegRunner;
 //! use rdlp_core::{InfoDict, PostProcessConfig};
 //! use std::path::PathBuf;
+//! use std::sync::Arc;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Create registry (auto-detects FFmpeg)
-//! let registry = PostProcessorRegistry::new()?;
+//! let ffmpeg = Arc::new(FFmpegRunner::new()?);
+//! let temp_registry = Arc::new(TempRegistry::new());
 //!
-//! // Create info and config
+//! let stages: Vec<Arc<dyn PipelineStage>> = vec![
+//!     Arc::new(MergeStage::new(Arc::clone(&ffmpeg))),
+//!     Arc::new(RemuxStage::new(Arc::clone(&ffmpeg))),
+//!     Arc::new(MetadataStage::new(Arc::clone(&ffmpeg))),
+//!     Arc::new(ThumbnailStage::new(ffmpeg)),
+//! ];
+//!
+//! let pipeline = Arc::new(Pipeline::new(stages, temp_registry, 2));
+//!
 //! let info = InfoDict::new(
 //!     "video123".to_string(),
 //!     "My Video".to_string(),
@@ -39,52 +43,13 @@
 //!     "https://example.com/video".to_string(),
 //! );
 //!
-//! let mut config = PostProcessConfig::default();
-//! config.embed_metadata = true;
-//!
-//! // Process files
+//! let config = Arc::new(PostProcessConfig::default());
 //! let files = vec![PathBuf::from("video.mp4")];
-//! let result = registry.process(&info, files, &config, None).await?;
 //!
-//! println!("Output: {:?}", result.files);
+//! let output = pipeline.run(info, files, config, "video".to_string(), false, None).await?;
+//! println!("Output: {output:?}");
 //! # Ok(())
 //! # }
-//! ```
-//!
-//! ## Custom Post-Processors
-//!
-//! You can create custom post-processors by implementing the `PostProcessor` trait:
-//!
-//! ```no_run
-//! use async_trait::async_trait;
-//! use rdlp_core::{InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result};
-//! use std::path::PathBuf;
-//! use std::sync::Arc;
-//!
-//! struct MyProcessor;
-//!
-//! #[async_trait]
-//! impl PostProcessor for MyProcessor {
-//!     fn name(&self) -> &str {
-//!         "MyProcessor"
-//!     }
-//!
-//!     fn should_run(&self, info: &InfoDict, config: &PostProcessConfig) -> bool {
-//!         // Custom condition
-//!         true
-//!     }
-//!
-//!     async fn process(
-//!         &self,
-//!         info: &InfoDict,
-//!         files: Vec<PathBuf>,
-//!         _config: &PostProcessConfig,
-//!         _callback: Option<Arc<dyn PostProcessCallback>>,
-//!     ) -> Result<PostProcessResult> {
-//!         // Custom processing logic
-//!         Ok(PostProcessResult::new(info.clone(), files))
-//!     }
-//! }
 //! ```
 //!
 //! ## FFmpeg Integration
@@ -105,24 +70,11 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! ## Built-in Processors
-//!
-//! | Processor | Priority | Description |
-//! |-----------|----------|-------------|
-//! | `FFmpegMerger` | 100 | Merge video + audio streams |
-//! | `FFmpegExtractAudio` | 50 | Extract and convert audio |
-//! | `FFmpegRemuxer` | 45 | Remux to MP4/MKV for better seeking |
-//! | `FFmpegVideoConvertor` | 40 | Convert/remux video formats |
-//! | `FFmpegMetadata` | 30 | Embed metadata and chapters |
-//! | `EmbedThumbnail` | 20 | Embed cover art/thumbnails |
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
 pub mod pipeline;
-pub mod processors;
-pub mod registry;
 
 // Re-export pipeline types for use by rdlp-api
 pub use pipeline::stages::{
@@ -131,7 +83,7 @@ pub use pipeline::stages::{
 };
 pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 
-// Re-export rdlp-ffmpeg types for backward compatibility
+// Re-export rdlp-ffmpeg types for convenience
 pub use rdlp_ffmpeg::error;
 pub use rdlp_ffmpeg::ffmpeg;
 pub use rdlp_ffmpeg::{
@@ -139,13 +91,5 @@ pub use rdlp_ffmpeg::{
     RemuxOptions, Result, StreamInfo, VideoConvertOptions,
 };
 
-pub use registry::{PostProcessorRegistry, PostProcessorRegistryTrait};
-
-// Re-export processor types
-pub use processors::{
-    EmbedThumbnail, FFmpegExtractAudio, FFmpegMerger, FFmpegMetadata, FFmpegNormalizeAudio,
-    FFmpegRemuxer, FFmpegVideoConvertor,
-};
-
 // Re-export core types for convenience
-pub use rdlp_core::{InfoDict, PostProcessConfig, PostProcessResult, PostProcessor};
+pub use rdlp_core::{InfoDict, PostProcessConfig};

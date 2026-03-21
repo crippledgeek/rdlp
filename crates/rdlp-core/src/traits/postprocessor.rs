@@ -1,8 +1,7 @@
-use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{AudioFormat, ContainerFormat, InfoDict, Result};
+use crate::{AudioFormat, ContainerFormat};
 
 /// Callback for reporting post-processing progress.
 ///
@@ -37,91 +36,12 @@ pub trait PostProcessCallback: Send + Sync {
     fn on_log(&self, _message: &str) {}
 }
 
-/// Post-processing operations on downloaded files
-///
-/// Post-processors transform downloaded files (merge video+audio, extract audio,
-/// embed metadata, thumbnails, etc.). They run after downloads complete.
-#[async_trait]
-pub trait PostProcessor: Send + Sync {
-    /// Name of the post-processor (e.g., "FFmpeg", "EmbedThumbnail", "Metadata")
-    fn name(&self) -> &str;
-
-    /// Process the downloaded file(s)
-    ///
-    /// # Arguments
-    /// * `info` - Video metadata
-    /// * `files` - List of downloaded file paths to process
-    /// * `config` - Post-processing configuration
-    /// * `callback` - Optional progress callback (0.0–1.0) for heavy operations
-    ///
-    /// # Returns
-    /// Updated InfoDict and potentially new file paths after processing
-    async fn process(
-        &self,
-        info: &InfoDict,
-        files: Vec<PathBuf>,
-        config: &PostProcessConfig,
-        callback: Option<Arc<dyn PostProcessCallback>>,
-    ) -> Result<PostProcessResult>;
-
-    /// Check if this post-processor should run based on config
-    ///
-    /// # Arguments
-    /// * `info` - Video metadata
-    /// * `config` - Post-processing configuration
-    ///
-    /// # Returns
-    /// `true` if this post-processor should run
-    fn should_run(&self, info: &InfoDict, config: &PostProcessConfig) -> bool;
-
-    /// Priority for this post-processor (higher runs first)
-    ///
-    /// Default is 0. Use this to ensure post-processors run in the correct order.
-    /// For example, merging video+audio should happen before embedding thumbnails.
-    fn priority(&self) -> i32 {
-        0
-    }
-}
-
 /// Factory for creating per-stage post-processing callbacks.
 ///
 /// Receives the processor/stage name and returns a fresh callback that
 /// will receive progress updates (0.0–1.0) for that specific stage.
-/// Used by the registry to create a callback for each processor run.
 pub type PostProcessCallbackFactory =
     Arc<dyn Fn(&str) -> Arc<dyn PostProcessCallback> + Send + Sync>;
-
-/// Result of post-processing
-#[derive(Debug, Clone)]
-pub struct PostProcessResult {
-    /// Updated InfoDict (may contain new metadata)
-    pub info: InfoDict,
-
-    /// Output file paths after processing
-    pub files: Vec<PathBuf>,
-
-    /// Files that can be deleted (intermediate files)
-    pub temp_files: Vec<PathBuf>,
-}
-
-impl PostProcessResult {
-    /// Create a new post-process result
-    #[must_use]
-    pub fn new(info: InfoDict, files: Vec<PathBuf>) -> Self {
-        Self {
-            info,
-            files,
-            temp_files: Vec::new(),
-        }
-    }
-
-    /// Add temporary files that can be cleaned up
-    #[must_use]
-    pub fn with_temp_files(mut self, temp_files: Vec<PathBuf>) -> Self {
-        self.temp_files = temp_files;
-        self
-    }
-}
 
 /// Post-processing configuration
 #[derive(Debug, Clone, Default)]
