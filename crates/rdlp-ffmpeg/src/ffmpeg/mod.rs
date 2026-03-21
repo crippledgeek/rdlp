@@ -28,6 +28,7 @@
 //! ```
 
 mod audio_codecs;
+pub mod audio_encoder_registry;
 mod ffi_helpers;
 pub(crate) mod log_capture;
 mod merge;
@@ -51,6 +52,7 @@ use crate::error::{PostProcessError, Result};
 
 // Re-export public types from submodules
 pub use audio_codecs::{AUDIO_CODECS, AudioCodecConfig, get_audio_codec};
+pub use audio_encoder_registry::{AudioCodecInfo, AudioEncoderInfo};
 pub use normalize_types::{
     AudioNormMode, LoudnormMeasurements, LoudnormPreset, NormalizeOptions, PeakAnalysis,
 };

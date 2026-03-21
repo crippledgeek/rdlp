@@ -8,9 +8,7 @@
 //! quality at equivalent bitrates. Use [`preferred_aac_encoder()`] to resolve
 //! the best available AAC encoder at runtime.
 
-use std::sync::OnceLock;
-
-use log::info;
+use super::audio_encoder_registry;
 
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,23 +164,14 @@ pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
 
 /// Returns the best available AAC encoder name.
 ///
-/// Checks once (cached via `OnceLock`) whether `libfdk_aac` is available in the
-/// linked FFmpeg build. If so, returns `"libfdk_aac"` (Fraunhofer FDK AAC —
-/// better quality, HE-AAC support); otherwise falls back to the built-in `"aac"`.
+/// Delegates to [`audio_encoder_registry::preferred_audio_encoder`] for a single
+/// source of truth. Returns `"libfdk_aac"` when the Fraunhofer FDK build is
+/// available, otherwise `"aac"` (built-in).
 ///
 /// This function requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn preferred_aac_encoder() -> &'static str {
-    static PREFERRED: OnceLock<&'static str> = OnceLock::new();
-    PREFERRED.get_or_init(|| {
-        if ffmpeg_the_third::codec::encoder::find_by_name("libfdk_aac").is_some() {
-            info!("Using libfdk_aac (Fraunhofer FDK) as AAC encoder");
-            "libfdk_aac"
-        } else {
-            info!("Using built-in aac encoder (libfdk_aac not available)");
-            "aac"
-        }
-    })
+    audio_encoder_registry::preferred_audio_encoder("aac").unwrap_or("aac")
 }
 
 #[cfg(test)]

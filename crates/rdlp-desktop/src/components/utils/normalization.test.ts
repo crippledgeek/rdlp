@@ -26,6 +26,8 @@ const base: DownloadOptions = {
     normalizeBoostDb: null,
     embedSubtitles: null,
     videoEncoder: null,
+    recodeAudio: null,
+    recodeContainer: null,
 };
 
 // ---------------------------------------------------------------------------

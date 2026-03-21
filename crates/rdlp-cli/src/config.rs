@@ -5,7 +5,9 @@
 //! a three-layer precedence: CLI > config file > defaults.
 
 use anyhow::Result;
-use rdlp_core::{AudioFormat, BrowserType, Config, ContainerFormat, SubtitleFormat, config_io};
+use rdlp_core::{
+    AudioFormat, BrowserType, Config, ContainerFormat, RecodeAudioMode, SubtitleFormat, config_io,
+};
 
 use crate::args::Args;
 use crate::selection::{select_audio_format, select_recode_video, select_remux_container};
@@ -179,6 +181,25 @@ pub(crate) fn merge_config(
 
     if let Some(ref encoder) = args.video_encoder {
         config.video_encoder = Some(encoder.clone());
+    }
+
+    // recode_container: explicit container for recode (overrides recode_video container)
+    if let Some(ref fmt) = args.recode_container {
+        config.recode_container = Some(
+            fmt.parse::<ContainerFormat>()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        );
+    }
+
+    // recode_audio: "copy", "auto", or an encoder name
+    match args.recode_audio.as_str() {
+        "copy" => config.recode_audio = RecodeAudioMode::Copy,
+        "auto" => config.recode_audio = RecodeAudioMode::Auto,
+        name => {
+            config.recode_audio = RecodeAudioMode::Encoder {
+                name: name.to_string(),
+            };
+        }
     }
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm

@@ -64,6 +64,8 @@ const defaultOptions: DownloadOptions = {
     normalizeBoostDb: null,
     embedSubtitles: null,
     videoEncoder: null,
+    recodeAudio: null,
+    recodeContainer: null,
 };
 
 function renderPanel(value: DownloadOptions, onChange = vi.fn()) {

@@ -104,6 +104,8 @@ export function buildDefaultOptions(
         normalizeBoostDb: settings?.normalize_boost_db ?? null,
         embedSubtitles: settings?.embed_subtitles ?? false,
         videoEncoder: null,
+        recodeAudio: null,
+        recodeContainer: null,
     };
 }
 

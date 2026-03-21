@@ -151,6 +151,18 @@ pub(crate) struct Args {
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
     pub recode_video: Option<String>,
 
+    /// Target container format for video recode (e.g., mp4, mkv, webm).
+    /// Takes precedence over --recode-video when both are specified.
+    #[arg(long, value_name = "FMT")]
+    pub recode_container: Option<String>,
+
+    /// Audio mode during video recode: copy (default), auto, or an encoder name
+    /// (e.g., libopus, aac, libmp3lame).
+    /// `copy` copies audio unchanged; `auto` selects the best encoder for the
+    /// target container; any other value is treated as an explicit encoder name.
+    #[arg(long, value_name = "MODE", default_value = "copy")]
+    pub recode_audio: String,
+
     /// Remux to container for better seeking - no re-encoding
     /// Use --remux for interactive, --remux=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]

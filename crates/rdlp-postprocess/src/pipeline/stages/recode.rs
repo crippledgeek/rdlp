@@ -1,15 +1,16 @@
 //! RecodeStage — transcodes video to a different container format.
 //!
-//! This stage runs at index 4 when `config.recode_video` is `Some`.
+//! This stage runs at index 4 when `config.recode_video` is `Some` or
+//! `config.recode_container` is `Some`.
 //! Uses `rdlp_ffmpeg::FFmpegRunner::convert_video()`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info, warn};
 
-use rdlp_core::ContainerFormat;
-use rdlp_ffmpeg::ffmpeg::video_codecs;
+use rdlp_core::{ContainerFormat, RecodeAudioMode};
+use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
@@ -69,10 +70,13 @@ impl RecodeStage {
     /// Build video conversion options.
     ///
     /// Returns `None` when an explicit encoder override is requested but not available.
+    /// `audio_codec` is `None` for copy, `Some(name)` for re-encode.
     fn build_convert_options(
         target_format: &str,
         can_remux: bool,
         encoder_override: Option<&str>,
+        audio_copy: bool,
+        audio_codec: Option<String>,
     ) -> Option<VideoConvertOptions> {
         if can_remux {
             return Some(VideoConvertOptions {
@@ -90,7 +94,8 @@ impl RecodeStage {
                 video_codec: Some(encoder_name.to_string()),
                 preset,
                 crf,
-                audio_copy: true,
+                audio_copy,
+                audio_codec,
             });
         }
 
@@ -114,7 +119,8 @@ impl RecodeStage {
             video_codec: encoder.map(String::from),
             preset,
             crf,
-            audio_copy: true,
+            audio_copy,
+            audio_codec,
         })
     }
 
@@ -142,7 +148,7 @@ impl PipelineStage for RecodeStage {
     }
 
     fn should_run(&self, msg: &PipelineMessage) -> bool {
-        msg.config.recode_video.is_some()
+        msg.config.recode_video.is_some() || msg.config.recode_container.is_some()
     }
 
     async fn process(&self, mut msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
@@ -152,7 +158,10 @@ impl PipelineStage for RecodeStage {
 
         let input_file = msg.tracker.primary();
 
-        let target_format = match msg.config.recode_video {
+        // Resolve target container: prefer recode_container, fallback to recode_video
+        let target_container = msg.config.recode_container.or(msg.config.recode_video);
+
+        let target_format = match target_container {
             Some(c) => c.as_ext(),
             None => {
                 debug!("RecodeStage: no recode target configured; defaulting to MP4");
@@ -197,12 +206,69 @@ impl PipelineStage for RecodeStage {
             debug!("RecodeStage: transcoding video");
         }
 
+        // Resolve audio mode — force Copy when audio normalization is active
+        // (normalizer already re-encoded audio; re-encoding again degrades quality)
+        let recode_audio = if msg.config.normalize_audio {
+            if !matches!(msg.config.recode_audio, RecodeAudioMode::Copy) {
+                warn!(
+                    "RecodeStage: normalize_audio is active — forcing audio copy mode \
+                     (re-encoding normalized audio degrades quality)"
+                );
+            }
+            RecodeAudioMode::Copy
+        } else {
+            msg.config.recode_audio.clone()
+        };
+
+        // Derive audio_copy / audio_codec from the resolved mode
+        let (audio_copy, audio_codec) = if can_remux {
+            // Remux path always copies audio — no re-encoding needed
+            (true, None)
+        } else {
+            match recode_audio {
+                RecodeAudioMode::Copy => (true, None),
+                RecodeAudioMode::Auto => {
+                    // Select best audio encoder for the target container
+                    let encoder = target_container
+                        .map(audio_encoder_registry::select_audio_encoder_for_container)
+                        .unwrap_or("aac");
+                    debug!("RecodeStage: auto audio encoder for {target_format}: {encoder}");
+                    (false, Some(encoder.to_string()))
+                }
+                RecodeAudioMode::Encoder { ref name } => {
+                    // Validate compatibility with target container
+                    if let Some(container) = target_container
+                        && !audio_encoder_registry::container_supports_audio_codec(container, name)
+                    {
+                        warn!(
+                            "RecodeStage: audio codec '{name}' may not be compatible with \
+                             container '{target_format}'; proceeding anyway"
+                        );
+                    }
+                    let resolved = audio_encoder_registry::resolve_audio_encoder(name)
+                        .unwrap_or_else(|| {
+                            warn!(
+                                "RecodeStage: audio encoder '{name}' not available; \
+                                 falling back to container default"
+                            );
+                            target_container
+                                .map(audio_encoder_registry::select_audio_encoder_for_container)
+                                .unwrap_or("aac")
+                        });
+                    debug!("RecodeStage: using audio encoder: {resolved}");
+                    (false, Some(resolved.to_string()))
+                }
+            }
+        };
+
         let output_path = msg.tracker.temp_path(&input_file, target_format);
 
         let opts = match Self::build_convert_options(
             target_format,
             can_remux,
             msg.config.video_encoder.as_deref(),
+            audio_copy,
+            audio_codec,
         ) {
             Some(o) => o,
             None => {
@@ -321,23 +387,45 @@ mod tests {
 
     #[test]
     fn build_convert_options_remux() {
-        let opts = RecodeStage::build_convert_options("mp4", true, None).unwrap();
+        let opts = RecodeStage::build_convert_options("mp4", true, None, true, None).unwrap();
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
     }
 
     #[test]
     fn build_convert_options_transcode_mp4() {
-        let opts = RecodeStage::build_convert_options("mp4", false, None).unwrap();
+        let opts = RecodeStage::build_convert_options("mp4", false, None, true, None).unwrap();
         assert!(!opts.remux_only);
         assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, Some("medium".to_string()));
         assert_eq!(opts.crf, Some(23));
+        assert!(opts.audio_copy);
+        assert!(opts.audio_codec.is_none());
+    }
+
+    #[test]
+    fn build_convert_options_with_audio_codec() {
+        let opts = RecodeStage::build_convert_options(
+            "mp4",
+            false,
+            None,
+            false,
+            Some("libopus".to_string()),
+        )
+        .unwrap();
+        assert!(!opts.audio_copy);
+        assert_eq!(opts.audio_codec, Some("libopus".to_string()));
     }
 
     #[test]
     fn build_convert_options_unavailable_encoder_returns_none() {
-        let result = RecodeStage::build_convert_options("mp4", false, Some("nonexistent_enc_xyz"));
+        let result = RecodeStage::build_convert_options(
+            "mp4",
+            false,
+            Some("nonexistent_enc_xyz"),
+            true,
+            None,
+        );
         assert!(result.is_none());
     }
 }

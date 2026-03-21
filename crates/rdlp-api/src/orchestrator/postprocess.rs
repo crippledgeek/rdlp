@@ -94,6 +94,8 @@ impl Orchestrator {
             normalize_boost_db: self.config.normalize_boost_db,
             verbose: self.config.verbose,
             video_encoder: self.config.video_encoder.clone(),
+            recode_audio: self.config.recode_audio.clone(),
+            recode_container: self.config.recode_container,
         }
     }
 
@@ -104,6 +106,7 @@ impl Orchestrator {
             || self.config.embed_thumbnail
             || self.config.embed_subtitles
             || self.config.recode_video.is_some()
+            || self.config.recode_container.is_some()
             || self.config.remux_container.is_some()
             || self.config.normalize_audio
     }

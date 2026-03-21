@@ -95,24 +95,24 @@ impl FileTracker {
 
         // Rename current files from UUID temp names back to clean names
         for file in &mut self.current_files {
-            if let Some(name) = file.file_name().and_then(|n| n.to_str()) {
-                if let Some(idx) = name.find(".rdlp-tmp-") {
-                    let clean_stem = &name[..idx];
-                    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-                    let clean_name = format!("{clean_stem}.{ext}");
-                    let clean_path = file.with_file_name(&clean_name);
-                    match std::fs::rename(&file, &clean_path) {
-                        Ok(()) => {
-                            self.temp_registry.release(file);
-                            *file = clean_path;
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "FileTracker: failed to rename {} → {}: {e}",
-                                file.display(),
-                                clean_name,
-                            );
-                        }
+            if let Some(name) = file.file_name().and_then(|n| n.to_str())
+                && let Some(idx) = name.find(".rdlp-tmp-")
+            {
+                let clean_stem = &name[..idx];
+                let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+                let clean_name = format!("{clean_stem}.{ext}");
+                let clean_path = file.with_file_name(&clean_name);
+                match std::fs::rename(&file, &clean_path) {
+                    Ok(()) => {
+                        self.temp_registry.release(file);
+                        *file = clean_path;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "FileTracker: failed to rename {} → {}: {e}",
+                            file.display(),
+                            clean_name,
+                        );
                     }
                 }
             }

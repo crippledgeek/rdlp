@@ -48,7 +48,7 @@ pub mod ffmpeg;
 // Re-export main types at crate root
 pub use error::{CorruptionKind, PostProcessError, Result};
 pub use ffmpeg::{
-    AudioExtractOptions, AudioNormMode, ChapterEntry, FFmpegRunner, LoudnormMeasurements,
-    LoudnormPreset, MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo,
-    VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, set_verbose,
+    AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
+    FFmpegRunner, LoudnormMeasurements, LoudnormPreset, MediaInfo, NormalizeOptions, PeakAnalysis,
+    RemuxOptions, StreamInfo, VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, set_verbose,
 };

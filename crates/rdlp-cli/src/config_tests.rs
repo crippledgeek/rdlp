@@ -64,6 +64,8 @@ fn default_args() -> Args {
         config_location: None,
         video_encoder: None,
         list_encoders: false,
+        recode_container: None,
+        recode_audio: "copy".to_string(),
     }
 }
 

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::audio_format::AudioFormat;
 use crate::browser_type::BrowserType;
 use crate::container::ContainerFormat;
+use crate::recode_audio_mode::RecodeAudioMode;
 use crate::subtitle_format::SubtitleFormat;
 
 /// Errors from configuration validation.
@@ -162,6 +163,16 @@ pub struct Config {
     /// When None, the best available encoder for the codec is auto-selected.
     #[serde(default)]
     pub video_encoder: Option<String>,
+
+    /// How to handle audio during video recode.
+    /// Default is Copy (stream copy audio unchanged).
+    #[serde(default)]
+    pub recode_audio: RecodeAudioMode,
+
+    /// Output container override for video recode.
+    /// When None, the container is derived from the video codec.
+    #[serde(default)]
+    pub recode_container: Option<ContainerFormat>,
 
     /// Remux to container format for better seeking
     pub remux_container: Option<ContainerFormat>,
@@ -364,6 +375,8 @@ impl Default for Config {
             audio_quality: None,
             recode_video: None,
             video_encoder: None,
+            recode_audio: RecodeAudioMode::Copy,
+            recode_container: None,
             remux_container: None,
             embed_thumbnail: true,
             embed_metadata: false,

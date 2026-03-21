@@ -12,6 +12,7 @@ fn test_select_audio_encoder_for_container() {
     assert_eq!(select_audio_encoder_for_container("m4a"), aac);
     assert_eq!(select_audio_encoder_for_container("mov"), aac);
     assert_eq!(select_audio_encoder_for_container("webm"), "libopus");
+    // MKV supports everything; registry prefers Opus for quality/size efficiency
     assert_eq!(select_audio_encoder_for_container("mkv"), "libopus");
     assert_eq!(select_audio_encoder_for_container("avi"), "libmp3lame");
     assert_eq!(select_audio_encoder_for_container("mp3"), "libmp3lame");

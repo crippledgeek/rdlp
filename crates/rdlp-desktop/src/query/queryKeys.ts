@@ -36,6 +36,10 @@ export const queryKeys = {
         list: () => ["downloads"] as const,
     },
     codecs: () => ["available-codecs"] as const,
+    audioCodecs: {
+        all: () => ["audioCodecs"] as const,
+        byContainer: (container: string | null) => ["audioCodecs", container] as const,
+    },
     formats: (url: string) => ["formats", url] as const,
     settings: () => ["settings"] as const,
     thumbnail: {
