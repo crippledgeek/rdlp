@@ -338,28 +338,6 @@ mod tests {
         )
     }
 
-    fn make_msg(pipeline: &Pipeline) -> PipelineMessage {
-        let (error_tx, _error_rx) = oneshot::channel();
-        PipelineMessage {
-            info: InfoDict::new(
-                "id123".to_string(),
-                "Test Video".to_string(),
-                "TestExtractor".to_string(),
-                "https://example.com/video".to_string(),
-            ),
-            tracker: FileTracker::new(
-                vec![PathBuf::from("/tmp/video.mp4")],
-                Arc::clone(&pipeline.temp_registry),
-            ),
-            config: Arc::new(PostProcessConfig::default()),
-            original_stem: "video".to_string(),
-            is_hls: false,
-            callback_factory: None,
-            error_tx: Some(error_tx),
-            warnings: Vec::new(),
-        }
-    }
-
     struct PassthroughStage;
     #[async_trait]
     impl PipelineStage for PassthroughStage {
