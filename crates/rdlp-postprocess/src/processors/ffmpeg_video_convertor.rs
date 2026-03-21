@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_core::{
     InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
 };
@@ -110,14 +110,12 @@ impl FFmpegVideoConvertor {
 
         // If the caller supplied an explicit encoder, verify it and use it directly.
         if let Some(requested) = encoder_override {
-            let resolved =
-                rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder(requested);
+            let resolved = rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder(requested);
             // Return None to signal "encoder unavailable" to the caller.
             let encoder_name = resolved?;
 
             // Derive preset/crf from the encoder name for a sensible default.
-            let (preset, crf) =
-                Self::default_preset_crf_for_encoder(encoder_name);
+            let (preset, crf) = Self::default_preset_crf_for_encoder(encoder_name);
 
             return Some(VideoConvertOptions {
                 remux_only: false,
@@ -160,7 +158,11 @@ impl FFmpegVideoConvertor {
             (Some("medium".to_string()), Some(23))
         } else if encoder.contains("vpx") {
             (None, Some(30))
-        } else if encoder.contains("av1") || encoder.contains("svt") || encoder.contains("aom") || encoder.contains("rav1e") {
+        } else if encoder.contains("av1")
+            || encoder.contains("svt")
+            || encoder.contains("aom")
+            || encoder.contains("rav1e")
+        {
             (None, Some(28))
         } else {
             (None, None)
@@ -244,8 +246,14 @@ impl PostProcessor for FFmpegVideoConvertor {
             debug!("Transcoding video");
         }
 
-        // Build output path
-        let output_path = input_file.with_extension(target_format);
+        // Build output path — use temp suffix when extensions match to avoid
+        // reading and writing the same file (FFmpeg can't do that).
+        let same_ext = input_ext.eq_ignore_ascii_case(target_format);
+        let convert_path = if same_ext {
+            input_file.with_extension(format!("recode.{target_format}"))
+        } else {
+            input_file.with_extension(target_format)
+        };
 
         // Build conversion options, applying any encoder override from config.
         let opts = match Self::build_convert_options(
@@ -272,14 +280,28 @@ impl PostProcessor for FFmpegVideoConvertor {
                 Arc::new(move |frac| cb.on_progress(frac))
             });
         self.ffmpeg
-            .convert_video(input_file, &output_path, &opts, progress_fn)
+            .convert_video(input_file, &convert_path, &opts, progress_fn)
             .await?;
+
+        // If we used a temp suffix, rename to the final path and delete the original
+        let output_path = if same_ext {
+            let final_path = input_file.with_extension(target_format);
+            if let Err(e) = tokio::fs::remove_file(input_file).await {
+                warn!("Could not remove original before rename: {e}");
+            }
+            if let Err(e) = tokio::fs::rename(&convert_path, &final_path).await {
+                warn!("Could not rename recode output: {e}");
+                convert_path // fall back to .recode.mp4
+            } else {
+                final_path
+            }
+        } else {
+            convert_path
+        };
 
         info!(output:? = output_path.display(); "Converted");
 
-        // Don't mark input as temp when output path equals input path
-        // (same extension → convert_video overwrites in place)
-        let temp_files = if config.keep_video || output_path == *input_file {
+        let temp_files = if config.keep_video || same_ext {
             Vec::new()
         } else {
             files

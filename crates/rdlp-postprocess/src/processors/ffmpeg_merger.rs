@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_core::{
     InfoDict, PostProcessCallback, PostProcessConfig, PostProcessResult, PostProcessor, Result,
 };
@@ -121,8 +121,18 @@ impl PostProcessor for FFmpegMerger {
         let audio_ext = audio_file.extension().and_then(|e| e.to_str());
         let output_format = self.determine_output_format(config, video_ext, audio_ext);
 
-        // Create output filename
-        let output_path = video_file.with_extension(output_format);
+        // Build the intended final output path by replacing the video file's
+        // extension with the output format.  This may produce the same path as
+        // the video input when both share the same extension (e.g. mp4→mp4).
+        // In that case we write to a collision-free temp path and rename afterward
+        // so we never overwrite the input while it is still needed by FFmpeg.
+        let intended_path = video_file.with_extension(output_format);
+        let collision = intended_path == *video_file;
+        let merge_output = if collision {
+            video_file.with_extension(format!("merging.{output_format}"))
+        } else {
+            intended_path.clone()
+        };
 
         // Merge using library bindings (stream copy, no re-encoding).
         // The MP4 muxer automatically handles AAC ADTS→ASC conversion,
@@ -136,16 +146,36 @@ impl PostProcessor for FFmpegMerger {
                 Arc::new(move |frac| cb.on_progress(frac))
             });
         self.ffmpeg
-            .merge(video_file, audio_file, &output_path, &opts, progress_fn)
+            .merge(video_file, audio_file, &merge_output, &opts, progress_fn)
             .await?;
+
+        // If we used a temp path because of a naming collision, rename it to
+        // the intended path now that both inputs are no longer needed.
+        let output_path = if collision {
+            if let Err(e) = tokio::fs::rename(&merge_output, &intended_path).await {
+                warn!(
+                    from:? = merge_output.display(),
+                    to:? = intended_path.display();
+                    "Could not rename merged output: {e}"
+                );
+                // Fall back to keeping the temp-named file rather than losing the data.
+                merge_output
+            } else {
+                intended_path
+            }
+        } else {
+            intended_path
+        };
 
         debug!(output:? = output_path.display(); "Merged output");
 
-        // Return result with merged file and original files as temp
+        // Return result with merged file and original files as temp.
+        // The original inputs are now safe to delete because the merge is complete
+        // and the output_path is a distinct file from both of them.
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files: files, // Original files can be deleted
+            temp_files: files, // Original video + audio streams can be deleted
         })
     }
 }
