@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use log::{debug, info};
 
 use rdlp_core::ContainerFormat;
-use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
 use rdlp_ffmpeg::ffmpeg::video_codecs;
+use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -188,7 +188,8 @@ impl PipelineStage for RecodeStage {
         );
 
         let media_info = self.ffmpeg.probe(&input_file).await?;
-        let can_remux = Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
+        let can_remux =
+            Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
 
         if can_remux {
             debug!("RecodeStage: remuxing (stream copy)");
@@ -216,13 +217,9 @@ impl PipelineStage for RecodeStage {
             }
         };
 
-        let callback = msg
-            .callback_factory
-            .as_ref()
-            .map(|f| f(self.name()))
-            .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac| cb.on_progress(frac))
-            });
+        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
+        );
 
         self.ffmpeg
             .convert_video(&input_file, &output_path, &opts, callback)

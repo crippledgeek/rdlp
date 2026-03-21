@@ -159,8 +159,7 @@ impl PipelineStage for SubtitleStage {
             return Ok(msg);
         }
 
-        let subtitle_files =
-            Self::find_subtitle_files(&media_file, &msg.original_stem);
+        let subtitle_files = Self::find_subtitle_files(&media_file, &msg.original_stem);
 
         if subtitle_files.is_empty() {
             debug!(
