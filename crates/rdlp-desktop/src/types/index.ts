@@ -89,6 +89,21 @@ export interface FormatListResponse {
     duration: number | null;
 }
 
+// ========== Video Codec Types (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
+
+/** Info about a single video encoder available in the linked FFmpeg build. */
+export interface VideoEncoderInfo {
+    encoderName: string;
+    displayName: string;
+}
+
+/** Info about a video codec with its available encoders. */
+export interface VideoCodecInfo {
+    codec: string;
+    displayName: string;
+    encoders: VideoEncoderInfo[];
+}
+
 // ========== Download Types ==========
 
 /** Lifecycle status of a download job (#[serde(rename_all = "lowercase")]). */
@@ -168,6 +183,7 @@ export interface DownloadOptions {
     normalizeBoost: boolean | null;
     normalizeBoostDb: number | null;
     embedSubtitles: boolean | null;
+    videoEncoder: string | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========

@@ -177,6 +177,10 @@ pub(crate) fn merge_config(
         );
     }
 
+    if let Some(ref encoder) = args.video_encoder {
+        config.video_encoder = Some(encoder.clone());
+    }
+
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
     // implies --normalize-audio
     let boost_enabled = args.normalize_boost || args.normalize_boost_db.is_some();

@@ -17,27 +17,6 @@ use rdlp_ffmpeg::VideoConvertOptions;
 
 use rdlp_core::ContainerFormat;
 
-/// Supported video codecs for transcoding.
-const VIDEO_CODECS: &[(&str, &str)] = &[
-    ("h264", "libx264"),
-    ("h265", "libx265"),
-    ("hevc", "libx265"),
-    ("vp9", "libvpx-vp9"),
-    ("vp8", "libvpx"),
-    ("av1", "libaom-av1"),
-    ("vvc", "libvvenc"),
-    ("h266", "libvvenc"),
-    ("mpeg1", "mpeg1video"),
-    ("mpeg2", "mpeg2video"),
-    ("mpeg4", "mpeg4"),
-    ("theora", "libtheora"),
-    ("prores", "prores_ks"),
-    ("dnxhd", "dnxhd"),
-    ("wmv2", "wmv2"),
-    ("ffv1", "ffv1"),
-    ("xvid", "libxvid"),
-];
-
 ffmpeg_processor!(
     FFmpegVideoConvertor,
     "FFmpegVideoConvertor",
@@ -58,10 +37,7 @@ impl FFmpegVideoConvertor {
 
     /// Get the FFmpeg encoder for a codec.
     fn get_encoder(codec: &str) -> Option<&'static str> {
-        VIDEO_CODECS
-            .iter()
-            .find(|(c, _)| c.eq_ignore_ascii_case(codec))
-            .map(|(_, e)| *e)
+        rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder(codec)
     }
 
     /// Determine if we can remux (copy) or need to transcode.
@@ -111,13 +87,45 @@ impl FFmpegVideoConvertor {
     }
 
     /// Build `VideoConvertOptions` from the target format and remux decision.
-    fn build_convert_options(target_format: &str, can_remux: bool) -> VideoConvertOptions {
+    ///
+    /// When `encoder_override` is `Some`, that encoder is verified for
+    /// availability via the registry and used directly. If the requested
+    /// encoder is not available, `None` is returned so the caller can
+    /// surface an error.
+    ///
+    /// Returns `None` only when `encoder_override` is set but the encoder
+    /// is not available in the current FFmpeg build.
+    fn build_convert_options(
+        target_format: &str,
+        can_remux: bool,
+        encoder_override: Option<&str>,
+    ) -> Option<VideoConvertOptions> {
         if can_remux {
-            return VideoConvertOptions {
+            return Some(VideoConvertOptions {
                 remux_only: true,
                 audio_copy: true,
                 ..Default::default()
-            };
+            });
+        }
+
+        // If the caller supplied an explicit encoder, verify it and use it directly.
+        if let Some(requested) = encoder_override {
+            let resolved =
+                rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder(requested);
+            // Return None to signal "encoder unavailable" to the caller.
+            let encoder_name = resolved?;
+
+            // Derive preset/crf from the encoder name for a sensible default.
+            let (preset, crf) =
+                Self::default_preset_crf_for_encoder(encoder_name);
+
+            return Some(VideoConvertOptions {
+                remux_only: false,
+                video_codec: Some(encoder_name.to_string()),
+                preset,
+                crf,
+                audio_copy: true,
+            });
         }
 
         // Determine target codec from container
@@ -137,12 +145,25 @@ impl FFmpegVideoConvertor {
             _ => (None, None),
         };
 
-        VideoConvertOptions {
+        Some(VideoConvertOptions {
             remux_only: false,
             video_codec: encoder.map(String::from),
             preset,
             crf,
             audio_copy: true,
+        })
+    }
+
+    /// Returns sensible default (preset, crf) values for a given encoder name.
+    fn default_preset_crf_for_encoder(encoder: &str) -> (Option<String>, Option<u32>) {
+        if encoder.contains("264") || encoder.contains("265") || encoder.contains("kvazaar") {
+            (Some("medium".to_string()), Some(23))
+        } else if encoder.contains("vpx") {
+            (None, Some(30))
+        } else if encoder.contains("av1") || encoder.contains("svt") || encoder.contains("aom") || encoder.contains("rav1e") {
+            (None, Some(28))
+        } else {
+            (None, None)
         }
     }
 }
@@ -226,8 +247,24 @@ impl PostProcessor for FFmpegVideoConvertor {
         // Build output path
         let output_path = input_file.with_extension(target_format);
 
-        // Build conversion options
-        let opts = Self::build_convert_options(target_format, can_remux);
+        // Build conversion options, applying any encoder override from config.
+        let opts = match Self::build_convert_options(
+            target_format,
+            can_remux,
+            config.video_encoder.as_deref(),
+        ) {
+            Some(o) => o,
+            None => {
+                let requested = config.video_encoder.as_deref().unwrap_or("");
+                return Err(PostProcessError::UnsupportedFormat {
+                    format: requested.to_string(),
+                    operation: format!(
+                        "video encoder '{requested}' is not available in this FFmpeg build"
+                    ),
+                }
+                .into());
+            }
+        };
 
         // Convert via library bindings
         let progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>> =
@@ -262,9 +299,9 @@ mod tests {
 
     #[test]
     fn test_get_encoder() {
-        assert_eq!(FFmpegVideoConvertor::get_encoder("h264"), Some("libx264"));
-        assert_eq!(FFmpegVideoConvertor::get_encoder("vp9"), Some("libvpx-vp9"));
-        assert_eq!(FFmpegVideoConvertor::get_encoder("unknown"), None);
+        assert!(FFmpegVideoConvertor::get_encoder("h264").is_some());
+        assert!(FFmpegVideoConvertor::get_encoder("vp9").is_some());
+        assert!(FFmpegVideoConvertor::get_encoder("unknown").is_none());
     }
 
     #[test]
@@ -285,7 +322,8 @@ mod tests {
 
     #[test]
     fn test_build_convert_options_remux() {
-        let opts = FFmpegVideoConvertor::build_convert_options("mp4", true);
+        let opts = FFmpegVideoConvertor::build_convert_options("mp4", true, None)
+            .expect("remux should always succeed");
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
         assert!(opts.video_codec.is_none());
@@ -293,9 +331,10 @@ mod tests {
 
     #[test]
     fn test_build_convert_options_transcode_mp4() {
-        let opts = FFmpegVideoConvertor::build_convert_options("mp4", false);
+        let opts = FFmpegVideoConvertor::build_convert_options("mp4", false, None)
+            .expect("auto encoder should resolve");
         assert!(!opts.remux_only);
-        assert_eq!(opts.video_codec, Some("libx264".to_string()));
+        assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, Some("medium".to_string()));
         assert_eq!(opts.crf, Some(23));
         assert!(opts.audio_copy);
@@ -303,11 +342,29 @@ mod tests {
 
     #[test]
     fn test_build_convert_options_transcode_webm() {
-        let opts = FFmpegVideoConvertor::build_convert_options("webm", false);
+        let opts = FFmpegVideoConvertor::build_convert_options("webm", false, None)
+            .expect("auto encoder should resolve");
         assert!(!opts.remux_only);
-        assert_eq!(opts.video_codec, Some("libvpx-vp9".to_string()));
+        assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, None); // VP9 has no preset
         assert_eq!(opts.crf, Some(30));
         assert!(opts.audio_copy);
+    }
+
+    #[test]
+    fn test_build_convert_options_encoder_override_unavailable() {
+        // A nonsense encoder name should return None (unavailable).
+        let result =
+            FFmpegVideoConvertor::build_convert_options("mp4", false, Some("nonexistent_enc_xyz"));
+        assert!(result.is_none(), "unavailable encoder should return None");
+    }
+
+    #[test]
+    fn test_build_convert_options_encoder_override_available() {
+        // mpeg4 is a built-in encoder; passing it by encoder name should succeed.
+        let opts = FFmpegVideoConvertor::build_convert_options("mp4", false, Some("mpeg4"))
+            .expect("mpeg4 is always available");
+        assert!(!opts.remux_only);
+        assert_eq!(opts.video_codec.as_deref(), Some("mpeg4"));
     }
 }

@@ -137,6 +137,15 @@ pub(crate) struct Args {
     #[arg(long)]
     pub retry_subs: bool,
 
+    /// Video encoder to use (e.g., libsvtav1, libx264).
+    /// Overrides automatic encoder selection.
+    #[arg(long, value_name = "NAME")]
+    pub video_encoder: Option<String>,
+
+    /// List available video encoders and exit.
+    #[arg(long)]
+    pub list_encoders: bool,
+
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]

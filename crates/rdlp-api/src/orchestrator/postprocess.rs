@@ -93,6 +93,7 @@ impl Orchestrator {
             normalize_boost: self.config.normalize_boost,
             normalize_boost_db: self.config.normalize_boost_db,
             verbose: self.config.verbose,
+            video_encoder: self.config.video_encoder.clone(),
         }
     }
 

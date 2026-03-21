@@ -61,6 +61,7 @@ function makeOptions(overrides: Partial<DownloadOptions> = {}): DownloadOptions 
         normalizeBoost: null,
         normalizeBoostDb: null,
         embedSubtitles: null,
+        videoEncoder: null,
         ...overrides,
     };
 }

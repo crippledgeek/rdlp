@@ -205,6 +205,9 @@ pub struct PostProcessOptions {
     pub normalize_boost_db: Option<f64>,
     /// Recode (transcode) video into a different container format.
     pub recode_video: Option<ContainerFormat>,
+    /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
+    /// `None` = auto-select best available encoder for the target codec.
+    pub video_encoder: Option<String>,
 }
 
 /// Network, retry, and cookie options.

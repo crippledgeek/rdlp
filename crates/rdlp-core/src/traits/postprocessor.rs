@@ -203,4 +203,11 @@ pub struct PostProcessConfig {
 
     /// Enable verbose FFmpeg logging (forward muxer trace to callback).
     pub verbose: bool,
+
+    /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
+    /// When `None`, the best available encoder for the target codec is
+    /// auto-selected via the encoder registry. When `Some`, the named
+    /// encoder is verified for availability before use; an unavailable
+    /// encoder causes the conversion step to return an error.
+    pub video_encoder: Option<String>,
 }
