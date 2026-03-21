@@ -174,9 +174,13 @@ impl Orchestrator {
             });
         }
 
-        // Run FFmpeg remux to fix container (faststart, timestamps)
-        // Applied to both HLS and HTTP downloads for consistent output
-        let result_files = if !self.config.extract_audio {
+        // Run FFmpeg remux to fix container (faststart, timestamps).
+        // Skip when there are multiple files — those are separate video/audio
+        // streams for a merge download.  The FFmpegMerger processor (priority 100)
+        // handles those files and produces a properly-muxed output on its own.
+        // Remuxing each stream individually before the merge is wasteful and
+        // forces unnecessary encode/decode cycles on the raw stream files.
+        let result_files = if !self.config.extract_audio && files.len() == 1 {
             self.emit(Event::PostProcessing {
                 id: self.download_id,
                 stage: "Remuxing container".into(),
@@ -265,8 +269,17 @@ impl Orchestrator {
                 Ok(()) => {
                     // Replace original with fixed file — only delete original
                     // after verifying the remuxed temp file exists and has content
-                    if !temp_path.exists() || tokio::fs::metadata(&temp_path).await.map(|m| m.len()).unwrap_or(0) == 0 {
-                        warn!("Remux produced empty or missing output: {}", temp_path.display());
+                    if !temp_path.exists()
+                        || tokio::fs::metadata(&temp_path)
+                            .await
+                            .map(|m| m.len())
+                            .unwrap_or(0)
+                            == 0
+                    {
+                        warn!(
+                            "Remux produced empty or missing output: {}",
+                            temp_path.display()
+                        );
                         output_files.push(file.clone());
                         continue;
                     }
