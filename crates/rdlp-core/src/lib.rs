@@ -3,7 +3,7 @@
 //! Core types, traits, and utilities for rdlp (Rust Download Program).
 //!
 //! This crate provides the foundational building blocks for the rdlp video downloader:
-//! - **Traits**: `InfoExtractor`, `Downloader`, `PostProcessor`, `JsEngine`, `CookieJar`
+//! - **Traits**: `InfoExtractor`, `Downloader`, `PostProcessCallback`, `JsEngine`, `CookieJar`
 //! - **Data Structures**: `InfoDict`, `Format`, `Config` (re-exported from `rdlp-types`)
 //! - **Error Types**: `RdlpError` and `Result`
 //!
@@ -58,6 +58,6 @@ pub use retry::{ExponentialBuilder, RetryConfig, Retryable, is_retryable_error};
 // Re-export traits
 pub use traits::{
     CookieJar, DownloadProgress, DownloadStats, Downloader, ExtractionContext, InfoExtractor,
-    JsEngine, PostProcessCallback, PostProcessCallbackFactory, PostProcessConfig,
-    PostProcessResult, PostProcessor, ProgressCallback, SearchExtractor,
+    JsEngine, PostProcessCallback, PostProcessCallbackFactory, PostProcessConfig, ProgressCallback,
+    SearchExtractor,
 };

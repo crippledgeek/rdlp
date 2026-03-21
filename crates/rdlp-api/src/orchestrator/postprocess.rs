@@ -125,14 +125,14 @@ impl Orchestrator {
         is_hls: bool,
     ) -> Result<Vec<PathBuf>> {
         debug!(
-            "[PostProcess] Called: is_hls={is_hls}, registry={}",
-            self.postprocessor_registry.is_some()
+            "[PostProcess] Called: is_hls={is_hls}, pipeline={}",
+            self.pipeline.is_some()
         );
 
-        let registry = match &self.postprocessor_registry {
-            Some(r) => r,
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
             None => {
-                // No post-processor available - return files unchanged
+                // No pipeline available — return files unchanged.
                 if self.needs_postprocessing() || is_hls {
                     warn!("Post-processing unavailable (FFmpeg not found)");
                     if is_hls {
@@ -143,69 +143,46 @@ impl Orchestrator {
             }
         };
 
-        // For HLS downloads, always run FFmpeg remux to fix container
-        // For other downloads, only run if explicitly configured
+        // For HLS downloads always run (RemuxStage handles TS → MP4 via is_hls flag).
+        // For other downloads, only run if explicitly configured.
         let needs_processing = self.needs_postprocessing() || is_hls;
         if !needs_processing {
             return Ok(files);
         }
 
-        // Build config - for HLS, enable remux even if not explicitly requested
-        let mut pp_config = self.to_postprocess_config();
-        if is_hls && pp_config.recode_video.is_none() && !pp_config.extract_audio {
-            // Use the central resolver to determine the container format,
-            // respecting user config and file extension before falling back.
-            let resolved = super::container_resolver::ResolvedContainer::resolve(
-                &self.config,
-                files.first().map(|f| f.as_path()),
-            );
-            pp_config.merge_output_format = Some(resolved.format);
-        }
+        let pp_config = self.to_postprocess_config();
 
         debug!("Running post-processing pipeline...");
 
-        if self.config.verbose {
-            let processors = registry.list_processors();
-            let msg = format!("Available processors: {}", processors.join(", "));
-            debug!("{msg}");
-            self.emit(Event::Debug {
-                id: self.download_id,
-                message: msg,
-            });
-        }
+        let original_stem = files
+            .first()
+            .and_then(|f| f.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("video")
+            .to_string();
 
-        // Run FFmpeg remux to fix container (faststart, timestamps).
-        // Skip when there are multiple files — those are separate video/audio
-        // streams for a merge download.  The FFmpegMerger processor (priority 100)
-        // handles those files and produces a properly-muxed output on its own.
-        // Remuxing each stream individually before the merge is wasteful and
-        // forces unnecessary encode/decode cycles on the raw stream files.
-        let result_files = if !self.config.extract_audio && files.len() == 1 {
-            self.emit(Event::PostProcessing {
-                id: self.download_id,
-                stage: "Remuxing container".into(),
-            });
-            self.ffmpeg_remux(&files).await.unwrap_or(files.clone())
-        } else {
-            files.clone()
-        };
-
-        // Build a per-stage progress callback factory for the pipeline.
+        // Build a per-stage progress callback factory.
         let callback_factory = Some(make_callback_factory(
             self.event_tx.clone(),
             self.download_id,
         ));
 
-        // Run the full post-processing pipeline
-        match registry
-            .process(info, result_files.clone(), &pp_config, callback_factory)
+        match pipeline
+            .run(
+                info.clone(),
+                files.clone(),
+                Arc::new(pp_config),
+                original_stem,
+                is_hls,
+                callback_factory,
+            )
             .await
         {
-            Ok(result) => {
-                if result.files != files {
+            Ok(output_files) => {
+                if output_files != files {
                     debug!("Post-processing complete");
                     if self.config.verbose {
-                        for file in &result.files {
+                        for file in &output_files {
                             let msg = format!("Output: {}", file.display());
                             debug!("{msg}");
                             self.emit(Event::Debug {
@@ -215,96 +192,14 @@ impl Orchestrator {
                         }
                     }
                 }
-                Ok(result.files)
+                Ok(output_files)
             }
             Err(e) => {
-                warn!("Post-processing failed: {e}");
-                // Return remuxed files on failure (or original if remux failed)
-                Ok(result_files)
+                warn!("Post-processing pipeline failed: {e}");
+                // Return original files on failure.
+                Ok(files)
             }
         }
-    }
-
-    /// Run FFmpeg remux on downloaded files to fix container format
-    ///
-    /// This performs a stream copy (no re-encoding) via library bindings to:
-    /// - Move moov atom to beginning of file (faststart)
-    /// - Fix timestamps
-    /// - Ensure proper MP4 container structure
-    ///
-    /// Applied to both HLS and HTTP downloads for consistent output quality.
-    pub(super) async fn ffmpeg_remux(&self, files: &[PathBuf]) -> Option<Vec<PathBuf>> {
-        let registry = self.postprocessor_registry.as_ref()?;
-        let processors = registry.list_processors();
-        if processors.is_empty() {
-            return None;
-        }
-
-        let mut output_files = Vec::new();
-
-        for file in files {
-            let ext = file
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or_else(|| {
-                    debug!(file:? = file.display(); "No file extension detected, defaulting to mp4");
-                    "mp4"
-                });
-
-            // MPEG-TS needs remux for seeking/thumbnails.
-            // Use the resolver to determine the target container.
-            let target_ext = if ext.eq_ignore_ascii_case("ts") {
-                let resolved = super::container_resolver::ResolvedContainer::resolve(
-                    &self.config,
-                    Some(file.as_path()),
-                );
-                resolved.format.as_ext()
-            } else {
-                ext
-            };
-            let temp_path = file.with_extension(format!("fixed.{target_ext}"));
-
-            // Remux using library bindings (stream copy + faststart)
-            match registry.remux_faststart(file, &temp_path).await {
-                Ok(()) => {
-                    // Replace original with fixed file — only delete original
-                    // after verifying the remuxed temp file exists and has content
-                    if !temp_path.exists()
-                        || tokio::fs::metadata(&temp_path)
-                            .await
-                            .map(|m| m.len())
-                            .unwrap_or(0)
-                            == 0
-                    {
-                        warn!(
-                            "Remux produced empty or missing output: {}",
-                            temp_path.display()
-                        );
-                        output_files.push(file.clone());
-                        continue;
-                    }
-                    if let Err(e) = tokio::fs::remove_file(file).await {
-                        warn!("Could not remove original file: {e}");
-                    }
-                    let final_path = file.with_extension(target_ext);
-                    if let Err(e) = tokio::fs::rename(&temp_path, &final_path).await {
-                        warn!("Could not rename fixed file: {e}");
-                        output_files.push(temp_path);
-                    } else {
-                        debug!("Post-processed: faststart enabled, container fixed");
-                        output_files.push(final_path);
-                    }
-                }
-                Err(e) => {
-                    debug!("FFmpeg remux failed: {e}");
-                    // Clean up temp file
-                    let _ = tokio::fs::remove_file(&temp_path).await;
-                    output_files.push(file.clone());
-                }
-            }
-        }
-
-        Some(output_files)
     }
 
     /// Clean up leftover HLS segment files from interrupted downloads

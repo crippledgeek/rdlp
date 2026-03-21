@@ -37,7 +37,10 @@ use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
 use rdlp_jsinterp::BoaJsEngine;
-use rdlp_postprocess::{PostProcessorRegistry, PostProcessorRegistryTrait};
+use rdlp_postprocess::{
+    AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, Pipeline, RecodeStage,
+    RemuxStage, SubtitleStage, TempRegistry, ThumbnailStage,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -85,7 +88,8 @@ impl std::fmt::Display for DownloadPlan {
 pub struct Orchestrator {
     pub(super) extractor_registry: Arc<dyn ExtractorRegistryTrait>,
     pub(super) downloader_registry: Arc<dyn DownloaderRegistryTrait>,
-    pub(super) postprocessor_registry: Option<Arc<dyn PostProcessorRegistryTrait>>,
+    /// Channel-based post-processing pipeline.
+    pub(super) pipeline: Option<Arc<Pipeline>>,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
     /// Event sender for download lifecycle events
@@ -115,6 +119,30 @@ impl Orchestrator {
         cancel_token: CancellationToken,
         interactive: Option<Arc<dyn InteractiveCallback>>,
     ) -> Self {
+        Self::new_with_registry(
+            config,
+            event_tx,
+            download_id,
+            cancel_token,
+            interactive,
+            None,
+        )
+    }
+
+    /// Create a new orchestrator, sharing the given `TempRegistry` across all
+    /// pipeline instances produced by this orchestrator.
+    ///
+    /// When `temp_registry` is `None` a fresh registry is created (same
+    /// behaviour as [`new`](Self::new)).
+    #[must_use]
+    pub fn new_with_registry(
+        config: Arc<Config>,
+        event_tx: mpsc::Sender<Event>,
+        download_id: DownloadId,
+        cancel_token: CancellationToken,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
+        temp_registry: Option<Arc<TempRegistry>>,
+    ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
         let http_client =
@@ -128,23 +156,22 @@ impl Orchestrator {
             Arc::clone(&config), // Cheap Arc clone instead of deep clone
         ));
 
-        // Initialize post-processor registry (optional - graceful degradation if FFmpeg not found)
-        let postprocessor_registry = Self::create_postprocessor_registry(&config);
+        let registry = temp_registry.unwrap_or_else(|| Arc::new(TempRegistry::new()));
+        let pipeline = Self::create_pipeline(&config, registry);
 
         // Cache extractor registry across orchestrator instances — it's stateless
         // and immutable, so constructing it once saves ~5ms per API call.
         static EXTRACTOR_REGISTRY: std::sync::OnceLock<Arc<ExtractorRegistry>> =
             std::sync::OnceLock::new();
-        let extractor_registry = Arc::clone(
-            EXTRACTOR_REGISTRY.get_or_init(|| Arc::new(ExtractorRegistry::new())),
-        );
+        let extractor_registry =
+            Arc::clone(EXTRACTOR_REGISTRY.get_or_init(|| Arc::new(ExtractorRegistry::new())));
 
         Self {
             extractor_registry,
             downloader_registry: Arc::new(DownloaderRegistry::with_config_and_cookies(
                 &config, raw_jar,
             )),
-            postprocessor_registry,
+            pipeline,
             extraction_context,
             config,
             event_tx,
@@ -154,28 +181,36 @@ impl Orchestrator {
         }
     }
 
-    /// Create post-processor registry with optional FFmpeg location
+    /// Build the channel-based post-processing pipeline.
     ///
-    /// Returns None if FFmpeg is not found (graceful degradation)
-    fn create_postprocessor_registry(
-        config: &Config,
-    ) -> Option<Arc<dyn PostProcessorRegistryTrait>> {
-        let registry_result =
-            PostProcessorRegistry::with_ffmpeg_location(config.ffmpeg_location.as_deref());
+    /// Returns `None` if FFmpeg is not available (graceful degradation).
+    fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
+        let ffmpeg =
+            match rdlp_ffmpeg::FFmpegRunner::with_location(config.ffmpeg_location.as_deref()) {
+                Ok(f) => {
+                    debug!("FFmpeg initialized successfully");
+                    rdlp_ffmpeg::set_verbose(config.verbose);
+                    Arc::new(f)
+                }
+                Err(e) => {
+                    warn!("FFmpeg NOT found: {e}");
+                    return None;
+                }
+            };
 
-        match registry_result {
-            Ok(registry) => {
-                debug!("FFmpeg initialized successfully");
-                // Set FFmpeg log level based on verbose mode
-                rdlp_ffmpeg::set_verbose(config.verbose);
-                Some(Arc::new(registry))
-            }
-            Err(e) => {
-                // Warn about FFmpeg not being found (needed for HLS fixup)
-                warn!("FFmpeg NOT found: {e}");
-                None
-            }
-        }
+        // Stage order: 0→Merge 1→AudioExtract 2→Normalize 3→Remux 4→Recode 5→Subtitle 6→Metadata 7→Thumbnail
+        let stages: Vec<Arc<dyn rdlp_postprocess::pipeline::PipelineStage>> = vec![
+            Arc::new(MergeStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(AudioExtractStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(NormalizeStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(RemuxStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(RecodeStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(SubtitleStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(MetadataStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(ThumbnailStage::new(ffmpeg)),
+        ];
+
+        Some(Arc::new(Pipeline::new(stages, temp_registry, 2)))
     }
 
     /// Create a new orchestrator with custom registries (for testing)
@@ -206,13 +241,12 @@ impl Orchestrator {
             Arc::clone(&config),
         ));
 
-        // Initialize post-processor registry (optional)
-        let postprocessor_registry = Self::create_postprocessor_registry(&config);
+        let pipeline = Self::create_pipeline(&config, Arc::new(TempRegistry::new()));
 
         Self {
             extractor_registry,
             downloader_registry,
-            postprocessor_registry,
+            pipeline,
             extraction_context,
             config,
             event_tx,

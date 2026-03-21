@@ -19,6 +19,7 @@ rdlp-api = { path = "../../rdlp-api", features = ["serde"] }
 rdlp-ffmpeg = { path = "../../rdlp-ffmpeg" }
 rdlp-types = { path = "../../rdlp-types" }
 rdlp-core = { path = "../../rdlp-core" }
+rdlp-postprocess = { path = "../../rdlp-postprocess" }
 rdlp-security = { path = "../../rdlp-security" }
 reqwest = { workspace = true }
 url = { workspace = true }

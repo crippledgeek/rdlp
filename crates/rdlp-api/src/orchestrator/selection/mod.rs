@@ -19,7 +19,7 @@ impl Orchestrator {
     /// Priority:
     /// 1. Explicit user format (`config.format = Some(...)`) always wins
     /// 2. Otherwise, compute default from:
-    ///    - `ffmpeg_available` -- from `postprocessor_registry.is_some()`
+    ///    - `ffmpeg_available` -- from `pipeline.is_some()`
     ///    - `audio_multistreams` -- from `config.audio_multistreams`
     ///
     /// # Defaults
@@ -42,7 +42,7 @@ impl Orchestrator {
         }
 
         // 2. Compute dynamic default
-        let ffmpeg_available = self.postprocessor_registry.is_some();
+        let ffmpeg_available = self.pipeline.is_some();
         let audio_multistreams = self.config.audio_multistreams;
 
         let selector = if ffmpeg_available && !audio_multistreams {
