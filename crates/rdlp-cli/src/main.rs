@@ -13,6 +13,7 @@ use indicatif::MultiProgress;
 use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
+use rdlp_postprocess::TempRegistry;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -93,6 +94,9 @@ async fn async_main() -> Result<()> {
             .with(tracing_subscriber::fmt::layer().with_writer(writer))
             .init();
     }
+
+    // Remove stale temp files left by a prior crash in the output directory.
+    TempRegistry::cleanup_stale(&config.output_directory);
 
     if let Some(rate) = config.rate_limit {
         debug!("Rate limit: {rate} bytes/s");

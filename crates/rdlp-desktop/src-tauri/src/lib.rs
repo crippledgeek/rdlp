@@ -15,7 +15,9 @@ pub mod events;
 /// Application state managed by Tauri.
 pub mod state;
 
+use rdlp_postprocess::TempRegistry;
 use state::AppState;
+use tauri::Manager;
 
 /// Run the Tauri application.
 ///
@@ -45,6 +47,21 @@ pub fn run() {
             commands::settings::reveal_in_folder,
             commands::thumbnail::proxy_thumbnail,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                // On exit, sweep the output directory for any stale temps that
+                // may have been left by downloads that were aborted without a
+                // clean pipeline shutdown (e.g. SIGKILL on a previous run).
+                let state = app.state::<AppState>();
+                let output_dir = state
+                    .settings
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .output_dir
+                    .clone();
+                TempRegistry::cleanup_stale(&output_dir);
+            }
+        });
 }

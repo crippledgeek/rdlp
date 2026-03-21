@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use rdlp_api::RdlpClient;
 use rdlp_core::Config;
+use rdlp_postprocess::TempRegistry;
 
 /// Top-level application state registered with [`tauri::Builder::manage`].
 ///
@@ -41,11 +42,15 @@ impl AppState {
     #[must_use]
     pub fn new() -> Self {
         let client = RdlpClient::new(Config::default()).expect("Failed to create RdlpClient");
+        let settings = AppSettings::load();
+
+        // Remove stale temp files left by a prior crash in the output directory.
+        TempRegistry::cleanup_stale(&settings.output_dir);
 
         Self {
             client: Arc::new(client),
             queue: Arc::new(Mutex::new(DownloadQueue::new())),
-            settings: Arc::new(Mutex::new(AppSettings::load())),
+            settings: Arc::new(Mutex::new(settings)),
         }
     }
 }

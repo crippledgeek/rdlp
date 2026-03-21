@@ -4363,6 +4363,7 @@ dependencies = [
  "rdlp-api",
  "rdlp-core",
  "rdlp-ffmpeg",
+ "rdlp-postprocess",
  "rdlp-security",
  "rdlp-types",
  "reqwest 0.12.28",
