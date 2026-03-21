@@ -124,18 +124,20 @@ export function DownloadOptionsPanel({
                 return { ...prev, recodeVideo: null, videoEncoder: null, remux: prev.remux };
             }
             if (val.startsWith(CODEC_VALUE_PREFIX)) {
-                // Codec-level selection: clear videoEncoder, use codec as recodeVideo key
-                const codec = val.slice(CODEC_VALUE_PREFIX.length) as ContainerFormat;
-                return { ...prev, recodeVideo: codec, videoEncoder: null, remux: null };
+                // Codec-level selection: use backend-provided default container
+                const codec = val.slice(CODEC_VALUE_PREFIX.length);
+                const codecInfo = availableCodecs.find((c) => c.codec === codec);
+                const container = (codecInfo?.defaultContainer ?? "mp4") as ContainerFormat;
+                return { ...prev, recodeVideo: container, videoEncoder: null, remux: null };
             }
             if (val.startsWith(ENCODER_VALUE_PREFIX)) {
-                // Encoder-level selection: find the parent codec and set both fields
+                // Encoder-level selection: use parent codec's default container
                 const encoderName = val.slice(ENCODER_VALUE_PREFIX.length);
                 const parentCodec = availableCodecs.find((c) =>
                     c.encoders.some((e) => e.encoderName === encoderName)
                 );
-                const recodeVideo = parentCodec ? (parentCodec.codec as ContainerFormat) : prev.recodeVideo;
-                return { ...prev, recodeVideo, videoEncoder: encoderName, remux: null };
+                const container = (parentCodec?.defaultContainer ?? "mp4") as ContainerFormat;
+                return { ...prev, recodeVideo: container, videoEncoder: encoderName, remux: null };
             }
             return prev;
         });
