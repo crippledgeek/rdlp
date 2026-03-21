@@ -263,7 +263,13 @@ impl Orchestrator {
             // Remux using library bindings (stream copy + faststart)
             match registry.remux_faststart(file, &temp_path).await {
                 Ok(()) => {
-                    // Replace original with fixed file
+                    // Replace original with fixed file — only delete original
+                    // after verifying the remuxed temp file exists and has content
+                    if !temp_path.exists() || tokio::fs::metadata(&temp_path).await.map(|m| m.len()).unwrap_or(0) == 0 {
+                        warn!("Remux produced empty or missing output: {}", temp_path.display());
+                        output_files.push(file.clone());
+                        continue;
+                    }
                     if let Err(e) = tokio::fs::remove_file(file).await {
                         warn!("Could not remove original file: {e}");
                     }
