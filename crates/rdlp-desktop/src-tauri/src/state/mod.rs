@@ -28,6 +28,8 @@ pub struct AppState {
     pub(crate) queue: Arc<Mutex<DownloadQueue>>,
     /// Persistent application settings.
     pub(crate) settings: Arc<Mutex<AppSettings>>,
+    /// Shared temp-file registry for crash-safe cleanup on exit.
+    pub(crate) temp_registry: Arc<TempRegistry>,
 }
 
 impl AppState {
@@ -41,16 +43,26 @@ impl AppState {
     /// failure that cannot be recovered from.
     #[must_use]
     pub fn new() -> Self {
-        let client = RdlpClient::new(Config::default()).expect("Failed to create RdlpClient");
         let settings = AppSettings::load();
 
         // Remove stale temp files left by a prior crash in the output directory.
         TempRegistry::cleanup_stale(&settings.output_dir);
 
+        // Create the shared registry once; pass it into the client so all
+        // pipeline instances register their temp files in the same registry.
+        let temp_registry = Arc::new(TempRegistry::new());
+
+        let client = RdlpClient::builder()
+            .config(Config::default())
+            .temp_registry(Arc::clone(&temp_registry))
+            .build()
+            .expect("Failed to create RdlpClient");
+
         Self {
             client: Arc::new(client),
             queue: Arc::new(Mutex::new(DownloadQueue::new())),
             settings: Arc::new(Mutex::new(settings)),
+            temp_registry,
         }
     }
 }

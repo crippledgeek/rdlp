@@ -51,9 +51,6 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                // On exit, sweep the output directory for any stale temps that
-                // may have been left by downloads that were aborted without a
-                // clean pipeline shutdown (e.g. SIGKILL on a previous run).
                 let state = app.state::<AppState>();
                 let output_dir = state
                     .settings
@@ -61,6 +58,9 @@ pub fn run() {
                     .unwrap_or_else(|e| e.into_inner())
                     .output_dir
                     .clone();
+                // Clean up temp files created by active downloads in this session.
+                state.temp_registry.cleanup_all();
+                // Also sweep for orphans left by a prior crash (SIGKILL, etc.).
                 TempRegistry::cleanup_stale(&output_dir);
             }
         });

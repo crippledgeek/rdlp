@@ -33,6 +33,7 @@ use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
 use log::{error, warn};
 use rdlp_core::{Config, DownloadStats, InfoDict};
+use rdlp_postprocess::TempRegistry;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -55,6 +56,13 @@ mod tests;
 pub struct RdlpClient {
     config: Arc<Config>,
     interactive: Option<Arc<dyn InteractiveCallback>>,
+    /// Shared registry for crash-safe temp file cleanup.
+    ///
+    /// A single registry is shared across all pipeline instances created
+    /// by this client. On clean exit, call `temp_registry().cleanup_all()`
+    /// to remove any files that were not cleaned up by a completed pipeline
+    /// run (e.g. if the process was killed mid-download).
+    temp_registry: Arc<TempRegistry>,
 }
 
 impl std::fmt::Debug for RdlpClient {
@@ -77,6 +85,16 @@ impl RdlpClient {
     /// Returns [`RdlpApiError::BuilderError`] if config validation fails.
     pub fn new(config: Config) -> Result<Self, RdlpApiError> {
         Self::builder().config(config).build()
+    }
+
+    /// Return the shared [`TempRegistry`] for this client.
+    ///
+    /// Callers (desktop, CLI) should call `cleanup_all()` on this registry
+    /// when the process is about to exit so any in-flight temp files created
+    /// by aborted downloads are removed.
+    #[must_use]
+    pub fn temp_registry(&self) -> &Arc<TempRegistry> {
+        &self.temp_registry
     }
 
     /// Create a new builder.
@@ -104,6 +122,7 @@ impl RdlpClient {
         let url = request.url.clone();
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
+        let registry = Arc::clone(&self.temp_registry);
 
         // Capture whether the user explicitly requested cookies.
         // When explicit, cookie loading failure must be fatal.
@@ -111,7 +130,8 @@ impl RdlpClient {
             config.cookies_from_browser.is_some() || config.cookies_file.is_some();
 
         let join_handle = tokio::spawn(async move {
-            let orchestrator = Orchestrator::new(config, tx.clone(), id, token, interactive_cb);
+            let orchestrator =
+                Orchestrator::new_with_registry(config, tx.clone(), id, token, interactive_cb, Some(registry));
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
             if let Err(e) = orchestrator.load_cookies().await {
@@ -454,9 +474,11 @@ impl RdlpClient {
         let cancel_token = CancellationToken::new();
         let config = Arc::clone(&self.config);
         let token = cancel_token.clone();
+        let registry = Arc::clone(&self.temp_registry);
 
         let join_handle = tokio::spawn(async move {
-            let orchestrator = Orchestrator::new(config, tx.clone(), id, token, None);
+            let orchestrator =
+                Orchestrator::new_with_registry(config, tx.clone(), id, token, None, Some(registry));
 
             // Build a minimal InfoDict from the file path
             let file_name = path
@@ -544,6 +566,7 @@ impl RdlpClient {
 pub struct RdlpClientBuilder {
     config: Option<Config>,
     interactive: Option<Arc<dyn InteractiveCallback>>,
+    temp_registry: Option<Arc<TempRegistry>>,
 }
 
 impl RdlpClientBuilder {
@@ -553,6 +576,7 @@ impl RdlpClientBuilder {
         Self {
             config: None,
             interactive: None,
+            temp_registry: None,
         }
     }
 
@@ -576,6 +600,18 @@ impl RdlpClientBuilder {
         self
     }
 
+    /// Provide a pre-existing [`TempRegistry`] to share across all pipeline
+    /// instances created by this client.
+    ///
+    /// When not set, a fresh registry is created during [`build`](Self::build).
+    /// This method is intended for desktop/CLI callers that need to hold the
+    /// registry reference independently (for `cleanup_all()` on exit).
+    #[must_use]
+    pub fn temp_registry(mut self, registry: Arc<TempRegistry>) -> Self {
+        self.temp_registry = Some(registry);
+        self
+    }
+
     /// Build the client.
     ///
     /// # Errors
@@ -586,9 +622,14 @@ impl RdlpClientBuilder {
             message: "config is required".into(),
         })?;
 
+        let temp_registry = self
+            .temp_registry
+            .unwrap_or_else(|| Arc::new(TempRegistry::new()));
+
         Ok(RdlpClient {
             config: Arc::new(config),
             interactive: self.interactive,
+            temp_registry,
         })
     }
 }

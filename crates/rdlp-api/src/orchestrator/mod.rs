@@ -119,6 +119,23 @@ impl Orchestrator {
         cancel_token: CancellationToken,
         interactive: Option<Arc<dyn InteractiveCallback>>,
     ) -> Self {
+        Self::new_with_registry(config, event_tx, download_id, cancel_token, interactive, None)
+    }
+
+    /// Create a new orchestrator, sharing the given `TempRegistry` across all
+    /// pipeline instances produced by this orchestrator.
+    ///
+    /// When `temp_registry` is `None` a fresh registry is created (same
+    /// behaviour as [`new`](Self::new)).
+    #[must_use]
+    pub fn new_with_registry(
+        config: Arc<Config>,
+        event_tx: mpsc::Sender<Event>,
+        download_id: DownloadId,
+        cancel_token: CancellationToken,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
+        temp_registry: Option<Arc<TempRegistry>>,
+    ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
         let http_client =
@@ -132,7 +149,8 @@ impl Orchestrator {
             Arc::clone(&config), // Cheap Arc clone instead of deep clone
         ));
 
-        let pipeline = Self::create_pipeline(&config);
+        let registry = temp_registry.unwrap_or_else(|| Arc::new(TempRegistry::new()));
+        let pipeline = Self::create_pipeline(&config, registry);
 
         // Cache extractor registry across orchestrator instances — it's stateless
         // and immutable, so constructing it once saves ~5ms per API call.
@@ -159,7 +177,7 @@ impl Orchestrator {
     /// Build the channel-based post-processing pipeline.
     ///
     /// Returns `None` if FFmpeg is not available (graceful degradation).
-    fn create_pipeline(config: &Config) -> Option<Arc<Pipeline>> {
+    fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
         let ffmpeg =
             match rdlp_ffmpeg::FFmpegRunner::with_location(config.ffmpeg_location.as_deref()) {
                 Ok(f) => {
@@ -172,8 +190,6 @@ impl Orchestrator {
                     return None;
                 }
             };
-
-        let temp_registry = Arc::new(TempRegistry::new());
 
         // Stage order: 0→Merge 1→AudioExtract 2→Normalize 3→Remux 4→Recode 5→Subtitle 6→Metadata 7→Thumbnail
         let stages: Vec<Arc<dyn rdlp_postprocess::pipeline::PipelineStage>> = vec![
@@ -218,7 +234,7 @@ impl Orchestrator {
             Arc::clone(&config),
         ));
 
-        let pipeline = Self::create_pipeline(&config);
+        let pipeline = Self::create_pipeline(&config, Arc::new(TempRegistry::new()));
 
         Self {
             extractor_registry,

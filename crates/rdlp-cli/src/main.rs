@@ -113,10 +113,18 @@ async fn async_main() -> Result<()> {
     let verbose = args.verbose;
     let quiet = config.quiet;
 
-    // Create RdlpClient with interactive callback
+    // Create a shared TempRegistry for this process lifetime.
+    // cleanup_all() is called at the end of async_main() to remove any temp
+    // files created during the session. cleanup_stale() (called above) handles
+    // orphans from prior crashes.
+    let temp_registry = Arc::new(TempRegistry::new());
+
+    // Create RdlpClient with interactive callback, sharing the registry
+    // so all pipeline instances register their temp files in the same registry.
     let client = RdlpClient::builder()
         .config(config)
         .interactive(Arc::new(DialoguerCallback))
+        .temp_registry(Arc::clone(&temp_registry))
         .build()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -331,7 +339,7 @@ async fn async_main() -> Result<()> {
     }
 
     // Wait for the final result
-    match handle.wait().await {
+    let result = match handle.wait().await {
         Ok(result) => {
             if let Some(path) = result.output_files.first() {
                 info!("Success! Video saved to: {}", path.display());
@@ -343,5 +351,11 @@ async fn async_main() -> Result<()> {
             Ok(())
         }
         Err(e) => fail_with(e, verbose),
-    }
+    };
+
+    // Clean up any temp files created during this session (e.g. aborted
+    // mid-pipeline). SIGKILL orphans are handled by cleanup_stale() at next startup.
+    temp_registry.cleanup_all();
+
+    result
 }
