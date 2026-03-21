@@ -5,13 +5,14 @@
 //! files directly. [`TempRegistry`] handles crash cleanup.
 
 pub mod registry;
+pub mod stages;
 pub mod tracker;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use rdlp_core::{InfoDict, PostProcessCallbackFactory, PostProcessConfig};
 
@@ -55,8 +56,10 @@ pub struct PipelineMessage {
     pub is_hls: bool,
     /// Factory for creating per-stage progress callbacks.
     pub callback_factory: Option<PostProcessCallbackFactory>,
-    /// Error channel — stages send errors here before dropping the downstream sender.
-    pub error_tx: mpsc::Sender<PipelineError>,
+    /// Error channel — the first fatal stage sends here; subsequent stages see `None`.
+    pub error_tx: Option<oneshot::Sender<PipelineError>>,
+    /// Non-fatal warnings accumulated by stages during processing.
+    pub warnings: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +141,7 @@ impl Pipeline {
 
         let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
 
-        let (error_tx, mut error_rx) = mpsc::channel::<PipelineError>(16);
+        let (error_tx, error_rx) = oneshot::channel::<PipelineError>();
 
         let msg = PipelineMessage {
             info,
@@ -147,7 +150,8 @@ impl Pipeline {
             original_stem,
             is_hls,
             callback_factory,
-            error_tx,
+            error_tx: Some(error_tx),
+            warnings: Vec::new(),
         };
 
         // Build channel chain: one mpsc(1) between consecutive stages.
@@ -161,8 +165,8 @@ impl Pipeline {
                 Ok(final_msg.tracker.current_files)
             }
             None => {
-                // Pipeline was interrupted — recover error from channel.
-                match error_rx.recv().await {
+                // Pipeline was interrupted — recover error from the oneshot.
+                match error_rx.await.ok() {
                     Some(err) => Err(anyhow::anyhow!("{err}")),
                     None => Err(anyhow::anyhow!(
                         "pipeline terminated with no output and no error"
@@ -268,8 +272,6 @@ impl Pipeline {
                     return;
                 }
 
-                // Clone the error_tx before moving msg into process().
-                let error_tx = msg.error_tx.clone();
                 let is_fatal = stage.is_fatal();
 
                 match stage.process(msg).await {
@@ -277,18 +279,16 @@ impl Pipeline {
                         let _ = out_tx.send(result).await;
                     }
                     Err(e) if is_fatal => {
-                        let pipeline_err = PipelineError::StageFailure {
-                            stage: stage_name.clone(),
-                            cause: e.to_string(),
-                        };
-                        let _ = error_tx.send(pipeline_err).await;
+                        // error_tx was moved into the message passed to process().
+                        // The stage is responsible for sending on msg.error_tx before
+                        // returning Err. If it didn't, we have no channel left — the
+                        // pipeline will fall back to "no error" message.
                         log::error!("Pipeline: fatal stage '{stage_name}' failed: {e}");
                         drop(out_tx); // cascade None downstream
                     }
                     Err(e) => {
                         // Non-fatal: log and cascade (message was moved into process).
                         // Non-fatal stages should return Ok(msg) on failure for passthrough.
-                        // If they return Err, the message is lost and we cascade.
                         log::warn!(
                             "Pipeline: non-fatal stage '{stage_name}' returned Err (message lost): {e}"
                         );
@@ -339,7 +339,7 @@ mod tests {
     }
 
     fn make_msg(pipeline: &Pipeline) -> PipelineMessage {
-        let (error_tx, _error_rx) = mpsc::channel(16);
+        let (error_tx, _error_rx) = oneshot::channel();
         PipelineMessage {
             info: InfoDict::new(
                 "id123".to_string(),
@@ -355,7 +355,8 @@ mod tests {
             original_stem: "video".to_string(),
             is_hls: false,
             callback_factory: None,
-            error_tx,
+            error_tx: Some(error_tx),
+            warnings: Vec::new(),
         }
     }
 
@@ -396,12 +397,14 @@ mod tests {
         fn should_run(&self, _: &PipelineMessage) -> bool {
             true
         }
-        async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        async fn process(&self, mut msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
             let err = PipelineError::StageFailure {
                 stage: "fail".into(),
                 cause: "test error".into(),
             };
-            let _ = msg.error_tx.send(err).await;
+            if let Some(tx) = msg.error_tx.take() {
+                let _ = tx.send(err);
+            }
             Err(anyhow::anyhow!("test error"))
         }
     }

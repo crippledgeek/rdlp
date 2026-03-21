@@ -82,8 +82,8 @@ impl FileTracker {
     pub fn cleanup(&mut self) {
         let to_delete: Vec<PathBuf> = self.temp_files.drain(..).collect();
         for path in to_delete {
-            // Unregister first (under registry lock), then delete.
-            self.temp_registry.unregister(&path);
+            // Release from registry first (under lock), then delete.
+            self.temp_registry.release(&path);
             if path.exists()
                 && let Err(e) = std::fs::remove_file(&path)
             {

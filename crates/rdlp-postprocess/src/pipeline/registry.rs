@@ -1,14 +1,17 @@
 //! Crash-safe temp file registry.
 //!
-//! `TempRegistry` tracks all pipeline temp files globally. On shutdown, it
-//! deletes any remaining registered files. On startup, `cleanup_stale()`
-//! removes old `*.rdlp-tmp-*` files left by a prior crash.
+//! `TempRegistry` tracks all pipeline temp files globally. On `Drop`, it
+//! deletes any remaining registered paths (orphaned temps from a crash or
+//! early exit). On startup, `cleanup_stale()` removes files left by a prior
+//! crash.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Global registry of pipeline temp files for crash-safe cleanup.
+///
+/// Share as `Arc<TempRegistry>` across stages.
 pub struct TempRegistry {
     active: Mutex<HashSet<PathBuf>>,
 }
@@ -22,7 +25,7 @@ impl TempRegistry {
         }
     }
 
-    /// Register a temp file path. Called by [`crate::pipeline::tracker::FileTracker::temp_path`].
+    /// Register a temp file path. Called by `FileTracker::temp_path()`.
     pub fn register(&self, path: &Path) {
         self.active
             .lock()
@@ -30,9 +33,9 @@ impl TempRegistry {
             .insert(path.to_path_buf());
     }
 
-    /// Unregister a temp file path. Called before deleting a file so that
-    /// `cleanup_all` does not double-delete it.
-    pub fn unregister(&self, path: &Path) {
+    /// Release a path — file has been moved to its final location and no
+    /// longer needs crash cleanup.
+    pub fn release(&self, path: &Path) {
         self.active
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -40,31 +43,12 @@ impl TempRegistry {
     }
 
     /// Check whether a path is currently registered.
+    #[must_use]
     pub fn contains(&self, path: &Path) -> bool {
         self.active
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(path)
-    }
-
-    /// Drain the registry atomically and delete all registered temp files.
-    ///
-    /// The set is drained under lock to prevent double-delete races with
-    /// concurrent `unregister` / file-deletion calls.
-    pub fn cleanup_all(&self) {
-        let paths: Vec<PathBuf> = {
-            let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-            guard.drain().collect()
-        };
-        for path in paths {
-            if path.exists() {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    log::warn!("TempRegistry: failed to delete {}: {e}", path.display());
-                } else {
-                    log::debug!("TempRegistry: cleaned up {}", path.display());
-                }
-            }
-        }
     }
 
     /// Scan `dir` for stale `*.rdlp-tmp-*` files older than 1 hour and delete
@@ -85,7 +69,6 @@ impl TempRegistry {
                 Some(n) => n.to_owned(),
                 None => continue,
             };
-            // Match files with `.rdlp-tmp-` in the stem (before the final ext)
             if !name.contains(".rdlp-tmp-") {
                 continue;
             }
@@ -113,6 +96,29 @@ impl Default for TempRegistry {
     }
 }
 
+impl Drop for TempRegistry {
+    fn drop(&mut self) {
+        // Drain and delete all remaining tracked temps.
+        let paths: Vec<PathBuf> = self
+            .active
+            .get_mut()
+            .map(|s| s.drain().collect())
+            .unwrap_or_default();
+        for path in paths {
+            if path.exists() {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!(
+                        "TempRegistry: drop cleanup failed for {}: {e}",
+                        path.display()
+                    );
+                } else {
+                    log::debug!("TempRegistry: drop-cleaned {}", path.display());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,25 +126,41 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_register_and_unregister() {
+    fn test_register_and_release() {
         let reg = TempRegistry::new();
         let path = PathBuf::from("/tmp/test-rdlp-tmp-abc.mp4");
         reg.register(&path);
         assert!(reg.contains(&path));
-        reg.unregister(&path);
+        reg.release(&path);
         assert!(!reg.contains(&path));
     }
 
     #[test]
-    fn test_cleanup_all_deletes_files() {
+    fn test_drop_deletes_remaining_files() {
         let dir = TempDir::new().unwrap();
-        let reg = TempRegistry::new();
         let path = dir.path().join("test.rdlp-tmp-123.mp4");
         fs::write(&path, b"test").unwrap();
-        reg.register(&path);
-        reg.cleanup_all();
+        assert!(path.exists());
+        {
+            let reg = TempRegistry::new();
+            reg.register(&path);
+            // reg drops here — should delete the file
+        }
         assert!(!path.exists());
-        assert!(!reg.contains(&path));
+    }
+
+    #[test]
+    fn test_drop_skips_released_files() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.rdlp-tmp-456.mp4");
+        fs::write(&path, b"test").unwrap();
+        {
+            let reg = TempRegistry::new();
+            reg.register(&path);
+            reg.release(&path);
+            // reg drops — path was released so NOT deleted
+        }
+        assert!(path.exists());
     }
 
     #[test]
@@ -146,7 +168,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("video.rdlp-tmp-abc123.mp4");
         fs::write(&path, b"test").unwrap();
-        // Set modification time to 2 hours ago
         let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
         filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(two_hours_ago))
             .unwrap();
