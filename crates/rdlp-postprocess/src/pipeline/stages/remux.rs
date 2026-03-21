@@ -102,13 +102,9 @@ impl PipelineStage for RemuxStage {
             ),
         };
 
-        let callback = msg
-            .callback_factory
-            .as_ref()
-            .map(|f| f(self.name()))
-            .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac| cb.on_progress(frac))
-            });
+        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
+        );
 
         self.ffmpeg
             .remux(&input_file, &output_path, &opts, callback)
@@ -166,11 +162,7 @@ mod tests {
             remux_container: Some(ContainerFormat::Mp4),
             ..PostProcessConfig::default()
         };
-        let msg = make_msg_with_config(
-            vec![PathBuf::from("/tmp/video.ts")],
-            config,
-            false,
-        );
+        let msg = make_msg_with_config(vec![PathBuf::from("/tmp/video.ts")], config, false);
         assert!(stage.should_run(&msg));
     }
 
@@ -210,11 +202,7 @@ mod tests {
             extract_audio: true,
             ..PostProcessConfig::default()
         };
-        let msg = make_msg_with_config(
-            vec![PathBuf::from("/tmp/video.ts")],
-            config,
-            false,
-        );
+        let msg = make_msg_with_config(vec![PathBuf::from("/tmp/video.ts")], config, false);
         assert!(!stage.should_run(&msg));
     }
 
@@ -223,7 +211,12 @@ mod tests {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
-            info: InfoDict::new("id".to_string(), "T".to_string(), "T".to_string(), "https://x.com".to_string()),
+            info: InfoDict::new(
+                "id".to_string(),
+                "T".to_string(),
+                "T".to_string(),
+                "https://x.com".to_string(),
+            ),
             tracker: FileTracker::new(vec![PathBuf::from("/tmp/v.mp4")], reg),
             config: Arc::new(PostProcessConfig {
                 remux_container: Some(ContainerFormat::Mp4),
@@ -243,7 +236,12 @@ mod tests {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
-            info: InfoDict::new("id".to_string(), "T".to_string(), "T".to_string(), "https://x.com".to_string()),
+            info: InfoDict::new(
+                "id".to_string(),
+                "T".to_string(),
+                "T".to_string(),
+                "https://x.com".to_string(),
+            ),
             tracker: FileTracker::new(vec![PathBuf::from("/tmp/v.ts")], reg),
             config: Arc::new(PostProcessConfig::default()),
             original_stem: "v".into(),

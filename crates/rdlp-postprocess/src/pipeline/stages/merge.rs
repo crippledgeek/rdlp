@@ -95,8 +95,7 @@ impl PipelineStage for MergeStage {
 
         let video_ext = video_file.extension().and_then(|e| e.to_str());
         let audio_ext = audio_file.extension().and_then(|e| e.to_str());
-        let output_format =
-            Self::determine_output_format(&msg.config, video_ext, audio_ext);
+        let output_format = Self::determine_output_format(&msg.config, video_ext, audio_ext);
 
         // Use tracker.temp_path — no naming collision possible.
         let output_path = msg.tracker.temp_path(&video_file, output_format);
@@ -106,13 +105,9 @@ impl PipelineStage for MergeStage {
             ..Default::default()
         };
 
-        let callback = msg
-            .callback_factory
-            .as_ref()
-            .map(|f| f(self.name()))
-            .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac| cb.on_progress(frac))
-            });
+        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
+        );
 
         self.ffmpeg
             .merge(&video_file, &audio_file, &output_path, &opts, callback)
