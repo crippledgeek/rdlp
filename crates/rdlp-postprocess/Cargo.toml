@@ -11,8 +11,11 @@ rdlp-core = { path = "../rdlp-core" }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 log = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
 
 # MP4 iTunes metadata (covr atom for Windows Explorer thumbnails)
 mp4ameta = "0.13"
@@ -20,6 +23,7 @@ mp4ameta = "0.13"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
+filetime = "0.2"
 
 [lints]
 workspace = true

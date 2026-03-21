@@ -1,0 +1,535 @@
+//! Channel-based post-processing pipeline.
+//!
+//! Each stage is a `tokio::spawn` task connected by bounded `mpsc` channels.
+//! [`FileTracker`] owns all file lifecycle decisions — no stage ever deletes
+//! files directly. [`TempRegistry`] handles crash cleanup.
+
+pub mod registry;
+pub mod tracker;
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use thiserror::Error;
+use tokio::sync::{Semaphore, mpsc};
+
+use rdlp_core::{InfoDict, PostProcessCallbackFactory, PostProcessConfig};
+
+pub use registry::TempRegistry;
+pub use tracker::FileTracker;
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/// Errors that can be produced by pipeline stages.
+#[derive(Debug, Error, Clone)]
+pub enum PipelineError {
+    /// A fatal stage failed.
+    #[error("stage '{stage}' failed: {cause}")]
+    StageFailure {
+        /// Name of the stage that failed.
+        stage: String,
+        /// Human-readable cause.
+        cause: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// PipelineMessage
+// ---------------------------------------------------------------------------
+
+/// The message that flows through the pipeline channel chain.
+///
+/// Each stage receives this, may mutate `tracker`, and sends it downstream.
+pub struct PipelineMessage {
+    /// Metadata for the video being processed.
+    pub info: InfoDict,
+    /// File lifecycle state.
+    pub tracker: FileTracker,
+    /// Post-processing configuration.
+    pub config: Arc<PostProcessConfig>,
+    /// Original file stem for thumbnail / subtitle discovery after UUID renames.
+    pub original_stem: String,
+    /// Whether the source was HLS (triggers auto-remux in `RemuxStage`).
+    pub is_hls: bool,
+    /// Factory for creating per-stage progress callbacks.
+    pub callback_factory: Option<PostProcessCallbackFactory>,
+    /// Error channel — stages send errors here before dropping the downstream sender.
+    pub error_tx: mpsc::Sender<PipelineError>,
+}
+
+// ---------------------------------------------------------------------------
+// PipelineStage trait
+// ---------------------------------------------------------------------------
+
+/// A single stage in the post-processing pipeline.
+#[async_trait]
+pub trait PipelineStage: Send + Sync {
+    /// Human-readable stage name (used in logging and error messages).
+    fn name(&self) -> &str;
+
+    /// Whether this stage should run for the given message.
+    ///
+    /// Receives the full message so stages can make data-dependent decisions
+    /// (e.g., `MergeStage` checks `tracker.current_files.len() >= 2`).
+    fn should_run(&self, msg: &PipelineMessage) -> bool;
+
+    /// Whether a failure in this stage is fatal.
+    ///
+    /// Fatal stages (default) kill the entire pipeline.
+    /// Non-fatal stages log the error and pass the message through unchanged.
+    fn is_fatal(&self) -> bool {
+        true
+    }
+
+    /// Process the message.
+    ///
+    /// Must use `tracker.temp_path()` for output and `tracker.replace()` to
+    /// promote output. Must never call `remove_file` directly.
+    async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage>;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline
+// ---------------------------------------------------------------------------
+
+/// Channel-based post-processing pipeline.
+pub struct Pipeline {
+    stages: Vec<Arc<dyn PipelineStage>>,
+    temp_registry: Arc<TempRegistry>,
+    concurrency: Arc<Semaphore>,
+}
+
+impl Pipeline {
+    /// Create a new pipeline.
+    ///
+    /// `max_concurrent` limits how many `run()` calls execute simultaneously
+    /// (used by `run_batch`).
+    pub fn new(
+        stages: Vec<Arc<dyn PipelineStage>>,
+        temp_registry: Arc<TempRegistry>,
+        max_concurrent: usize,
+    ) -> Self {
+        Self {
+            stages,
+            temp_registry,
+            concurrency: Arc::new(Semaphore::new(max_concurrent)),
+        }
+    }
+
+    /// Run the full pipeline for a single video.
+    ///
+    /// Returns the final `current_files` from the tracker on success.
+    pub async fn run(
+        &self,
+        info: InfoDict,
+        files: Vec<std::path::PathBuf>,
+        config: Arc<PostProcessConfig>,
+        original_stem: String,
+        is_hls: bool,
+        callback_factory: Option<PostProcessCallbackFactory>,
+    ) -> anyhow::Result<Vec<std::path::PathBuf>> {
+        let _permit = self
+            .concurrency
+            .acquire()
+            .await
+            .expect("semaphore should not be closed");
+
+        let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
+
+        let (error_tx, mut error_rx) = mpsc::channel::<PipelineError>(16);
+
+        let msg = PipelineMessage {
+            info,
+            tracker,
+            config,
+            original_stem,
+            is_hls,
+            callback_factory,
+            error_tx,
+        };
+
+        // Build channel chain: one mpsc(1) between consecutive stages.
+        // first_tx → stage_0 → stage_1 → ... → stage_N → final_rx
+        let mut final_rx = self.spawn_chain(msg);
+
+        // Await the final message.
+        match final_rx.recv().await {
+            Some(mut final_msg) => {
+                final_msg.tracker.cleanup();
+                Ok(final_msg.tracker.current_files)
+            }
+            None => {
+                // Pipeline was interrupted — recover error from channel.
+                match error_rx.recv().await {
+                    Some(err) => Err(anyhow::anyhow!("{err}")),
+                    None => Err(anyhow::anyhow!(
+                        "pipeline terminated with no output and no error"
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Run the pipeline concurrently for multiple videos.
+    ///
+    /// Concurrency is bounded by the semaphore configured in [`new`].
+    ///
+    /// Takes `self: Arc<Self>` so that the pipeline can be shared across tasks.
+    pub async fn run_batch(
+        self: Arc<Self>,
+        inputs: Vec<BatchInput>,
+        config: Arc<PostProcessConfig>,
+        callback_factory: Option<PostProcessCallbackFactory>,
+    ) -> Vec<anyhow::Result<Vec<std::path::PathBuf>>> {
+        let mut handles = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let pipeline = Arc::clone(&self);
+            let config = Arc::clone(&config);
+            let factory = callback_factory.clone();
+            let handle = tokio::spawn(async move {
+                pipeline
+                    .run(
+                        input.info,
+                        input.files,
+                        config,
+                        input.original_stem,
+                        input.is_hls,
+                        factory,
+                    )
+                    .await
+            });
+            handles.push(handle);
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            match handle.await {
+                Ok(res) => results.push(res),
+                Err(e) => results.push(Err(anyhow::anyhow!("task panicked: {e}"))),
+            }
+        }
+        results
+    }
+
+    /// Spawn the stage chain and return the final receiver.
+    ///
+    /// The chain is: initial_msg → [stage_0] → [stage_1] → ... → final_rx
+    ///
+    /// Each stage task reads from `in_rx`, may process or pass-through,
+    /// then sends to `out_tx`. When a fatal stage fails, it drops `out_tx`
+    /// which cascades None through all downstream stages.
+    fn spawn_chain(&self, initial_msg: PipelineMessage) -> mpsc::Receiver<PipelineMessage> {
+        if self.stages.is_empty() {
+            // No stages — connect directly.
+            let (tx, rx) = mpsc::channel::<PipelineMessage>(1);
+            let _ = tx.try_send(initial_msg);
+            return rx;
+        }
+
+        // Build channels: one per inter-stage boundary.
+        // stages: [S0, S1, S2]
+        // channels: tx0→rx0 (input to S0), tx1→rx1 (S0→S1), tx2→rx2 (S1→S2), tx3→rx3 (S2→output)
+
+        let n = self.stages.len();
+        let mut txs: Vec<mpsc::Sender<PipelineMessage>> = Vec::with_capacity(n + 1);
+        let mut rxs: Vec<mpsc::Receiver<PipelineMessage>> = Vec::with_capacity(n + 1);
+
+        for _ in 0..=n {
+            let (tx, rx) = mpsc::channel::<PipelineMessage>(1);
+            txs.push(tx);
+            rxs.push(rx);
+        }
+
+        // Send initial message into the first channel.
+        let _ = txs[0].try_send(initial_msg);
+
+        // Spawn one task per stage.
+        // rxs[0] is stage 0's input, rxs[1] is stage 1's input, ..., rxs[n] is the final output.
+        // txs[i+1] is stage i's output.
+        let mut rxs_iter = rxs.into_iter();
+
+        for (i, stage) in self.stages.iter().enumerate() {
+            let stage = Arc::clone(stage);
+            let in_rx_i = rxs_iter.next().unwrap();
+            let out_tx = txs[i + 1].clone();
+            let stage_name = stage.name().to_owned();
+
+            tokio::spawn(async move {
+                let mut in_rx = in_rx_i;
+                let msg = match in_rx.recv().await {
+                    Some(m) => m,
+                    None => return, // upstream cascade
+                };
+
+                if !stage.should_run(&msg) {
+                    let _ = out_tx.send(msg).await;
+                    return;
+                }
+
+                // Clone the error_tx before moving msg into process().
+                let error_tx = msg.error_tx.clone();
+                let is_fatal = stage.is_fatal();
+
+                match stage.process(msg).await {
+                    Ok(result) => {
+                        let _ = out_tx.send(result).await;
+                    }
+                    Err(e) if is_fatal => {
+                        let pipeline_err = PipelineError::StageFailure {
+                            stage: stage_name.clone(),
+                            cause: e.to_string(),
+                        };
+                        let _ = error_tx.send(pipeline_err).await;
+                        log::error!("Pipeline: fatal stage '{stage_name}' failed: {e}");
+                        drop(out_tx); // cascade None downstream
+                    }
+                    Err(e) => {
+                        // Non-fatal: log and cascade (message was moved into process).
+                        // Non-fatal stages should return Ok(msg) on failure for passthrough.
+                        // If they return Err, the message is lost and we cascade.
+                        log::warn!(
+                            "Pipeline: non-fatal stage '{stage_name}' returned Err (message lost): {e}"
+                        );
+                        drop(out_tx);
+                    }
+                }
+            });
+        }
+
+        // The last rx in the iterator is the pipeline output.
+        rxs_iter.next().unwrap()
+    }
+}
+
+/// Input for a single video in [`Pipeline::run_batch`].
+pub struct BatchInput {
+    /// Video metadata.
+    pub info: InfoDict,
+    /// Files to process.
+    pub files: Vec<std::path::PathBuf>,
+    /// Original file stem.
+    pub original_stem: String,
+    /// Whether the source was HLS.
+    pub is_hls: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_pipeline(stages: Vec<Arc<dyn PipelineStage>>) -> Pipeline {
+        let reg = Arc::new(TempRegistry::new());
+        Pipeline::new(stages, reg, 4)
+    }
+
+    fn make_info() -> InfoDict {
+        InfoDict::new(
+            "id".to_string(),
+            "Test Video".to_string(),
+            "TestExtractor".to_string(),
+            "https://example.com/video".to_string(),
+        )
+    }
+
+    fn make_msg(pipeline: &Pipeline) -> PipelineMessage {
+        let (error_tx, _error_rx) = mpsc::channel(16);
+        PipelineMessage {
+            info: InfoDict::new(
+                "id123".to_string(),
+                "Test Video".to_string(),
+                "TestExtractor".to_string(),
+                "https://example.com/video".to_string(),
+            ),
+            tracker: FileTracker::new(
+                vec![PathBuf::from("/tmp/video.mp4")],
+                Arc::clone(&pipeline.temp_registry),
+            ),
+            config: Arc::new(PostProcessConfig::default()),
+            original_stem: "video".to_string(),
+            is_hls: false,
+            callback_factory: None,
+            error_tx,
+        }
+    }
+
+    struct PassthroughStage;
+    #[async_trait]
+    impl PipelineStage for PassthroughStage {
+        fn name(&self) -> &str {
+            "passthrough"
+        }
+        fn should_run(&self, _: &PipelineMessage) -> bool {
+            true
+        }
+        async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+            Ok(msg)
+        }
+    }
+
+    struct SkipStage;
+    #[async_trait]
+    impl PipelineStage for SkipStage {
+        fn name(&self) -> &str {
+            "skip"
+        }
+        fn should_run(&self, _: &PipelineMessage) -> bool {
+            false
+        }
+        async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+            panic!("should not be called");
+        }
+    }
+
+    struct FailStage;
+    #[async_trait]
+    impl PipelineStage for FailStage {
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn should_run(&self, _: &PipelineMessage) -> bool {
+            true
+        }
+        async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+            let err = PipelineError::StageFailure {
+                stage: "fail".into(),
+                cause: "test error".into(),
+            };
+            let _ = msg.error_tx.send(err).await;
+            Err(anyhow::anyhow!("test error"))
+        }
+    }
+
+    struct NonFatalFailStage;
+    #[async_trait]
+    impl PipelineStage for NonFatalFailStage {
+        fn name(&self) -> &str {
+            "nonfatal"
+        }
+        fn should_run(&self, _: &PipelineMessage) -> bool {
+            true
+        }
+        fn is_fatal(&self) -> bool {
+            false
+        }
+        async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+            // Non-fatal: return Ok with the message to pass through.
+            // (This simulates a stage that encounters an error but can still pass through.)
+            Ok(msg)
+        }
+    }
+
+    fn run_args(
+        files: Vec<PathBuf>,
+    ) -> (
+        InfoDict,
+        Vec<PathBuf>,
+        Arc<PostProcessConfig>,
+        String,
+        bool,
+        Option<PostProcessCallbackFactory>,
+    ) {
+        (
+            make_info(),
+            files,
+            Arc::new(PostProcessConfig::default()),
+            "video".to_string(),
+            false,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_passthrough() {
+        let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
+        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_skip_stage() {
+        let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
+        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_fatal_error_cascades() {
+        let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
+        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("test error"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_nonfatal_passes_through() {
+        let pipeline = make_pipeline(vec![
+            Arc::new(NonFatalFailStage),
+            Arc::new(PassthroughStage),
+        ]);
+        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_concurrent_semaphore() {
+        use std::sync::Arc as StdArc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CONCURRENT: AtomicUsize = AtomicUsize::new(0);
+        static MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+        struct CountingStage;
+        #[async_trait]
+        impl PipelineStage for CountingStage {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            fn should_run(&self, _: &PipelineMessage) -> bool {
+                true
+            }
+            async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+                let c = CONCURRENT.fetch_add(1, Ordering::SeqCst) + 1;
+                MAX_SEEN.fetch_max(c, Ordering::SeqCst);
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                CONCURRENT.fetch_sub(1, Ordering::SeqCst);
+                Ok(msg)
+            }
+        }
+
+        let reg = StdArc::new(TempRegistry::new());
+        // Max concurrency = 2
+        let pipeline = StdArc::new(Pipeline::new(vec![Arc::new(CountingStage)], reg, 2));
+
+        let mut handles = vec![];
+        for _ in 0..6 {
+            let p = StdArc::clone(&pipeline);
+            handles.push(tokio::spawn(async move {
+                let (info, files, config, stem, hls, cb) =
+                    run_args(vec![PathBuf::from("/tmp/v.mp4")]);
+                p.run(info, files, config, stem, hls, cb).await
+            }));
+        }
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+        // Semaphore should have capped concurrency at 2
+        assert!(
+            MAX_SEEN.load(Ordering::SeqCst) <= 2,
+            "max concurrent was {}",
+            MAX_SEEN.load(Ordering::SeqCst)
+        );
+    }
+}

@@ -120,6 +120,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod pipeline;
 pub mod processors;
 pub mod registry;
 
