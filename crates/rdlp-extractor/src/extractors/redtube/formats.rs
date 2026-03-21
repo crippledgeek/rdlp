@@ -210,8 +210,7 @@ pub fn build_format(quality_str: &str, url: String, format_type: &str) -> Format
 
     // Include format type in ID to ensure uniqueness (e.g., "1080-hls", "1080-mp4")
     let format_id = format!("{quality_str}-{format_type}");
-    let mut format =
-        BaseExtractor::build_format(format_id, url, format_type.to_owned(), height);
+    let mut format = BaseExtractor::build_format(format_id, url, format_type.to_owned(), height);
 
     // RedTube-specific: set format_note to raw quality string when height is unknown
     if height.is_none() {

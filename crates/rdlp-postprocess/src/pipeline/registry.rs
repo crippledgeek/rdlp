@@ -51,6 +51,33 @@ impl TempRegistry {
             .contains(path)
     }
 
+    /// Drain the registry atomically and delete all registered temp files.
+    ///
+    /// Called on explicit shutdown (e.g. `RunEvent::ExitRequested`, SIGTERM).
+    /// The set is drained under the lock; file deletion happens outside the
+    /// lock to avoid holding the lock across I/O. Double-delete is impossible
+    /// because the set is drained atomically.
+    pub fn cleanup_all(&self) {
+        let paths: Vec<PathBuf> = self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .collect();
+        for path in paths {
+            if path.exists() {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!(
+                        "TempRegistry: cleanup_all failed for {}: {e}",
+                        path.display()
+                    );
+                } else {
+                    log::debug!("TempRegistry: cleanup_all removed {}", path.display());
+                }
+            }
+        }
+    }
+
     /// Scan `dir` for stale `*.rdlp-tmp-*` files older than 1 hour and delete
     /// them. Called on app startup to remove files left by a prior crash.
     pub fn cleanup_stale(dir: &Path) {
@@ -182,5 +209,39 @@ mod tests {
         fs::write(&path, b"test").unwrap();
         TempRegistry::cleanup_stale(dir.path());
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_cleanup_all_deletes_registered_files() {
+        let dir = TempDir::new().unwrap();
+        let path1 = dir.path().join("a.rdlp-tmp-111.mp4");
+        let path2 = dir.path().join("b.rdlp-tmp-222.mp4");
+        fs::write(&path1, b"test").unwrap();
+        fs::write(&path2, b"test").unwrap();
+
+        let reg = TempRegistry::new();
+        reg.register(&path1);
+        reg.register(&path2);
+
+        reg.cleanup_all();
+
+        assert!(!path1.exists());
+        assert!(!path2.exists());
+        // Registry is now empty — Drop should be a no-op
+        assert!(!reg.contains(&path1));
+        assert!(!reg.contains(&path2));
+    }
+
+    #[test]
+    fn test_cleanup_all_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.rdlp-tmp-333.mp4");
+        fs::write(&path, b"test").unwrap();
+
+        let reg = TempRegistry::new();
+        reg.register(&path);
+        reg.cleanup_all();
+        // Second call must not panic — file is gone, set is empty
+        reg.cleanup_all();
     }
 }

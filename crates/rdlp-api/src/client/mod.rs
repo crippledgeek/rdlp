@@ -464,7 +464,12 @@ impl RdlpClient {
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let info = rdlp_core::InfoDict::new(&file_name, &file_name, "local", format!("file://{}", path.display()));
+            let info = rdlp_core::InfoDict::new(
+                &file_name,
+                &file_name,
+                "local",
+                format!("file://{}", path.display()),
+            );
             let _ = tx
                 .send(Event::PostProcessing {
                     id,
@@ -476,7 +481,12 @@ impl RdlpClient {
                 let err = RdlpApiError::IoError {
                     message: format!("File not found: {}", path.display()),
                 };
-                let _ = tx.send(Event::Failed { id, error: err.clone() }).await;
+                let _ = tx
+                    .send(Event::Failed {
+                        id,
+                        error: err.clone(),
+                    })
+                    .await;
                 return Err(err);
             }
 
@@ -501,7 +511,12 @@ impl RdlpClient {
                 }
                 Err(e) => {
                     let err = RdlpApiError::from(e);
-                    let _ = tx.send(Event::Failed { id, error: err.clone() }).await;
+                    let _ = tx
+                        .send(Event::Failed {
+                            id,
+                            error: err.clone(),
+                        })
+                        .await;
                     Err(err)
                 }
             }
