@@ -62,6 +62,8 @@ fn default_args() -> Args {
         search_filter: vec![],
         ignore_config: false,
         config_location: None,
+        video_encoder: None,
+        list_encoders: false,
     }
 }
 
