@@ -40,7 +40,15 @@ pub struct VideoConvertOptions {
     /// Constant Rate Factor for quality-based encoding.
     pub crf: Option<u32>,
     /// If true, copy audio stream without re-encoding.
+    ///
+    /// Takes precedence over `audio_codec`. When `audio_copy` is true and
+    /// `audio_codec` is `Some`, audio is still copied unchanged.
     pub audio_copy: bool,
+    /// Audio encoder name to use for audio re-encoding (e.g., "libfdk_aac", "libopus").
+    ///
+    /// Only used when `audio_copy` is false. When `None` and `audio_copy` is false,
+    /// the existing behavior is preserved (implementation decides the encoder).
+    pub audio_codec: Option<String>,
 }
 
 /// A chapter entry for metadata embedding.

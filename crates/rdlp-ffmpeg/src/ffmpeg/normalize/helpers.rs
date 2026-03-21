@@ -208,32 +208,26 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 
 /// Select the appropriate audio encoder for a container extension.
 ///
-/// For AAC-compatible containers, returns the best available AAC encoder
-/// via [`preferred_aac_encoder()`] (`libfdk_aac` when available, `aac` otherwise).
+/// Handles both video containers and audio-only output formats (e.g., mp3, flac, wav).
+/// For recognized audio-only extensions, returns the canonical encoder directly.
+/// For video containers, delegates to [`audio_encoder_registry::select_audio_encoder_for_container`].
+/// Falls back to the best available AAC encoder for unknown extensions.
 pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
-    if ext.eq_ignore_ascii_case("mp4")
-        || ext.eq_ignore_ascii_case("m4a")
-        || ext.eq_ignore_ascii_case("mov")
-        || ext.eq_ignore_ascii_case("f4v")
-        || ext.eq_ignore_ascii_case("3gp")
-        || ext.eq_ignore_ascii_case("ts")
-        || ext.eq_ignore_ascii_case("mpg")
-        || ext.eq_ignore_ascii_case("flv")
-    {
-        crate::ffmpeg::audio_codecs::preferred_aac_encoder()
-    } else if ext.eq_ignore_ascii_case("webm")
-        || ext.eq_ignore_ascii_case("ogg")
-        || ext.eq_ignore_ascii_case("opus")
-        || ext.eq_ignore_ascii_case("mkv")
-        || ext.eq_ignore_ascii_case("mka")
-    {
-        "libopus"
-    } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
-        "libmp3lame"
-    } else if ext.eq_ignore_ascii_case("flac") {
-        "flac"
-    } else if ext.eq_ignore_ascii_case("wav") {
-        "pcm_s16le"
+    // Audio-only output formats: these are not ContainerFormat variants but
+    // appear as extensions when normalizing standalone audio files.
+    if ext.eq_ignore_ascii_case("mp3") {
+        return "libmp3lame";
+    }
+    if ext.eq_ignore_ascii_case("flac") {
+        return "flac";
+    }
+    if ext.eq_ignore_ascii_case("wav") {
+        return "pcm_s16le";
+    }
+
+    // For proper container formats, delegate to the registry
+    if let Ok(container) = ext.parse::<rdlp_core::ContainerFormat>() {
+        crate::ffmpeg::audio_encoder_registry::select_audio_encoder_for_container(container)
     } else {
         crate::ffmpeg::audio_codecs::preferred_aac_encoder()
     }

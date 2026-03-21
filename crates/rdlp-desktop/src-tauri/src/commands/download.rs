@@ -18,7 +18,7 @@ use rdlp_api::request::{
     DownloadRequest, FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions,
     SubtitleOptions,
 };
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, RecodeAudioMode};
 
 /// Frontend-supplied download options.
 ///
@@ -87,6 +87,15 @@ pub struct DownloadOptions {
     /// `None` = auto-select best available encoder for the target codec.
     #[serde(default)]
     pub video_encoder: Option<String>,
+    /// Target container for recode (e.g. `Mp4`, `Mkv`, `WebM`).
+    /// Takes precedence over `recode_video` when both are set.
+    /// `None` = use `recode_video` value.
+    #[serde(default)]
+    pub recode_container: Option<ContainerFormat>,
+    /// Audio handling during video recode.
+    /// `None` = use default (Copy).
+    #[serde(default)]
+    pub recode_audio: Option<RecodeAudioMode>,
 }
 
 /// Start a new download for the given URL.
@@ -230,6 +239,8 @@ pub async fn start_download(
             extract_audio,
             recode_video: options.recode_video,
             video_encoder: options.video_encoder,
+            recode_container: options.recode_container,
+            recode_audio: options.recode_audio,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             write_thumbnail: write_thumbnail_resolved.then_some(true),
@@ -420,6 +431,8 @@ mod tests {
             output_template: None,
             embed_subtitles: None,
             video_encoder: None,
+            recode_container: None,
+            recode_audio: None,
         }
     }
 

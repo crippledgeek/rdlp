@@ -4,7 +4,7 @@
 
 import { cn } from "@/lib/utils";
 import { useState } from "react";
-import { ChevronUp, ChevronDown, FolderOpen, Settings2 } from "lucide-react";
+import { ChevronUp, ChevronDown, FolderOpen, Settings2, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,15 +30,19 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { optionsSummary } from "./utils/tableHelpers";
 import { getNormSelectValue, handleNormSelectChange } from "./utils/normalization";
 import { NormalizationCustomControls } from "./NormalizationCustomControls";
 import { codecsQueryOptions } from "../api/codecs";
+import { audioCodecsQueryOptions } from "../api/audioCodecs";
 import type {
     AppSettings,
+    AudioCodecInfo,
     AudioFormat,
     ContainerFormat,
     DownloadOptions,
+    RecodeAudioMode,
     VideoCodecInfo,
 } from "../types";
 
@@ -50,11 +54,31 @@ const REMUX_OPTIONS: Array<{ value: ContainerFormat; label: string }> = [
     { value: "webm", label: "WebM" },
 ];
 
-/** Codec-level value prefix used in the Recode Select when Expert Mode is off. */
+/** Recode container options (includes Auto which maps to null). */
+const RECODE_CONTAINER_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: "mp4", label: "MP4" },
+    { value: "mkv", label: "MKV" },
+    { value: "webm", label: "WebM" },
+    { value: "mov", label: "MOV" },
+    { value: "ogg", label: "OGG" },
+    { value: "ts", label: "TS" },
+    { value: "avi", label: "AVI" },
+];
+
+/** Codec-level value prefix used in the video Recode Select when Expert Mode is off. */
 const CODEC_VALUE_PREFIX = "codec:";
 
-/** Encoder-level value prefix used in the Recode Select when Expert Mode is on. */
+/** Encoder-level value prefix used in the video Recode Select when Expert Mode is on. */
 const ENCODER_VALUE_PREFIX = "encoder:";
+
+/** Prefix for audio codec selection (default mode). */
+const AUDIO_CODEC_PREFIX = "audio-codec:";
+
+/** Prefix for audio encoder selection (expert mode). */
+const AUDIO_ENCODER_PREFIX = "audio-encoder:";
+
+/** Sentinel value for "copy" audio (stream copy unchanged). */
+const AUDIO_COPY_VALUE = "audio-copy";
 
 const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
     { value: "mp3", label: "MP3" },
@@ -65,21 +89,10 @@ const AUDIO_OPTIONS: Array<{ value: AudioFormat; label: string }> = [
 
 const NONE_SENTINEL = "none";
 
-// -- Types ----------------------------------------------------------------
-
-interface DownloadOptionsPanelProps {
-    options: DownloadOptions;
-    setOptions: React.Dispatch<React.SetStateAction<DownloadOptions>>;
-    settings: AppSettings | null;
-    subtitleLangs: string[];
-    showOptions: boolean;
-    setShowOptions: (open: boolean) => void;
-    onBrowseDir: () => void;
-    onSubLangSelect: (lang: string) => void;
-}
+// -- Helpers ----------------------------------------------------------------
 
 /**
- * Derive the current Select value for the Recode dropdown from options state.
+ * Derive the current Select value for the video Recode dropdown from options state.
  * Returns "none", "codec:<name>", or "encoder:<name>" depending on expert mode.
  */
 function getRecodeSelectValue(
@@ -99,6 +112,74 @@ function getRecodeSelectValue(
     return `${CODEC_VALUE_PREFIX}${options.recodeVideo}`;
 }
 
+/**
+ * Derive the current Select value for the audio recode dropdown.
+ * Returns AUDIO_COPY_VALUE, "audio-codec:<name>", or "audio-encoder:<name>" depending on mode/expert.
+ */
+function getAudioRecodeSelectValue(
+    recodeAudio: RecodeAudioMode | null,
+    audioExpert: boolean,
+): string {
+    if (!recodeAudio || recodeAudio.mode === "copy") return AUDIO_COPY_VALUE;
+    if (recodeAudio.mode === "auto") {
+        // auto is used in default mode; show as codec value if we can derive it
+        return AUDIO_COPY_VALUE; // fallback — auto without a named codec shows as Copy
+    }
+    if (recodeAudio.mode === "encoder") {
+        if (audioExpert) return `${AUDIO_ENCODER_PREFIX}${recodeAudio.name}`;
+        // Non-expert: show as copy since we can't easily reverse-map encoder→codec here
+        return AUDIO_COPY_VALUE;
+    }
+    return AUDIO_COPY_VALUE;
+}
+
+/**
+ * Check if the current audio selection is compatible with the given container.
+ * Returns null when compatible (or Copy is selected), or an incompatibility message.
+ */
+function getAudioCompatibilityWarning(
+    recodeAudio: RecodeAudioMode | null,
+    container: string | null,
+    audioCodecs: AudioCodecInfo[],
+): string | null {
+    if (!container) return null;
+    if (!recodeAudio || recodeAudio.mode === "copy") return null;
+
+    let codecName: string | null = null;
+    if (recodeAudio.mode === "encoder") {
+        // Find the parent codec for this encoder
+        const parentCodec = audioCodecs.find((c) =>
+            c.encoders.some((e) => e.encoderName === recodeAudio.name),
+        );
+        codecName = parentCodec?.codec ?? null;
+    }
+
+    if (!codecName) return null;
+
+    const codecInfo = audioCodecs.find((c) => c.codec === codecName);
+    if (!codecInfo) return null;
+
+    if (!codecInfo.supportedContainers.includes(container)) {
+        const containerLabel = container.toUpperCase();
+        return `${codecInfo.displayName} is not compatible with ${containerLabel}. Audio reset to Copy.`;
+    }
+
+    return null;
+}
+
+// -- Types ----------------------------------------------------------------
+
+interface DownloadOptionsPanelProps {
+    options: DownloadOptions;
+    setOptions: React.Dispatch<React.SetStateAction<DownloadOptions>>;
+    settings: AppSettings | null;
+    subtitleLangs: string[];
+    showOptions: boolean;
+    setShowOptions: (open: boolean) => void;
+    onBrowseDir: () => void;
+    onSubLangSelect: (lang: string) => void;
+}
+
 /** Zone 3: Collapsible download options with save directory, remux, audio, subtitles, thumbnail. */
 export function DownloadOptionsPanel({
     options,
@@ -111,33 +192,92 @@ export function DownloadOptionsPanel({
     onSubLangSelect,
 }: DownloadOptionsPanelProps) {
     const { data: codecs = [] } = useQuery(codecsQueryOptions());
-    const [expertMode, setExpertMode] = useState(false);
+    const [videoExpert, setVideoExpert] = useState(false);
+    const [audioExpert, setAudioExpert] = useState(false);
+    const [audioCompatWarning, setAudioCompatWarning] = useState<string | null>(null);
 
-    // Only include codecs that have at least one available encoder
+    // Only include video codecs that have at least one available encoder
     const availableCodecs = codecs.filter((c) => c.encoders.length > 0);
 
-    const recodeSelectValue = getRecodeSelectValue(options, availableCodecs, expertMode);
+    const recodeActive = !!options.recodeVideo;
+
+    // Fetch audio codecs filtered by current recode container
+    const { data: audioCodecs = [] } = useQuery({
+        ...audioCodecsQueryOptions(options.recodeContainer),
+        enabled: recodeActive,
+    });
+
+    const recodeSelectValue = getRecodeSelectValue(options, availableCodecs, videoExpert);
+    const audioSelectValue = getAudioRecodeSelectValue(options.recodeAudio, audioExpert);
 
     const handleRecodeChange = (val: string) => {
         setOptions((prev) => {
             if (val === NONE_SENTINEL) {
-                return { ...prev, recodeVideo: null, videoEncoder: null, remux: prev.remux };
+                return {
+                    ...prev,
+                    recodeVideo: null,
+                    videoEncoder: null,
+                    recodeContainer: null,
+                    recodeAudio: null,
+                    remux: prev.remux,
+                };
             }
             if (val.startsWith(CODEC_VALUE_PREFIX)) {
-                // Codec-level selection: use backend-provided default container
                 const codec = val.slice(CODEC_VALUE_PREFIX.length);
                 const codecInfo = availableCodecs.find((c) => c.codec === codec);
                 const container = (codecInfo?.defaultContainer ?? "mp4") as ContainerFormat;
                 return { ...prev, recodeVideo: container, videoEncoder: null, remux: null };
             }
             if (val.startsWith(ENCODER_VALUE_PREFIX)) {
-                // Encoder-level selection: use parent codec's default container
                 const encoderName = val.slice(ENCODER_VALUE_PREFIX.length);
                 const parentCodec = availableCodecs.find((c) =>
-                    c.encoders.some((e) => e.encoderName === encoderName)
+                    c.encoders.some((e) => e.encoderName === encoderName),
                 );
                 const container = (parentCodec?.defaultContainer ?? "mp4") as ContainerFormat;
                 return { ...prev, recodeVideo: container, videoEncoder: encoderName, remux: null };
+            }
+            return prev;
+        });
+        // Clear compat warning when recode is deactivated
+        if (val === NONE_SENTINEL) setAudioCompatWarning(null);
+    };
+
+    const handleContainerChange = (val: string) => {
+        const newContainer = val === NONE_SENTINEL ? null : val;
+        setOptions((prev) => {
+            const newOptions = { ...prev, recodeContainer: newContainer };
+
+            // Check if current audio selection is still compatible
+            if (prev.recodeAudio && prev.recodeAudio.mode !== "copy" && newContainer) {
+                const warning = getAudioCompatibilityWarning(
+                    prev.recodeAudio,
+                    newContainer,
+                    audioCodecs,
+                );
+                if (warning) {
+                    setAudioCompatWarning(warning);
+                    return { ...newOptions, recodeAudio: { mode: "copy" } };
+                }
+            }
+
+            setAudioCompatWarning(null);
+            return newOptions;
+        });
+    };
+
+    const handleAudioRecodeChange = (val: string) => {
+        setAudioCompatWarning(null);
+        setOptions((prev) => {
+            if (val === AUDIO_COPY_VALUE) {
+                return { ...prev, recodeAudio: { mode: "copy" } };
+            }
+            if (val.startsWith(AUDIO_CODEC_PREFIX)) {
+                // Default mode: codec selected → auto-pick best encoder
+                return { ...prev, recodeAudio: { mode: "auto" } };
+            }
+            if (val.startsWith(AUDIO_ENCODER_PREFIX)) {
+                const encoderName = val.slice(AUDIO_ENCODER_PREFIX.length);
+                return { ...prev, recodeAudio: { mode: "encoder", name: encoderName } };
             }
             return prev;
         });
@@ -227,7 +367,7 @@ export function DownloadOptionsPanel({
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value={NONE_SENTINEL}>None</SelectItem>
-                                    {!expertMode ? (
+                                    {!videoExpert ? (
                                         // Default mode: one entry per codec (display name only)
                                         availableCodecs.map((codec) => (
                                             <SelectItem
@@ -264,10 +404,10 @@ export function DownloadOptionsPanel({
                                     <input
                                         type="checkbox"
                                         className="size-2.5 accent-primary"
-                                        checked={expertMode}
+                                        checked={videoExpert}
                                         onChange={(e) => {
-                                            setExpertMode(e.target.checked);
-                                            // Switching off expert mode clears the encoder override
+                                            setVideoExpert(e.target.checked);
+                                            // Switching off video expert mode clears the encoder override
                                             if (!e.target.checked) {
                                                 setOptions((prev) => ({ ...prev, videoEncoder: null }));
                                             }
@@ -277,6 +417,105 @@ export function DownloadOptionsPanel({
                                 </label>
                             </div>
                         </div>
+
+                        {/* Recode sub-options: Container + Audio (only when Recode is active) */}
+                        {recodeActive && (
+                            <>
+                                {/* Container */}
+                                <Label className="options-label pl-3 text-muted-foreground/70">
+                                    Container
+                                </Label>
+                                <Select
+                                    value={options.recodeContainer ?? NONE_SENTINEL}
+                                    onValueChange={handleContainerChange}
+                                >
+                                    <SelectTrigger className={cn("h-7 text-xs", options.recodeContainer && "select-active")}>
+                                        <SelectValue placeholder="Auto" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={NONE_SENTINEL}>Auto</SelectItem>
+                                        {RECODE_CONTAINER_OPTIONS.map((o) => (
+                                            <SelectItem key={o.value} value={o.value}>
+                                                {o.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+
+                                {/* Audio recode */}
+                                <Label className="options-label pl-3 text-muted-foreground/70 self-start pt-1">
+                                    Audio
+                                </Label>
+                                <div className="flex flex-col gap-0.5">
+                                    <Select
+                                        value={audioSelectValue}
+                                        onValueChange={handleAudioRecodeChange}
+                                    >
+                                        <SelectTrigger className={cn("h-7 text-xs", options.recodeAudio && options.recodeAudio.mode !== "copy" && "select-active")}>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={AUDIO_COPY_VALUE}>Copy</SelectItem>
+                                            {!audioExpert ? (
+                                                // Default mode: codec display names
+                                                audioCodecs.map((codec) => (
+                                                    <SelectItem
+                                                        key={codec.codec}
+                                                        value={`${AUDIO_CODEC_PREFIX}${codec.codec}`}
+                                                    >
+                                                        {codec.displayName}
+                                                    </SelectItem>
+                                                ))
+                                            ) : (
+                                                // Expert mode: encoder names grouped by codec
+                                                audioCodecs.map((codec, idx) => (
+                                                    <SelectGroup key={codec.codec}>
+                                                        {idx > 0 && <SelectSeparator />}
+                                                        <SelectLabel>{codec.displayName}</SelectLabel>
+                                                        {codec.encoders.map((enc) => (
+                                                            <SelectItem
+                                                                key={enc.encoderName}
+                                                                value={`${AUDIO_ENCODER_PREFIX}${enc.encoderName}`}
+                                                            >
+                                                                {enc.encoderName}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectGroup>
+                                                ))
+                                            )}
+                                        </SelectContent>
+                                    </Select>
+                                    <div className="flex items-center justify-end">
+                                        <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="size-2.5 accent-primary"
+                                                checked={audioExpert}
+                                                onChange={(e) => {
+                                                    setAudioExpert(e.target.checked);
+                                                    // Switching off audio expert mode resets to Copy
+                                                    if (!e.target.checked) {
+                                                        setOptions((prev) => ({
+                                                            ...prev,
+                                                            recodeAudio: { mode: "copy" },
+                                                        }));
+                                                    }
+                                                }}
+                                            />
+                                            Expert
+                                        </label>
+                                    </div>
+                                    {audioCompatWarning && (
+                                        <Alert className="mt-1 py-2 px-3 col-span-2">
+                                            <AlertTriangle className="size-3.5" />
+                                            <AlertDescription className="text-[10px]">
+                                                {audioCompatWarning}
+                                            </AlertDescription>
+                                        </Alert>
+                                    )}
+                                </div>
+                            </>
+                        )}
 
                         {/* Extract Audio */}
                         <Label className="options-label">

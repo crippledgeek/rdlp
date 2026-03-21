@@ -105,6 +105,34 @@ export interface VideoCodecInfo {
     encoders: VideoEncoderInfo[];
 }
 
+// ========== Audio Codec Types (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
+
+/** Info about a single audio encoder available in the linked FFmpeg build. */
+export interface AudioEncoderInfo {
+    encoderName: string;
+    displayName: string;
+}
+
+/** Info about an audio codec with its available encoders and compatible containers. */
+export interface AudioCodecInfo {
+    codec: string;
+    displayName: string;
+    encoders: AudioEncoderInfo[];
+    /** ContainerFormat enum values serialized as lowercase strings (e.g. "mp4", "mkv"). */
+    supportedContainers: string[];
+}
+
+/**
+ * How to handle audio during video recode.
+ *
+ * Mirrors Rust `RecodeAudioMode` with `#[serde(tag = "mode")]`:
+ *   { mode: "copy" } | { mode: "auto" } | { mode: "encoder", name: "libfdk_aac" }
+ */
+export type RecodeAudioMode =
+    | { mode: "copy" }
+    | { mode: "auto" }
+    | { mode: "encoder"; name: string };
+
 // ========== Download Types ==========
 
 /** Lifecycle status of a download job (#[serde(rename_all = "lowercase")]). */
@@ -185,6 +213,8 @@ export interface DownloadOptions {
     normalizeBoostDb: number | null;
     embedSubtitles: boolean | null;
     videoEncoder: string | null;
+    recodeAudio: RecodeAudioMode | null;
+    recodeContainer: string | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{AudioFormat, ContainerFormat};
+use crate::{AudioFormat, ContainerFormat, RecodeAudioMode};
 
 /// Callback for reporting post-processing progress.
 ///
@@ -130,4 +130,12 @@ pub struct PostProcessConfig {
     /// encoder is verified for availability before use; an unavailable
     /// encoder causes the conversion step to return an error.
     pub video_encoder: Option<String>,
+
+    /// How to handle audio during video recode.
+    /// Default is Copy (stream copy audio unchanged).
+    pub recode_audio: RecodeAudioMode,
+
+    /// Output container override for video recode.
+    /// When `None`, the container is derived from the video codec.
+    pub recode_container: Option<ContainerFormat>,
 }

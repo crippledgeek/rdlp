@@ -40,9 +40,9 @@ pub mod traits;
 // Re-export types from rdlp-types for convenience
 pub use rdlp_types::{
     AudioFormat, BrowserType, Chapter, Config, ContainerFormat, DownloadProtocol, Format,
-    FormatSelector, Fragment, InfoDict, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
-    SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo, Subtitle,
-    SubtitleDiagnostic, SubtitleFormat, SubtitleKind, SubtitleReason, SubtitleResult,
+    FormatSelector, Fragment, InfoDict, RecodeAudioMode, SearchFilter, SearchFilterDescriptor,
+    SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo,
+    Subtitle, SubtitleDiagnostic, SubtitleFormat, SubtitleKind, SubtitleReason, SubtitleResult,
     SubtitleStatus, SubtitleTrack, Thumbnail, normalize_from_info_dict,
 };
 

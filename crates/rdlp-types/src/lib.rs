@@ -31,6 +31,7 @@ pub mod format;
 pub mod info_dict;
 pub mod parse_error;
 pub mod protocol;
+pub mod recode_audio_mode;
 pub mod search;
 pub mod subtitle_format;
 pub mod subtitle_kind;
@@ -46,6 +47,7 @@ pub use format::{Format, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use parse_error::ParseEnumError;
 pub use protocol::DownloadProtocol;
+pub use recode_audio_mode::RecodeAudioMode;
 pub use search::{
     SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
     SearchResultPreview, SearchSiteInfo,

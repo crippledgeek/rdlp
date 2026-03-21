@@ -208,6 +208,11 @@ pub struct PostProcessOptions {
     /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
     /// `None` = auto-select best available encoder for the target codec.
     pub video_encoder: Option<String>,
+    /// Target container for recode (overrides `recode_video` when set).
+    pub recode_container: Option<ContainerFormat>,
+    /// Audio handling during video recode.
+    /// `None` preserves base config (defaults to Copy).
+    pub recode_audio: Option<rdlp_core::RecodeAudioMode>,
 }
 
 /// Network, retry, and cookie options.

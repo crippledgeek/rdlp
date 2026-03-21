@@ -30,6 +30,7 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::codecs::get_available_codecs,
+            commands::codecs::get_available_audio_codecs,
             commands::search::search_content,
             commands::search::get_search_providers,
             commands::search::get_search_filters,
