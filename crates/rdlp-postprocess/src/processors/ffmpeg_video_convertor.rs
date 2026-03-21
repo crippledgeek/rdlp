@@ -277,10 +277,18 @@ impl PostProcessor for FFmpegVideoConvertor {
 
         info!(output:? = output_path.display(); "Converted");
 
+        // Don't mark input as temp when output path equals input path
+        // (same extension → convert_video overwrites in place)
+        let temp_files = if config.keep_video || output_path == *input_file {
+            Vec::new()
+        } else {
+            files
+        };
+
         Ok(PostProcessResult {
             info: info.clone(),
             files: vec![output_path],
-            temp_files: if config.keep_video { Vec::new() } else { files },
+            temp_files,
         })
     }
 }
