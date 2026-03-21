@@ -130,8 +130,14 @@ impl RdlpClient {
             config.cookies_from_browser.is_some() || config.cookies_file.is_some();
 
         let join_handle = tokio::spawn(async move {
-            let orchestrator =
-                Orchestrator::new_with_registry(config, tx.clone(), id, token, interactive_cb, Some(registry));
+            let orchestrator = Orchestrator::new_with_registry(
+                config,
+                tx.clone(),
+                id,
+                token,
+                interactive_cb,
+                Some(registry),
+            );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
             if let Err(e) = orchestrator.load_cookies().await {
@@ -477,8 +483,14 @@ impl RdlpClient {
         let registry = Arc::clone(&self.temp_registry);
 
         let join_handle = tokio::spawn(async move {
-            let orchestrator =
-                Orchestrator::new_with_registry(config, tx.clone(), id, token, None, Some(registry));
+            let orchestrator = Orchestrator::new_with_registry(
+                config,
+                tx.clone(),
+                id,
+                token,
+                None,
+                Some(registry),
+            );
 
             // Build a minimal InfoDict from the file path
             let file_name = path

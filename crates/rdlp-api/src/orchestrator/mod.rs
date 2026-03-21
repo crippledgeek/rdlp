@@ -119,7 +119,14 @@ impl Orchestrator {
         cancel_token: CancellationToken,
         interactive: Option<Arc<dyn InteractiveCallback>>,
     ) -> Self {
-        Self::new_with_registry(config, event_tx, download_id, cancel_token, interactive, None)
+        Self::new_with_registry(
+            config,
+            event_tx,
+            download_id,
+            cancel_token,
+            interactive,
+            None,
+        )
     }
 
     /// Create a new orchestrator, sharing the given `TempRegistry` across all
