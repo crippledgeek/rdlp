@@ -101,6 +101,7 @@ export interface VideoEncoderInfo {
 export interface VideoCodecInfo {
     codec: string;
     displayName: string;
+    defaultContainer: string;
     encoders: VideoEncoderInfo[];
 }
 
