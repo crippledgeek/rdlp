@@ -21,9 +21,9 @@ use crate::pipeline::registry::TempRegistry;
 /// implement `Drop` with file deletion.
 pub struct FileTracker {
     /// The live files currently being processed.
-    pub current_files: Vec<PathBuf>,
+    pub(crate) current_files: Vec<PathBuf>,
     /// Files that have been superseded by a later stage's output.
-    pub temp_files: Vec<PathBuf>,
+    pub(crate) temp_files: Vec<PathBuf>,
     temp_registry: Arc<TempRegistry>,
 }
 
