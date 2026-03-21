@@ -124,6 +124,13 @@ pub mod pipeline;
 pub mod processors;
 pub mod registry;
 
+// Re-export pipeline types for use by rdlp-api
+pub use pipeline::stages::{
+    AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage, RemuxStage,
+    SubtitleStage, ThumbnailStage,
+};
+pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
+
 // Re-export rdlp-ffmpeg types for backward compatibility
 pub use rdlp_ffmpeg::error;
 pub use rdlp_ffmpeg::ffmpeg;
