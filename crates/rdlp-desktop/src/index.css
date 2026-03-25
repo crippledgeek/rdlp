@@ -4,34 +4,65 @@
 
 @layer base {
     :root {
-        --background: 220 6% 7%;
-        --foreground: 240 4% 92%;
-        --card: 220 5% 13%;
-        --card-foreground: 240 4% 92%;
-        --popover: 220 5% 13%;
-        --popover-foreground: 240 4% 92%;
-        --primary: 160 79% 40%;
+        /* Navy-black surface layers */
+        --background: 237 53% 7%;
+        --foreground: 0 0% 93%;
+        --card: 237 43% 10%;
+        --card-foreground: 0 0% 93%;
+        --popover: 237 43% 10%;
+        --popover-foreground: 0 0% 93%;
+        /* Blue accent (#4a9eff → HSL 213 100% 65%) */
+        --primary: 213 100% 65%;
         --primary-foreground: 0 0% 100%;
-        --secondary: 220 5% 12%;
-        --secondary-foreground: 240 4% 92%;
-        --muted: 220 5% 12%;
-        --muted-foreground: 220 4% 34%;
-        --accent: 220 5% 12%;
-        --accent-foreground: 240 4% 92%;
-        --destructive: 0 84% 60%;
+        --secondary: 237 40% 11%;
+        --secondary-foreground: 0 0% 93%;
+        --muted: 237 40% 11%;
+        --muted-foreground: 0 0% 40%;
+        --accent: 237 40% 14%;
+        --accent-foreground: 0 0% 93%;
+        --destructive: 0 75% 63%;
         --destructive-foreground: 0 0% 100%;
-        --border: 220 5% 12%;
-        --input: 220 5% 15%;
-        --ring: 160 79% 40%;
+        --border: 237 35% 15%;
+        --input: 237 35% 16%;
+        --ring: 213 100% 65%;
         --radius: 0.375rem;
-        --sidebar: hsl(220 6% 7%);
-        --sidebar-foreground: hsl(240 4% 92%);
-        --sidebar-primary: hsl(160 79% 40%);
+        /* Sidebar tokens (mapped to navy-black theme) */
+        --sidebar: hsl(237 53% 7%);
+        --sidebar-foreground: hsl(0 0% 93%);
+        --sidebar-primary: hsl(213 100% 65%);
         --sidebar-primary-foreground: hsl(0 0% 100%);
-        --sidebar-accent: hsl(220 5% 12%);
-        --sidebar-accent-foreground: hsl(240 4% 92%);
-        --sidebar-border: hsl(220 5% 12%);
-        --sidebar-ring: hsl(160 79% 40%);
+        --sidebar-accent: hsl(237 40% 11%);
+        --sidebar-accent-foreground: hsl(0 0% 93%);
+        --sidebar-border: hsl(237 35% 15%);
+        --sidebar-ring: hsl(213 100% 65%);
+        /* Surface layer tokens (spec: 4 layers) */
+        --surface-deepest: #08081a;
+        --surface-base: #0a0a1a;
+        --surface-raised: #0e0e1e;
+        --surface-elevated: #141428;
+        /* Border tokens */
+        --border-default: #1a1a2e;
+        --border-strong: #2a2a3e;
+        --border-accent: #1a2a4a;
+        /* Text tokens */
+        --text-primary: #eeeeee;
+        --text-secondary: #aaaaaa;
+        --text-muted: #666666;
+        --text-disabled: #444444;
+        /* Semantic tokens */
+        --success: #4a9e4a;
+        --warning: #e8a838;
+        --error: #e85858;
+        --highlight: #c084fc;
+        /* Badge category tokens */
+        --badge-protocol-fg: #4a9e4a;
+        --badge-protocol-bg: #1a3020;
+        --badge-resolution-fg: #6a8aff;
+        --badge-resolution-bg: #1a2040;
+        --badge-codec-fg: #c084fc;
+        --badge-codec-bg: #2a1a30;
+        --badge-feature-fg: #5abfbf;
+        --badge-feature-bg: #1a2020;
     }
 }
 
@@ -69,6 +100,16 @@
     --radius-xl: calc(var(--radius) + 4px);
     --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
     --font-mono: "Space Mono", ui-monospace, monospace;
+    /* Surface layer Tailwind tokens */
+    --color-surface-deepest: var(--surface-deepest);
+    --color-surface-base: var(--surface-base);
+    --color-surface-raised: var(--surface-raised);
+    --color-surface-elevated: var(--surface-elevated);
+    /* Semantic Tailwind tokens */
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-error: var(--error);
+    --color-highlight: var(--highlight);
 }
 
 @layer base {

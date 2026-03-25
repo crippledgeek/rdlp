@@ -6,6 +6,11 @@
 //   - Rust Option<T> maps to T | null.
 //   - Rust enums with #[serde(rename_all = "lowercase")] become string literals.
 
+// ========== UI State Types ==========
+
+/** Active view in the pane-based workspace. */
+export type { AppView } from "../stores/uiStore";
+
 // ========== Search Types ==========
 
 /** A site that supports search (snake_case — default serde). */
@@ -215,6 +220,7 @@ export interface DownloadOptions {
     videoEncoder: string | null;
     recodeAudio: RecodeAudioMode | null;
     recodeContainer: string | null;
+    verbose: boolean | null;
 }
 
 // ========== Event Payloads (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========

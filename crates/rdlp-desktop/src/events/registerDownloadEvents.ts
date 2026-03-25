@@ -17,6 +17,7 @@ import {
     onPostProcessProgress,
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
+import { appendLog } from "../components/LogViewer";
 import type { DownloadJob } from "../types";
 
 interface ProgressEntry {
@@ -70,7 +71,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
         onDownloadProgress((p) => {
             if (!mounted) return;
             pending.set(p.jobId, {
-                progress: p.progress,
+                progress: p.progress * 100,
                 speed: p.speed,
                 eta: p.eta,
             });
@@ -90,7 +91,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                             ? {
                                   ...job,
                                   status: "completed" as const,
-                                  progress: 1.0,
+                                  progress: 100,
                                   output_path: p.filepath || null,
                                   completed_at: Math.floor(Date.now() / 1000),
                               }
@@ -124,6 +125,9 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
     unlisteners.push(
         onDownloadLog((p) => {
             if (!mounted) return;
+            // Forward to global log viewer ring buffer
+            const level = p.level === "warn" ? "warn" : p.level === "debug" ? "debug" : "info";
+            appendLog(level, p.message, p.jobId);
             qc.setQueryData<DownloadJob[]>(
                 queryKeys.downloads.list(),
                 (old) =>
