@@ -530,4 +530,163 @@ mod tests {
         ];
         assert!(validate_search_filters(&filters).is_ok());
     }
+
+    // ---- Negative tests ----
+
+    #[test]
+    fn test_parse_results_missing_thumb_link() {
+        // Item with no a.video-thumb → should skip
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="video-title text-break" href="https://tnaflix.com/video/123">Title</a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_empty_href() {
+        // Thumb link with empty href → should skip
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="thumb video-thumb bg-dark" href="">
+                <img data-src="thumb.jpg" alt="Test" />
+            </a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_missing_img_thumbnail_none() {
+        // No img inside thumb link → thumbnail should be None
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="thumb video-thumb bg-dark" href="https://tnaflix.com/v/test/video789">
+            </a>
+            <a class="video-title text-break" href="https://tnaflix.com/v/test/video789">Test</a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].thumbnail_url, None);
+    }
+
+    #[test]
+    fn test_parse_results_placeholder_img_filtered() {
+        // Placeholder image src → thumbnail should be None
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="thumb video-thumb bg-dark" href="https://tnaflix.com/v/test/video789">
+                <img src="/assets/img/video_cover_placeholder.jpg" alt="Test" />
+            </a>
+            <a class="video-title text-break" href="https://tnaflix.com/v/test/video789">Test</a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].thumbnail_url, None);
+    }
+
+    #[test]
+    fn test_parse_results_missing_duration() {
+        // No .video-duration div → duration should be None
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="thumb video-thumb bg-dark" href="https://tnaflix.com/v/test/video789">
+                <img data-src="thumb.jpg" alt="Test" />
+            </a>
+            <a class="video-title text-break" href="https://tnaflix.com/v/test/video789">Test</a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].duration, None);
+    }
+
+    #[test]
+    fn test_parse_results_missing_views() {
+        // No icon-eye element → view_count should be None
+        let item = r#"<div data-vid="789" class="col-xs-6 col-md-4 col-xl-3 mb-3">
+            <a class="thumb video-thumb bg-dark" href="https://tnaflix.com/v/test/video789">
+                <img data-src="thumb.jpg" alt="Test" />
+                <div class="thumb-icon video-duration">05:00</div>
+            </a>
+            <a class="video-title text-break" href="https://tnaflix.com/v/test/video789">Test</a>
+        </div>"#;
+        let html = make_search_html(&[item], false);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].view_count, None);
+    }
+
+    #[test]
+    fn test_parse_results_malformed_html_no_panic() {
+        let html = "<div data-vid=\"123\" class=\"col\"><a class=\"video-thumb\" href=\"";
+        let results = parse_search_results(html);
+        let _ = results; // Should not panic
+    }
+
+    #[test]
+    fn test_parse_results_empty_html() {
+        assert!(parse_search_results("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_no_data_vid_divs() {
+        let html = "<html><body><p>No results</p></body></html>";
+        assert!(parse_search_results(html).is_empty());
+    }
+
+    #[test]
+    fn test_parse_pagination_next_link_ignored() {
+        let html = r#"<html><body>
+            <ul class="pagination justify-content-center mt-4">
+                <li class="page-item active"><span class="page-link">1</span></li>
+                <li class="page-item"><a class="page-link" href="?page=2">2</a></li>
+                <li class="page-item"><a class="page-link" href="?page=2">Next</a></li>
+            </ul>
+        </body></html>"#;
+        // "Next" is not numeric → should be ignored, max = 2
+        assert_eq!(parse_pagination(html), Some(2));
+    }
+
+    #[test]
+    fn test_parse_pagination_empty_html() {
+        assert_eq!(parse_pagination(""), None);
+    }
+
+    #[test]
+    fn test_validate_filters_empty_key() {
+        let filters = vec![SearchFilter {
+            key: String::new(),
+            value: "newest".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_filters_empty_ordering_value() {
+        let filters = vec![SearchFilter {
+            key: "ordering".to_string(),
+            value: String::new(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_filters_case_sensitive_ordering() {
+        let filters = vec![SearchFilter {
+            key: "ordering".to_string(),
+            value: "Newest".to_string(), // uppercase N
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_parse_view_count_empty() {
+        assert_eq!(parse_view_count(""), None);
+    }
+
+    #[test]
+    fn test_parse_view_count_whitespace_only() {
+        assert_eq!(parse_view_count("   "), None);
+    }
 }

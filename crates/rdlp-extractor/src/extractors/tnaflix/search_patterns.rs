@@ -533,4 +533,106 @@ mod tests {
         assert!(cat.default.is_none());
         assert!(cat.allowed_values.len() > 74); // sections + categories
     }
+
+    // ---- Negative tests ----
+
+    fn make_neg_query(q: &str) -> rdlp_types::SearchQuery {
+        rdlp_types::SearchQuery {
+            query: q.to_string(),
+            filters: vec![],
+            max_results: None,
+            page: None,
+        }
+    }
+
+    // EMPFlix _for variant coverage
+
+    #[test]
+    fn test_build_search_url_for_empflix() {
+        let query = make_neg_query("test");
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.starts_with("https://www.empflix.com/search?what=test"));
+        assert!(!url.contains("tnaflix.com"));
+    }
+
+    #[test]
+    fn test_build_search_url_page_for_empflix() {
+        let query = make_neg_query("test");
+        let url = build_search_url_page_for("https://www.empflix.com", &query, 3);
+        assert!(url.starts_with("https://www.empflix.com/search?what=test"));
+        assert!(url.contains("&page=3"));
+    }
+
+    #[test]
+    fn test_build_browse_url_for_empflix_section() {
+        let url = build_browse_url_for("https://www.empflix.com", "new");
+        assert_eq!(url, "https://www.empflix.com/new");
+    }
+
+    #[test]
+    fn test_build_browse_url_page_for_empflix_section() {
+        let url = build_browse_url_page_for("https://www.empflix.com", "new", 5);
+        assert_eq!(url, "https://www.empflix.com/new/5");
+    }
+
+    #[test]
+    fn test_build_browse_url_page_for_empflix_category() {
+        let url = build_browse_url_page_for("https://www.empflix.com", "teen-porn", 2);
+        assert_eq!(url, "https://www.empflix.com/teen-porn?page=2");
+    }
+
+    // Edge cases for _for variants
+
+    #[test]
+    fn test_build_search_url_for_empty_query() {
+        let query = make_neg_query("");
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("what=&tab="));
+    }
+
+    #[test]
+    fn test_build_search_url_for_with_multiple_filters() {
+        let query = rdlp_types::SearchQuery {
+            query: "test".to_string(),
+            filters: vec![
+                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "newest".to_string() },
+                rdlp_types::SearchFilter { key: "other".to_string(), value: "val".to_string() },
+            ],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("&ordering=newest"));
+        assert!(url.contains("&other=val"));
+    }
+
+    // is_valid_category negative (renamed to avoid duplicate)
+
+    #[test]
+    fn test_is_valid_category_rejects_empty() {
+        assert!(!is_valid_category(""));
+    }
+
+    #[test]
+    fn test_is_valid_category_case_sensitive() {
+        assert!(!is_valid_category("New"));
+        assert!(!is_valid_category("TEEN-PORN"));
+    }
+
+    // slug_to_label edge cases
+
+    #[test]
+    fn test_slug_to_label_empty() {
+        assert_eq!(slug_to_label(""), "");
+    }
+
+    #[test]
+    fn test_slug_to_label_single_word() {
+        assert_eq!(slug_to_label("solo"), "Solo");
+    }
+
+    #[test]
+    fn test_slug_to_label_only_suffix() {
+        assert_eq!(slug_to_label("porn"), "Porn");
+    }
 }

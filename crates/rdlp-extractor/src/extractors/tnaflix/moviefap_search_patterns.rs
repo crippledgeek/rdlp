@@ -165,4 +165,53 @@ mod tests {
         let filters = search_filter_descriptors();
         assert_eq!(filters[0].allowed_values.len(), 5);
     }
+
+    // ---- Negative tests ----
+
+    #[test]
+    fn test_build_search_url_empty_query() {
+        let query = make_query("", None);
+        let url = build_search_url(&query, 1);
+        // Empty query → empty segment between /search/ and /relevance/
+        assert!(url.contains("/search/"));
+        assert!(url.contains("/relevance/1"));
+    }
+
+    #[test]
+    fn test_build_search_url_special_chars_in_query() {
+        let query = make_query("test&foo=bar", None);
+        let url = build_search_url(&query, 1);
+        // Special chars are not URL-encoded (matches yt-dlp behavior)
+        assert!(url.contains("test&foo=bar"));
+    }
+
+    #[test]
+    fn test_build_search_url_page_zero() {
+        let query = make_query("test", None);
+        let url = build_search_url(&query, 0);
+        assert!(url.ends_with("/0"));
+    }
+
+    #[test]
+    fn test_build_search_url_page_large() {
+        let query = make_query("test", None);
+        let url = build_search_url(&query, 99999);
+        assert!(url.ends_with("/99999"));
+    }
+
+    #[test]
+    fn test_build_search_url_invalid_ordering_still_builds() {
+        // URL builder doesn't validate ordering — validation is separate
+        let query = make_query("test", Some("invalid_sort"));
+        let url = build_search_url(&query, 1);
+        assert!(url.contains("/invalid_sort/"));
+    }
+
+    #[test]
+    fn test_build_search_url_whitespace_only_query() {
+        let query = make_query("   ", None);
+        let url = build_search_url(&query, 1);
+        // Whitespace-only splits to empty segments, joined is empty
+        assert!(url.contains("/search//"));
+    }
 }

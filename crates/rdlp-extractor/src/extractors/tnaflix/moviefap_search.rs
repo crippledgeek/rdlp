@@ -474,4 +474,218 @@ mod tests {
         assert_eq!(parse_duration_secs("not-a-duration"), None);
         assert_eq!(parse_duration_secs(""), None);
     }
+
+    // ---- Negative tests ----
+
+    #[test]
+    fn test_parse_results_missing_title_link() {
+        // videothumb with no .thumbtitle a[href] → should skip item
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle"></span>
+            <a href="https://moviefap.com/videos/abc/test.html" class="videothumb">
+                <img src="thumb.jpg" alt="test" />
+            </a>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_empty_href() {
+        // Title link with empty href → should skip
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="" title="Test">Test</a>
+            </span>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_empty_title_text_uses_unknown() {
+        // Title link with whitespace-only text → falls back to "Unknown"
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="https://moviefap.com/videos/abc/test.html" title=""> </a>
+            </span>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Unknown");
+    }
+
+    #[test]
+    fn test_parse_results_missing_thumbnail() {
+        // No img inside a.videothumb → thumbnail should be None
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="https://moviefap.com/videos/abc/test.html" title="Test">Test</a>
+            </span>
+            <a href="https://moviefap.com/videos/abc/test.html" class="videothumb">
+            </a>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].thumbnail_url, None);
+    }
+
+    #[test]
+    fn test_parse_results_empty_thumbnail_src() {
+        // img with empty src → thumbnail should be None
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="https://moviefap.com/videos/abc/test.html" title="Test">Test</a>
+            </span>
+            <a href="https://moviefap.com/videos/abc/test.html" class="videothumb">
+                <img src="" alt="Test" />
+            </a>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].thumbnail_url, None);
+    }
+
+    #[test]
+    fn test_parse_results_missing_videoleft() {
+        // No .videoleft element → duration should be None
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="https://moviefap.com/videos/abc/test.html" title="Test">Test</a>
+            </span>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].duration, None);
+    }
+
+    #[test]
+    fn test_parse_results_videoleft_no_duration() {
+        // .videoleft with only "3 years ago" (no duration before br)
+        let item = r#"<div class="videothumb">
+            <span class="thumbtitle">
+                <a href="https://moviefap.com/videos/abc/test.html" title="Test">Test</a>
+            </span>
+            <div class="videoleft">3 years ago</div>
+        </div>"#;
+        let html = make_search_html(&[item], None);
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 1);
+        // "3 years ago" can't parse as mm:ss → duration is None
+        assert_eq!(results[0].duration, None);
+    }
+
+    #[test]
+    fn test_parse_results_malformed_html_no_panic() {
+        let html = "<html><body><div class=\"videothumb\"><span class=\"thumbtitle\"><a href=\"";
+        let results = parse_search_results(html);
+        // Should not panic; may return empty or partial results
+        let _ = results;
+    }
+
+    #[test]
+    fn test_parse_results_completely_empty_html() {
+        let results = parse_search_results("");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_results_no_videothumb_divs() {
+        let html = "<html><body><p>No results found</p></body></html>";
+        let results = parse_search_results(html);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pagination_with_next_link() {
+        // "next >>" is not a page number → should be ignored
+        let pagination = r#"<div class="pagination">
+            <span class="current">1</span>
+            <a href="/search/query/relevance/2">2</a>
+            <a href="/search/query/relevance/3">3</a>
+            <a href="/search/query/relevance/2">next &gt;&gt;</a>
+        </div>"#;
+        let html = make_search_html(&[], Some(pagination));
+        let max_pages = parse_pagination(&html);
+        assert_eq!(max_pages, Some(3)); // "next >>" is not numeric, ignored
+    }
+
+    #[test]
+    fn test_parse_pagination_empty_html() {
+        assert_eq!(parse_pagination(""), None);
+    }
+
+    #[test]
+    fn test_parse_pagination_only_current_span() {
+        // Only <span class="current">1</span>, no <a> links
+        let pagination = r#"<div class="pagination"><span class="current">1</span></div>"#;
+        let html = make_search_html(&[], Some(pagination));
+        assert_eq!(parse_pagination(&html), None);
+    }
+
+    #[test]
+    fn test_validate_filters_multiple_orderings() {
+        // Two ordering filters — both valid individually
+        let filters = vec![
+            SearchFilter { key: "ordering".to_string(), value: "adddate".to_string() },
+            SearchFilter { key: "ordering".to_string(), value: "rate".to_string() },
+        ];
+        assert!(validate_search_filters(&filters).is_ok());
+    }
+
+    #[test]
+    fn test_validate_filters_category_key_rejected() {
+        // MovieFap doesn't support "category" filter (unlike TNAFlix)
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "milf".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_filters_empty_key() {
+        let filters = vec![SearchFilter {
+            key: String::new(),
+            value: "value".to_string(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_filters_empty_ordering_value() {
+        let filters = vec![SearchFilter {
+            key: "ordering".to_string(),
+            value: String::new(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_parse_duration_single_number() {
+        // "123" — not mm:ss format
+        assert_eq!(parse_duration_secs("123"), None);
+    }
+
+    #[test]
+    fn test_parse_duration_four_parts() {
+        // "1:2:3:4" — too many parts
+        assert_eq!(parse_duration_secs("1:2:3:4"), None);
+    }
+
+    #[test]
+    fn test_parse_duration_non_numeric_parts() {
+        assert_eq!(parse_duration_secs("ab:cd"), None);
+    }
+
+    #[test]
+    fn test_parse_duration_zero() {
+        assert_eq!(parse_duration_secs("0:00"), Some(0.0));
+    }
 }
