@@ -107,7 +107,7 @@ pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("video");
-    let parent = base_path.parent().unwrap_or(Path::new("."));
+    let parent = base_path.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!("{stem}.{suffix}"))
 }
 

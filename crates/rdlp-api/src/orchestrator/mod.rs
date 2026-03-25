@@ -354,7 +354,7 @@ impl Orchestrator {
 
         // Single video - use existing state machine
         let mut phase = DownloadPhase::Extracting {
-            url: url.to_string(),
+            url: url.to_owned(),
         };
 
         loop {

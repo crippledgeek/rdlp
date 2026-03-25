@@ -15,7 +15,7 @@ mod netscape;
 mod util;
 
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, warn};
 use rdlp_core::{BrowserType, CookieJar, Result};
 use reqwest::cookie::CookieStore;
 use std::path::Path;
@@ -61,7 +61,13 @@ impl CookieJar for SimpleCookieJar {
         let Some(header_value) = self.jar.cookies(&parsed) else {
             return Ok(Vec::new());
         };
-        let cookie_str = header_value.to_str().unwrap_or("");
+        let cookie_str = match header_value.to_str() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Cookie header contains non-ASCII bytes: {e}");
+                return Ok(Vec::new());
+            }
+        };
         Ok(cookie_str
             .split("; ")
             .filter(|s| !s.is_empty())

@@ -50,7 +50,7 @@ impl Orchestrator {
                     .any(|known| ext.eq_ignore_ascii_case(known))
             })
             .map(str::to_lowercase)
-            .unwrap_or_else(|| "jpg".to_string());
+            .unwrap_or_else(|| "jpg".to_owned());
 
         // Build output path: {media_stem}.{ext}
         let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);

@@ -73,8 +73,8 @@ impl Orchestrator {
         // Priority 1: Use container field from HLS/DASH metadata
         if let Some(ref container) = format.container {
             return match container.as_str() {
-                "m4s" | "m4v" | "m4a" => "mp4".to_string(), // fMP4 variants → mp4
-                other => other.split('_').next().unwrap_or(other).to_string(),
+                "m4s" | "m4v" | "m4a" => "mp4".to_owned(), // fMP4 variants → mp4
+                other => other.split('_').next().unwrap_or(other).to_owned(),
             };
         }
 
@@ -84,9 +84,9 @@ impl Orchestrator {
                 super::container_resolver::ResolvedContainer::resolve(&self.config, None)
                     .format
                     .as_ext()
-                    .to_string()
+                    .to_owned()
             }
-            ext => ext.to_string(),
+            ext => ext.to_owned(),
         }
     }
 

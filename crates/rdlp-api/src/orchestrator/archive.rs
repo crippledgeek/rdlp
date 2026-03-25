@@ -25,7 +25,7 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
             let trimmed = line.trim();
             !trimmed.is_empty() && !trimmed.starts_with('#')
         })
-        .map(|line| line.trim().to_string())
+        .map(|line| line.trim().to_owned())
         .collect()
 }
 

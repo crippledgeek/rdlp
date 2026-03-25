@@ -21,7 +21,7 @@ impl Orchestrator {
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_string(),
+                url: url.to_owned(),
             }
         })?;
 
@@ -71,7 +71,7 @@ impl Orchestrator {
                     .get_or_insert_with(std::collections::HashMap::new);
                 headers
                     .entry("Referer".to_string())
-                    .or_insert(referer.clone());
+                    .or_insert_with(|| referer.clone());
             }
         }
 
@@ -86,7 +86,7 @@ impl Orchestrator {
     pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_core::InfoDict> {
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_string(),
+                url: url.to_owned(),
             }
         })?;
 
@@ -106,7 +106,7 @@ impl Orchestrator {
                     .get_or_insert_with(std::collections::HashMap::new);
                 headers
                     .entry("Referer".to_string())
-                    .or_insert(referer.clone());
+                    .or_insert_with(|| referer.clone());
             }
         }
 
@@ -135,7 +135,7 @@ impl Orchestrator {
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_string(),
+                url: url.to_owned(),
             }
         })?;
 
