@@ -139,29 +139,39 @@ const CODEC_H264: &str = "h264";
 const CODEC_AAC: &str = "aac";
 use rdlp_types::DownloadProtocol;
 
-/// Build format list from video metadata and fetch filesizes
+/// Build format list from video metadata and fetch filesizes.
+///
+/// Filesize detection is parallelized — all HEAD requests run concurrently
+/// instead of sequentially, reducing latency from O(n × RTT) to O(RTT).
 pub(crate) async fn build_formats(
     video_data: Vec<VideoMetadata>,
     ctx: &ExtractionContext,
 ) -> Vec<Format> {
-    let mut formats = Vec::new();
+    // Build format structs (sync, no I/O)
+    let mut formats: Vec<Format> = video_data
+        .into_iter()
+        .map(|(format_id, video_url, ext, height, width)| {
+            let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
+            format.height = height;
+            format.width = width;
+            format.format_note = height.map(|h| format!("{h}p"));
+            if ext == "mp4" {
+                format.vcodec = Some(CODEC_H264.to_owned());
+                format.acodec = Some(CODEC_AAC.to_owned());
+            }
+            format
+        })
+        .collect();
 
-    for (format_id, video_url, ext, height, width) in video_data {
-        let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
+    // Parallel filesize detection — all HEAD requests run concurrently
+    let futures: Vec<_> = formats
+        .iter()
+        .map(|f| BaseExtractor::detect_file_size(&f.url, &ctx.http_client, Some("TNAFlix")))
+        .collect();
+    let sizes = futures::future::join_all(futures).await;
 
-        format.height = height;
-        format.width = width;
-        format.format_note = height.map(|h| format!("{h}p"));
-
-        if ext == "mp4" {
-            format.vcodec = Some(CODEC_H264.to_owned());
-            format.acodec = Some(CODEC_AAC.to_owned());
-        }
-
-        format.filesize =
-            BaseExtractor::detect_file_size(&video_url, &ctx.http_client, Some("TNAFlix")).await;
-
-        formats.push(format);
+    for (format, size) in formats.iter_mut().zip(sizes) {
+        format.filesize = size;
     }
 
     BaseExtractor::dedup_format_ids(&mut formats);
