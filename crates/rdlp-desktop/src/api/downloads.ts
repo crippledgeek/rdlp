@@ -5,7 +5,6 @@ import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import { queryClient } from "../query/queryClient";
 import type { DownloadJob, DownloadOptions } from "../types";
-export { buildDefaultOptions } from "../components/FormatOptionsPanel";
 
 /** Fetch the current download queue. */
 export function downloadsQueryOptions() {

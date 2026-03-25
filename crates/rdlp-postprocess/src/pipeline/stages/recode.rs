@@ -96,6 +96,7 @@ impl RecodeStage {
                 crf,
                 audio_copy,
                 audio_codec,
+                ..Default::default()
             });
         }
 
@@ -121,6 +122,7 @@ impl RecodeStage {
             crf,
             audio_copy,
             audio_codec,
+            ..Default::default()
         })
     }
 
@@ -182,9 +184,9 @@ impl PipelineStage for RecodeStage {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        if input_ext.eq_ignore_ascii_case(target_format) {
+        if input_ext.eq_ignore_ascii_case(target_format) && msg.config.video_encoder.is_none() {
             debug!(
-                "RecodeStage: file already in target format ({}), skipping",
+                "RecodeStage: file already in target format ({}) and no encoder override, skipping",
                 target_format
             );
             return Ok(msg);
@@ -197,8 +199,9 @@ impl PipelineStage for RecodeStage {
         );
 
         let media_info = self.ffmpeg.probe(&input_file).await?;
-        let can_remux =
-            Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
+        // When a video encoder is explicitly requested, always transcode — never remux
+        let can_remux = msg.config.video_encoder.is_none()
+            && Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
 
         if can_remux {
             debug!("RecodeStage: remuxing (stream copy)");
@@ -263,7 +266,7 @@ impl PipelineStage for RecodeStage {
 
         let output_path = msg.tracker.temp_path(&input_file, target_format);
 
-        let opts = match Self::build_convert_options(
+        let mut opts = match Self::build_convert_options(
             target_format,
             can_remux,
             msg.config.video_encoder.as_deref(),
@@ -283,14 +286,51 @@ impl PipelineStage for RecodeStage {
             }
         };
 
-        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+        opts.verbose = msg.config.verbose;
+
+        let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
+
+        // Log recode parameters to the UI
+        if let Some(ref cb) = stage_callback {
+            let video_info = opts.video_codec.as_deref().unwrap_or("copy");
+            let preset_info = opts.preset.as_deref().unwrap_or("default");
+            let crf_info = opts.crf.map_or("default".to_string(), |c| c.to_string());
+            cb.on_log(&format!(
+                "Recode: video={video_info} preset={preset_info} crf={crf_info}"
+            ));
+            if let Some(ref ac) = opts.audio_codec {
+                cb.on_log(&format!("Recode: audio={ac}"));
+            } else if opts.audio_copy {
+                cb.on_log("Recode: audio=copy");
+            }
+            cb.on_log(&format!("Recode: container={target_format}"));
+        }
+
+        let progress_callback = stage_callback.as_ref().cloned().map(
             |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
         );
 
+        let log_callback: Option<Arc<dyn Fn(&str) + Send + Sync>> =
+            if opts.verbose {
+                stage_callback.as_ref().cloned().map(
+                    |cb| -> Arc<dyn Fn(&str) + Send + Sync> {
+                        Arc::new(move |msg| cb.on_log(msg))
+                    },
+                )
+            } else {
+                None
+            };
+
         self.ffmpeg
-            .convert_video(&input_file, &output_path, &opts, callback)
+            .convert_video(&input_file, &output_path, &opts, progress_callback, log_callback)
             .await?;
 
+        if let Some(ref cb) = stage_callback {
+            cb.on_log(&format!(
+                "Recode: complete → {}",
+                output_path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
         info!("RecodeStage: converted to {}", output_path.display());
 
         msg.tracker.replace(vec![output_path]);

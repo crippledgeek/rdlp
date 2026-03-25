@@ -49,6 +49,9 @@ pub struct VideoConvertOptions {
     /// Only used when `audio_copy` is false. When `None` and `audio_copy` is false,
     /// the existing behavior is preserved (implementation decides the encoder).
     pub audio_codec: Option<String>,
+    /// When true, capture FFmpeg C-level log messages and forward them via
+    /// the log callback. Enables verbose encoder output in the UI log viewer.
+    pub verbose: bool,
 }
 
 /// A chapter entry for metadata embedding.

@@ -33,7 +33,7 @@ impl PostProcessCallback for PostProcessBridge {
     fn on_log(&self, message: &str) {
         let _ = self.event_tx.try_send(Event::Debug {
             id: self.download_id,
-            message: message.to_string(),
+            message: message.to_owned(),
         });
     }
 }
@@ -53,12 +53,12 @@ fn make_callback_factory(
         // Notify the frontend that a new post-processing stage has started.
         let _ = event_tx.try_send(Event::PostProcessing {
             id: download_id,
-            stage: stage_name.to_string(),
+            stage: stage_name.to_owned(),
         });
         Arc::new(PostProcessBridge {
             event_tx: event_tx.clone(),
             download_id,
-            stage: stage_name.to_string(),
+            stage: stage_name.to_owned(),
         })
     })
 }
@@ -162,7 +162,7 @@ impl Orchestrator {
             .and_then(|f| f.file_stem())
             .and_then(|s| s.to_str())
             .unwrap_or("video")
-            .to_string();
+            .to_owned();
 
         // Build a per-stage progress callback factory.
         let callback_factory = Some(make_callback_factory(

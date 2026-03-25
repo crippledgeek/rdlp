@@ -106,7 +106,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
     let chunk_count = chunk_info.chunk_paths.len();
     let chunk_type = match chunk_info.download_id {
         Some(id) => format!("new-style (ID: {id})"),
-        None => "old-style".to_string(),
+        None => "old-style".to_owned(),
     };
 
     debug!(chunk_count, chunk_type:?; "Merging chunks");
@@ -240,7 +240,7 @@ impl Orchestrator {
             let chunk_type = if let Some(id) = chunk_info.download_id {
                 format!("new-style (download ID: {id})")
             } else {
-                "old-style".to_string()
+                "old-style".to_owned()
             };
 
             debug!(

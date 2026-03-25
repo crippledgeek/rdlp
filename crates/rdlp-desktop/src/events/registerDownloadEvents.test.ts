@@ -57,7 +57,7 @@ describe("registerDownloadEvents", () => {
         });
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0].logMessages).toEqual(["Fetching metadata"]);
+        expect(jobs[0]!.logMessages).toEqual(["Fetching metadata"]);
     });
 
     it("accumulates multiple log messages in order", async () => {
@@ -81,7 +81,7 @@ describe("registerDownloadEvents", () => {
         });
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0].logMessages).toEqual(["First", "Second", "Third"]);
+        expect(jobs[0]!.logMessages).toEqual(["First", "Second", "Third"]);
     });
 
     it("also updates statusMessage on download-log event", async () => {
@@ -95,7 +95,7 @@ describe("registerDownloadEvents", () => {
         });
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0].statusMessage).toBe("Merging streams");
+        expect(jobs[0]!.statusMessage).toBe("Merging streams");
     });
 
     it("does not affect other jobs when a log event arrives", async () => {
@@ -110,8 +110,8 @@ describe("registerDownloadEvents", () => {
         });
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0].logMessages).toEqual(["Only for job-1"]);
-        expect(jobs[1].logMessages).toBeUndefined();
+        expect(jobs[0]!.logMessages).toEqual(["Only for job-1"]);
+        expect(jobs[1]!.logMessages).toBeUndefined();
     });
 
     it("appends to existing logMessages when already populated", async () => {
@@ -125,6 +125,6 @@ describe("registerDownloadEvents", () => {
         });
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0].logMessages).toEqual(["Previous message", "New message"]);
+        expect(jobs[0]!.logMessages).toEqual(["Previous message", "New message"]);
     });
 });

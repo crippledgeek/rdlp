@@ -5,7 +5,7 @@
 //          which injects the correct Referer header for CDNs like CDN77.
 // Layer 3: Placeholder <div> if proxy also fails.
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -50,13 +50,20 @@ interface ThumbnailProps {
 export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     // Check module-level cache so remounted components skip the direct attempt
     const [directFailed, setDirectFailed] = useState(() => !!src && directFailCache.has(src));
-    const imgRef = useRef<HTMLImageElement>(null);
     const { data: proxyUrl, isError: proxyFailed, isPending: proxyPending } = useProxyThumbnail(src, directFailed);
 
-    // Detect broken images that WebKitGTK doesn't fire onError for.
-    // Check naturalWidth after mount — a broken image has naturalWidth === 0.
-    const handleLoad = useCallback(() => {
-        if (imgRef.current && imgRef.current.naturalWidth === 0) {
+    // Ref callback: runs when the img element mounts or src changes.
+    // Handles the WebKitGTK race condition where img.complete is true before
+    // React attaches onLoad/onError. No useEffect needed.
+    const imgRefCallback = useCallback((img: HTMLImageElement | null) => {
+        if (img && img.complete && img.naturalWidth === 0) {
+            if (src) directFailCache.add(src);
+            setDirectFailed(true);
+        }
+    }, [src]);
+
+    const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+        if (e.currentTarget.naturalWidth === 0) {
             if (src) directFailCache.add(src);
             setDirectFailed(true);
         }
@@ -65,18 +72,6 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     const handleError = useCallback(() => {
         if (src) directFailCache.add(src);
         setDirectFailed(true);
-    }, [src]);
-
-    // Also check on mount in case the image was already cached/broken before
-    // React attached event handlers (WebKitGTK race condition).
-    useEffect(() => {
-        const img = imgRef.current;
-        if (img && img.complete) {
-            if (img.naturalWidth === 0) {
-                if (src) directFailCache.add(src);
-                setDirectFailed(true);
-            }
-        }
     }, [src]);
 
     // No source → placeholder
@@ -102,7 +97,7 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
     // Default: try direct load
     return (
         <img
-            ref={imgRef}
+            ref={imgRefCallback}
             src={src}
             alt={alt}
             className={className}

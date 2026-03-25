@@ -26,12 +26,12 @@ function extractErrorMessage(err: unknown): string {
     if (typeof err === "object" && err !== null) {
         const obj = err as Record<string, unknown>;
         // AppError adjacently-tagged: { kind, data: { message } }
-        if (typeof obj.data === "object" && obj.data !== null) {
-            const data = obj.data as Record<string, unknown>;
-            if (typeof data.message === "string") return data.message;
+        if (typeof obj["data"] === "object" && obj["data"] !== null) {
+            const data = obj["data"] as Record<string, unknown>;
+            if (typeof data["message"] === "string") return data["message"];
         }
         // Plain object with top-level message
-        if (typeof obj.message === "string") return obj.message;
+        if (typeof obj["message"] === "string") return obj["message"];
         // Last resort: readable JSON instead of [object Object]
         try { return JSON.stringify(err); } catch { /* fall through */ }
     }

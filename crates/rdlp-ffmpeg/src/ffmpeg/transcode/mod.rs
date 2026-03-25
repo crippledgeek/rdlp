@@ -8,6 +8,7 @@ mod audio_pipeline;
 mod audio_pipeline_direct;
 mod audio_pipeline_interleaved;
 pub(crate) mod mux_timing;
+#[cfg(test)]
 mod tests;
 mod video_convert;
 mod video_pipeline;

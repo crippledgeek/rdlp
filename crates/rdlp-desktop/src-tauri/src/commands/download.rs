@@ -96,6 +96,10 @@ pub struct DownloadOptions {
     /// `None` = use default (Copy).
     #[serde(default)]
     pub recode_audio: Option<RecodeAudioMode>,
+    /// Enable verbose FFmpeg log capture for this download.
+    /// `None` = use settings default.
+    #[serde(default)]
+    pub verbose: Option<bool>,
 }
 
 /// Start a new download for the given URL.
@@ -274,7 +278,7 @@ pub async fn start_download(
             proxy,
             ..NetworkOptions::default()
         },
-        verbose: if settings.verbose { Some(true) } else { None },
+        verbose: if options.verbose.unwrap_or(settings.verbose) { Some(true) } else { None },
         ..DownloadRequest::default()
     };
 

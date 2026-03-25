@@ -112,7 +112,7 @@ pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
     if !status.is_success() {
         return Err(RdlpError::Http {
             status: status.as_u16(),
-            reason: status.canonical_reason().unwrap_or("Unknown").to_string(),
+            reason: status.canonical_reason().unwrap_or("Unknown").to_owned(),
         });
     }
     Ok(())

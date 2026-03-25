@@ -264,13 +264,10 @@ async fn test_download_without_explicit_cookies_warns_on_cookie_error() {
 
     let mut got_cookie_failed = false;
     while let Some(event) = handle.events().recv().await {
-        if let Event::Failed { error, .. } = &event {
-            // If we get a failure, it should NOT be about cookies
-            if let RdlpApiError::IoError { message } = error {
-                if message.contains("cookie") {
-                    got_cookie_failed = true;
-                }
-            }
+        if let Event::Failed { error: RdlpApiError::IoError { message }, .. } = &event
+            && message.contains("cookie")
+        {
+            got_cookie_failed = true;
         }
     }
     assert!(

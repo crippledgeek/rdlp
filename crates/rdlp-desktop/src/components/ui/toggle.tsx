@@ -1,22 +1,39 @@
-import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { Toggle as TogglePrimitive } from "radix-ui"
+import {
+  ToggleButton as AriaToggleButton,
+  ToggleButtonGroup as AriaToggleButtonGroup,
+  composeRenderProps,
+  type ToggleButtonGroupProps as AriaToggleButtonGroupProps,
+  type ToggleButtonProps as AriaToggleButtonProps,
+} from "react-aria-components"
 
 import { cn } from "@/lib/utils"
 
 const toggleVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium hover:bg-muted hover:text-muted-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] outline-none transition-[color,box-shadow] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive whitespace-nowrap",
+  [
+    "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors",
+    /* Disabled */
+    "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+    /* Hover */
+    "data-[hovered]:bg-muted data-[hovered]:text-muted-foreground",
+    /* Selected */
+    "data-[selected]:bg-accent data-[selected]:text-accent-foreground",
+    /* Focus Visible */
+    "data-[focus-visible]:outline-none data-[focus-visible]:ring-2 data-[focus-visible]:ring-ring",
+    /* Resets */
+    "focus-visible:outline-none",
+  ],
   {
     variants: {
       variant: {
         default: "bg-transparent",
         outline:
-          "border border-input bg-transparent shadow-xs hover:bg-accent hover:text-accent-foreground",
+          "border border-input bg-transparent shadow-sm data-[hovered]:bg-accent data-[hovered]:text-accent-foreground",
       },
       size: {
-        default: "h-9 px-2 min-w-9",
-        sm: "h-8 px-1.5 min-w-8",
-        lg: "h-10 px-2.5 min-w-10",
+        default: "h-9 px-3",
+        sm: "h-8 px-2",
+        lg: "h-10 px-3",
       },
     },
     defaultVariants: {
@@ -26,20 +43,43 @@ const toggleVariants = cva(
   }
 )
 
-function Toggle({
-  className,
-  variant,
-  size,
-  ...props
-}: React.ComponentProps<typeof TogglePrimitive.Root> &
-  VariantProps<typeof toggleVariants>) {
-  return (
-    <TogglePrimitive.Root
-      data-slot="toggle"
-      className={cn(toggleVariants({ variant, size, className }))}
-      {...props}
-    />
-  )
-}
+interface ToggleProps
+  extends AriaToggleButtonProps,
+    VariantProps<typeof toggleVariants> {}
 
-export { Toggle, toggleVariants }
+const Toggle = ({ className, variant, size, ...props }: ToggleProps) => (
+  <AriaToggleButton
+    className={composeRenderProps(className, (className) =>
+      cn(
+        "group-data-[orientation=vertical]/togglegroup:w-full",
+        toggleVariants({
+          variant,
+          size,
+          className,
+        })
+      )
+    )}
+    {...props}
+  />
+)
+
+const ToggleButtonGroup = ({
+  children,
+  className,
+  ...props
+}: AriaToggleButtonGroupProps) => (
+  <AriaToggleButtonGroup
+    className={composeRenderProps(className, (className) =>
+      cn(
+        "group/togglegroup flex items-center justify-center gap-1 data-[orientation=vertical]:flex-col",
+        className
+      )
+    )}
+    {...props}
+  >
+    {children}
+  </AriaToggleButtonGroup>
+)
+
+export { Toggle, toggleVariants, ToggleButtonGroup }
+export type { ToggleProps }

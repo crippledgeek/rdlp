@@ -49,7 +49,7 @@ impl ProgressCallback for EventProgressCallback {
     fn on_log(&self, message: &str) {
         let _ = self.event_tx.try_send(Event::Debug {
             id: self.download_id,
-            message: message.to_string(),
+            message: message.to_owned(),
         });
     }
 }
