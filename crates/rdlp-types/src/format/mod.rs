@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use crate::protocol::DownloadProtocol;
 
-pub use selector::FormatSelector;
+pub use selector::{FormatSelectError, FormatSelector};
 
 /// Video/audio format information
 ///

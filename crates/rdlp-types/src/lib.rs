@@ -43,7 +43,7 @@ pub use audio_format::AudioFormat;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
-pub use format::{Format, FormatSelector, Fragment};
+pub use format::{Format, FormatSelectError, FormatSelector, Fragment};
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use parse_error::ParseEnumError;
 pub use protocol::DownloadProtocol;
