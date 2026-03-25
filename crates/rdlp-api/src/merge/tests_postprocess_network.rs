@@ -8,14 +8,14 @@ use std::path::PathBuf;
 #[test]
 fn test_postprocess_none_preserves_remux() {
     let mut config = Config {
-        remux_container: Some(rdlp_core::ContainerFormat::Mkv),
+        remux_container: Some(rdlp_types::ContainerFormat::Mkv),
         ..Config::default()
     };
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
     assert_eq!(
         config.remux_container,
-        Some(rdlp_core::ContainerFormat::Mkv)
+        Some(rdlp_types::ContainerFormat::Mkv)
     );
 }
 
@@ -26,13 +26,13 @@ fn test_postprocess_some_overrides_remux() {
         ..Config::default()
     };
     let opts = PostProcessOptions {
-        remux: Some(rdlp_core::ContainerFormat::Mp4),
+        remux: Some(rdlp_types::ContainerFormat::Mp4),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
     assert_eq!(
         config.remux_container,
-        Some(rdlp_core::ContainerFormat::Mp4)
+        Some(rdlp_types::ContainerFormat::Mp4)
     );
 }
 
@@ -40,13 +40,13 @@ fn test_postprocess_some_overrides_remux() {
 fn test_postprocess_none_preserves_extract_audio() {
     let mut config = Config {
         extract_audio: true,
-        audio_format: Some(rdlp_core::AudioFormat::Mp3),
+        audio_format: Some(rdlp_types::AudioFormat::Mp3),
         ..Config::default()
     };
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
     assert!(config.extract_audio);
-    assert_eq!(config.audio_format, Some(rdlp_core::AudioFormat::Mp3));
+    assert_eq!(config.audio_format, Some(rdlp_types::AudioFormat::Mp3));
 }
 
 #[test]
@@ -57,12 +57,12 @@ fn test_postprocess_some_overrides_extract_audio() {
         ..Config::default()
     };
     let opts = PostProcessOptions {
-        extract_audio: Some(rdlp_core::AudioFormat::Aac),
+        extract_audio: Some(rdlp_types::AudioFormat::Aac),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
     assert!(config.extract_audio);
-    assert_eq!(config.audio_format, Some(rdlp_core::AudioFormat::Aac));
+    assert_eq!(config.audio_format, Some(rdlp_types::AudioFormat::Aac));
 }
 
 #[test]
@@ -422,12 +422,12 @@ fn test_postprocess_some_overrides_normalize_boost_db() {
 #[test]
 fn test_postprocess_none_preserves_recode_video() {
     let mut config = Config {
-        recode_video: Some(rdlp_core::ContainerFormat::Mkv),
+        recode_video: Some(rdlp_types::ContainerFormat::Mkv),
         ..Config::default()
     };
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.recode_video, Some(rdlp_core::ContainerFormat::Mkv));
+    assert_eq!(config.recode_video, Some(rdlp_types::ContainerFormat::Mkv));
 }
 
 #[test]
@@ -437,11 +437,11 @@ fn test_postprocess_some_overrides_recode_video() {
         ..Config::default()
     };
     let opts = PostProcessOptions {
-        recode_video: Some(rdlp_core::ContainerFormat::Mp4),
+        recode_video: Some(rdlp_types::ContainerFormat::Mp4),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.recode_video, Some(rdlp_core::ContainerFormat::Mp4));
+    assert_eq!(config.recode_video, Some(rdlp_types::ContainerFormat::Mp4));
 }
 
 // --- NetworkOptions ---
@@ -549,14 +549,14 @@ fn test_network_some_overrides_rate_limit() {
 #[test]
 fn test_network_none_preserves_cookies_from_browser() {
     let mut config = Config {
-        cookies_from_browser: Some(rdlp_core::BrowserType::Firefox),
+        cookies_from_browser: Some(rdlp_types::BrowserType::Firefox),
         ..Config::default()
     };
     let opts = NetworkOptions::default();
     opts.merge_into(&mut config);
     assert_eq!(
         config.cookies_from_browser,
-        Some(rdlp_core::BrowserType::Firefox)
+        Some(rdlp_types::BrowserType::Firefox)
     );
 }
 
@@ -567,13 +567,13 @@ fn test_network_some_overrides_cookies_from_browser() {
         ..Config::default()
     };
     let opts = NetworkOptions {
-        cookies_from_browser: Some(rdlp_core::BrowserType::Chrome),
+        cookies_from_browser: Some(rdlp_types::BrowserType::Chrome),
         ..NetworkOptions::default()
     };
     opts.merge_into(&mut config);
     assert_eq!(
         config.cookies_from_browser,
-        Some(rdlp_core::BrowserType::Chrome)
+        Some(rdlp_types::BrowserType::Chrome)
     );
 }
 

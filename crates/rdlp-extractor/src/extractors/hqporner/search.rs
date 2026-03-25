@@ -3,7 +3,7 @@
 //! Parses search result HTML into `SearchResultPreview` items.
 //! Each result card contains a title, video URL, thumbnail, and duration.
 
-use rdlp_core::SearchResultPreview;
+use rdlp_types::SearchResultPreview;
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;

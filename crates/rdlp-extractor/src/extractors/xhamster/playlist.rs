@@ -8,9 +8,9 @@ use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
 use log::{debug, info};
 use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, InfoDict, RdlpError, Result, Retryable,
-    check_http_response,
+    ExponentialBuilder, ExtractionContext, RdlpError, Result, Retryable, check_http_response,
 };
+use rdlp_types::InfoDict;
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Arc;

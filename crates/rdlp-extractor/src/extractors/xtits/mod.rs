@@ -15,7 +15,8 @@ mod formats;
 mod patterns;
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
+use rdlp_types::InfoDict;
 use regex::Regex;
 use scraper::Html;
 

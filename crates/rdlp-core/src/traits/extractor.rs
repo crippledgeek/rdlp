@@ -2,8 +2,11 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::sync::Arc;
 
-use crate::{BrowserType, Config, InfoDict, Result};
-use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
+use crate::Result;
+use rdlp_types::{
+    BrowserType, Config, InfoDict, SearchFilterDescriptor, SearchPageResponse, SearchQuery,
+    SearchResultPreview,
+};
 
 /// Core trait for all site extractors
 ///

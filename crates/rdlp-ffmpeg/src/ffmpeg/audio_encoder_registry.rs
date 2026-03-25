@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use log::info;
-use rdlp_core::ContainerFormat;
+use rdlp_types::ContainerFormat;
 use serde::{Deserialize, Serialize};
 
 /// Information about a specific audio encoder.
@@ -341,7 +341,7 @@ pub fn audio_codecs_for_container(container: ContainerFormat) -> Vec<AudioCodecI
 ///
 /// ```no_run
 /// use rdlp_ffmpeg::ffmpeg::audio_encoder_registry::container_supports_audio_codec;
-/// use rdlp_core::ContainerFormat;
+/// use rdlp_types::ContainerFormat;
 ///
 /// assert!(container_supports_audio_codec(ContainerFormat::Mp4, "aac"));
 /// assert!(!container_supports_audio_codec(ContainerFormat::Mp4, "vorbis"));

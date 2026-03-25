@@ -1,7 +1,7 @@
 //! Tests for subtitle pipeline: validation, normalization, and policy
 
 use super::*;
-use rdlp_core::SubtitleKind;
+use rdlp_types::SubtitleKind;
 
 fn track(lang: &str, ext: &str, is_auto: bool) -> SubtitleTrack {
     SubtitleTrack {

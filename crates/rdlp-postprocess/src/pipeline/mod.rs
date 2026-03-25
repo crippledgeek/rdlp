@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
-use rdlp_core::{InfoDict, PostProcessCallbackFactory, PostProcessConfig};
+use rdlp_core::{PostProcessCallbackFactory, PostProcessConfig};
+use rdlp_types::InfoDict;
 
 pub use registry::TempRegistry;
 pub use tracker::FileTracker;

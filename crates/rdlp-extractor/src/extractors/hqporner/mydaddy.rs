@@ -5,7 +5,8 @@
 //! URLs are static string literals in the HTML.
 
 use log::debug;
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_types::Format;
 use regex::Regex;
 use std::sync::LazyLock;
 

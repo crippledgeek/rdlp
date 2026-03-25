@@ -4,7 +4,8 @@
 //! `SearchResultPreview`, HTML fallback scraping, and filter validation.
 
 use log::debug;
-use rdlp_core::{RdlpError, Result, SearchFilter, SearchFilterDescriptor, SearchResultPreview};
+use rdlp_core::{RdlpError, Result};
+use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchResultPreview};
 use serde::{Deserialize, Deserializer};
 
 use super::patterns;

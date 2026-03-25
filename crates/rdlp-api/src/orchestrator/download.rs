@@ -5,8 +5,9 @@
 
 use super::{Orchestrator, errors::*};
 use log::{debug, info, warn};
-use rdlp_core::{DownloadStats, Format, RdlpError};
+use rdlp_core::{DownloadStats, RdlpError};
 use rdlp_security::validate_url_security;
+use rdlp_types::Format;
 use std::path::Path;
 
 /// Result of a successful download with CDN fallback

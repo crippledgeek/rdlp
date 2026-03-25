@@ -7,7 +7,7 @@
 //! 4. **Policy** -- apply user flags, decide warn vs error ([`apply_subtitle_policy`])
 
 use log::{debug, warn};
-use rdlp_core::{
+use rdlp_types::{
     InfoDict, SubtitleDiagnostic, SubtitleFormat, SubtitleReason, SubtitleResult, SubtitleStatus,
     SubtitleTrack, normalize_from_info_dict,
 };

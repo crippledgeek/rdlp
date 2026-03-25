@@ -7,7 +7,7 @@
 use crate::request::{
     FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions, SubtitleOptions,
 };
-use rdlp_core::Config;
+use rdlp_types::Config;
 
 #[cfg(test)]
 mod tests_output_format_subtitle;

@@ -125,7 +125,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::{ContainerFormat, InfoDict, PostProcessConfig};
+    use rdlp_core::PostProcessConfig;
+    use rdlp_types::{ContainerFormat, InfoDict};
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 

@@ -39,9 +39,12 @@ pub use errors::RdlpApiError;
 pub use events::Event;
 pub use handle::{DownloadHandle, DownloadId};
 pub use orchestrator::InteractiveCallback;
-pub use rdlp_core::{
+pub use rdlp_core::{DownloadProgress, config_io};
+pub use rdlp_postprocess::TempRegistry;
+pub use rdlp_types::{
+    AudioFormat, BrowserType, Config, ContainerFormat, Format, InfoDict, RecodeAudioMode,
     SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
-    SearchResultPreview, SearchSiteInfo,
+    SearchResultPreview, SearchSiteInfo, SubtitleFormat,
 };
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

@@ -13,7 +13,7 @@ impl Orchestrator {
     #[allow(dead_code)]
     pub(super) async fn download_from_info(
         &self,
-        info: &rdlp_core::InfoDict,
+        info: &rdlp_types::InfoDict,
         interactive: bool,
     ) -> Result<Option<PathBuf>> {
         self.download_from_info_to_dir(
@@ -48,7 +48,7 @@ impl Orchestrator {
     /// * `audio_type_filter` - If set, filter lazily-resolved formats to this language
     pub(super) async fn download_from_info_to_dir(
         &self,
-        info: &rdlp_core::InfoDict,
+        info: &rdlp_types::InfoDict,
         interactive: bool,
         output_dir: &std::path::Path,
         subtitle_langs: &[String],
@@ -62,7 +62,7 @@ impl Orchestrator {
 
         let mut output_path: Option<PathBuf> = None;
         let mut download_result: DownloadResult = None;
-        let mut last_info_ref: Option<rdlp_core::InfoDict> = None;
+        let mut last_info_ref: Option<rdlp_types::InfoDict> = None;
 
         for attempt in 0..=MAX_EXTRACT_RETRIES {
             if attempt > 0 {

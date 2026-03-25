@@ -19,10 +19,8 @@ mod search_patterns;
 
 use async_trait::async_trait;
 use log::debug;
-use rdlp_core::{
-    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
-    SearchPageResponse,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_types::{InfoDict, SearchPageResponse};
 use regex::Regex;
 use scraper::Html;
 use std::time::Duration;
@@ -219,7 +217,7 @@ impl TNAFlixSearchExtractor {
     /// # Arguments
     /// * `query` - The search query with optional filters.
     /// * `page` - 1-based page number.
-    fn build_page_url(query: &rdlp_core::SearchQuery, page: usize) -> String {
+    fn build_page_url(query: &rdlp_types::SearchQuery, page: usize) -> String {
         if let Some(cat) = query.filters.iter().find(|f| f.key == "category") {
             if page <= 1 {
                 search_patterns::build_browse_url(&cat.value)
@@ -234,10 +232,10 @@ impl TNAFlixSearchExtractor {
     /// Fetch a single search results page and return `(results, max_page_number)`.
     async fn fetch_single_search_page(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_core::SearchResultPreview>, usize)> {
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, usize)> {
         let page_url = Self::build_page_url(query, page);
         debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
@@ -258,9 +256,9 @@ impl TNAFlixSearchExtractor {
     /// Collect all pages up to `MAX_PLAYLIST_SIZE` results.
     async fn search_all_pages(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         search::validate_search_filters(&query.filters)?;
 
         let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
@@ -318,21 +316,21 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         "TNAFlix"
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         search_patterns::search_filter_descriptors()
     }
 
     async fn search(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
         search::validate_search_filters(&query.filters)?;

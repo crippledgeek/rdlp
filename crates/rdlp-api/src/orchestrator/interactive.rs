@@ -5,7 +5,7 @@
 //! interactive mode is enabled.
 
 use async_trait::async_trait;
-use rdlp_core::{Format, InfoDict};
+use rdlp_types::{Format, InfoDict};
 
 /// Callback for interactive user input (format selection, subtitle selection).
 ///

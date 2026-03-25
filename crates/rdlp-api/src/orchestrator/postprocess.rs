@@ -123,7 +123,7 @@ impl Orchestrator {
     /// * `Err(e)` - Post-processing failed
     pub(crate) async fn run_postprocessing(
         &self,
-        info: &rdlp_core::InfoDict,
+        info: &rdlp_types::InfoDict,
         files: Vec<PathBuf>,
         is_hls: bool,
     ) -> Result<Vec<PathBuf>> {
