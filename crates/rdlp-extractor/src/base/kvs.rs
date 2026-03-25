@@ -42,20 +42,21 @@ static KVS_STRING_PATTERN: LazyLock<Regex> =
 ///
 /// Provides convenient accessors for common value types.
 #[derive(Debug, Clone, Default)]
-pub struct KvsFlashvars {
+pub(crate) struct KvsFlashvars {
     vars: Vec<(String, String)>,
 }
 
 impl KvsFlashvars {
     /// Create a new empty flashvars container.
     #[must_use]
-    pub fn new() -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new() -> Self {
         Self { vars: Vec::new() }
     }
 
     /// Get a string value by key.
     #[must_use]
-    pub fn get(&self, key: &str) -> Option<&str> {
+    pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.vars
             .iter()
             .find(|(k, _)| k == key)
@@ -64,37 +65,41 @@ impl KvsFlashvars {
 
     /// Get a value and parse it as f64.
     #[must_use]
-    pub fn get_f64(&self, key: &str) -> Option<f64> {
+    pub(crate) fn get_f64(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(|s| s.parse().ok())
     }
 
     /// Get a value and parse it as u64.
     #[must_use]
-    pub fn get_u64(&self, key: &str) -> Option<u64> {
+    #[allow(dead_code)]
+    pub(crate) fn get_u64(&self, key: &str) -> Option<u64> {
         self.get(key).and_then(|s| s.parse().ok())
     }
 
     /// Check if a key exists and has a non-empty value.
     #[must_use]
-    pub fn has(&self, key: &str) -> bool {
+    pub(crate) fn has(&self, key: &str) -> bool {
         self.get(key).is_some_and(|v| !v.is_empty())
     }
 
     /// Get all key-value pairs as a slice.
     #[must_use]
-    pub fn as_slice(&self) -> &[(String, String)] {
+    #[allow(dead_code)]
+    pub(crate) fn as_slice(&self) -> &[(String, String)] {
         &self.vars
     }
 
     /// Get the number of flashvars.
     #[must_use]
-    pub fn len(&self) -> usize {
+    #[allow(dead_code)]
+    pub(crate) fn len(&self) -> usize {
         self.vars.len()
     }
 
     /// Check if empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    #[allow(dead_code)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.vars.is_empty()
     }
 }
@@ -116,7 +121,7 @@ impl KvsFlashvars {
 /// assert_eq!(flashvars.get_f64("video_duration"), Some(1698.0));
 /// ```
 #[must_use]
-pub fn parse_kvs_flashvars(flashvars_content: &str) -> KvsFlashvars {
+pub(crate) fn parse_kvs_flashvars(flashvars_content: &str) -> KvsFlashvars {
     let vars = KVS_STRING_PATTERN
         .captures_iter(flashvars_content)
         .map(|caps| {

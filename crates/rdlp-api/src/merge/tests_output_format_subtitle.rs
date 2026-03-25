@@ -204,26 +204,32 @@ fn test_subtitle_nonempty_overrides_sub_langs() {
 #[test]
 fn test_subtitle_none_preserves_sub_format() {
     let mut config = Config {
-        subtitle_format: Some(rdlp_core::SubtitleFormat::Vtt),
+        subtitle_format: Some(rdlp_types::SubtitleFormat::Vtt),
         ..Config::default()
     };
     let opts = SubtitleOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.subtitle_format, Some(rdlp_core::SubtitleFormat::Vtt));
+    assert_eq!(
+        config.subtitle_format,
+        Some(rdlp_types::SubtitleFormat::Vtt)
+    );
 }
 
 #[test]
 fn test_subtitle_some_overrides_sub_format() {
     let mut config = Config {
-        subtitle_format: Some(rdlp_core::SubtitleFormat::Vtt),
+        subtitle_format: Some(rdlp_types::SubtitleFormat::Vtt),
         ..Config::default()
     };
     let opts = SubtitleOptions {
-        sub_format: Some(rdlp_core::SubtitleFormat::Srt),
+        sub_format: Some(rdlp_types::SubtitleFormat::Srt),
         ..SubtitleOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.subtitle_format, Some(rdlp_core::SubtitleFormat::Srt));
+    assert_eq!(
+        config.subtitle_format,
+        Some(rdlp_types::SubtitleFormat::Srt)
+    );
 }
 
 #[test]

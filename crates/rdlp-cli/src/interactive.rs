@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 use log::info;
 use rdlp_api::InteractiveCallback;
-use rdlp_core::{Format, InfoDict};
+use rdlp_api::{Format, InfoDict};
 use rdlp_table::{ColorMode, TableOpts, render_table_and_rows};
 
 /// CLI interactive callback backed by inquire.

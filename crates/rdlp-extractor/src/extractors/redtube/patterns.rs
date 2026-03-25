@@ -3,7 +3,7 @@
 //! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 //! Includes search URL builders and filter descriptors for the JSON API.
 
-use rdlp_core::SearchFilter;
+use rdlp_types::SearchFilter;
 use regex::Regex;
 use std::sync::LazyLock;
 use url::form_urlencoded;

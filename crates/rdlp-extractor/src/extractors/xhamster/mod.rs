@@ -28,10 +28,8 @@ mod utils;
 
 use async_trait::async_trait;
 use log::debug;
-use rdlp_core::{
-    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, SearchExtractor,
-    SearchPageResponse,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_types::{InfoDict, SearchPageResponse};
 use std::time::Duration;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
@@ -216,10 +214,10 @@ impl XHamsterExtractor {
     /// Fetch a single search page, returning its results and the max page count.
     async fn fetch_single_search_page(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_core::SearchResultPreview>, usize)> {
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, usize)> {
         let page_url = if page == 1 {
             patterns::build_search_url(query)
         } else {
@@ -239,9 +237,9 @@ impl XHamsterExtractor {
     /// Perform a paginated search, collecting results across all pages.
     async fn search_all_pages(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         search::validate_search_filters(&query.filters)?;
 
         let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
@@ -333,21 +331,21 @@ impl SearchExtractor for XHamsterExtractor {
         "XHamster"
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         patterns::search_filter_descriptors()
     }
 
     async fn search(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
         search::validate_search_filters(&query.filters)?;

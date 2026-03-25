@@ -8,7 +8,7 @@ use super::state::DownloadState;
 use super::*;
 use crate::events::Event;
 use crate::handle::DownloadId;
-use rdlp_core::{Config, Format, InfoDict};
+use rdlp_types::{Config, Format, InfoDict};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -41,7 +41,7 @@ fn create_test_format(format_id: &str, quality: &str, filesize: Option<u64>) -> 
         format_id,
         "https://example.com/video.mp4",
         "mp4",
-        rdlp_core::DownloadProtocol::Https,
+        rdlp_types::DownloadProtocol::Https,
     );
     format.format_note = Some(quality.to_string());
     format.filesize = filesize;
@@ -167,7 +167,7 @@ fn test_sanitize_filename_length_truncation() {
 fn test_generate_output_path() {
     let orchestrator = create_test_orchestrator();
     let mut info =
-        rdlp_core::InfoDict::new("test123", "Test Video", "test", "https://example.com/test");
+        rdlp_types::InfoDict::new("test123", "Test Video", "test", "https://example.com/test");
     info.formats = vec![];
     let format = create_test_format("720p", "720p", Some(1000000));
 
@@ -181,7 +181,7 @@ fn test_generate_output_path() {
 #[test]
 fn test_generate_output_path_sanitizes_invalid_chars() {
     let orchestrator = create_test_orchestrator();
-    let mut info = rdlp_core::InfoDict::new(
+    let mut info = rdlp_types::InfoDict::new(
         "test123",
         "Invalid/Characters\\In:Title*?.mp4",
         "test",
@@ -200,7 +200,7 @@ fn test_generate_output_path_sanitizes_invalid_chars() {
 #[test]
 fn test_generate_output_path_hls_extension() {
     let orchestrator = create_test_orchestrator();
-    let mut info = rdlp_core::InfoDict::new(
+    let mut info = rdlp_types::InfoDict::new(
         "test123",
         "HLS Test Video",
         "test",

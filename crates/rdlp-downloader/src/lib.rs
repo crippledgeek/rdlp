@@ -118,7 +118,7 @@
 //!
 //! ```rust,no_run
 //! use rdlp_downloader::DownloaderRegistry;
-//! use rdlp_core::Config;
+//! use rdlp_types::Config;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create registry with custom configuration
@@ -228,7 +228,7 @@
 //!
 //! ## Configuration
 //!
-//! Key configuration options (via [`rdlp_core::Config`]):
+//! Key configuration options (via [`rdlp_types::Config`]):
 //!
 //! - `concurrent_fragments`: Number of parallel connections (default: 4)
 //! - `buffer_size`: I/O buffer size in bytes (default: 2 MB)
@@ -258,9 +258,10 @@ pub use progress::{
     ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter,
 };
 
-use rdlp_core::{Config, Downloader};
+use rdlp_core::Downloader;
 use rdlp_http::HttpClientFactory;
 use rdlp_ratelimit::RateLimiter;
+use rdlp_types::Config;
 use std::sync::Arc;
 
 /// Trait for downloader registries to enable mocking in tests

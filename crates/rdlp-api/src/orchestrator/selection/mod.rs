@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::{DownloadPlan, Orchestrator, errors::*};
 use log::{debug, info, warn};
-use rdlp_core::{Format, FormatSelector, InfoDict};
+use rdlp_types::{Format, FormatSelector, InfoDict};
 
 #[cfg(test)]
 mod tests;

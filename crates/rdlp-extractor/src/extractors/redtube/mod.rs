@@ -23,9 +23,10 @@ mod search;
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, Retryable,
-    SearchExtractor, SearchPageResponse,
+    ExponentialBuilder, ExtractionContext, InfoExtractor, RdlpError, Result, Retryable,
+    SearchExtractor,
 };
+use rdlp_types::{InfoDict, SearchPageResponse};
 use regex::Regex;
 use scraper::Html;
 use std::time::Duration;
@@ -97,7 +98,7 @@ impl RedTubeExtractor {
         url: &str,
         api_meta: formats::ApiVideoMetadata,
         webpage: &str,
-        formats: Vec<rdlp_core::Format>,
+        formats: Vec<rdlp_types::Format>,
         hls_flags: &crate::hls::HlsStreamFlags,
     ) -> InfoDict {
         let mut info = InfoDict::new(video_id, &api_meta.title, InfoExtractor::name(self), url);
@@ -142,7 +143,7 @@ impl RedTubeExtractor {
         video_id: &str,
         url: &str,
         webpage: &str,
-        formats: Vec<rdlp_core::Format>,
+        formats: Vec<rdlp_types::Format>,
         hls_flags: &crate::hls::HlsStreamFlags,
     ) -> Result<InfoDict> {
         let metadata = {
@@ -271,9 +272,9 @@ impl RedTubeExtractor {
     /// Caps results at `max_results` or `MAX_PLAYLIST_SIZE`.
     async fn search_all_pages(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         let descriptors = patterns::search_filter_descriptors();
         search::validate_search_filters(&query.filters, &descriptors)?;
 
@@ -363,7 +364,7 @@ impl RedTubeExtractor {
         &self,
         url: &str,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_core::SearchResultPreview>, Option<u64>)> {
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Option<u64>)> {
         let response = (|| async { ctx.http_client.get(url).send().await })
             .retry(
                 ExponentialBuilder::default()
@@ -389,7 +390,7 @@ impl RedTubeExtractor {
         &self,
         url: &str,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
         search::parse_html_search_results(&webpage)
     }
@@ -401,21 +402,21 @@ impl SearchExtractor for RedTubeExtractor {
         "RedTube"
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         patterns::search_filter_descriptors()
     }
 
     async fn search(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>> {
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
         self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
         &self,
-        query: &rdlp_core::SearchQuery,
+        query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
         let descriptors = patterns::search_filter_descriptors();

@@ -3,6 +3,8 @@
 //! Pre-compiled selectors and patterns used across multiple extractors.
 //! Initialized once at first use via `std::sync::LazyLock`.
 
+#![allow(dead_code)]
+
 use regex::Regex;
 use scraper::Selector;
 use std::sync::LazyLock;

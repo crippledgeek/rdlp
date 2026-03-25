@@ -8,6 +8,7 @@ description = "FFmpeg library bindings wrapper for rdlp (probing, remuxing, tran
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
+rdlp-types = { path = "../rdlp-types" }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

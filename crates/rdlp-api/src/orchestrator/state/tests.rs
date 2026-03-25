@@ -5,23 +5,23 @@ use super::*;
 #[test]
 fn test_selecting_subtitles_display() {
     let phase = DownloadPhase::SelectingSubtitles {
-        info: Box::new(rdlp_core::InfoDict::new(
+        info: Box::new(rdlp_types::InfoDict::new(
             "id",
             "title",
             "test",
             "http://example.com",
         )),
-        format: Box::new(rdlp_core::Format::new(
+        format: Box::new(rdlp_types::Format::new(
             "f1",
             "http://example.com/v.mp4",
             "mp4",
-            rdlp_core::DownloadProtocol::Https,
+            rdlp_types::DownloadProtocol::Https,
         )),
-        plan: Box::new(super::super::DownloadPlan::Single(rdlp_core::Format::new(
+        plan: Box::new(super::super::DownloadPlan::Single(rdlp_types::Format::new(
             "f1",
             "http://example.com/v.mp4",
             "mp4",
-            rdlp_core::DownloadProtocol::Https,
+            rdlp_types::DownloadProtocol::Https,
         ))),
     };
 
@@ -31,7 +31,7 @@ fn test_selecting_subtitles_display() {
 #[test]
 fn test_selecting_subtitles_passes_through_when_no_subs() {
     // Verify the phase can be constructed with empty subtitle data
-    let info = Box::new(rdlp_core::InfoDict::new(
+    let info = Box::new(rdlp_types::InfoDict::new(
         "id",
         "title",
         "test",

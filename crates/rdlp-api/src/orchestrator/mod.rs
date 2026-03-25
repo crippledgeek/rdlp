@@ -32,7 +32,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, info, warn};
 use rdlp_cookies::SimpleCookieJar;
-use rdlp_core::{Config, ExtractionContext, Format};
+use rdlp_core::ExtractionContext;
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
 use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
@@ -41,6 +41,7 @@ use rdlp_postprocess::{
     AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, Pipeline, RecodeStage,
     RemuxStage, SubtitleStage, TempRegistry, ThumbnailStage,
 };
+use rdlp_types::{Config, Format};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -373,7 +374,7 @@ impl Orchestrator {
     }
 
     /// Extract metadata without downloading (for --dump-json / --print / --simulate)
-    pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_core::InfoDict>> {
+    pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_types::InfoDict>> {
         self.extract_playlist_info(url).await
     }
 
@@ -390,7 +391,7 @@ impl Orchestrator {
     /// - `Ok(None)` - User cancelled
     pub async fn download_subtitles_only(
         &self,
-        info: &rdlp_core::InfoDict,
+        info: &rdlp_types::InfoDict,
     ) -> Result<Option<Vec<PathBuf>>> {
         self.download_subtitles_standalone(info).await
     }
@@ -428,7 +429,7 @@ impl Orchestrator {
 #[cfg(test)]
 mod download_plan_tests {
     use super::*;
-    use rdlp_core::{DownloadProtocol, Format};
+    use rdlp_types::{DownloadProtocol, Format};
 
     fn make_format(id: &str) -> Format {
         Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https)

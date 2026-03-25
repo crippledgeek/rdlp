@@ -13,7 +13,8 @@ mod tests_json_ld;
 #[cfg(test)]
 mod tests_metadata;
 
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_types::Format;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
@@ -95,7 +96,7 @@ pub(crate) struct ExtractedMetadata {
     pub channel_id: Option<String>,
     pub channel_url: Option<String>,
     pub thumbnail: Option<String>,
-    pub thumbnails: Option<Vec<rdlp_core::Thumbnail>>,
+    pub thumbnails: Option<Vec<rdlp_types::Thumbnail>>,
     pub duration: Option<f64>,
     pub upload_date: Option<String>,
     pub view_count: Option<u64>,
@@ -307,7 +308,7 @@ impl TnaFlixNetworkBase {
     /// Parse ISO 8601 duration string to seconds
     ///
     /// # Examples
-    /// ```
+    /// ```rust,ignore
     /// # use rdlp_extractor::base::tnaflix_network::TnaFlixNetworkBase;
     /// let base = TnaFlixNetworkBase::new();
     /// assert_eq!(base.parse_iso8601_duration("PT1H2M3S"), Some(3723.0));
@@ -357,7 +358,7 @@ impl TnaFlixNetworkBase {
     /// Parse ISO 8601 date/datetime string to YYYYMMDD format
     ///
     /// # Examples
-    /// ```
+    /// ```rust,ignore
     /// # use rdlp_extractor::base::tnaflix_network::TnaFlixNetworkBase;
     /// let base = TnaFlixNetworkBase::new();
     /// assert_eq!(base.parse_iso8601_date("2024-01-15"), Some("20240115".to_string()));

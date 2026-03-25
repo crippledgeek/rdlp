@@ -3,7 +3,8 @@
 //! This module provides functions to load and save Config from/to TOML files.
 //! The Config type itself is defined in rdlp-types.
 
-use crate::{Config, RdlpError, Result};
+use crate::{RdlpError, Result};
+use rdlp_types::Config;
 use std::path::{Path, PathBuf};
 
 /// Returns the platform-specific default config file path.

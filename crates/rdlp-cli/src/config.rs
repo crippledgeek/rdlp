@@ -5,7 +5,7 @@
 //! a three-layer precedence: CLI > config file > defaults.
 
 use anyhow::Result;
-use rdlp_core::{
+use rdlp_api::{
     AudioFormat, BrowserType, Config, ContainerFormat, RecodeAudioMode, SubtitleFormat, config_io,
 };
 

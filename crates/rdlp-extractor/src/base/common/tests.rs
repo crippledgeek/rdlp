@@ -1,6 +1,7 @@
 //! Tests for common base extractor utilities
 
 use super::*;
+use rdlp_security::is_private_host;
 use regex::Regex;
 use scraper::Html;
 

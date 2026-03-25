@@ -65,7 +65,7 @@ impl Orchestrator {
     pub(super) async fn detect_existing_playlist_files(
         &self,
         playlist_dir: &std::path::Path,
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         subtitle_langs: &[String],
         strict_subs: bool,
     ) -> ResumeDetection {
@@ -199,7 +199,7 @@ impl Orchestrator {
     pub(super) async fn retry_missing_subtitles(
         &self,
         missing_subs: &HashMap<String, PathBuf>,
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         sub_langs: &[String],
     ) -> usize {
         let count = missing_subs.len();
@@ -281,7 +281,7 @@ impl Orchestrator {
     pub(super) fn log_missing_subs(
         &self,
         missing_subs: &HashMap<String, PathBuf>,
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         total: usize,
     ) {
         infos

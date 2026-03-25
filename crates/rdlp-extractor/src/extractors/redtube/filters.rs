@@ -3,7 +3,7 @@
 //! Contains the filter definitions (ordering, period, category, tags) and their
 //! allowed value lists, sourced from the RedTube JSON API endpoints.
 
-use rdlp_core::{SearchFilterDescriptor, SearchFilterValue};
+use rdlp_types::{SearchFilterDescriptor, SearchFilterValue};
 
 /// Build the list of known RedTube category filter values.
 ///

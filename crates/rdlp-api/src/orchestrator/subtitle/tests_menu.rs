@@ -1,7 +1,7 @@
 //! Tests for subtitle menu building, display, and preselection
 
 use super::*;
-use rdlp_core::{InfoDict, Subtitle};
+use rdlp_types::{InfoDict, Subtitle};
 use std::collections::HashMap;
 
 fn make_sub(url: &str, ext: &str) -> Subtitle {

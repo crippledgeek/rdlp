@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use log::debug;
-use rdlp_core::Format;
+use rdlp_types::Format;
 use serde_json::Value;
 
 use rdlp_core::JsEngine;
@@ -152,7 +152,7 @@ pub async fn extract_from_initials(
                     format_id,
                     deciphered,
                     "mp4",
-                    rdlp_core::DownloadProtocol::M3u8Native,
+                    rdlp_types::DownloadProtocol::M3u8Native,
                 );
                 format.http_headers = Some(referer_headers(page_url));
                 formats.push(format);
@@ -234,7 +234,7 @@ pub async fn extract_from_initials(
                             format_id,
                             deciphered,
                             "mp4",
-                            rdlp_core::DownloadProtocol::M3u8Native,
+                            rdlp_types::DownloadProtocol::M3u8Native,
                         );
                         format.http_headers = Some(referer_headers(page_url));
                         formats.push(format);
@@ -315,7 +315,7 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
                 "video",
                 url,
                 "mp4",
-                rdlp_core::DownloadProtocol::Https,
+                rdlp_types::DownloadProtocol::Https,
             ));
         }
     }

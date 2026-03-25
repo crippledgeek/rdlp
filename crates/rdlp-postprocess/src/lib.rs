@@ -19,7 +19,8 @@
 //! use rdlp_postprocess::pipeline::PipelineStage;
 //! use rdlp_postprocess::{MergeStage, RemuxStage, MetadataStage, ThumbnailStage};
 //! use rdlp_postprocess::FFmpegRunner;
-//! use rdlp_core::{InfoDict, PostProcessConfig};
+//! use rdlp_core::PostProcessConfig;
+//! use rdlp_types::InfoDict;
 //! use std::path::PathBuf;
 //! use std::sync::Arc;
 //!
@@ -54,12 +55,13 @@
 //!
 //! ## FFmpeg Integration
 //!
-//! FFmpeg operations are provided by the [`rdlp_ffmpeg`] crate and re-exported here:
+//! FFmpeg operations are provided by the [`rdlp_ffmpeg`] crate. Use `rdlp_postprocess::FFmpegRunner`
+//! (re-exported) or `rdlp_ffmpeg::FFmpegRunner` directly:
 //!
 //! ```no_run
 //! use rdlp_postprocess::FFmpegRunner;
 //!
-//! # async fn example() -> rdlp_postprocess::Result<()> {
+//! # async fn example() -> anyhow::Result<()> {
 //! let ffmpeg = FFmpegRunner::new()?;
 //!
 //! // Probe a media file
@@ -83,13 +85,8 @@ pub use pipeline::stages::{
 };
 pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 
-// Re-export rdlp-ffmpeg types for convenience
-pub use rdlp_ffmpeg::error;
-pub use rdlp_ffmpeg::ffmpeg;
-pub use rdlp_ffmpeg::{
-    AudioExtractOptions, ChapterEntry, CorruptionKind, FFmpegRunner, MediaInfo, PostProcessError,
-    RemuxOptions, Result, StreamInfo, VideoConvertOptions,
-};
+// Re-export FFmpegRunner so callers don't need a direct rdlp-ffmpeg dependency
+pub use rdlp_ffmpeg::FFmpegRunner;
 
 // Re-export core types for convenience
-pub use rdlp_core::{InfoDict, PostProcessConfig};
+pub use rdlp_core::PostProcessConfig;

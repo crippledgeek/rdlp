@@ -1,6 +1,6 @@
 //! Tests for select_subtitles_for_download logic
 
-use rdlp_core::{Subtitle, SubtitleFormat};
+use rdlp_types::{Subtitle, SubtitleFormat};
 use std::collections::HashMap;
 
 fn make_sub(url: &str, ext: &str) -> Subtitle {

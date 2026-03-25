@@ -7,7 +7,7 @@ use rdlp_api::bus::EventBus;
 use rdlp_api::events::Event;
 use rdlp_api::request::DownloadRequest;
 use rdlp_api::{RdlpApiError, RdlpClient};
-use rdlp_core::Config;
+use rdlp_types::Config;
 
 // ---------------------------------------------------------------------------
 // Helpers

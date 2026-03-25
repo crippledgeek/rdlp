@@ -1,6 +1,6 @@
 //! URL builders and constants for PornHub search API.
 
-use rdlp_core::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
+use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
 use url::form_urlencoded;
 
 /// PornHub Webmaster API search base URL.

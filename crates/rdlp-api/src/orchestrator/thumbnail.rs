@@ -22,7 +22,7 @@ impl Orchestrator {
     /// - `None` — no thumbnail URL available or download failed
     pub(super) async fn download_thumbnail(
         &self,
-        info: &rdlp_core::InfoDict,
+        info: &rdlp_types::InfoDict,
         media_file: &Path,
     ) -> Option<PathBuf> {
         // Get best thumbnail URL

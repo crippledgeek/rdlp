@@ -41,21 +41,16 @@ mod string_utils;
 mod tests;
 
 use log::debug;
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result, check_http_response};
+use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
+use rdlp_types::Format;
 use regex::Regex;
 
-// Re-export security functions from rdlp-security
-pub use rdlp_security::{
-    MAX_URL_LENGTH as SECURITY_MAX_URL_LENGTH, is_private_host, sanitize_for_logging,
-    validate_url_security,
-};
-
 // Re-export selectors, patterns, and constants from submodule
-pub use selectors::*;
+pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks
 /// Re-exported from rdlp-security for backward compatibility
-pub use rdlp_security::MAX_URL_LENGTH;
+pub(crate) use rdlp_security::MAX_URL_LENGTH;
 
 // ============================================================================
 // Base Extractor
@@ -110,7 +105,7 @@ impl BaseExtractor {
     /// let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
     /// let html = Html::parse_document(&webpage);
     /// ```
-    pub async fn fetch_webpage(url: &str, ctx: &ExtractionContext) -> Result<String> {
+    pub(crate) async fn fetch_webpage(url: &str, ctx: &ExtractionContext) -> Result<String> {
         // Security: Validate URL length
         if url.len() > MAX_URL_LENGTH {
             return Err(RdlpError::Extraction(format!(
@@ -159,7 +154,7 @@ impl BaseExtractor {
     ///     ctx
     /// ).await?;
     /// ```
-    pub async fn fetch_webpage_with_headers(
+    pub(crate) async fn fetch_webpage_with_headers(
         url: &str,
         headers: &[(&str, &str)],
         ctx: &ExtractionContext,
@@ -224,7 +219,7 @@ impl BaseExtractor {
     /// ```rust,ignore
     /// BaseExtractor::validate_url_security(segment_url)?;
     /// ```
-    pub fn validate_url_security(url: &str) -> Result<()> {
+    pub(crate) fn validate_url_security(url: &str) -> Result<()> {
         rdlp_security::validate_url_security(url).map_err(|e| RdlpError::Extraction(e.to_string()))
     }
 
@@ -255,7 +250,11 @@ impl BaseExtractor {
     /// let id = BaseExtractor::extract_id_from_url(url, &VIDEO_PATTERN, "id");
     /// ```
     #[must_use]
-    pub fn extract_id_from_url(url: &str, pattern: &Regex, group_name: &str) -> Option<String> {
+    pub(crate) fn extract_id_from_url(
+        url: &str,
+        pattern: &Regex,
+        group_name: &str,
+    ) -> Option<String> {
         pattern
             .captures(url)
             .and_then(|cap| cap.name(group_name))
@@ -286,7 +285,7 @@ impl BaseExtractor {
     /// let id = BaseExtractor::extract_id_positional(url, &PATTERN, &[1, 2]);
     /// ```
     #[must_use]
-    pub fn extract_id_positional(
+    pub(crate) fn extract_id_positional(
         url: &str,
         pattern: &Regex,
         group_indices: &[usize],
@@ -328,7 +327,7 @@ impl BaseExtractor {
     /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None).await;
     /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS")).await;
     /// ```
-    pub async fn detect_file_size(
+    pub(crate) async fn detect_file_size(
         url: &str,
         http_client: &reqwest::Client,
         log_prefix: Option<&str>,
@@ -391,7 +390,7 @@ impl BaseExtractor {
     /// Calculated width in pixels
     #[must_use]
     #[inline]
-    pub fn width_from_height(height: u32) -> u32 {
+    pub(crate) fn width_from_height(height: u32) -> u32 {
         match height {
             240 => 426,
             360 => 640,
@@ -412,7 +411,7 @@ impl BaseExtractor {
     /// # Returns
     /// Parsed height as u32, `None` if parsing fails
     #[must_use]
-    pub fn parse_quality_height(quality_str: &str) -> Option<u32> {
+    pub(crate) fn parse_quality_height(quality_str: &str) -> Option<u32> {
         quality_str.trim_end_matches(['p', 'P']).parse::<u32>().ok()
     }
 
@@ -425,7 +424,8 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Parsed quality height, `None` if not found
-    pub fn parse_quality_from_url(url: &str) -> Option<u32> {
+    #[allow(dead_code)]
+    pub(crate) fn parse_quality_from_url(url: &str) -> Option<u32> {
         QUALITY_FROM_URL_PATTERN
             .captures(url)
             .and_then(|cap| cap.get(1))
@@ -445,14 +445,14 @@ impl BaseExtractor {
     /// # Returns
     /// A Format struct with quality metadata populated
     #[must_use]
-    pub fn build_format(
+    pub(crate) fn build_format(
         format_id: impl Into<String>,
         url: impl Into<String>,
         ext: impl Into<String>,
         height: Option<u32>,
     ) -> Format {
         let ext = ext.into();
-        let mut format = Format::new(format_id, url, &ext, rdlp_core::DownloadProtocol::Https);
+        let mut format = Format::new(format_id, url, &ext, rdlp_types::DownloadProtocol::Https);
 
         if let Some(h) = height {
             format.height = Some(h);
@@ -483,7 +483,7 @@ impl BaseExtractor {
     ///
     /// The desktop UI uses `format_id` for row selection (`===` comparison),
     /// so duplicate IDs cause multiple rows to highlight on a single click.
-    pub fn dedup_format_ids(formats: &mut [Format]) {
+    pub(crate) fn dedup_format_ids(formats: &mut [Format]) {
         let mut id_counts: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
         for format in formats.iter_mut() {

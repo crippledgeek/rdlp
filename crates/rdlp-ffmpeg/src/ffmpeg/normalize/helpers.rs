@@ -226,7 +226,7 @@ pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
     }
 
     // For proper container formats, delegate to the registry
-    if let Ok(container) = ext.parse::<rdlp_core::ContainerFormat>() {
+    if let Ok(container) = ext.parse::<rdlp_types::ContainerFormat>() {
         crate::ffmpeg::audio_encoder_registry::select_audio_encoder_for_container(container)
     } else {
         crate::ffmpeg::audio_codecs::preferred_aac_encoder()

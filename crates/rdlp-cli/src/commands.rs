@@ -4,8 +4,8 @@
 //! and the error exit helper.
 
 use anyhow::Result;
+use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
-use rdlp_core::InfoDict;
 use tracing::error;
 
 /// Print all supported codecs
