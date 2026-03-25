@@ -164,15 +164,8 @@ pub(crate) async fn build_formats(
         .collect();
 
     // Parallel filesize detection — all HEAD requests run concurrently
-    let futures: Vec<_> = formats
-        .iter()
-        .map(|f| BaseExtractor::detect_file_size(&f.url, &ctx.http_client, Some("TNAFlix")))
-        .collect();
-    let sizes = futures::future::join_all(futures).await;
-
-    for (format, size) in formats.iter_mut().zip(sizes) {
-        format.filesize = size;
-    }
+    BaseExtractor::detect_file_sizes_parallel(&mut formats, &ctx.http_client, Some("TNAFlix"))
+        .await;
 
     BaseExtractor::dedup_format_ids(&mut formats);
     formats

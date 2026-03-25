@@ -359,6 +359,37 @@ impl BaseExtractor {
         None
     }
 
+    /// Detect file sizes for multiple formats in parallel.
+    ///
+    /// Runs HEAD requests concurrently for all formats, reducing latency from
+    /// `O(n × RTT)` to `O(RTT)`. Each format's `filesize` field is populated
+    /// with the detected size (or left as `None` if detection fails).
+    ///
+    /// # Arguments
+    /// * `formats` - Mutable slice of formats whose `url` fields will be probed.
+    /// * `http_client` - HTTP client for HEAD requests.
+    /// * `log_prefix` - Optional prefix for debug log messages (e.g. `"TNAFlix"`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// BaseExtractor::detect_file_sizes_parallel(&mut formats, &ctx.http_client, Some("RedTube")).await;
+    /// ```
+    pub(crate) async fn detect_file_sizes_parallel(
+        formats: &mut [rdlp_types::Format],
+        http_client: &reqwest::Client,
+        log_prefix: Option<&str>,
+    ) {
+        let futures: Vec<_> = formats
+            .iter()
+            .map(|f| Self::detect_file_size(&f.url, http_client, log_prefix))
+            .collect();
+        let sizes = futures::future::join_all(futures).await;
+        for (format, size) in formats.iter_mut().zip(sizes) {
+            format.filesize = size;
+        }
+    }
+
     /// Parse total file size from a Content-Range header.
     ///
     /// Parses the format `bytes 0-0/123456` and returns the total size.
