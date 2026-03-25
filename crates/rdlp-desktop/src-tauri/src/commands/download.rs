@@ -437,6 +437,7 @@ mod tests {
             video_encoder: None,
             recode_container: None,
             recode_audio: None,
+            verbose: None,
         }
     }
 

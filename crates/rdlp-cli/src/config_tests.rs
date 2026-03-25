@@ -19,6 +19,7 @@ fn default_args() -> Args {
         list_codecs: false,
         simulate: false,
         dump_json: false,
+        list_formats: false,
         print: None,
         interactive: false,
         extract_audio: false,

@@ -60,6 +60,10 @@ pub(crate) struct Args {
     #[arg(short = 'j', long)]
     pub dump_json: bool,
 
+    /// List available formats as a table (no download)
+    #[arg(short = 'F', long)]
+    pub list_formats: bool,
+
     /// Print specific field(s) from metadata (no download)
     /// e.g., --print title or --print "id,title,extractor"
     #[arg(long)]

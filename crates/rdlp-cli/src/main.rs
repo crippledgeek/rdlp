@@ -262,8 +262,8 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
-    // Metadata-only modes: --dump-json, --print, --simulate
-    if args.dump_json || args.print.is_some() || args.simulate {
+    // Metadata-only modes: --dump-json, --print, --list-formats, --simulate
+    if args.dump_json || args.print.is_some() || args.list_formats || args.simulate {
         let infos = match client.extract_info(&url).await {
             Ok(infos) => infos,
             Err(e) => fail_with(e, verbose),
@@ -276,13 +276,25 @@ async fn async_main() -> Result<()> {
             }
         }
 
+        if args.list_formats {
+            for info in &infos {
+                let refs: Vec<&rdlp_api::Format> = info.formats.iter().collect();
+                let table = rdlp_table::render_formats_table(
+                    &refs,
+                    &rdlp_table::TableOpts::default(),
+                );
+                println!("{}", info.title);
+                println!("{table}");
+            }
+        }
+
         if let Some(ref fields) = args.print {
             for info in &infos {
                 print_fields(info, fields)?;
             }
         }
 
-        if args.simulate && !args.dump_json && args.print.is_none() {
+        if args.simulate && !args.dump_json && args.print.is_none() && !args.list_formats {
             for info in &infos {
                 debug!(
                     "[Simulate] {} | id={} | extractor={} | {} format(s)",

@@ -136,7 +136,7 @@ pub async fn validate_format_expression(
 
         let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
             field: "expression".to_owned(),
-            message: e,
+            message: e.to_string(),
         })?;
 
         if formats.is_empty() {

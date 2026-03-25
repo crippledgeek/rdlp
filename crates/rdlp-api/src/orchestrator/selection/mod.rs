@@ -102,7 +102,7 @@ impl Orchestrator {
         let format = {
             let selector_str = self.resolve_effective_selector();
             let format_selector = FormatSelector::parse(&selector_str)
-                .map_err(OrchestratorError::InvalidFormatSelector)?;
+                .map_err(|e| OrchestratorError::InvalidFormatSelector(e.to_string()))?;
 
             let selected_formats = format_selector.select(formats);
             if selected_formats.is_empty() {
