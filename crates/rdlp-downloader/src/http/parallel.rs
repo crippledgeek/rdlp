@@ -9,13 +9,65 @@ use crate::chunking::calculate_chunks;
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info, warn};
-use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result};
+use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, is_retryable_error};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+
+/// Maximum number of retry attempts for a single chunk download.
+///
+/// Covers body-stream failures (decode errors, read timeouts mid-transfer)
+/// that occur after the initial HTTP connection succeeds. The inner
+/// `download_range_with_progress` handles connection-level retries separately.
+const MAX_CHUNK_RETRIES: u32 = 3;
+
+/// Download a single chunk with retry for transient body-stream failures.
+///
+/// Wraps `download_range_with_progress` in a retry loop with linear backoff
+/// (1s, 2s, 3s). Partial files are cleaned up between attempts. Only
+/// retryable errors (5xx, 429, network, I/O) trigger retries.
+///
+/// This is a different retry domain from the inner `with_retry` on
+/// `send()` — this handles failures that occur *during* body transfer,
+/// not connection-level failures.
+pub(crate) async fn download_chunk_with_retry(
+    downloader: &HttpDownloader,
+    url: &str,
+    start: u64,
+    end: u64,
+    chunk_path: &Path,
+    progress: Option<Arc<AtomicU64>>,
+    chunk_id: u64,
+) -> Result<u64> {
+    let mut retries = 0u32;
+
+    loop {
+        match downloader
+            .download_range_with_progress(url, start, end, chunk_path, progress.clone())
+            .await
+        {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => {
+                if retries < MAX_CHUNK_RETRIES && is_retryable_error(&e) {
+                    retries += 1;
+                    warn!(
+                        "Chunk {chunk_id} failed (attempt {}/{}): {e}",
+                        retries,
+                        MAX_CHUNK_RETRIES + 1
+                    );
+                    // Clean up partial file before retry
+                    let _ = tokio::fs::remove_file(chunk_path).await;
+                    tokio::time::sleep(Duration::from_secs(retries as u64)).await;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
 
 /// Mode for chunk merging operations
 #[derive(Clone, Copy)]

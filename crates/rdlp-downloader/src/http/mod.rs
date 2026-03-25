@@ -10,6 +10,8 @@ mod trait_impl;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use parallel::download_chunk_with_retry;
+
 use backon::Retryable;
 use futures::StreamExt;
 use log::warn;
