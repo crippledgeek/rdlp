@@ -5,7 +5,7 @@
 //! callback and error-only log level.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::error::PostProcessError;
 
@@ -80,6 +80,55 @@ impl Drop for LogSuppressGuard {
 /// - A `debug_assert!` in `begin()` that fires in debug builds if violated.
 static LOG_BUFFER: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
+/// Type alias for the real-time log forwarding callback.
+///
+/// Receives `(level, formatted_message)` where `level` is the raw `AV_LOG_*`
+/// constant (lower = more severe).
+type LogForwarder = Arc<dyn Fn(i32, String) + Send + Sync>;
+
+/// Global real-time log forwarder.
+///
+/// When set, `capture_callback` forwards each formatted message through this
+/// callback in addition to pushing it into `LOG_BUFFER`.
+static LOG_FORWARDER: Mutex<Option<LogForwarder>> = Mutex::new(None);
+
+/// Install a real-time log forwarder.
+///
+/// While active, each FFmpeg log message captured by `capture_callback` is also
+/// forwarded through `cb(level, message)`. The callback is called while the
+/// `LOG_FORWARDER` mutex is held — it must not block or panic.
+pub fn set_log_forwarder(cb: Arc<dyn Fn(i32, String) + Send + Sync>) {
+    if let Ok(mut guard) = LOG_FORWARDER.lock() {
+        *guard = Some(cb);
+    }
+}
+
+/// Remove the real-time log forwarder.
+pub fn clear_log_forwarder() {
+    if let Ok(mut guard) = LOG_FORWARDER.lock() {
+        *guard = None;
+    }
+}
+
+/// RAII guard that clears the log forwarder on drop.
+pub struct LogForwarderGuard {
+    _private: (),
+}
+
+impl LogForwarderGuard {
+    /// Create a new guard that installs the forwarder.
+    pub fn new(cb: Arc<dyn Fn(i32, String) + Send + Sync>) -> Self {
+        set_log_forwarder(cb);
+        Self { _private: () }
+    }
+}
+
+impl Drop for LogForwarderGuard {
+    fn drop(&mut self) {
+        clear_log_forwarder();
+    }
+}
+
 /// RAII guard for FFmpeg log capture.
 ///
 /// While active, FFmpeg log messages at `AV_LOG_INFO` level and below (i.e.,
@@ -102,10 +151,12 @@ impl LogCaptureGuard {
             .map_err(|e| PostProcessError::LogCaptureFailed {
                 message: format!("failed to lock log buffer: {e}"),
             })?;
-        // Single-session invariant: nested capture overwrites the active buffer.
-        // This fires in debug builds to catch misuse early.
-        debug_assert!(buf.is_none(), "LogCaptureGuard: nested capture detected");
-        *buf = Some(Vec::new());
+        // Allow nested capture when bridge_ffmpeg_logs creates an outer guard
+        // and an FFmpeg function creates an inner guard (e.g., convert_video
+        // in verbose mode). Both install the same capture_callback.
+        if buf.is_none() {
+            *buf = Some(Vec::new());
+        }
         drop(buf);
 
         // Set log level to INFO so loudnorm output is emitted
@@ -191,7 +242,13 @@ unsafe extern "C" fn capture_callback(
         if let Ok(mut guard) = LOG_BUFFER.lock()
             && let Some(v) = guard.as_mut()
         {
-            v.push(msg);
+            v.push(msg.clone());
+        }
+        // Forward in real-time if a forwarder is active
+        if let Ok(guard) = LOG_FORWARDER.lock()
+            && let Some(ref forwarder) = *guard
+        {
+            forwarder(level, msg);
         }
     }
 }
@@ -199,6 +256,105 @@ unsafe extern "C" fn capture_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_log_forwarder_receives_messages() {
+        use std::sync::Arc;
+
+        let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
+        let received_clone = received.clone();
+
+        // Set forwarder
+        set_log_forwarder(Arc::new(move |level, msg| {
+            if let Ok(mut v) = received_clone.lock() {
+                v.push((level, msg));
+            }
+        }));
+
+        // Begin capture (installs capture_callback)
+        let guard = LogCaptureGuard::begin().unwrap();
+
+        // Trigger an FFmpeg log message by setting level to INFO then logging
+        unsafe {
+            let msg = std::ffi::CString::new("test log message\n").unwrap();
+            ffmpeg_the_third::ffi::av_log(
+                std::ptr::null_mut(),
+                ffmpeg_the_third::ffi::AV_LOG_INFO,
+                msg.as_ptr(),
+            );
+        }
+
+        // Forwarder should have received the message
+        let msgs = received.lock().unwrap();
+        assert!(!msgs.is_empty(), "forwarder should have received at least one message");
+        assert_eq!(msgs[0].0, ffmpeg_the_third::ffi::AV_LOG_INFO);
+        assert!(msgs[0].1.contains("test log message"));
+
+        // Buffer should also have it (dual delivery)
+        let buffered = guard.take_captured().unwrap();
+        assert!(!buffered.is_empty(), "buffer should also have the message");
+
+        drop(guard);
+        clear_log_forwarder();
+    }
+
+    #[test]
+    fn test_clear_log_forwarder_stops_forwarding() {
+        use std::sync::Arc;
+
+        let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
+        let received_clone = received.clone();
+
+        set_log_forwarder(Arc::new(move |level, msg| {
+            if let Ok(mut v) = received_clone.lock() {
+                v.push((level, msg));
+            }
+        }));
+
+        let guard = LogCaptureGuard::begin().unwrap();
+
+        // Clear forwarder before logging
+        clear_log_forwarder();
+
+        unsafe {
+            let msg = std::ffi::CString::new("after clear\n").unwrap();
+            ffmpeg_the_third::ffi::av_log(
+                std::ptr::null_mut(),
+                ffmpeg_the_third::ffi::AV_LOG_INFO,
+                msg.as_ptr(),
+            );
+        }
+
+        // Forwarder should NOT have received it
+        let msgs = received.lock().unwrap();
+        assert!(msgs.is_empty(), "forwarder should not receive after clear");
+
+        // Buffer should still have it
+        let buffered = guard.take_captured().unwrap();
+        assert!(!buffered.is_empty(), "buffer should still capture");
+
+        drop(guard);
+    }
+
+    #[test]
+    fn test_log_forwarder_guard_drop_clears() {
+        use std::sync::Arc;
+
+        let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
+        let received_clone = received.clone();
+
+        {
+            let _guard = LogForwarderGuard::new(Arc::new(move |level, msg| {
+                if let Ok(mut v) = received_clone.lock() {
+                    v.push((level, msg));
+                }
+            }));
+            // Forwarder is set inside this scope
+            assert!(LOG_FORWARDER.lock().unwrap().is_some());
+        }
+        // After drop, forwarder should be cleared
+        assert!(LOG_FORWARDER.lock().unwrap().is_none());
+    }
 
     #[test]
     fn test_log_buffer_init_and_clear() {
