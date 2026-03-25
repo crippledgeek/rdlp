@@ -93,24 +93,25 @@ async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Resul
         .and_then(|v| v.as_array())
         .ok_or_else(|| RdlpError::Extraction("No mediaDefinitions in flashvars".to_string()))?;
 
+    // Separate get_media endpoints (need async fetch) from direct URLs (sync)
+    let mut media_futures = Vec::new();
     for (idx, definition) in media_definitions.iter().enumerate() {
         let video_url = match definition.get("videoUrl").and_then(|v| v.as_str()) {
             Some(url) if !url.is_empty() => url,
             _ => continue,
         };
 
-        // Handle get_media endpoints (returns JSON with actual URLs)
         if video_url.contains("/video/get_media") {
-            if let Some(media_formats) = fetch_media_formats(video_url, idx, ctx).await {
-                formats.extend(media_formats);
-            }
-            continue;
-        }
-
-        // Direct video URL
-        if let Some(format) = build_format_from_definition(definition, video_url, idx) {
+            media_futures.push(fetch_media_formats(video_url, idx, ctx));
+        } else if let Some(format) = build_format_from_definition(definition, video_url, idx) {
             formats.push(format);
         }
+    }
+
+    // Fetch all get_media endpoints in parallel
+    let media_results = futures::future::join_all(media_futures).await;
+    for result in media_results.into_iter().flatten() {
+        formats.extend(result);
     }
 
     if formats.is_empty() {
