@@ -129,6 +129,50 @@ impl Drop for LogForwarderGuard {
     }
 }
 
+/// Opaque guard that holds both a `LogCaptureGuard` (installs `capture_callback`)
+/// and a `LogForwarderGuard` (routes messages through `PostProcessCallback::on_log`).
+///
+/// Hold this until the FFmpeg operation completes. Both guards are dropped together.
+pub struct FfmpegLogBridge {
+    _capture: LogCaptureGuard,
+    _forwarder: LogForwarderGuard,
+}
+
+/// Activate both FFmpeg log capture and real-time forwarding to a
+/// `PostProcessCallback`.
+///
+/// Returns an opaque `FfmpegLogBridge` — hold it until the FFmpeg operation
+/// completes. Internally creates a `LogCaptureGuard` (installs
+/// `capture_callback`) and a `LogForwarderGuard` (routes messages through
+/// `cb.on_log()`).
+///
+/// Level mapping:
+/// - `AV_LOG_ERROR` / `AV_LOG_FATAL` → `[ERROR] message`
+/// - `AV_LOG_WARNING` → `[WARN] message`
+/// - `AV_LOG_INFO` → `message` (no prefix)
+pub fn bridge_ffmpeg_logs(
+    cb: &Arc<dyn rdlp_core::PostProcessCallback>,
+) -> std::result::Result<FfmpegLogBridge, PostProcessError> {
+    let capture_guard = LogCaptureGuard::begin()?;
+    let cb = cb.clone();
+    let forwarder_guard = LogForwarderGuard::new(Arc::new(move |level: i32, msg: String| {
+        let trimmed = msg.trim_end();
+        if trimmed.is_empty() {
+            return;
+        }
+        let prefixed = match level {
+            l if l <= 16 => format!("[ERROR] {trimmed}"),
+            24 => format!("[WARN] {trimmed}"),
+            _ => trimmed.to_string(),
+        };
+        cb.on_log(&prefixed);
+    }));
+    Ok(FfmpegLogBridge {
+        _capture: capture_guard,
+        _forwarder: forwarder_guard,
+    })
+}
+
 /// RAII guard for FFmpeg log capture.
 ///
 /// While active, FFmpeg log messages at `AV_LOG_INFO` level and below (i.e.,
@@ -334,6 +378,51 @@ mod tests {
         assert!(!buffered.is_empty(), "buffer should still capture");
 
         drop(guard);
+    }
+
+    #[test]
+    fn test_bridge_ffmpeg_logs_captures_and_forwards() {
+        use std::sync::Arc;
+
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let received_clone = received.clone();
+
+        // Create a mock PostProcessCallback
+        struct MockCallback {
+            logs: Arc<Mutex<Vec<String>>>,
+        }
+        impl rdlp_core::PostProcessCallback for MockCallback {
+            fn on_progress(&self, _progress: f64) {}
+            fn on_log(&self, message: &str) {
+                if let Ok(mut v) = self.logs.lock() {
+                    v.push(message.to_string());
+                }
+            }
+        }
+
+        let cb: Arc<dyn rdlp_core::PostProcessCallback> = Arc::new(MockCallback {
+            logs: received_clone,
+        });
+
+        let _bridge = bridge_ffmpeg_logs(&cb).unwrap();
+
+        // Trigger a log message
+        unsafe {
+            let msg = std::ffi::CString::new("bridge test\n").unwrap();
+            ffmpeg_the_third::ffi::av_log(
+                std::ptr::null_mut(),
+                ffmpeg_the_third::ffi::AV_LOG_INFO,
+                msg.as_ptr(),
+            );
+        }
+
+        let msgs = received.lock().unwrap();
+        assert!(!msgs.is_empty(), "bridge should forward to PostProcessCallback");
+        assert!(
+            msgs.iter().any(|m| m.contains("bridge test")),
+            "message should contain 'bridge test', got: {:?}",
+            *msgs
+        );
     }
 
     #[test]
