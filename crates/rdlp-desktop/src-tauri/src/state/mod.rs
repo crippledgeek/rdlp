@@ -14,8 +14,8 @@ pub use download_queue::{DownloadJob, DownloadQueue, JobStatus, SavedDownloadOpt
 use std::sync::{Arc, Mutex};
 
 use rdlp_api::RdlpClient;
-use rdlp_core::Config;
 use rdlp_postprocess::TempRegistry;
+use rdlp_types::Config;
 
 /// Top-level application state registered with [`tauri::Builder::manage`].
 ///

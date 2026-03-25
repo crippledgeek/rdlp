@@ -17,7 +17,7 @@ use super::{DownloadPlan, Orchestrator, OrchestratorError, Result, archive};
 use futures_util::StreamExt;
 use helpers::{detect_audio_types, filter_formats_by_language};
 use log::{debug, error, info, warn};
-use rdlp_core::{Format, SubtitleFormat};
+use rdlp_types::{Format, SubtitleFormat};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -100,7 +100,7 @@ impl Orchestrator {
     /// and skips them, allowing interrupted downloads to be resumed.
     pub(super) async fn download_playlist_internal(
         &self,
-        mut infos: Vec<rdlp_core::InfoDict>,
+        mut infos: Vec<rdlp_types::InfoDict>,
         interactive: bool,
         archive: Option<HashSet<String>>,
     ) -> Result<Option<Vec<PathBuf>>> {

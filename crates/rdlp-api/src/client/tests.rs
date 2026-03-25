@@ -93,7 +93,7 @@ fn test_build_config_preserves_base_when_no_override() {
 
 #[test]
 fn test_build_config_preserves_remux_from_base_config() {
-    use rdlp_core::ContainerFormat;
+    use rdlp_types::ContainerFormat;
 
     let base_config = Config {
         remux_container: Some(ContainerFormat::Mkv),
@@ -209,7 +209,7 @@ fn test_search_filters_unknown_site() {
 
 #[test]
 fn test_cookies_explicitly_requested_flag() {
-    use rdlp_core::BrowserType;
+    use rdlp_types::BrowserType;
     use std::path::PathBuf;
 
     // No cookies requested — flag should be false

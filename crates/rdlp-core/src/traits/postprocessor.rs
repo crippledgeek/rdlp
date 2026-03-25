@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{AudioFormat, ContainerFormat, RecodeAudioMode};
+use rdlp_types::{AudioFormat, ContainerFormat, RecodeAudioMode};
 
 /// Callback for reporting post-processing progress.
 ///

@@ -7,7 +7,7 @@
 use super::Orchestrator;
 use super::errors::*;
 use log::{debug, info, warn};
-use rdlp_core::Format;
+use rdlp_types::Format;
 use std::path::{Path, PathBuf};
 
 /// Result of a successful merge download

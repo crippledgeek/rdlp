@@ -129,7 +129,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::{InfoDict, PostProcessConfig};
+    use rdlp_core::PostProcessConfig;
+    use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
@@ -179,7 +180,7 @@ mod tests {
     #[test]
     fn determine_output_format_explicit_config() {
         let config = PostProcessConfig {
-            merge_output_format: Some(rdlp_core::ContainerFormat::Mkv),
+            merge_output_format: Some(rdlp_types::ContainerFormat::Mkv),
             ..PostProcessConfig::default()
         };
         assert_eq!(

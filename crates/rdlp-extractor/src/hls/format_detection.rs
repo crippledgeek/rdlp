@@ -42,7 +42,7 @@ fn detect_codec_from_id(format_id: &str, is_video: bool) -> Option<String> {
 ///
 /// Returns `(Option<bool>, Option<bool>)` — `(is_live, has_encryption)`.
 async fn enrich_single_hls_format(
-    format: &mut rdlp_core::Format,
+    format: &mut rdlp_types::Format,
     hls_detector: &HlsSizeDetector,
     url: &str,
     extractor_name: &str,
@@ -134,29 +134,29 @@ async fn enrich_single_hls_format(
 /// # Returns
 /// Tuple of (formats with sizes/segment counts populated, stream-level flags)
 pub async fn detect_format_sizes(
-    formats: Vec<rdlp_core::Format>,
+    formats: Vec<rdlp_types::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
-) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
+) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     detect_format_sizes_inner(formats, ctx, extractor_name, true).await
 }
 
 /// Like [`detect_format_sizes`] but skips HEAD requests for non-HLS formats
 /// when `detect_sizes` is false. HLS variant expansion always runs regardless.
 pub async fn detect_format_sizes_lazy(
-    formats: Vec<rdlp_core::Format>,
+    formats: Vec<rdlp_types::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
-) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
+) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     detect_format_sizes_inner(formats, ctx, extractor_name, false).await
 }
 
 async fn detect_format_sizes_inner(
-    formats: Vec<rdlp_core::Format>,
+    formats: Vec<rdlp_types::Format>,
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
     detect_sizes: bool,
-) -> (Vec<rdlp_core::Format>, HlsStreamFlags) {
+) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     use futures::future::join_all;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -232,7 +232,7 @@ async fn detect_format_sizes_inner(
                             format!("{}-{}k", format.format_id, variant.bandwidth / 1000)
                         };
 
-                        let mut expanded_format = rdlp_core::Format::new(
+                        let mut expanded_format = rdlp_types::Format::new(
                             &format_id,
                             &variant.media_playlist_url,
                             &format.ext,
@@ -307,7 +307,7 @@ async fn detect_format_sizes_inner(
     let results = join_all(detection_futures).await;
 
     // Flatten expanded formats, deduplicate HLS CDN mirrors, aggregate flags
-    let mut formats: Vec<rdlp_core::Format> = Vec::new();
+    let mut formats: Vec<rdlp_types::Format> = Vec::new();
     let mut flags = HlsStreamFlags::default();
     // Key: (height, vcodec, acodec, language) — language prevents merging
     // different audio tracks (e.g. SUB/DUB) at the same resolution.

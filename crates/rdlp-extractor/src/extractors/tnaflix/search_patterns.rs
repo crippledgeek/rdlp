@@ -84,7 +84,7 @@ const BROWSE_CATEGORIES: &[&str] = &[
     "webcam-shows",
 ];
 
-/// Build a TNAFlix search URL from a [`SearchQuery`](rdlp_core::SearchQuery).
+/// Build a TNAFlix search URL from a [`SearchQuery`](rdlp_types::SearchQuery).
 ///
 /// Format: `https://www.tnaflix.com/search?what={encoded_query}&tab=`
 ///
@@ -95,7 +95,7 @@ const BROWSE_CATEGORIES: &[&str] = &[
 ///
 /// # Returns
 /// A fully-formed search URL string.
-pub fn build_search_url(query: &rdlp_core::SearchQuery) -> String {
+pub fn build_search_url(query: &rdlp_types::SearchQuery) -> String {
     let encoded_query = query.query.split_whitespace().collect::<Vec<_>>().join("+");
 
     let mut url = format!("https://www.tnaflix.com/search?what={encoded_query}&tab=");
@@ -120,7 +120,7 @@ pub fn build_search_url(query: &rdlp_core::SearchQuery) -> String {
 ///
 /// # Returns
 /// A fully-formed search URL string for the given page.
-pub fn build_search_url_page(query: &rdlp_core::SearchQuery, page: usize) -> String {
+pub fn build_search_url_page(query: &rdlp_types::SearchQuery, page: usize) -> String {
     let mut url = build_search_url(query);
     url.push_str(&format!("&page={page}"));
     url
@@ -207,41 +207,41 @@ pub fn slug_to_label(slug: &str) -> String {
 /// # Supported Filters
 /// - `ordering` - Sort order (featured, newest, duration, rating)
 /// - `category` - Browse section or category slug
-pub fn search_filter_descriptors() -> Vec<rdlp_core::SearchFilterDescriptor> {
-    let category_values: Vec<rdlp_core::SearchFilterValue> = BROWSE_SECTIONS
+pub fn search_filter_descriptors() -> Vec<rdlp_types::SearchFilterDescriptor> {
+    let category_values: Vec<rdlp_types::SearchFilterValue> = BROWSE_SECTIONS
         .iter()
         .chain(BROWSE_CATEGORIES.iter())
-        .map(|&slug| rdlp_core::SearchFilterValue {
+        .map(|&slug| rdlp_types::SearchFilterValue {
             value: slug.to_string(),
             label: slug_to_label(slug),
         })
         .collect();
 
     vec![
-        rdlp_core::SearchFilterDescriptor {
+        rdlp_types::SearchFilterDescriptor {
             key: "ordering".to_string(),
             display_name: "Sort by".to_string(),
             allowed_values: vec![
-                rdlp_core::SearchFilterValue {
+                rdlp_types::SearchFilterValue {
                     value: "featured".to_string(),
                     label: "Featured".to_string(),
                 },
-                rdlp_core::SearchFilterValue {
+                rdlp_types::SearchFilterValue {
                     value: "newest".to_string(),
                     label: "Newest".to_string(),
                 },
-                rdlp_core::SearchFilterValue {
+                rdlp_types::SearchFilterValue {
                     value: "duration".to_string(),
                     label: "Longest".to_string(),
                 },
-                rdlp_core::SearchFilterValue {
+                rdlp_types::SearchFilterValue {
                     value: "rating".to_string(),
                     label: "Top rated".to_string(),
                 },
             ],
             default: Some("featured".to_string()),
         },
-        rdlp_core::SearchFilterDescriptor {
+        rdlp_types::SearchFilterDescriptor {
             key: "category".to_string(),
             display_name: "Category".to_string(),
             allowed_values: category_values,
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_build_search_url_basic() {
-        let query = rdlp_core::SearchQuery {
+        let query = rdlp_types::SearchQuery {
             query: "test query".to_string(),
             filters: vec![],
             max_results: None,
@@ -268,9 +268,9 @@ mod tests {
 
     #[test]
     fn test_build_search_url_with_filter() {
-        let query = rdlp_core::SearchQuery {
+        let query = rdlp_types::SearchQuery {
             query: "test".to_string(),
-            filters: vec![rdlp_core::SearchFilter {
+            filters: vec![rdlp_types::SearchFilter {
                 key: "ordering".to_string(),
                 value: "newest".to_string(),
             }],
@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_build_search_url_no_raw_spaces() {
-        let query = rdlp_core::SearchQuery {
+        let query = rdlp_types::SearchQuery {
             query: "hello world test".to_string(),
             filters: vec![],
             max_results: None,
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_build_search_url_page() {
-        let query = rdlp_core::SearchQuery {
+        let query = rdlp_types::SearchQuery {
             query: "test".to_string(),
             filters: vec![],
             max_results: None,
@@ -309,9 +309,9 @@ mod tests {
 
     #[test]
     fn test_build_search_url_page_with_filter() {
-        let query = rdlp_core::SearchQuery {
+        let query = rdlp_types::SearchQuery {
             query: "test".to_string(),
-            filters: vec![rdlp_core::SearchFilter {
+            filters: vec![rdlp_types::SearchFilter {
                 key: "ordering".to_string(),
                 value: "rating".to_string(),
             }],

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::args::Args;
-use rdlp_core::{AudioFormat, Config, SubtitleFormat};
+use rdlp_api::{AudioFormat, Config, SubtitleFormat};
 
 /// Helper: create default Args for testing (all fields at defaults).
 fn default_args() -> Args {

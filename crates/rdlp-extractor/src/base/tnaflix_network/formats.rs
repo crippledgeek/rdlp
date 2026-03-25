@@ -3,7 +3,8 @@
 //! Provides functions for extracting video source URLs from HTML and
 //! building Format objects with filesize detection.
 
-use rdlp_core::{ExtractionContext, Format};
+use rdlp_core::ExtractionContext;
+use rdlp_types::Format;
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
@@ -136,7 +137,7 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
 // Common codec strings to avoid repeated allocations
 const CODEC_H264: &str = "h264";
 const CODEC_AAC: &str = "aac";
-use rdlp_core::DownloadProtocol;
+use rdlp_types::DownloadProtocol;
 
 /// Build format list from video metadata and fetch filesizes
 pub(crate) async fn build_formats(

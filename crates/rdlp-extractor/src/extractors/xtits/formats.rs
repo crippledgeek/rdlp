@@ -8,7 +8,7 @@
 //! - `video_alt_url` + `video_alt_url_text` — alternate quality (e.g. "720p")
 
 use log::debug;
-use rdlp_core::Format;
+use rdlp_types::Format;
 
 use crate::base::common::BaseExtractor;
 use crate::base::kvs::{KvsFlashvars, parse_kvs_flashvars};

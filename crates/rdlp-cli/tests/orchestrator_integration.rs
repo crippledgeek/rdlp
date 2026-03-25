@@ -4,8 +4,7 @@
 //! Internal orchestrator tests (mock registries, state machine,
 //! resume, templates) live in `rdlp-api/src/orchestrator/tests.rs`.
 
-use rdlp_api::RdlpClient;
-use rdlp_core::Config;
+use rdlp_api::{Config, RdlpClient};
 use tempfile::TempDir;
 
 /// Helper function to create a test config with a temporary directory

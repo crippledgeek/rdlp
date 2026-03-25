@@ -250,7 +250,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::{InfoDict, PostProcessConfig};
+    use rdlp_core::PostProcessConfig;
+    use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 

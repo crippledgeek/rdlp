@@ -4,8 +4,8 @@
 //! terminal UI using `indicatif` progress bars and spinners.
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rdlp_api::DownloadProgress;
 use rdlp_api::Event;
-use rdlp_core::DownloadProgress;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};

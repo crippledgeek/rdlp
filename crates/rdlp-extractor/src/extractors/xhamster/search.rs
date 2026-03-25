@@ -1,7 +1,8 @@
 //! XHamster search result parsing and filter validation.
 
 use log::debug;
-use rdlp_core::{RdlpError, Result, SearchFilter, SearchResultPreview};
+use rdlp_core::{RdlpError, Result};
+use rdlp_types::{SearchFilter, SearchResultPreview};
 use serde_json::Value;
 
 use super::patterns;

@@ -12,7 +12,7 @@ impl Orchestrator {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn download_episodes(
         &self,
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         existing_files: &HashMap<String, PathBuf>,
         archive: &Option<HashSet<String>>,
         playlist_dir: &std::path::Path,
@@ -27,7 +27,7 @@ impl Orchestrator {
         let mut interrupted = false;
 
         // Collect episodes that still need downloading
-        let to_download: Vec<(usize, rdlp_core::InfoDict)> = infos
+        let to_download: Vec<(usize, rdlp_types::InfoDict)> = infos
             .iter()
             .enumerate()
             .filter_map(|(i, ep)| {
@@ -137,7 +137,7 @@ impl Orchestrator {
         failed: &mut Vec<(usize, String, String)>,
         downloaded: &mut Vec<PathBuf>,
         interrupted: &mut bool,
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         playlist_dir: &std::path::Path,
         selected_sub_langs: &[String],
         selected_audio: &Option<String>,

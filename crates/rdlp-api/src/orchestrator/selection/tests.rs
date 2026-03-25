@@ -3,7 +3,7 @@
 use crate::events::Event;
 use crate::handle::DownloadId;
 use crate::orchestrator::{DownloadPlan, Orchestrator};
-use rdlp_core::{Config, DownloadProtocol, Format, InfoDict};
+use rdlp_types::{Config, DownloadProtocol, Format, InfoDict};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

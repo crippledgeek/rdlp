@@ -3,7 +3,8 @@
 //! Extracts video formats from various sources in the page.
 
 use log::debug;
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_types::Format;
 use serde_json::Value;
 
 use super::patterns::{

@@ -9,8 +9,8 @@ pub(super) fn test_ctx() -> RenderContext {
     }
 }
 
-pub(super) fn test_info() -> rdlp_core::InfoDict {
-    let mut info = rdlp_core::InfoDict::new(
+pub(super) fn test_info() -> rdlp_types::InfoDict {
+    let mut info = rdlp_types::InfoDict::new(
         "abc123",
         "My Video Title",
         "TestExtractor",
@@ -29,12 +29,12 @@ pub(super) fn test_info() -> rdlp_core::InfoDict {
     info
 }
 
-pub(super) fn test_format() -> rdlp_core::Format {
-    let mut f = rdlp_core::Format::new(
+pub(super) fn test_format() -> rdlp_types::Format {
+    let mut f = rdlp_types::Format::new(
         "720p",
         "https://example.com/video.mp4",
         "mp4",
-        rdlp_core::DownloadProtocol::Https,
+        rdlp_types::DownloadProtocol::Https,
     );
     f.height = Some(720);
     f.width = Some(1280);

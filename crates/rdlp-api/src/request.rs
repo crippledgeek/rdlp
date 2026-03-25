@@ -4,7 +4,7 @@
 //! initiating a download. All types use typed enums from `rdlp-types`
 //! (re-exported through `rdlp-core`) instead of raw strings.
 
-use rdlp_core::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
 use std::path::PathBuf;
 
 /// Top-level request for initiating a download.
@@ -130,7 +130,7 @@ pub struct FormatOptions {
 ///
 /// ```
 /// use rdlp_api::request::SubtitleOptions;
-/// use rdlp_core::SubtitleFormat;
+/// use rdlp_types::SubtitleFormat;
 ///
 /// let opts = SubtitleOptions {
 ///     write_subs: Some(true),
@@ -161,7 +161,7 @@ pub struct SubtitleOptions {
 ///
 /// ```no_run
 /// use rdlp_api::request::PostProcessOptions;
-/// use rdlp_core::ContainerFormat;
+/// use rdlp_types::ContainerFormat;
 ///
 /// let opts = PostProcessOptions {
 ///     remux: Some(ContainerFormat::Mp4),
@@ -212,7 +212,7 @@ pub struct PostProcessOptions {
     pub recode_container: Option<ContainerFormat>,
     /// Audio handling during video recode.
     /// `None` preserves base config (defaults to Copy).
-    pub recode_audio: Option<rdlp_core::RecodeAudioMode>,
+    pub recode_audio: Option<rdlp_types::RecodeAudioMode>,
 }
 
 /// Network, retry, and cookie options.
@@ -221,7 +221,7 @@ pub struct PostProcessOptions {
 ///
 /// ```
 /// use rdlp_api::request::NetworkOptions;
-/// use rdlp_core::BrowserType;
+/// use rdlp_types::BrowserType;
 ///
 /// let opts = NetworkOptions {
 ///     retries: Some(5),

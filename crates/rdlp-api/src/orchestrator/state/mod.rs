@@ -9,7 +9,7 @@ use super::session_state::{self, SessionState, SingleVideoState};
 use super::{Orchestrator, errors::*};
 use crate::events::Event;
 use log::{debug, warn};
-use rdlp_core::Format;
+use rdlp_types::Format;
 use std::fmt;
 use std::path::PathBuf;
 use tracing::instrument;
@@ -38,12 +38,12 @@ pub enum DownloadPhase {
     /// Selecting format (interactive or automatic)
     SelectingFormat {
         /// Extracted video metadata
-        info: Box<rdlp_core::InfoDict>,
+        info: Box<rdlp_types::InfoDict>,
     },
     /// Selecting subtitles (interactive multi-select or pass-through)
     SelectingSubtitles {
         /// Extracted video metadata
-        info: Box<rdlp_core::InfoDict>,
+        info: Box<rdlp_types::InfoDict>,
         /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Download plan (single or merge)
@@ -52,18 +52,18 @@ pub enum DownloadPhase {
     /// Preparing download (checking for resume state)
     Preparing {
         /// Extracted video metadata
-        info: Box<rdlp_core::InfoDict>,
+        info: Box<rdlp_types::InfoDict>,
         /// Primary format (video format for merge, combined format for single)
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
-        subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        subtitle_selection: Vec<(String, rdlp_types::Subtitle)>,
         /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
     },
     /// Downloading with progress tracking
     Downloading {
         /// Extracted video metadata (for post-processing and thumbnail)
-        info: Box<rdlp_core::InfoDict>,
+        info: Box<rdlp_types::InfoDict>,
         /// Path where the file will be saved
         output_path: PathBuf,
         /// Primary format (video format for merge, combined format for single)
@@ -71,7 +71,7 @@ pub enum DownloadPhase {
         /// Resume state (fresh or resuming from offset)
         state: DownloadState,
         /// Subtitles selected for download (empty if none)
-        subtitle_selection: Vec<(String, rdlp_core::Subtitle)>,
+        subtitle_selection: Vec<(String, rdlp_types::Subtitle)>,
         /// Download plan (single or merge)
         plan: Box<DownloadPlan>,
     },
