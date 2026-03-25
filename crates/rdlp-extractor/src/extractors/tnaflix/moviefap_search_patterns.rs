@@ -214,4 +214,29 @@ mod tests {
         // Whitespace-only splits to empty segments, joined is empty
         assert!(url.contains("/search//"));
     }
+
+    #[test]
+    fn test_build_search_url_duplicate_ordering_uses_first() {
+        // Two ordering filters — .find() returns the first one
+        let query = rdlp_types::SearchQuery {
+            query: "test".to_string(),
+            filters: vec![
+                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "adddate".to_string() },
+                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "rate".to_string() },
+            ],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url(&query, 1);
+        assert!(url.contains("/adddate/")); // first match wins
+        assert!(!url.contains("/rate/"));
+    }
+
+    #[test]
+    fn test_build_search_url_tabs_and_newlines_in_query() {
+        let query = make_query("hello\tworld\nfoo", None);
+        let url = build_search_url(&query, 1);
+        // split_whitespace splits on tabs/newlines too
+        assert!(url.contains("hello+world+foo"));
+    }
 }

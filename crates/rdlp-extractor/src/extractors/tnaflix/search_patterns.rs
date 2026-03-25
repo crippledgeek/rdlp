@@ -635,4 +635,38 @@ mod tests {
     fn test_slug_to_label_only_suffix() {
         assert_eq!(slug_to_label("porn"), "Porn");
     }
+
+    #[test]
+    fn test_build_browse_url_page_for_page_zero() {
+        // Page 0 is allowed by the builder (no validation)
+        let url = build_browse_url_page_for("https://www.tnaflix.com", "new", 0);
+        assert_eq!(url, "https://www.tnaflix.com/new/0");
+    }
+
+    #[test]
+    fn test_build_browse_url_for_empty_slug() {
+        let url = build_browse_url_for("https://www.tnaflix.com", "");
+        assert_eq!(url, "https://www.tnaflix.com/");
+    }
+
+    #[test]
+    fn test_build_browse_url_for_trailing_slash_base() {
+        // Trailing slash on base_url produces double slash
+        let url = build_browse_url_for("https://www.tnaflix.com/", "new");
+        assert_eq!(url, "https://www.tnaflix.com//new");
+    }
+
+    #[test]
+    fn test_build_search_url_for_leading_trailing_whitespace_query() {
+        // split_whitespace handles leading/trailing spaces
+        let query = rdlp_types::SearchQuery {
+            query: "  hello   world  ".to_string(),
+            filters: vec![],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("what=hello+world"));
+        assert!(!url.contains("  ")); // no double spaces
+    }
 }

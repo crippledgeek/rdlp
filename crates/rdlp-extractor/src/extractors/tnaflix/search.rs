@@ -689,4 +689,73 @@ mod tests {
     fn test_parse_view_count_whitespace_only() {
         assert_eq!(parse_view_count("   "), None);
     }
+
+    // ---- Additional negative tests (round 2) ----
+
+    #[test]
+    fn test_parse_duration_four_parts() {
+        // "1:2:3:4" — too many parts for TNAFlix parser
+        assert_eq!(parse_duration_secs("1:2:3:4"), None);
+    }
+
+    #[test]
+    fn test_parse_duration_single_number() {
+        assert_eq!(parse_duration_secs("123"), None);
+    }
+
+    #[test]
+    fn test_parse_duration_zero() {
+        assert_eq!(parse_duration_secs("0:00"), Some(0.0));
+    }
+
+    #[test]
+    fn test_parse_duration_leading_zeros() {
+        assert_eq!(parse_duration_secs("01:02:03"), Some(3723.0));
+    }
+
+    #[test]
+    fn test_parse_view_count_k_suffix_invalid_number() {
+        // "abc.defK" → strip 'k' → "abc.def" can't parse → None
+        assert_eq!(parse_view_count("abc.defK"), None);
+    }
+
+    #[test]
+    fn test_parse_view_count_m_suffix_invalid_number() {
+        assert_eq!(parse_view_count("xyzM"), None);
+    }
+
+    #[test]
+    fn test_parse_view_count_uppercase_k() {
+        // "5K" → lowercase to "5k" → strip 'k' → 5000
+        assert_eq!(parse_view_count("5K"), Some(5000));
+    }
+
+    #[test]
+    fn test_parse_view_count_uppercase_m() {
+        assert_eq!(parse_view_count("2M"), Some(2_000_000));
+    }
+
+    #[test]
+    fn test_parse_view_count_double_suffix() {
+        // "5K5K" → lowercase "5k5k" → strip trailing 'k' → "5k5" → parse fails → None
+        assert_eq!(parse_view_count("5K5K"), None);
+    }
+
+    #[test]
+    fn test_validate_filters_empty_category_value() {
+        let filters = vec![SearchFilter {
+            key: "category".to_string(),
+            value: String::new(),
+        }];
+        assert!(validate_search_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn test_validate_filters_multiple_different_keys() {
+        let filters = vec![
+            SearchFilter { key: "ordering".to_string(), value: "newest".to_string() },
+            SearchFilter { key: "category".to_string(), value: "teen-porn".to_string() },
+        ];
+        assert!(validate_search_filters(&filters).is_ok());
+    }
 }
