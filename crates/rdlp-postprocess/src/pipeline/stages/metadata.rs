@@ -9,8 +9,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::info;
 
-use rdlp_core::InfoDict;
 use rdlp_ffmpeg::{ChapterEntry, FFmpegRunner};
+use rdlp_types::InfoDict;
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -182,7 +182,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::{InfoDict, PostProcessConfig};
+    use rdlp_core::PostProcessConfig;
+    use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
@@ -312,12 +313,12 @@ mod tests {
             "https://example.com".to_string(),
         );
         info.chapters = Some(vec![
-            rdlp_core::Chapter {
+            rdlp_types::Chapter {
                 title: "Intro".to_string(),
                 start_time: 0.0,
                 end_time: 30.0,
             },
-            rdlp_core::Chapter {
+            rdlp_types::Chapter {
                 title: "Main".to_string(),
                 start_time: 30.0,
                 end_time: 120.0,

@@ -13,7 +13,7 @@ mod download;
 
 use super::{Orchestrator, Result};
 use log::{debug, info};
-use rdlp_core::InfoDict;
+use rdlp_types::InfoDict;
 
 #[cfg(test)]
 mod tests_menu;
@@ -167,7 +167,7 @@ impl Orchestrator {
     pub(super) async fn select_subtitles_interactive(
         &self,
         info: &InfoDict,
-    ) -> Result<Option<Vec<(String, rdlp_core::Subtitle)>>> {
+    ) -> Result<Option<Vec<(String, rdlp_types::Subtitle)>>> {
         let items = build_subtitle_menu_items(info);
         if items.is_empty() {
             debug!("No subtitles available for interactive selection");
@@ -237,7 +237,7 @@ impl Orchestrator {
         info: &InfoDict,
         interactive: bool,
         list_subs: bool,
-    ) -> Result<Option<Vec<(String, rdlp_core::Subtitle)>>> {
+    ) -> Result<Option<Vec<(String, rdlp_types::Subtitle)>>> {
         let has_subs = info.subtitles.as_ref().is_some_and(|s| !s.is_empty())
             || info
                 .automatic_captions
@@ -260,7 +260,7 @@ impl Orchestrator {
         info: &InfoDict,
         lang: &str,
         is_auto: bool,
-    ) -> Option<rdlp_core::Subtitle> {
+    ) -> Option<rdlp_types::Subtitle> {
         let source = if is_auto {
             info.automatic_captions.as_ref()
         } else {
@@ -316,7 +316,7 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
         langs: &[String],
-    ) -> Vec<(String, rdlp_core::Subtitle)> {
+    ) -> Vec<(String, rdlp_types::Subtitle)> {
         let mut result = Vec::new();
         for lang in langs {
             // Try manual subtitles first, then auto-captions

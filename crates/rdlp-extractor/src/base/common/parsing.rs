@@ -24,7 +24,7 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Duration in seconds, `None` if parsing fails
-    pub fn parse_iso8601_duration(duration_str: &str) -> Option<f64> {
+    pub(crate) fn parse_iso8601_duration(duration_str: &str) -> Option<f64> {
         if !duration_str.starts_with("PT") {
             return None;
         }
@@ -58,7 +58,8 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Date in YYYYMMDD format, `None` if parsing fails
-    pub fn parse_iso8601_date(date_str: &str) -> Option<String> {
+    #[allow(dead_code)]
+    pub(crate) fn parse_iso8601_date(date_str: &str) -> Option<String> {
         let caps = ISO8601_DATE_PATTERN.captures(date_str)?;
 
         let year = caps.get(1)?.as_str();
@@ -91,7 +92,7 @@ impl BaseExtractor {
     /// assert_eq!(BaseExtractor::parse_duration("893"), Some(893.0));
     /// ```
     #[must_use]
-    pub fn parse_duration(s: &str) -> Option<f64> {
+    pub(crate) fn parse_duration(s: &str) -> Option<f64> {
         let s = s.trim();
 
         // Try ISO 8601 first
@@ -141,7 +142,7 @@ impl BaseExtractor {
     /// # Returns
     /// Duration in seconds, `None` if parsing fails
     #[must_use]
-    pub fn parse_text_duration(text: &str) -> Option<f64> {
+    pub(crate) fn parse_text_duration(text: &str) -> Option<f64> {
         let text = text.trim().to_lowercase();
         let mut total_seconds = 0.0;
         let mut found_any = false;

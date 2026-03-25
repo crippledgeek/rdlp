@@ -2,7 +2,7 @@
 
 use super::{Orchestrator, errors::*};
 use log::{debug, info};
-use rdlp_core::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
+use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
 impl Orchestrator {
@@ -16,7 +16,7 @@ impl Orchestrator {
     /// - No extractor is found for the URL
     /// - Extraction fails
     #[instrument(skip(self), fields(url = %url))]
-    pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_core::InfoDict> {
+    pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
@@ -83,7 +83,7 @@ impl Orchestrator {
     /// Uses `extract_lazy()` instead of `extract()` to skip expensive
     /// operations like re-fetching the watch page. Auto-sets `Referer`
     /// headers on all resolved formats.
-    pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_core::InfoDict> {
+    pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
                 url: url.to_owned(),
@@ -130,7 +130,7 @@ impl Orchestrator {
     pub(super) async fn extract_playlist_info(
         &self,
         url: &str,
-    ) -> Result<Vec<rdlp_core::InfoDict>> {
+    ) -> Result<Vec<rdlp_types::InfoDict>> {
         debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {

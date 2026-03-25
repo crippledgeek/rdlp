@@ -31,9 +31,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, Retryable,
-    SearchExtractor, SearchPageResponse, SearchQuery, SearchResultPreview,
+    ExponentialBuilder, ExtractionContext, InfoExtractor, RdlpError, Result, Retryable,
+    SearchExtractor,
 };
+use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
@@ -217,7 +218,7 @@ impl SearchExtractor for PornHubExtractor {
         "PornHub"
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_core::SearchFilterDescriptor> {
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         search_patterns::search_filter_descriptors()
     }
 

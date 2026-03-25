@@ -4,7 +4,7 @@
 //! audio formats, and video recode formats.
 
 use anyhow::Result;
-use rdlp_core::{AudioFormat, ContainerFormat};
+use rdlp_api::{AudioFormat, ContainerFormat};
 
 /// Interactive remux container selection
 pub(crate) fn select_remux_container() -> Result<Option<ContainerFormat>> {

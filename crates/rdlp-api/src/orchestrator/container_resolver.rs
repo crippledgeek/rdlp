@@ -5,7 +5,7 @@
 //! decisions and every fallback is explicitly logged.
 
 use log::debug;
-use rdlp_core::ContainerFormat;
+use rdlp_types::ContainerFormat;
 use std::path::{Path, PathBuf};
 
 /// How the container format was determined.
@@ -41,7 +41,7 @@ impl ResolvedContainer {
     /// 2. `config.merge_output_format` (`--merge-output-format=<fmt>`)
     /// 3. Output file extension (from format selection)
     /// 4. Fallback to MP4 with warning
-    pub fn resolve(config: &rdlp_core::Config, output_path: Option<&Path>) -> Self {
+    pub fn resolve(config: &rdlp_types::Config, output_path: Option<&Path>) -> Self {
         // Priority 1: explicit remux target
         if let Some(c) = config.remux_container {
             return Self {
@@ -87,7 +87,7 @@ impl ResolvedContainer {
 /// derive subtitle filenames from (stem + lang + ext). Uses
 /// [`ResolvedContainer`] to avoid hardcoding a container extension.
 pub fn output_stub(
-    config: &rdlp_core::Config,
+    config: &rdlp_types::Config,
     output_dir: &Path,
     sanitized_title: &str,
 ) -> PathBuf {
@@ -116,11 +116,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn base_config() -> rdlp_core::Config {
-        rdlp_core::Config {
+    fn base_config() -> rdlp_types::Config {
+        rdlp_types::Config {
             remux_container: None,
             merge_output_format: None,
-            ..rdlp_core::Config::default()
+            ..rdlp_types::Config::default()
         }
     }
 

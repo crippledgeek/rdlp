@@ -7,7 +7,8 @@
 use crate::errors::RdlpApiError;
 use crate::handle::DownloadId;
 use crate::result::DownloadResult;
-use rdlp_core::{DownloadProgress, InfoDict};
+use rdlp_core::DownloadProgress;
+use rdlp_types::InfoDict;
 
 /// A download lifecycle event.
 ///

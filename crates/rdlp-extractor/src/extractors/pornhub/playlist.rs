@@ -11,9 +11,8 @@
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
 use log::{debug, info};
-use rdlp_core::{
-    ExtractionContext, InfoDict, InfoExtractor, RdlpError, Result, check_http_response,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, check_http_response};
+use rdlp_types::InfoDict;
 use scraper::{Html, Selector};
 use std::collections::HashSet;
 use std::sync::Arc;

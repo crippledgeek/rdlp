@@ -8,7 +8,7 @@
 //! ```no_run
 //! use rdlp_api::client::RdlpClient;
 //! use rdlp_api::request::DownloadRequest;
-//! use rdlp_core::Config;
+//! use rdlp_types::Config;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = RdlpClient::new(Config::default())?;
@@ -32,8 +32,9 @@ use crate::orchestrator::{InteractiveCallback, Orchestrator};
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
 use log::{error, warn};
-use rdlp_core::{Config, DownloadStats, InfoDict};
+use rdlp_core::DownloadStats;
 use rdlp_postprocess::TempRegistry;
+use rdlp_types::{Config, InfoDict};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -346,7 +347,7 @@ impl RdlpClient {
     /// # Returns
     /// A list of `SearchSiteInfo` with name and display name.
     #[must_use]
-    pub fn list_search_sites(&self) -> Vec<rdlp_core::SearchSiteInfo> {
+    pub fn list_search_sites(&self) -> Vec<rdlp_types::SearchSiteInfo> {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
@@ -355,7 +356,7 @@ impl RdlpClient {
         orchestrator
             .list_search_extractors()
             .into_iter()
-            .map(|name| rdlp_core::SearchSiteInfo {
+            .map(|name| rdlp_types::SearchSiteInfo {
                 name: name.to_lowercase(),
                 display_name: name.to_string(),
             })
@@ -372,7 +373,7 @@ impl RdlpClient {
     pub fn search_filters(
         &self,
         site: &str,
-    ) -> Result<Vec<rdlp_core::SearchFilterDescriptor>, RdlpApiError> {
+    ) -> Result<Vec<rdlp_types::SearchFilterDescriptor>, RdlpApiError> {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
@@ -400,8 +401,8 @@ impl RdlpClient {
     pub async fn search(
         &self,
         site: &str,
-        query: &rdlp_core::SearchQuery,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>, RdlpApiError> {
+        query: &rdlp_types::SearchQuery,
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>, RdlpApiError> {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
@@ -424,8 +425,8 @@ impl RdlpClient {
     pub async fn search_page(
         &self,
         site: &str,
-        query: &rdlp_core::SearchQuery,
-    ) -> Result<rdlp_core::SearchPageResponse, RdlpApiError> {
+        query: &rdlp_types::SearchQuery,
+    ) -> Result<rdlp_types::SearchPageResponse, RdlpApiError> {
         let id = DownloadId::next();
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
@@ -444,8 +445,8 @@ impl RdlpClient {
     pub async fn search_preview(
         &self,
         site: &str,
-        query: &rdlp_core::SearchQuery,
-    ) -> Result<Vec<rdlp_core::SearchResultPreview>, RdlpApiError> {
+        query: &rdlp_types::SearchQuery,
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>, RdlpApiError> {
         self.search(site, query).await
     }
 
@@ -498,7 +499,7 @@ impl RdlpClient {
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let info = rdlp_core::InfoDict::new(
+            let info = rdlp_types::InfoDict::new(
                 &file_name,
                 &file_name,
                 "local",

@@ -9,9 +9,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 
-use rdlp_core::{ContainerFormat, RecodeAudioMode};
 use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
+use rdlp_types::{ContainerFormat, RecodeAudioMode};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -346,7 +346,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::{InfoDict, PostProcessConfig};
+    use rdlp_core::PostProcessConfig;
+    use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 

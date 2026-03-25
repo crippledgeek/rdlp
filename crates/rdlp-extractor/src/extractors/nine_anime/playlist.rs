@@ -14,7 +14,8 @@
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use log::{debug, info};
-use rdlp_core::{ExtractionContext, InfoDict, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_types::InfoDict;
 use scraper::Html;
 
 use super::{build_subtitle_map, episodes, metadata, patterns, resolve_episode_formats};

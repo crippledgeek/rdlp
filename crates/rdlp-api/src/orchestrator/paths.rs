@@ -14,8 +14,8 @@ impl Orchestrator {
     /// is individually sanitized for filesystem safety.
     pub(super) fn generate_output_path(
         &self,
-        info: &rdlp_core::InfoDict,
-        format: &rdlp_core::Format,
+        info: &rdlp_types::InfoDict,
+        format: &rdlp_types::Format,
     ) -> Result<PathBuf> {
         let file_ext = self.determine_file_extension(format);
         let template = OutputTemplate::parse(&self.config.output_template).map_err(|e| {
@@ -69,7 +69,7 @@ impl Orchestrator {
     ///
     /// For streaming protocols (HLS, DASH), uses the detected container format
     /// from segment metadata. Falls back to URL-based detection if not available.
-    pub(super) fn determine_file_extension(&self, format: &rdlp_core::Format) -> String {
+    pub(super) fn determine_file_extension(&self, format: &rdlp_types::Format) -> String {
         // Priority 1: Use container field from HLS/DASH metadata
         if let Some(ref container) = format.container {
             return match container.as_str() {

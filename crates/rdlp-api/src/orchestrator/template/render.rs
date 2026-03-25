@@ -6,7 +6,7 @@ use super::{
     Segment, TemplateError,
 };
 use chrono::NaiveDate;
-use rdlp_core::{Format, InfoDict};
+use rdlp_types::{Format, InfoDict};
 
 impl OutputTemplate {
     /// Render the template using metadata from `InfoDict`, `Format`, and a computed extension.

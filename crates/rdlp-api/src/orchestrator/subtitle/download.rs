@@ -2,7 +2,7 @@
 
 use super::{Orchestrator, Result};
 use log::{debug, warn};
-use rdlp_core::InfoDict;
+use rdlp_types::InfoDict;
 use std::path::{Path, PathBuf};
 
 impl Orchestrator {
@@ -22,7 +22,7 @@ impl Orchestrator {
         &self,
         info: &InfoDict,
         output_path: &Path,
-        interactive_selection: &[(String, rdlp_core::Subtitle)],
+        interactive_selection: &[(String, rdlp_types::Subtitle)],
     ) -> Result<Vec<(String, PathBuf)>> {
         // If interactive selection is non-empty, use it directly
         if !interactive_selection.is_empty() {
@@ -52,7 +52,7 @@ impl Orchestrator {
     /// Vec of (language, path) for downloaded subtitle files
     pub(in crate::orchestrator) async fn download_subtitles_from_selection(
         &self,
-        selected: &[(String, rdlp_core::Subtitle)],
+        selected: &[(String, rdlp_types::Subtitle)],
         output_path: &Path,
     ) -> Result<Vec<(String, PathBuf)>> {
         let mut downloaded = Vec::new();

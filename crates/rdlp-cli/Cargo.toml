@@ -12,12 +12,10 @@ path = "src/main.rs"
 [dependencies]
 rdlp-api = { path = "../rdlp-api" }
 rdlp-table = { path = "../rdlp-table" }
-rdlp-core = { path = "../rdlp-core" }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-extractor = { path = "../rdlp-extractor" }
 rdlp-downloader = { path = "../rdlp-downloader" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
-rdlp-postprocess = { path = "../rdlp-postprocess" }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-plugin = { path = "../rdlp-plugin" }

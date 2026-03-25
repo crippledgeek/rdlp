@@ -27,7 +27,7 @@ impl BaseExtractor {
     /// # Returns
     /// The content attribute value if found and non-empty
     #[must_use]
-    pub fn extract_meta_content(html: &Html, selector: &Selector) -> Option<String> {
+    pub(crate) fn extract_meta_content(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
             .and_then(|elem| elem.value().attr("content"))
@@ -44,7 +44,8 @@ impl BaseExtractor {
     /// # Returns
     /// The href attribute value if found and non-empty
     #[must_use]
-    pub fn extract_link_href(html: &Html, selector: &Selector) -> Option<String> {
+    #[allow(dead_code)]
+    pub(crate) fn extract_link_href(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
             .and_then(|elem| elem.value().attr("href"))
@@ -61,7 +62,7 @@ impl BaseExtractor {
     /// # Returns
     /// The text content if found and non-empty
     #[must_use]
-    pub fn extract_element_text(html: &Html, selector: &Selector) -> Option<String> {
+    pub(crate) fn extract_element_text(html: &Html, selector: &Selector) -> Option<String> {
         html.select(selector)
             .next()
             .map(|elem| elem.text().collect::<String>().trim().to_string())
@@ -74,7 +75,8 @@ impl BaseExtractor {
     /// the selector from a string. Use this for site-specific selectors that
     /// are not worth pre-compiling as statics.
     #[must_use]
-    pub fn extract_meta_content_str(html: &Html, selector_str: &str) -> Option<String> {
+    #[allow(dead_code)]
+    pub(crate) fn extract_meta_content_str(html: &Html, selector_str: &str) -> Option<String> {
         let selector = Selector::parse(selector_str).ok()?;
         Self::extract_meta_content(html, &selector)
     }
@@ -85,7 +87,7 @@ impl BaseExtractor {
     /// the selector from a string. Use this for site-specific selectors that
     /// are not worth pre-compiling as statics.
     #[must_use]
-    pub fn extract_element_text_str(html: &Html, selector_str: &str) -> Option<String> {
+    pub(crate) fn extract_element_text_str(html: &Html, selector_str: &str) -> Option<String> {
         let selector = Selector::parse(selector_str).ok()?;
         Self::extract_element_text(html, &selector)
     }
@@ -96,7 +98,11 @@ impl BaseExtractor {
     /// attribute found. Relative hrefs starting with `/` are made absolute
     /// using the provided `base_url`.
     #[must_use]
-    pub fn extract_first_href(html: &Html, selectors: &[&str], base_url: &str) -> Option<String> {
+    pub(crate) fn extract_first_href(
+        html: &Html,
+        selectors: &[&str],
+        base_url: &str,
+    ) -> Option<String> {
         for selector_str in selectors {
             let Ok(selector) = Selector::parse(selector_str) else {
                 continue;
@@ -128,7 +134,7 @@ impl BaseExtractor {
     /// # Returns
     /// Title from the first successful strategy, `None` if all fail
     #[must_use]
-    pub fn extract_title_multi_strategy(html: &Html) -> Option<String> {
+    pub(crate) fn extract_title_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(title) = Self::extract_meta_content(html, &OG_TITLE_SELECTOR) {
             return Some(Self::truncate_string(title, MAX_TITLE_LENGTH));
@@ -161,7 +167,7 @@ impl BaseExtractor {
     /// # Returns
     /// Description from the first successful strategy, `None` if all fail
     #[must_use]
-    pub fn extract_description_multi_strategy(html: &Html) -> Option<String> {
+    pub(crate) fn extract_description_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(desc) = Self::extract_meta_content(html, &OG_DESCRIPTION_SELECTOR) {
             return Some(Self::truncate_string(desc, MAX_DESCRIPTION_LENGTH));
@@ -184,7 +190,7 @@ impl BaseExtractor {
     /// # Returns
     /// Thumbnail URL from the first successful strategy, `None` if all fail
     #[must_use]
-    pub fn extract_thumbnail_multi_strategy(html: &Html) -> Option<String> {
+    pub(crate) fn extract_thumbnail_multi_strategy(html: &Html) -> Option<String> {
         // Strategy 1: Open Graph
         if let Some(thumb) = Self::extract_meta_content(html, &OG_IMAGE_SELECTOR) {
             return Some(thumb);

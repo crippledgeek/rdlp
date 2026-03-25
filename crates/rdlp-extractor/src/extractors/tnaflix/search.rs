@@ -21,7 +21,8 @@
 //! </div>
 //! ```
 
-use rdlp_core::{RdlpError, Result, SearchFilter, SearchResultPreview};
+use rdlp_core::{RdlpError, Result};
+use rdlp_types::{SearchFilter, SearchResultPreview};
 use scraper::{Html, Selector};
 use std::collections::HashSet;
 use std::sync::LazyLock;

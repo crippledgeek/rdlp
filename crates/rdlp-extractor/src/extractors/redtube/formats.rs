@@ -4,7 +4,8 @@
 //! and the `getVideoById` JSON API response.
 
 use log::debug;
-use rdlp_core::{ExtractionContext, Format, RdlpError, Result, Thumbnail};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_types::{Format, Thumbnail};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;

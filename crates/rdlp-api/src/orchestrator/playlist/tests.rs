@@ -4,18 +4,18 @@ use super::*;
 
 #[test]
 fn test_detect_audio_types_empty() {
-    let infos: Vec<rdlp_core::InfoDict> = Vec::new();
+    let infos: Vec<rdlp_types::InfoDict> = Vec::new();
     assert!(detect_audio_types(&infos).is_empty());
 }
 
 #[test]
 fn test_detect_audio_types_single() {
-    let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
-    let mut fmt = rdlp_core::Format::new(
+    let mut info = rdlp_types::InfoDict::new("id", "title", "test", "http://example.com");
+    let mut fmt = rdlp_types::Format::new(
         "f1",
         "http://example.com/v.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     fmt.language = Some("SUB".to_string());
     info.formats = vec![fmt];
@@ -24,19 +24,19 @@ fn test_detect_audio_types_single() {
 
 #[test]
 fn test_detect_audio_types_multiple() {
-    let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
-    let mut sub = rdlp_core::Format::new(
+    let mut info = rdlp_types::InfoDict::new("id", "title", "test", "http://example.com");
+    let mut sub = rdlp_types::Format::new(
         "f1",
         "http://example.com/v.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     sub.language = Some("SUB".to_string());
-    let mut dub = rdlp_core::Format::new(
+    let mut dub = rdlp_types::Format::new(
         "f2",
         "http://example.com/v2.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     dub.language = Some("DUB".to_string());
     info.formats = vec![dub, sub];
@@ -46,12 +46,12 @@ fn test_detect_audio_types_multiple() {
 
 #[test]
 fn test_detect_audio_types_no_language() {
-    let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
-    let fmt = rdlp_core::Format::new(
+    let mut info = rdlp_types::InfoDict::new("id", "title", "test", "http://example.com");
+    let fmt = rdlp_types::Format::new(
         "f1",
         "http://example.com/v.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     info.formats = vec![fmt];
     assert!(detect_audio_types(&[info]).is_empty());
@@ -59,19 +59,19 @@ fn test_detect_audio_types_no_language() {
 
 #[test]
 fn test_filter_formats_by_language() {
-    let mut info = rdlp_core::InfoDict::new("id", "title", "test", "http://example.com");
-    let mut sub = rdlp_core::Format::new(
+    let mut info = rdlp_types::InfoDict::new("id", "title", "test", "http://example.com");
+    let mut sub = rdlp_types::Format::new(
         "f1",
         "http://example.com/v.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     sub.language = Some("SUB".to_string());
-    let mut dub = rdlp_core::Format::new(
+    let mut dub = rdlp_types::Format::new(
         "f2",
         "http://example.com/v2.m3u8",
         "mp4",
-        rdlp_core::DownloadProtocol::M3u8,
+        rdlp_types::DownloadProtocol::M3u8,
     );
     dub.language = Some("DUB".to_string());
     info.formats = vec![sub, dub];

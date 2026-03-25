@@ -1,7 +1,8 @@
 //! Download result types.
 
 use crate::handle::DownloadId;
-use rdlp_core::{DownloadStats, InfoDict};
+use rdlp_core::DownloadStats;
+use rdlp_types::InfoDict;
 use std::path::PathBuf;
 
 /// Result of a completed download.

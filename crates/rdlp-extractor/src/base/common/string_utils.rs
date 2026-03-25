@@ -23,7 +23,7 @@ impl BaseExtractor {
     /// * `prefix` - Log prefix (e.g., extractor name)
     /// * `message` - Message to log
     #[inline]
-    pub fn log_if_verbose(_ctx: &ExtractionContext, prefix: &str, message: &str) {
+    pub(crate) fn log_if_verbose(_ctx: &ExtractionContext, prefix: &str, message: &str) {
         debug!("[{prefix}] {message}");
     }
 
@@ -37,7 +37,7 @@ impl BaseExtractor {
     /// * `label` - Label for the content
     /// * `content` - Content to log (will be truncated)
     /// * `max_length` - Maximum characters to show
-    pub fn log_content_if_verbose(
+    pub(crate) fn log_content_if_verbose(
         _ctx: &ExtractionContext,
         prefix: &str,
         label: &str,
@@ -67,7 +67,7 @@ impl BaseExtractor {
     /// # Returns
     /// Truncated string (or original if already shorter)
     #[must_use]
-    pub fn truncate_string(s: String, max_len: usize) -> String {
+    pub(crate) fn truncate_string(s: String, max_len: usize) -> String {
         if s.chars().count() <= max_len {
             s
         } else {
@@ -93,7 +93,7 @@ impl BaseExtractor {
     /// assert_eq!(clean, "Video removed");
     /// ```
     #[must_use]
-    pub fn clean_html_tags(text: &str, max_len: Option<usize>) -> String {
+    pub(crate) fn clean_html_tags(text: &str, max_len: Option<usize>) -> String {
         let max = max_len.unwrap_or(200);
         HTML_TAG_PATTERN
             .replace_all(text.trim(), "")
@@ -115,7 +115,8 @@ impl BaseExtractor {
     /// # Returns
     /// Sanitized string with sensitive data redacted
     #[must_use]
-    pub fn sanitize_for_logging(s: &str) -> String {
+    #[allow(dead_code)]
+    pub(crate) fn sanitize_for_logging(s: &str) -> String {
         rdlp_security::sanitize_for_logging(s)
     }
 }

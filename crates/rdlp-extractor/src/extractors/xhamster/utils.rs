@@ -4,7 +4,7 @@
 //! and legacy HTML fallback helpers.
 
 use log::debug;
-use rdlp_core::InfoDict;
+use rdlp_types::InfoDict;
 use regex::Regex;
 use scraper::Html;
 use serde_json::Value;

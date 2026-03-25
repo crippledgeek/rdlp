@@ -17,7 +17,7 @@ impl Orchestrator {
         existing_files: &HashMap<String, PathBuf>,
         missing_subs: &HashMap<String, PathBuf>,
         saved_sub_langs: &[String],
-        infos: &[rdlp_core::InfoDict],
+        infos: &[rdlp_types::InfoDict],
         total: usize,
     ) -> Result<Option<Vec<PathBuf>>> {
         use super::super::session_state::SessionState;
@@ -60,7 +60,7 @@ impl Orchestrator {
     /// Returns the timestamp when resolution completed (for token freshness).
     pub(in crate::orchestrator) async fn batch_resolve_episodes(
         &self,
-        infos: &mut [rdlp_core::InfoDict],
+        infos: &mut [rdlp_types::InfoDict],
         existing_files: &HashMap<String, PathBuf>,
         selected_audio: &mut Option<String>,
     ) -> Instant {
@@ -139,7 +139,7 @@ impl Orchestrator {
 ///
 /// Scans format `language` fields and returns sorted unique values.
 /// Used to offer SUB/DUB selection before batch download.
-pub(super) fn detect_audio_types(infos: &[rdlp_core::InfoDict]) -> Vec<String> {
+pub(super) fn detect_audio_types(infos: &[rdlp_types::InfoDict]) -> Vec<String> {
     let types: std::collections::HashSet<&str> = infos
         .iter()
         .flat_map(|info| &info.formats)
@@ -166,7 +166,7 @@ pub(in crate::orchestrator) fn extract_cdn_host(url: &str) -> Option<&str> {
 /// Filter episode formats to only include the selected audio/language type.
 ///
 /// Removes all formats whose `language` field does not match the given value.
-pub(super) fn filter_formats_by_language(infos: &mut [rdlp_core::InfoDict], language: &str) {
+pub(super) fn filter_formats_by_language(infos: &mut [rdlp_types::InfoDict], language: &str) {
     for info in infos.iter_mut() {
         info.formats
             .retain(|f| f.language.as_deref() == Some(language));

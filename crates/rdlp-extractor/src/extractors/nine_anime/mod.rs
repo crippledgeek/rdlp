@@ -36,9 +36,8 @@ pub mod playlist;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use rdlp_core::{
-    DownloadProtocol, ExtractionContext, Format, InfoDict, InfoExtractor, RdlpError, Result,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
+use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use scraper::Html;
 
 use std::collections::HashMap;
@@ -255,14 +254,14 @@ pub(crate) async fn resolve_episode_formats(
 /// (usually "vtt") as the subtitle format.
 fn build_subtitle_map(
     tracks: &[megacloud::SubtitleTrack],
-) -> HashMap<String, Vec<rdlp_core::Subtitle>> {
-    let mut map: HashMap<String, Vec<rdlp_core::Subtitle>> = HashMap::new();
+) -> HashMap<String, Vec<rdlp_types::Subtitle>> {
+    let mut map: HashMap<String, Vec<rdlp_types::Subtitle>> = HashMap::new();
 
     for track in tracks {
         // Derive extension from URL (e.g., ".../en.vtt" → "vtt")
         let ext = track.url.rsplit('.').next().unwrap_or("vtt").to_string();
 
-        let subtitle = rdlp_core::Subtitle {
+        let subtitle = rdlp_types::Subtitle {
             url: track.url.clone(),
             ext,
             name: Some(track.label.clone()),
