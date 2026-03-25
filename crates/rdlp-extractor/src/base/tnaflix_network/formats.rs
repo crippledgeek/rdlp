@@ -141,14 +141,14 @@ use rdlp_types::DownloadProtocol;
 
 /// Build format list from video metadata and fetch filesizes.
 ///
-/// Filesize detection is parallelized — all HEAD requests run concurrently
-/// instead of sequentially, reducing latency from O(n × RTT) to O(RTT).
+/// Filesize detection uses `detect_format_sizes` (the shared HLS module
+/// helper) which runs all HEAD requests in parallel via `join_all`.
 pub(crate) async fn build_formats(
     video_data: Vec<VideoMetadata>,
     ctx: &ExtractionContext,
 ) -> Vec<Format> {
     // Build format structs (sync, no I/O)
-    let mut formats: Vec<Format> = video_data
+    let formats: Vec<Format> = video_data
         .into_iter()
         .map(|(format_id, video_url, ext, height, width)| {
             let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
@@ -163,9 +163,11 @@ pub(crate) async fn build_formats(
         })
         .collect();
 
-    // Parallel filesize detection — all HEAD requests run concurrently
-    BaseExtractor::detect_file_sizes_parallel(&mut formats, &ctx.http_client, Some("TNAFlix"))
-        .await;
+    // Parallel filesize detection — reuses the shared HLS module helper
+    // which runs HEAD requests concurrently. HLS flags are discarded
+    // since TNAFlix network formats are all direct HTTPS.
+    let (mut formats, _hls_flags) =
+        crate::hls::detect_format_sizes(formats, ctx, "TNAFlix").await;
 
     BaseExtractor::dedup_format_ids(&mut formats);
     formats
