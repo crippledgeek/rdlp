@@ -370,22 +370,23 @@ impl HttpDownloader {
                         // end is exclusive in ChunkRequest, but HTTP Range is inclusive
                         let abs_end = byte_offset + chunk.end - 1;
 
-                        let result = downloader
-                            .download_range_with_progress(
-                                &url,
-                                abs_start,
-                                abs_end,
-                                &chunk_path,
-                                Some(progress),
-                            )
-                            .await;
+                        let result = download_chunk_with_retry(
+                            &downloader,
+                            &url,
+                            abs_start,
+                            abs_end,
+                            &chunk_path,
+                            Some(progress),
+                            chunk_id,
+                        )
+                        .await;
 
                         match &result {
                             Ok(bytes) => {
                                 ctrl_report.report_chunk_complete(*bytes, start_time.elapsed());
                             }
                             Err(e) => {
-                                error!("Adaptive chunk {chunk_id} failed: {e}");
+                                error!("Adaptive chunk {chunk_id} failed after retries: {e}");
                             }
                         }
 
@@ -460,11 +461,18 @@ impl HttpDownloader {
                 let progress = Some(progress_counter.clone());
 
                 async move {
-                    let result = downloader
-                        .download_range_with_progress(&url, start, end, &chunk_path, progress)
-                        .await;
+                    let result = download_chunk_with_retry(
+                        &downloader,
+                        &url,
+                        start,
+                        end,
+                        &chunk_path,
+                        progress,
+                        chunk_id as u64,
+                    )
+                    .await;
                     if let Err(ref e) = result {
-                        error!("Chunk {chunk_id} failed: {e}");
+                        error!("Chunk {chunk_id} failed after retries: {e}");
                     }
                     result.map(|bytes| (chunk_id, chunk_path, bytes))
                 }

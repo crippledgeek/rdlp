@@ -146,12 +146,14 @@ async fn test_parallel_download_error_propagation() {
         .create_async()
         .await;
 
-    // Mock FAILURE for chunk 2 (this should trigger fail-fast)
+    // Mock FAILURE for chunk 2 (this should trigger fail-fast after retries)
+    // With chunk-level retry, the failing chunk may be retried up to MAX_CHUNK_RETRIES (3) times.
     let mock_chunk_2_fail = server
         .mock("GET", "/test-video.mp4")
         .match_header("range", "bytes=10485760-15728639")
         .with_status(500)
         .with_body("Internal Server Error")
+        .expect_at_least(1)
         .create_async()
         .await;
 
@@ -296,16 +298,8 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result = download_chunk_with_retry(
-        &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
-        Some(progress),
-        0,
-    )
-    .await;
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 1024);
@@ -340,16 +334,8 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result = download_chunk_with_retry(
-        &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
-        Some(progress),
-        0,
-    )
-    .await;
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
 
     assert!(result.is_err());
 }
@@ -383,16 +369,8 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result = download_chunk_with_retry(
-        &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
-        Some(progress),
-        0,
-    )
-    .await;
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
 
     assert!(result.is_err());
     // mockito's expect(1) will panic on Drop if more than 1 request was made
@@ -408,7 +386,9 @@ async fn test_chunk_retry_cleans_partial_file() {
     let chunk_path = temp_dir.path().join("chunk_0");
 
     // Write a partial file to simulate a failed download
-    tokio::fs::write(&chunk_path, b"partial data").await.unwrap();
+    tokio::fs::write(&chunk_path, b"partial data")
+        .await
+        .unwrap();
     assert!(chunk_path.exists());
 
     // Mockito matches in LIFO order. Create success mock FIRST (matched second).
@@ -443,16 +423,8 @@ async fn test_chunk_retry_cleans_partial_file() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result = download_chunk_with_retry(
-        &downloader,
-        &url,
-        0,
-        511,
-        &chunk_path,
-        Some(progress),
-        0,
-    )
-    .await;
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 511, &chunk_path, Some(progress), 0).await;
 
     assert!(result.is_ok());
     // The file should contain the successful download, not the partial data

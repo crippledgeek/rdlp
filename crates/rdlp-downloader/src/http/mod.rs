@@ -10,6 +10,7 @@ mod trait_impl;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub(crate) use parallel::download_chunk_with_retry;
 
 use backon::Retryable;

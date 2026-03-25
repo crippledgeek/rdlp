@@ -635,7 +635,10 @@ mod tests {
             let state = ctrl.state.lock().unwrap();
             (state.current_chunk_level, state.current_connections)
         };
-        assert_eq!(level1, 4, "chunk level should have increased by 2 from floor");
+        assert_eq!(
+            level1, 4,
+            "chunk level should have increased by 2 from floor"
+        );
         assert_eq!(conns1, 3, "connections should have increased by 1");
 
         // Second interval — throughput still high (increasing) → another ramp.
