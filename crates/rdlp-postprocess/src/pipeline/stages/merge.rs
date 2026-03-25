@@ -109,9 +109,9 @@ impl PipelineStage for MergeStage {
         let _log_bridge = stage_callback
             .as_ref()
             .and_then(|cb| rdlp_ffmpeg::bridge_ffmpeg_logs(cb).ok());
-        let callback = stage_callback.map(
-            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
-        );
+        let callback = stage_callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+            Arc::new(move |frac| cb.on_progress(frac))
+        });
 
         self.ffmpeg
             .merge(&video_file, &audio_file, &output_path, &opts, callback)

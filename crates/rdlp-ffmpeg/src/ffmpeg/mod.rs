@@ -52,8 +52,8 @@ use crate::error::{PostProcessError, Result};
 
 // Re-export public types from submodules
 pub use audio_codecs::{AUDIO_CODECS, AudioCodecConfig, get_audio_codec};
-pub use log_capture::{FfmpegLogBridge, LogForwarderGuard, bridge_ffmpeg_logs};
 pub use audio_encoder_registry::{AudioCodecInfo, AudioEncoderInfo};
+pub use log_capture::{FfmpegLogBridge, LogForwarderGuard, bridge_ffmpeg_logs};
 pub use normalize_types::{
     AudioNormMode, LoudnormMeasurements, LoudnormPreset, NormalizeOptions, PeakAnalysis,
 };

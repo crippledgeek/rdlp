@@ -330,7 +330,10 @@ mod tests {
 
         // Forwarder should have received the message
         let msgs = received.lock().unwrap();
-        assert!(!msgs.is_empty(), "forwarder should have received at least one message");
+        assert!(
+            !msgs.is_empty(),
+            "forwarder should have received at least one message"
+        );
         assert_eq!(msgs[0].0, ffmpeg_the_third::ffi::AV_LOG_INFO);
         assert!(msgs[0].1.contains("test log message"));
 
@@ -417,7 +420,10 @@ mod tests {
         }
 
         let msgs = received.lock().unwrap();
-        assert!(!msgs.is_empty(), "bridge should forward to PostProcessCallback");
+        assert!(
+            !msgs.is_empty(),
+            "bridge should forward to PostProcessCallback"
+        );
         assert!(
             msgs.iter().any(|m| m.contains("bridge test")),
             "message should contain 'bridge test', got: {:?}",

@@ -310,29 +310,42 @@ impl PipelineStage for RecodeStage {
             cb.on_log(&format!("Recode: container={target_format}"));
         }
 
-        let progress_callback = stage_callback.as_ref().cloned().map(
-            |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
-        );
+        let progress_callback =
+            stage_callback
+                .as_ref()
+                .cloned()
+                .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
+                    Arc::new(move |frac| cb.on_progress(frac))
+                });
 
-        let log_callback: Option<Arc<dyn Fn(&str) + Send + Sync>> =
-            if opts.verbose {
-                stage_callback.as_ref().cloned().map(
-                    |cb| -> Arc<dyn Fn(&str) + Send + Sync> {
-                        Arc::new(move |msg| cb.on_log(msg))
-                    },
-                )
-            } else {
-                None
-            };
+        let log_callback: Option<Arc<dyn Fn(&str) + Send + Sync>> = if opts.verbose {
+            stage_callback
+                .as_ref()
+                .cloned()
+                .map(|cb| -> Arc<dyn Fn(&str) + Send + Sync> {
+                    Arc::new(move |msg| cb.on_log(msg))
+                })
+        } else {
+            None
+        };
 
         self.ffmpeg
-            .convert_video(&input_file, &output_path, &opts, progress_callback, log_callback)
+            .convert_video(
+                &input_file,
+                &output_path,
+                &opts,
+                progress_callback,
+                log_callback,
+            )
             .await?;
 
         if let Some(ref cb) = stage_callback {
             cb.on_log(&format!(
                 "Recode: complete → {}",
-                output_path.file_name().unwrap_or_default().to_string_lossy()
+                output_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
             ));
         }
         info!("RecodeStage: converted to {}", output_path.display());

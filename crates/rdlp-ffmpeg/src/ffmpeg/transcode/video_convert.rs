@@ -46,12 +46,8 @@ impl FFmpegRunner {
                 None
             };
 
-            let result = Self::convert_video_sync(
-                &effective_input,
-                &output,
-                &opts,
-                progress_fn.as_deref(),
-            );
+            let result =
+                Self::convert_video_sync(&effective_input, &output, &opts, progress_fn.as_deref());
 
             // Drain captured logs and forward to the UI log viewer.
             if let Some(ref guard) = log_guard {
@@ -163,7 +159,10 @@ impl FFmpegRunner {
             } else if r_rate.numerator() > 0 && r_rate.denominator() > 0 {
                 debug!(
                     "video_convert: avg_frame_rate={}/{} ({avg_fps:.1} fps) looks wrong, using r_frame_rate={}/{}",
-                    avg.numerator(), avg.denominator(), r_rate.numerator(), r_rate.denominator()
+                    avg.numerator(),
+                    avg.denominator(),
+                    r_rate.numerator(),
+                    r_rate.denominator()
                 );
                 r_rate
             } else {
@@ -338,9 +337,9 @@ impl FFmpegRunner {
         let audio_transcode_state: Option<(
             ffmpeg_the_third::decoder::Audio,
             ffmpeg_the_third::encoder::audio::Encoder,
-            ffmpeg_the_third::Rational,        // encoder time_base
-            usize,                             // audio_ost_index for transcode
-            ffmpeg_the_third::filter::Graph,   // audio format conversion filter
+            ffmpeg_the_third::Rational,      // encoder time_base
+            usize,                           // audio_ost_index for transcode
+            ffmpeg_the_third::filter::Graph, // audio format conversion filter
         )> = if let Some(enc_name) = audio_encode_codec {
             if let Some(audio_idx) = audio_ist_index {
                 // Open audio decoder
@@ -603,7 +602,12 @@ impl FFmpegRunner {
 
         // Flush video encoder
         video_encoder.send_eof()?;
-        Self::drain_video_encoder_packets(&mut video_encoder, &mut octx, video_ost_index, video_enc_time_base)?;
+        Self::drain_video_encoder_packets(
+            &mut video_encoder,
+            &mut octx,
+            video_ost_index,
+            video_enc_time_base,
+        )?;
 
         // Flush audio encoder (transcode path)
         if let (
@@ -622,7 +626,12 @@ impl FFmpegRunner {
             // Flush decoder
             audio_dec.send_eof()?;
             Self::drain_audio_transcode_filtered(
-                audio_dec, audio_filter, audio_enc, &mut octx, enc_tb, audio_ost_idx,
+                audio_dec,
+                audio_filter,
+                audio_enc,
+                &mut octx,
+                enc_tb,
+                audio_ost_idx,
             )?;
             // Flush filter graph
             audio_filter
@@ -631,7 +640,11 @@ impl FFmpegRunner {
                 .source()
                 .flush()?;
             Self::drain_audio_filter_to_encoder(
-                audio_filter, audio_enc, &mut octx, enc_tb, audio_ost_idx,
+                audio_filter,
+                audio_enc,
+                &mut octx,
+                enc_tb,
+                audio_ost_idx,
             )?;
             // Flush encoder
             audio_enc.send_eof()?;
@@ -661,18 +674,18 @@ impl FFmpegRunner {
         let mut graph = ffmpeg_the_third::filter::Graph::new();
 
         let sample_fmt_name = unsafe {
-            let name_ptr =
-                ffmpeg_the_third::ffi::av_get_sample_fmt_name(decoder.format().into());
+            let name_ptr = ffmpeg_the_third::ffi::av_get_sample_fmt_name(decoder.format().into());
             if name_ptr.is_null() {
                 "fltp"
             } else {
-                std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap_or("fltp")
+                std::ffi::CStr::from_ptr(name_ptr)
+                    .to_str()
+                    .unwrap_or("fltp")
             }
         };
 
         let enc_fmt_name = unsafe {
-            let name_ptr =
-                ffmpeg_the_third::ffi::av_get_sample_fmt_name(encoder.format().into());
+            let name_ptr = ffmpeg_the_third::ffi::av_get_sample_fmt_name(encoder.format().into());
             if name_ptr.is_null() {
                 "s16"
             } else {
@@ -694,9 +707,8 @@ impl FFmpegRunner {
         );
         graph
             .add(
-                &ffmpeg_the_third::filter::find("abuffer").ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed("abuffer filter not found")
-                })?,
+                &ffmpeg_the_third::filter::find("abuffer")
+                    .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffer filter not found"))?,
                 "in",
                 &abuffer_args,
             )
@@ -726,12 +738,11 @@ impl FFmpegRunner {
 
         // Set buffersink frame_size to match encoder's required frame size
         let frame_size = encoder.frame_size();
-        if frame_size > 0 && let Some(mut sink) = graph.get("out") {
+        if frame_size > 0
+            && let Some(mut sink) = graph.get("out")
+        {
             unsafe {
-                ffmpeg_the_third::ffi::av_buffersink_set_frame_size(
-                    sink.as_mut_ptr(),
-                    frame_size,
-                );
+                ffmpeg_the_third::ffi::av_buffersink_set_frame_size(sink.as_mut_ptr(), frame_size);
             }
         }
 
