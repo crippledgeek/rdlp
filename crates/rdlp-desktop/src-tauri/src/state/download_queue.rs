@@ -65,6 +65,7 @@ pub struct DownloadJob {
 /// Stored on [`DownloadJob`] so that retry operations can reconstruct the
 /// original [`crate::commands::download::DownloadOptions`] exactly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SavedDownloadOptions {
     /// Raw JSON of the original `DownloadOptions` sent by the frontend.
     pub(crate) json: serde_json::Value,
