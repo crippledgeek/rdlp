@@ -121,7 +121,11 @@ impl PipelineStage for AudioExtractStage {
             msg.config.audio_quality.as_deref(),
         );
 
-        let callback = msg.callback_factory.as_ref().map(|f| f(self.name())).map(
+        let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
+        let _log_bridge = stage_callback
+            .as_ref()
+            .and_then(|cb| rdlp_ffmpeg::bridge_ffmpeg_logs(cb).ok());
+        let callback = stage_callback.map(
             |cb| -> Arc<dyn Fn(f64) + Send + Sync> { Arc::new(move |frac| cb.on_progress(frac)) },
         );
 

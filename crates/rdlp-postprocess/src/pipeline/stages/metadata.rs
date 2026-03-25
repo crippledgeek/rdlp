@@ -140,8 +140,26 @@ impl PipelineStage for MetadataStage {
         let metadata = Self::build_metadata(&msg.info);
         let chapters = Self::build_chapters(&msg.info);
 
+        let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
+        let _log_forwarder = stage_callback.as_ref().map(|cb| {
+            let cb = cb.clone();
+            rdlp_ffmpeg::LogForwarderGuard::new(std::sync::Arc::new(
+                move |level: i32, msg: String| {
+                    let trimmed = msg.trim_end();
+                    if trimmed.is_empty() {
+                        return;
+                    }
+                    let prefixed = match level {
+                        l if l <= 16 => format!("[ERROR] {trimmed}"),
+                        24 => format!("[WARN] {trimmed}"),
+                        _ => trimmed.to_string(),
+                    };
+                    cb.on_log(&prefixed);
+                },
+            ))
+        });
         let log_callback = if msg.config.verbose {
-            msg.callback_factory.as_ref().map(|f| f(self.name()))
+            stage_callback
         } else {
             None
         };

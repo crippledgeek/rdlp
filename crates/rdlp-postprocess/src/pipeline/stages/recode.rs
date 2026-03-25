@@ -289,6 +289,10 @@ impl PipelineStage for RecodeStage {
         opts.verbose = msg.config.verbose;
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
+        // Bridge FFmpeg logs to the callback for real-time encoder output
+        let _log_bridge = stage_callback
+            .as_ref()
+            .and_then(|cb| rdlp_ffmpeg::bridge_ffmpeg_logs(cb).ok());
 
         // Log recode parameters to the UI
         if let Some(ref cb) = stage_callback {
