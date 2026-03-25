@@ -109,6 +109,7 @@ impl FFmpegRunner {
         encoder: &mut ffmpeg_the_third::encoder::video::Video,
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
+        enc_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
         let mut frame = ffmpeg_the_third::frame::Video::empty();
         while decoder.receive_frame(&mut frame).is_ok() {
@@ -118,7 +119,7 @@ impl FFmpegRunner {
                 .source()
                 .add(&frame)?;
             frame_unref_video(&mut frame);
-            Self::drain_video_filter_to_encoder(filter, encoder, octx, ost_index)?;
+            Self::drain_video_filter_to_encoder(filter, encoder, octx, ost_index, enc_time_base)?;
         }
         Ok(())
     }
@@ -129,6 +130,7 @@ impl FFmpegRunner {
         encoder: &mut ffmpeg_the_third::encoder::video::Video,
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
+        enc_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
         let mut filtered = ffmpeg_the_third::frame::Video::empty();
         loop {
@@ -140,16 +142,21 @@ impl FFmpegRunner {
             }
             encoder.send_frame(&filtered)?;
             frame_unref_video(&mut filtered);
-            Self::drain_video_encoder_packets(encoder, octx, ost_index)?;
+            Self::drain_video_encoder_packets(encoder, octx, ost_index, enc_time_base)?;
         }
         Ok(())
     }
 
     /// Receive encoded video packets from encoder and write to output.
+    ///
+    /// Packets are rescaled from `enc_time_base` to the output stream's
+    /// time_base (read from octx, which reflects the muxer's final value
+    /// set during `write_header`).
     pub(super) fn drain_video_encoder_packets(
         encoder: &mut ffmpeg_the_third::encoder::video::Video,
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
+        enc_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
         let ost_time_base = octx
             .stream(ost_index)
@@ -159,6 +166,7 @@ impl FFmpegRunner {
             .time_base();
         let mut packet = ffmpeg_the_third::Packet::empty();
         while encoder.receive_packet(&mut packet).is_ok() {
+            packet.rescale_ts(enc_time_base, ost_time_base);
             packet.set_stream(ost_index);
 
             // Capture packet metadata before write

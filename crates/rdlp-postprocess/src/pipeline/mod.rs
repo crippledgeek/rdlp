@@ -256,7 +256,9 @@ impl Pipeline {
 
         for (i, stage) in self.stages.iter().enumerate() {
             let stage = Arc::clone(stage);
-            let in_rx_i = rxs_iter.next().unwrap();
+            let in_rx_i = rxs_iter
+                .next()
+                .expect("pipeline: rxs has stages+1 elements; iteration {i} must yield Some");
             let out_tx = txs[i + 1].clone();
             let stage_name = stage.name().to_owned();
 
@@ -299,7 +301,9 @@ impl Pipeline {
         }
 
         // The last rx in the iterator is the pipeline output.
-        rxs_iter.next().unwrap()
+        rxs_iter
+            .next()
+            .expect("pipeline: rxs has stages+1 elements; loop consumed stages; one must remain")
     }
 }
 
