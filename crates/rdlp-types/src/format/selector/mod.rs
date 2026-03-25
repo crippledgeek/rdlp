@@ -17,11 +17,14 @@
 //!   op           = "<=" | ">=" | "!=" | "<" | ">" | "="
 //!   value        = number | string
 
+mod error;
 mod eval;
 mod parser;
 
 #[cfg(test)]
 mod tests;
+
+pub use error::FormatSelectError;
 
 use super::Format;
 use winnow::prelude::*;
@@ -133,10 +136,14 @@ impl FormatSelector {
     /// Parse a format selection expression.
     ///
     /// Returns an error if the expression is empty or contains invalid syntax.
-    pub fn parse(expression: &str) -> Result<Self, String> {
+    pub fn parse(expression: &str) -> Result<Self, FormatSelectError> {
         let expression = expression.trim();
         if expression.is_empty() {
-            return Err("Empty format expression".to_string());
+            return Err(FormatSelectError::Parse {
+                message: "Empty format expression".to_string(),
+                position: 0,
+                input: String::new(),
+            });
         }
 
         // Strip trailing '/' (yt-dlp tolerates it)
@@ -144,7 +151,12 @@ impl FormatSelector {
 
         let fallbacks = parser::parse_expression
             .parse(to_parse)
-            .map_err(|e| format!("Invalid format expression '{expression}': {e}"))?;
+            .map_err(|e| FormatSelectError::Parse {
+                // winnow's ParseError::offset() gives the byte offset of the failure.
+                position: e.offset(),
+                message: e.inner().to_string(),
+                input: expression.to_string(),
+            })?;
 
         Ok(Self {
             expression: expression.to_string(),
