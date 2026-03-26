@@ -313,7 +313,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_page_number_pattern() {
         let cap = PAGE_NUMBER_PATTERN
             .captures("from_videos+from_albums:03")
