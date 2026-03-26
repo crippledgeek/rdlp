@@ -299,12 +299,7 @@ fn test_fix_audio_timestamps_with_sample_clock_noop() {
 
 /// Helper: compute expected DTS/duration for sample-clock synthesis
 /// using `av_rescale_q(samples, 1/sample_rate, ost_tb)`.
-fn sample_clock_rescale(
-    samples: i64,
-    sample_rate: i32,
-    ost_tb_num: i32,
-    ost_tb_den: i32,
-) -> i64 {
+fn sample_clock_rescale(samples: i64, sample_rate: i32, ost_tb_num: i32, ost_tb_den: i32) -> i64 {
     // av_rescale_q(a, bq, cq) = a * bq.num * cq.den / (bq.den * cq.num)
     // bq = {1, sample_rate}, cq = {ost_tb_num, ost_tb_den}
     // = samples * 1 * ost_tb_den / (sample_rate * ost_tb_num)
