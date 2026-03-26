@@ -134,6 +134,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(XTitsExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(NineAnimeExtractor::new()));
 
         registry
     }
