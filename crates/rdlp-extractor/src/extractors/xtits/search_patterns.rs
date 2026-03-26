@@ -27,11 +27,6 @@ pub(crate) static DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("Valid duration pattern")
 });
 
-/// Regex to extract video ID from URL path `/videos/{id}/`.
-pub(crate) static VIDEO_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"/videos/(\d+)/").expect("Valid video ID pattern")
-});
-
 /// Regex to detect the highest page number in pagination links.
 pub(crate) static PAGE_NUMBER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"from_videos\+from_albums:(\d+)").expect("Valid page number pattern")
@@ -310,12 +305,6 @@ mod tests {
     }
 
     #[test]
-    fn test_video_id_pattern() {
-        let cap = VIDEO_ID_PATTERN
-            .captures("/videos/50088/slug/")
-            .unwrap();
-        assert_eq!(&cap[1], "50088");
-    }
 
     #[test]
     fn test_page_number_pattern() {
