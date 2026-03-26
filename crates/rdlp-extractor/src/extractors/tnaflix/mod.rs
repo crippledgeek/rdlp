@@ -131,7 +131,7 @@ impl InfoExtractor for TNAFlixExtractor {
 
             BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
 
-            ajax::parse_moviefap_xml(&self.base, &cdn_url, ctx).await?
+            ajax::parse_moviefap_xml(&self.base, &cdn_url, url, ctx).await?
         } else {
             // TNAFlix/EMPFlix: try HTML <source> tags first, fallback to AJAX
             let video_data = {
@@ -162,12 +162,22 @@ impl InfoExtractor for TNAFlixExtractor {
         };
 
         // Build formats and fetch filesizes using base (asynchronous)
-        let formats = self.base.build_formats(video_data, ctx).await;
+        let mut formats = self.base.build_formats(video_data, ctx).await;
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction(format!(
                 "No video formats found for URL: {url}"
             )));
+        }
+
+        // Set Referer header on all formats so the CDN receives it during download.
+        // MovieFap's CDN may throttle requests without a proper Referer.
+        if is_moviefap {
+            let mut headers = std::collections::HashMap::new();
+            headers.insert("Referer".to_string(), url.to_string());
+            for format in &mut formats {
+                format.http_headers = Some(headers.clone());
+            }
         }
 
         // Build InfoDict with all extracted metadata

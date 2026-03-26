@@ -68,12 +68,15 @@ pub async fn parse_empflix_ajax(
 pub async fn parse_moviefap_xml(
     base: &TnaFlixNetworkBase,
     cdn_url: &str,
+    referer: &str,
     ctx: &ExtractionContext,
 ) -> Result<Vec<VideoMetadata>> {
-    // Fetch the XML from cdn.php
+    // Fetch the XML from cdn.php (matching browser headers)
     let response = ctx
         .http_client
         .get(cdn_url)
+        .header("Referer", referer)
+        .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
         .map_err(|e| RdlpError::Network(format!("Failed to fetch MovieFap XML: {e}")))?;
