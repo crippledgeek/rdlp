@@ -13,6 +13,7 @@
 
 mod formats;
 mod patterns;
+mod search_patterns;
 
 use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
