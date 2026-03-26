@@ -16,6 +16,9 @@ use super::super::salvage::prepare_input_with_salvage;
 use super::super::{FFmpegRunner, RemuxOptions, VideoConvertOptions, ensure_init};
 use super::mux_timing::flush_interleave_queue;
 
+/// Callback type for forwarding FFmpeg log lines to the UI.
+type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 impl FFmpegRunner {
     /// Convert a video file, either by remuxing or transcoding.
     ///
@@ -31,7 +34,7 @@ impl FFmpegRunner {
         output: impl AsRef<Path>,
         opts: &VideoConvertOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
-        log_fn: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+        log_fn: Option<LogFn>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -50,15 +53,14 @@ impl FFmpegRunner {
                 Self::convert_video_sync(&effective_input, &output, &opts, progress_fn.as_deref());
 
             // Drain captured logs and forward to the UI log viewer.
-            if let Some(ref guard) = log_guard {
-                if let Ok(lines) = guard.take_captured() {
-                    if let Some(ref log) = log_fn {
-                        for line in lines {
-                            let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                log(trimmed);
-                            }
-                        }
+            if let Some(ref guard) = log_guard
+                && let Ok(lines) = guard.take_captured()
+                && let Some(ref log) = log_fn
+            {
+                for line in lines {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        log(trimmed);
                     }
                 }
             }

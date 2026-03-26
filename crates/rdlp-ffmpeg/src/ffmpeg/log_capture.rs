@@ -301,8 +301,14 @@ unsafe extern "C" fn capture_callback(
 mod tests {
     use super::*;
 
+    /// All tests in this module share process-global state (`LOG_BUFFER`,
+    /// `LOG_FORWARDER`, `av_log_set_level`, `av_log_set_callback`). This mutex
+    /// serializes them to prevent races when `cargo test` runs in parallel.
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
     #[test]
     fn test_log_forwarder_receives_messages() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         use std::sync::Arc;
 
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
@@ -347,6 +353,7 @@ mod tests {
 
     #[test]
     fn test_clear_log_forwarder_stops_forwarding() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         use std::sync::Arc;
 
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
@@ -385,6 +392,7 @@ mod tests {
 
     #[test]
     fn test_bridge_ffmpeg_logs_captures_and_forwards() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         use std::sync::Arc;
 
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -433,6 +441,7 @@ mod tests {
 
     #[test]
     fn test_log_forwarder_guard_drop_clears() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         use std::sync::Arc;
 
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
@@ -453,6 +462,7 @@ mod tests {
 
     #[test]
     fn test_log_buffer_init_and_clear() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         // Ensure buffer starts as None
         {
             let buf = LOG_BUFFER.lock().unwrap();
@@ -485,6 +495,7 @@ mod tests {
 
     #[test]
     fn test_log_suppress_guard_error_level() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         // error_level() sets AV_LOG_ERROR; drop restores the saved level
         unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
         let guard = LogSuppressGuard::error_level();
@@ -500,6 +511,7 @@ mod tests {
 
     #[test]
     fn test_log_suppress_guard_fatal_level() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         // new() sets AV_LOG_FATAL; drop restores the saved level
         unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
         let guard = LogSuppressGuard::new();
