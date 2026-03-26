@@ -33,6 +33,8 @@ pub mod megacloud;
 pub mod metadata;
 pub mod patterns;
 pub mod playlist;
+pub mod search;
+pub mod search_patterns;
 
 use async_trait::async_trait;
 use log::{debug, info};
