@@ -3,8 +3,8 @@
 //! XTits is a KVS (Kernel Video Sharing) tube site serving direct MP4 downloads.
 //!
 //! Supports:
-//! - Video pages: `https://www.xtits.xxx/videos/183207/slug/`
-//! - Embed pages: `https://www.xtits.xxx/embed/183207`
+//! - Video pages: `https://www.xtits.com/videos/183207/slug/`
+//! - Embed pages: `https://www.xtits.com/embed/183207`
 //!
 //! ## Module Structure
 //!
@@ -23,7 +23,7 @@ use scraper::Html;
 use crate::base::common::BaseExtractor;
 
 /// Base URL for making relative hrefs absolute.
-const XTITS_BASE_URL: &str = "https://www.xtits.xxx";
+const XTITS_BASE_URL: &str = "https://www.xtits.com";
 
 /// XTits extractor
 pub struct XTitsExtractor;
@@ -403,7 +403,7 @@ mod tests {
         let html = Html::parse_document(html_str);
         assert_eq!(
             extract_model_url(&html),
-            Some("https://www.xtits.xxx/models/jenni-lee/".to_string())
+            Some("https://www.xtits.com/models/jenni-lee/".to_string())
         );
     }
 }
