@@ -322,6 +322,9 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
                     &format!("Found {} media items", arr.len()),
                 );
 
+                // Separate endpoints needing async fetch from direct formats
+                let mut fetch_futures = Vec::new();
+
                 for (idx, item) in arr.iter().enumerate() {
                     BaseExtractor::log_if_verbose(
                         ctx,
@@ -335,14 +338,11 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
 
                         let has_quality = item.get("quality").is_some();
 
-                        // If format is mp4/hls without quality, fetch JSON to get actual formats
                         if matches!(format_type, "mp4" | "hls") && !has_quality {
-                            if let Some(fetched) = fetch_formats_from_endpoint(video_url, ctx).await
-                            {
-                                formats.extend(fetched);
-                            }
+                            // Queue for parallel fetch
+                            fetch_futures.push(fetch_formats_from_endpoint(video_url, ctx));
                         } else {
-                            // Has quality field, process directly
+                            // Has quality field, process directly (sync)
                             let quality_str = parse_quality(item);
                             let format =
                                 build_format(&quality_str, video_url.to_string(), format_type);
@@ -362,6 +362,12 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
                             formats.push(format);
                         }
                     }
+                }
+
+                // Fetch all endpoints in parallel
+                let fetch_results = futures::future::join_all(fetch_futures).await;
+                for result in fetch_results.into_iter().flatten() {
+                    formats.extend(result);
                 }
             }
             Err(e) => {

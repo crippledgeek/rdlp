@@ -170,6 +170,9 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
+                                  progress: pct,
+                                  speed: null,
+                                  eta: null,
                                   statusMessage: `${p.stage}… ${pct}%`,
                               }
                             : job,

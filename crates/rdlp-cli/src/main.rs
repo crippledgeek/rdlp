@@ -198,16 +198,21 @@ async fn async_main() -> Result<()> {
             query: query_text.clone(),
             filters,
             max_results: None,
-            page: None,
+            page: Some(1),
         };
 
-        match client.search(site, &search_query).await {
-            Ok(results) => {
-                if results.is_empty() {
+        match client.search_page(site, &search_query).await {
+            Ok(response) => {
+                if response.results.is_empty() {
                     eprintln!("No results found for '{query_text}'.");
                 } else {
-                    eprintln!("Found {} results:\n", results.len());
-                    for (i, r) in results.iter().enumerate() {
+                    let page_info = if response.has_more {
+                        format!(" (page {}, more available)", response.page)
+                    } else {
+                        format!(" (page {})", response.page)
+                    };
+                    eprintln!("Found {} results{}:\n", response.results.len(), page_info);
+                    for (i, r) in response.results.iter().enumerate() {
                         eprintln!("{:>3}. {}", i + 1, r.title);
                         eprintln!("     {}", r.video_url);
                         if let Some(d) = r.duration {

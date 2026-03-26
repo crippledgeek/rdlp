@@ -75,6 +75,64 @@ mod tests {
         assert_eq!(caps.get(1).unwrap().as_str(), "123456");
     }
 
+    // ---- Negative URL pattern tests ----
+
+    #[test]
+    fn test_tnaflix_rejects_missing_video_prefix() {
+        assert!(!TNAFLIX_URL_PATTERN.is_match("https://www.tnaflix.com/category/title/123"));
+    }
+
+    #[test]
+    fn test_tnaflix_rejects_non_numeric_id() {
+        assert!(!TNAFLIX_URL_PATTERN.is_match("https://www.tnaflix.com/cat/title/videoABC"));
+    }
+
+    #[test]
+    fn test_tnaflix_rejects_single_path_segment() {
+        assert!(!TNAFLIX_URL_PATTERN.is_match("https://www.tnaflix.com/video123"));
+    }
+
+    #[test]
+    fn test_tnaflix_rejects_wrong_domain() {
+        assert!(!TNAFLIX_URL_PATTERN.is_match("https://www.empflix.com/cat/title/video123"));
+    }
+
+    #[test]
+    fn test_empflix_rejects_wrong_domain() {
+        assert!(!EMPFLIX_URL_PATTERN.is_match("https://www.tnaflix.com/videos/title-123"));
+    }
+
+    #[test]
+    fn test_empflix_rejects_missing_id() {
+        assert!(!EMPFLIX_URL_PATTERN.is_match("https://www.empflix.com/videos/title-"));
+    }
+
+    #[test]
+    fn test_empflix_rejects_random_path() {
+        assert!(!EMPFLIX_URL_PATTERN.is_match("https://www.empflix.com/search?q=test"));
+    }
+
+    #[test]
+    fn test_moviefap_rejects_uppercase_hex() {
+        // Regex is [0-9a-f] only — uppercase hex should not match
+        assert!(!MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/ABCDEF/title.html"));
+    }
+
+    #[test]
+    fn test_moviefap_rejects_missing_html_extension() {
+        assert!(!MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/abc123/title"));
+    }
+
+    #[test]
+    fn test_moviefap_rejects_non_hex_id() {
+        assert!(!MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/xyz!/title.html"));
+    }
+
+    #[test]
+    fn test_moviefap_rejects_wrong_domain() {
+        assert!(!MOVIEFAP_URL_PATTERN.is_match("https://www.empflix.com/videos/abc123/title.html"));
+    }
+
     #[test]
     fn test_empflix_id_extraction() {
         // /videos/title-ID format

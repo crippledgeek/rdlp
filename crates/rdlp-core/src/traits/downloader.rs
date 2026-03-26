@@ -187,10 +187,16 @@ impl DownloadProgress {
             }
         });
 
-        let eta = if speed > 0.0 {
-            total_bytes.map(|total| {
+        let eta = if speed > 1.0 {
+            total_bytes.and_then(|total| {
                 let remaining = total.saturating_sub(bytes_downloaded);
-                Duration::from_secs_f64(remaining as f64 / speed)
+                let secs = remaining as f64 / speed;
+                // Cap at 24 hours — anything larger is not a useful estimate
+                if secs <= 86_400.0 {
+                    Some(Duration::from_secs_f64(secs))
+                } else {
+                    None
+                }
             })
         } else {
             None
@@ -223,8 +229,7 @@ impl DownloadProgress {
             None
         };
 
-        let eta = if speed > 0.0 && total_segments > 0 {
-            // Estimate based on segments remaining and current speed
+        let eta = if speed > 1.0 && total_segments > 0 {
             let remaining_segments = total_segments.saturating_sub(segments_downloaded);
             let avg_segment_size = if segments_downloaded > 0 {
                 bytes_downloaded / segments_downloaded
@@ -232,7 +237,8 @@ impl DownloadProgress {
                 2 * 1024 * 1024 // Default 2MB estimate
             };
             let remaining_bytes = remaining_segments * avg_segment_size;
-            Some(Duration::from_secs_f64(remaining_bytes as f64 / speed))
+            let secs = remaining_bytes as f64 / speed;
+            if secs <= 86_400.0 { Some(Duration::from_secs_f64(secs)) } else { None }
         } else {
             None
         };
@@ -269,8 +275,7 @@ impl DownloadProgress {
             None
         };
 
-        let eta = if speed > 0.0 && total_duration > 0.0 && duration_downloaded < total_duration {
-            // Estimate remaining bytes based on duration ratio and current progress
+        let eta = if speed > 1.0 && total_duration > 0.0 && duration_downloaded < total_duration {
             let remaining_duration = total_duration - duration_downloaded;
             let duration_ratio = if duration_downloaded > 0.0 {
                 remaining_duration / duration_downloaded
@@ -278,9 +283,8 @@ impl DownloadProgress {
                 1.0
             };
             let estimated_remaining_bytes = (bytes_downloaded as f64 * duration_ratio) as u64;
-            Some(Duration::from_secs_f64(
-                estimated_remaining_bytes as f64 / speed,
-            ))
+            let secs = estimated_remaining_bytes as f64 / speed;
+            if secs <= 86_400.0 { Some(Duration::from_secs_f64(secs)) } else { None }
         } else {
             None
         };

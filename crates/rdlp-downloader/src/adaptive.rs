@@ -40,6 +40,13 @@ pub(crate) const CHUNK_LEVELS: [usize; 8] = [
     8 * 1024 * 1024, // 8 MB
 ];
 
+/// Minimum chunk level for multiplicative decrease.
+///
+/// Prevents the AIMD death spiral where ever-smaller chunks increase HTTP
+/// overhead, further reducing throughput, triggering more decreases. At level 2
+/// (256KB), per-request overhead is <1% of payload.
+const MIN_CHUNK_LEVEL: u8 = 2;
+
 /// Maximum number of throughput samples retained in history.
 const MAX_HISTORY: usize = 8;
 
@@ -111,7 +118,7 @@ impl Default for AdaptiveConfig {
             max_connections: 8,
             decision_interval: 4,
             initial_connections: 2,
-            initial_chunk_level: 0,
+            initial_chunk_level: MIN_CHUNK_LEVEL,
         }
     }
 }
@@ -137,7 +144,7 @@ struct AdaptiveState {
 impl AdaptiveState {
     fn new(initial_connections: usize, initial_chunk_level: u8) -> Self {
         Self {
-            current_chunk_level: initial_chunk_level.min(7),
+            current_chunk_level: initial_chunk_level.clamp(MIN_CHUNK_LEVEL, 7),
             current_connections: initial_connections.max(1),
             throughput_history: VecDeque::with_capacity(MAX_HISTORY),
             chunks_since_last_adjust: 0,
@@ -466,7 +473,7 @@ impl AdaptiveController {
         self.log(&msg);
     }
 
-    /// Increase the chunk level by `delta`, clamped to [0, 7].
+    /// Adjust the chunk level by `delta`, clamped to [MIN_CHUNK_LEVEL, 7].
     ///
     /// In HLS mode the chunk level is not adjusted.
     fn bump_chunk_level(&self, state: &mut AdaptiveState, delta: i8) {
@@ -474,7 +481,7 @@ impl AdaptiveController {
             return;
         }
         let old_level = state.current_chunk_level;
-        let new_level = (old_level as i16 + delta as i16).clamp(0, 7) as u8;
+        let new_level = (old_level as i16 + delta as i16).clamp(MIN_CHUNK_LEVEL as i16, 7) as u8;
         state.current_chunk_level = new_level;
         if new_level != old_level {
             let msg = format!(
@@ -567,9 +574,9 @@ mod tests {
     fn test_next_chunk_basic() {
         let ctrl = make_controller(1024 * 1024); // 1 MB
         let chunk = ctrl.next_chunk().unwrap();
-        // Level 0 = 64 KB
+        // Level 2 (MIN_CHUNK_LEVEL) = 256 KB
         assert_eq!(chunk.start, 0);
-        assert_eq!(chunk.end, 64 * 1024);
+        assert_eq!(chunk.end, 256 * 1024);
     }
 
     #[test]
@@ -618,7 +625,7 @@ mod tests {
             max_connections: 8,
             decision_interval: 4,
             initial_connections: 2,
-            initial_chunk_level: 0,
+            initial_chunk_level: 2, // MIN_CHUNK_LEVEL (was 0)
         };
         let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
 
@@ -628,7 +635,10 @@ mod tests {
             let state = ctrl.state.lock().unwrap();
             (state.current_chunk_level, state.current_connections)
         };
-        assert_eq!(level1, 2, "chunk level should have increased by 2");
+        assert_eq!(
+            level1, 4,
+            "chunk level should have increased by 2 from floor"
+        );
         assert_eq!(conns1, 3, "connections should have increased by 1");
 
         // Second interval — throughput still high (increasing) → another ramp.
@@ -831,7 +841,7 @@ mod tests {
             max_connections: 2,
             decision_interval: 1,
             initial_connections: 1,
-            initial_chunk_level: 0,
+            initial_chunk_level: 2, // MIN_CHUNK_LEVEL (was 0)
         };
         let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
 
@@ -842,11 +852,11 @@ mod tests {
         let level = ctrl.state.lock().unwrap().current_chunk_level;
         assert!(level <= 7, "chunk level must not exceed 7, got {level}");
 
-        // Now force into Steady and apply many MDs to try to go below 0.
+        // Now force into Steady and apply many MDs to try to go below MIN_CHUNK_LEVEL.
         {
             let mut state = ctrl.state.lock().unwrap();
             state.phase = Phase::Steady;
-            state.current_chunk_level = 0;
+            state.current_chunk_level = 2; // MIN_CHUNK_LEVEL (was 0)
             state.last_ewma = Some(10_000_000.0);
             for _ in 0..MAX_HISTORY {
                 state.throughput_history.push_back(100.0);
@@ -855,7 +865,7 @@ mod tests {
             ctrl.adjust(&mut state);
         }
         let level = ctrl.state.lock().unwrap().current_chunk_level;
-        assert_eq!(level, 0, "chunk level must not go below 0");
+        assert_eq!(level, 2, "chunk level must not go below MIN_CHUNK_LEVEL");
     }
 
     #[test]
@@ -914,6 +924,68 @@ mod tests {
             final_level, initial_level,
             "HLS mode must not adjust chunk level"
         );
+    }
+
+    // ── chunk level floor tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_chunk_level_floor_on_multiplicative_decrease() {
+        // Controller at level 3 with many MD triggers should never go below MIN_CHUNK_LEVEL (2).
+        let cfg = AdaptiveConfig {
+            max_connections: 8,
+            decision_interval: 2,
+            initial_connections: 4,
+            initial_chunk_level: 3,
+        };
+        let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
+
+        // Drive into Steady phase first with good throughput.
+        drive(&ctrl, 8, 10_000_000.0);
+
+        // Now simulate severe throughput drops to trigger repeated MD.
+        for _ in 0..10 {
+            drive(&ctrl, 2, 100_000.0); // Very low throughput → MD triggers
+        }
+
+        let state = ctrl.state.lock().unwrap();
+        assert!(
+            state.current_chunk_level >= 2,
+            "Chunk level {} dropped below floor 2",
+            state.current_chunk_level
+        );
+    }
+
+    #[test]
+    fn test_initial_chunk_level_clamped_to_floor() {
+        // Constructing with initial_chunk_level=0 should clamp to MIN_CHUNK_LEVEL (2).
+        let cfg = AdaptiveConfig {
+            initial_chunk_level: 0,
+            ..Default::default()
+        };
+        let ctrl = make_controller_cfg(1024 * 1024, cfg, ControllerMode::HttpChunked);
+
+        let state = ctrl.state.lock().unwrap();
+        assert_eq!(
+            state.current_chunk_level, 2,
+            "Initial chunk level should be clamped to floor"
+        );
+    }
+
+    #[test]
+    fn test_floor_does_not_block_upward_movement() {
+        // From level 2 (the floor), bumping +1 should reach level 3.
+        let cfg = AdaptiveConfig {
+            initial_chunk_level: 2,
+            ..Default::default()
+        };
+        let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
+
+        // Manually bump up.
+        {
+            let mut state = ctrl.state.lock().unwrap();
+            ctrl.bump_chunk_level(&mut state, 1);
+            assert_eq!(state.current_chunk_level, 3);
+        }
     }
 
     // ── realtime ratio test ───────────────────────────────────────────────────

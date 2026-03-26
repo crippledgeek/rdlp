@@ -134,17 +134,33 @@ pub fn spawn_progress_reporter(
 ) -> ProgressGuard {
     let task = callback.map(|cb| {
         tokio::spawn(async move {
+            // EWMA speed state: per-tick delta smoothed with alpha=0.3.
+            // Matches wget/curl responsiveness without a ring buffer.
+            const EWMA_ALPHA: f64 = 0.3;
+            let mut prev_bytes: u64 = config.resume_from;
+            let mut prev_time: Instant = config.start_time;
+            let mut smooth_speed: f64 = 0.0;
+
             loop {
                 tokio::time::sleep(config.update_interval).await;
 
                 let bytes = metrics.downloaded.load(Ordering::Relaxed);
-                let elapsed = Instant::now()
-                    .duration_since(config.start_time)
-                    .as_secs_f64();
-                let speed = if elapsed > 0.0 {
-                    (bytes - config.resume_from) as f64 / elapsed
+                let now = Instant::now();
+                let delta_bytes = bytes.saturating_sub(prev_bytes);
+                let delta_secs = now.duration_since(prev_time).as_secs_f64();
+
+                let speed = if delta_secs > 0.01 {
+                    let instant_speed = delta_bytes as f64 / delta_secs;
+                    smooth_speed = if smooth_speed == 0.0 {
+                        instant_speed
+                    } else {
+                        EWMA_ALPHA * instant_speed + (1.0 - EWMA_ALPHA) * smooth_speed
+                    };
+                    prev_bytes = bytes;
+                    prev_time = now;
+                    smooth_speed
                 } else {
-                    0.0
+                    smooth_speed
                 };
 
                 let progress_info = if let (Some(segments_counter), Some(duration_counter)) =

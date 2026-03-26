@@ -1,7 +1,7 @@
 //! Search URL patterns and filter descriptors for TNAFlix.
 //!
 //! Contains the search URL builder, page URL builder, and filter descriptor
-//! definitions used by `TNAFlixSearchExtractor`.
+//! definitions used by `TNAFlixSearchExtractor` and `EMPFlixSearchExtractor`.
 
 /// Built-in browse sections (non-category pages).
 const BROWSE_SECTIONS: &[&str] = &["new", "toprated", "featured"];
@@ -84,6 +84,54 @@ const BROWSE_CATEGORIES: &[&str] = &[
     "webcam-shows",
 ];
 
+/// Build a search URL from a [`SearchQuery`](rdlp_types::SearchQuery) for a given base URL.
+///
+/// Format: `{base_url}/search?what={encoded_query}&tab=`
+///
+/// Filters are appended as additional query parameters.
+///
+/// # Arguments
+/// * `base_url` - Site base URL, e.g. `"https://www.tnaflix.com"`.
+/// * `query` - The search query with optional filters.
+///
+/// # Returns
+/// A fully-formed search URL string.
+pub fn build_search_url_for(base_url: &str, query: &rdlp_types::SearchQuery) -> String {
+    let encoded_query = query.query.split_whitespace().collect::<Vec<_>>().join("+");
+
+    let mut url = format!("{base_url}/search?what={encoded_query}&tab=");
+
+    for filter in &query.filters {
+        url.push('&');
+        url.push_str(&filter.key);
+        url.push('=');
+        url.push_str(&filter.value);
+    }
+
+    url
+}
+
+/// Build a search URL for a specific page number for the given base URL.
+///
+/// Appends `&page={page}` to the base search URL.
+///
+/// # Arguments
+/// * `base_url` - Site base URL, e.g. `"https://www.tnaflix.com"`.
+/// * `query` - The search query with optional filters.
+/// * `page` - 1-based page number.
+///
+/// # Returns
+/// A fully-formed search URL string for the given page.
+pub fn build_search_url_page_for(
+    base_url: &str,
+    query: &rdlp_types::SearchQuery,
+    page: usize,
+) -> String {
+    let mut url = build_search_url_for(base_url, query);
+    url.push_str(&format!("&page={page}"));
+    url
+}
+
 /// Build a TNAFlix search URL from a [`SearchQuery`](rdlp_types::SearchQuery).
 ///
 /// Format: `https://www.tnaflix.com/search?what={encoded_query}&tab=`
@@ -96,18 +144,7 @@ const BROWSE_CATEGORIES: &[&str] = &[
 /// # Returns
 /// A fully-formed search URL string.
 pub fn build_search_url(query: &rdlp_types::SearchQuery) -> String {
-    let encoded_query = query.query.split_whitespace().collect::<Vec<_>>().join("+");
-
-    let mut url = format!("https://www.tnaflix.com/search?what={encoded_query}&tab=");
-
-    for filter in &query.filters {
-        url.push('&');
-        url.push_str(&filter.key);
-        url.push('=');
-        url.push_str(&filter.value);
-    }
-
-    url
+    build_search_url_for("https://www.tnaflix.com", query)
 }
 
 /// Build a TNAFlix search URL for a specific page number.
@@ -137,6 +174,34 @@ pub fn is_valid_category(value: &str) -> bool {
     BROWSE_SECTIONS.contains(&value) || BROWSE_CATEGORIES.contains(&value)
 }
 
+/// Build a browse URL for page 1 of a section or category for the given base URL.
+///
+/// # Arguments
+/// * `base_url` - Site base URL, e.g. `"https://www.empflix.com"`.
+/// * `slug` - A browse section ("new") or category slug ("teen-porn").
+///
+/// # Returns
+/// `{base_url}/{slug}`
+pub fn build_browse_url_for(base_url: &str, slug: &str) -> String {
+    format!("{base_url}/{slug}")
+}
+
+/// Build a browse URL for a specific page number for the given base URL.
+///
+/// Sections use `/{slug}/{page}`, categories use `/{slug}?page={page}`.
+///
+/// # Arguments
+/// * `base_url` - Site base URL, e.g. `"https://www.empflix.com"`.
+/// * `slug` - A browse section or category slug.
+/// * `page` - 1-based page number.
+pub fn build_browse_url_page_for(base_url: &str, slug: &str, page: usize) -> String {
+    if BROWSE_SECTIONS.contains(&slug) {
+        format!("{base_url}/{slug}/{page}")
+    } else {
+        format!("{base_url}/{slug}?page={page}")
+    }
+}
+
 /// Build a TNAFlix browse URL for page 1 of a section or category.
 ///
 /// # Arguments
@@ -145,7 +210,7 @@ pub fn is_valid_category(value: &str) -> bool {
 /// # Returns
 /// `https://www.tnaflix.com/{slug}`
 pub fn build_browse_url(slug: &str) -> String {
-    format!("https://www.tnaflix.com/{slug}")
+    build_browse_url_for("https://www.tnaflix.com", slug)
 }
 
 /// Build a TNAFlix browse URL for a specific page number.
@@ -156,11 +221,7 @@ pub fn build_browse_url(slug: &str) -> String {
 /// * `slug` - A browse section or category slug.
 /// * `page` - 1-based page number.
 pub fn build_browse_url_page(slug: &str, page: usize) -> String {
-    if BROWSE_SECTIONS.contains(&slug) {
-        format!("https://www.tnaflix.com/{slug}/{page}")
-    } else {
-        format!("https://www.tnaflix.com/{slug}?page={page}")
-    }
+    build_browse_url_page_for("https://www.tnaflix.com", slug, page)
 }
 
 /// Convert a kebab-case slug to a human-readable label.
@@ -471,5 +532,141 @@ mod tests {
         assert_eq!(cat.display_name, "Category");
         assert!(cat.default.is_none());
         assert!(cat.allowed_values.len() > 74); // sections + categories
+    }
+
+    // ---- Negative tests ----
+
+    fn make_neg_query(q: &str) -> rdlp_types::SearchQuery {
+        rdlp_types::SearchQuery {
+            query: q.to_string(),
+            filters: vec![],
+            max_results: None,
+            page: None,
+        }
+    }
+
+    // EMPFlix _for variant coverage
+
+    #[test]
+    fn test_build_search_url_for_empflix() {
+        let query = make_neg_query("test");
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.starts_with("https://www.empflix.com/search?what=test"));
+        assert!(!url.contains("tnaflix.com"));
+    }
+
+    #[test]
+    fn test_build_search_url_page_for_empflix() {
+        let query = make_neg_query("test");
+        let url = build_search_url_page_for("https://www.empflix.com", &query, 3);
+        assert!(url.starts_with("https://www.empflix.com/search?what=test"));
+        assert!(url.contains("&page=3"));
+    }
+
+    #[test]
+    fn test_build_browse_url_for_empflix_section() {
+        let url = build_browse_url_for("https://www.empflix.com", "new");
+        assert_eq!(url, "https://www.empflix.com/new");
+    }
+
+    #[test]
+    fn test_build_browse_url_page_for_empflix_section() {
+        let url = build_browse_url_page_for("https://www.empflix.com", "new", 5);
+        assert_eq!(url, "https://www.empflix.com/new/5");
+    }
+
+    #[test]
+    fn test_build_browse_url_page_for_empflix_category() {
+        let url = build_browse_url_page_for("https://www.empflix.com", "teen-porn", 2);
+        assert_eq!(url, "https://www.empflix.com/teen-porn?page=2");
+    }
+
+    // Edge cases for _for variants
+
+    #[test]
+    fn test_build_search_url_for_empty_query() {
+        let query = make_neg_query("");
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("what=&tab="));
+    }
+
+    #[test]
+    fn test_build_search_url_for_with_multiple_filters() {
+        let query = rdlp_types::SearchQuery {
+            query: "test".to_string(),
+            filters: vec![
+                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "newest".to_string() },
+                rdlp_types::SearchFilter { key: "other".to_string(), value: "val".to_string() },
+            ],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("&ordering=newest"));
+        assert!(url.contains("&other=val"));
+    }
+
+    // is_valid_category negative (renamed to avoid duplicate)
+
+    #[test]
+    fn test_is_valid_category_rejects_empty() {
+        assert!(!is_valid_category(""));
+    }
+
+    #[test]
+    fn test_is_valid_category_case_sensitive() {
+        assert!(!is_valid_category("New"));
+        assert!(!is_valid_category("TEEN-PORN"));
+    }
+
+    // slug_to_label edge cases
+
+    #[test]
+    fn test_slug_to_label_empty() {
+        assert_eq!(slug_to_label(""), "");
+    }
+
+    #[test]
+    fn test_slug_to_label_single_word() {
+        assert_eq!(slug_to_label("solo"), "Solo");
+    }
+
+    #[test]
+    fn test_slug_to_label_only_suffix() {
+        assert_eq!(slug_to_label("porn"), "Porn");
+    }
+
+    #[test]
+    fn test_build_browse_url_page_for_page_zero() {
+        // Page 0 is allowed by the builder (no validation)
+        let url = build_browse_url_page_for("https://www.tnaflix.com", "new", 0);
+        assert_eq!(url, "https://www.tnaflix.com/new/0");
+    }
+
+    #[test]
+    fn test_build_browse_url_for_empty_slug() {
+        let url = build_browse_url_for("https://www.tnaflix.com", "");
+        assert_eq!(url, "https://www.tnaflix.com/");
+    }
+
+    #[test]
+    fn test_build_browse_url_for_trailing_slash_base() {
+        // Trailing slash on base_url produces double slash
+        let url = build_browse_url_for("https://www.tnaflix.com/", "new");
+        assert_eq!(url, "https://www.tnaflix.com//new");
+    }
+
+    #[test]
+    fn test_build_search_url_for_leading_trailing_whitespace_query() {
+        // split_whitespace handles leading/trailing spaces
+        let query = rdlp_types::SearchQuery {
+            query: "  hello   world  ".to_string(),
+            filters: vec![],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url_for("https://www.empflix.com", &query);
+        assert!(url.contains("what=hello+world"));
+        assert!(!url.contains("  ")); // no double spaces
     }
 }

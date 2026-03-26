@@ -40,8 +40,9 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    HQPornerExtractor, NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor,
-    TNAFlixSearchExtractor, XHamsterExtractor, XTitsExtractor,
+    EMPFlixSearchExtractor, HQPornerExtractor, MovieFapSearchExtractor, NineAnimeExtractor,
+    PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
+    XHamsterExtractor, XTitsExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -124,6 +125,12 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(HQPornerExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(EMPFlixSearchExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(MovieFapSearchExtractor::new()));
 
         registry
     }

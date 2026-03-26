@@ -2,6 +2,7 @@
 
 use super::*;
 use rdlp_core::Downloader;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]
@@ -145,12 +146,14 @@ async fn test_parallel_download_error_propagation() {
         .create_async()
         .await;
 
-    // Mock FAILURE for chunk 2 (this should trigger fail-fast)
+    // Mock FAILURE for chunk 2 (this should trigger fail-fast after retries)
+    // With chunk-level retry, the failing chunk may be retried up to MAX_CHUNK_RETRIES (3) times.
     let mock_chunk_2_fail = server
         .mock("GET", "/test-video.mp4")
         .match_header("range", "bytes=10485760-15728639")
         .with_status(500)
         .with_body("Internal Server Error")
+        .expect_at_least(1)
         .create_async()
         .await;
 
@@ -251,6 +254,183 @@ async fn test_download_to_writer_streams_bytes() {
 
     let received = reader_handle.await.unwrap();
     assert_eq!(received, body.as_slice());
+}
+
+#[tokio::test]
+async fn test_chunk_retry_succeeds_on_second_attempt() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // Mockito matches in LIFO order (last-created matched first).
+    // Create success mock FIRST so it's matched SECOND.
+    let body = vec![0xABu8; 1024];
+    let _mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-type", "application/octet-stream")
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Create fail mock LAST so it's matched FIRST (LIFO).
+    let _mock_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .with_body("error")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let progress = Arc::new(AtomicU64::new(0));
+
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 1024);
+}
+
+#[tokio::test]
+async fn test_chunk_retry_exhausted_returns_error() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // All requests fail with 500
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .with_body("error")
+        .expect_at_least(3)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let progress = Arc::new(AtomicU64::new(0));
+
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_chunk_retry_non_retryable_fails_immediately() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // 403 is not retryable — should fail immediately, not retry
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(403)
+        .with_body("forbidden")
+        .expect(1) // Only 1 request — no retries
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let progress = Arc::new(AtomicU64::new(0));
+
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+
+    assert!(result.is_err());
+    // mockito's expect(1) will panic on Drop if more than 1 request was made
+}
+
+#[tokio::test]
+async fn test_chunk_retry_cleans_partial_file() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // Write a partial file to simulate a failed download
+    tokio::fs::write(&chunk_path, b"partial data")
+        .await
+        .unwrap();
+    assert!(chunk_path.exists());
+
+    // Mockito matches in LIFO order. Create success mock FIRST (matched second).
+    let body = vec![0xCDu8; 512];
+    let _mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-type", "application/octet-stream")
+        .with_body(body)
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Create fail mock LAST (matched first — LIFO).
+    let _mock_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .with_body("error")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let progress = Arc::new(AtomicU64::new(0));
+
+    let result =
+        download_chunk_with_retry(&downloader, &url, 0, 511, &chunk_path, Some(progress), 0).await;
+
+    assert!(result.is_ok());
+    // The file should contain the successful download, not the partial data
+    let contents = tokio::fs::read(&chunk_path).await.unwrap();
+    assert_eq!(contents.len(), 512);
+    assert!(contents.iter().all(|&b| b == 0xCD));
 }
 
 #[tokio::test]

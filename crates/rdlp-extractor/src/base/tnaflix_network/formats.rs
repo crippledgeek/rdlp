@@ -139,30 +139,35 @@ const CODEC_H264: &str = "h264";
 const CODEC_AAC: &str = "aac";
 use rdlp_types::DownloadProtocol;
 
-/// Build format list from video metadata and fetch filesizes
+/// Build format list from video metadata and fetch filesizes.
+///
+/// Filesize detection uses `detect_format_sizes` (the shared HLS module
+/// helper) which runs all HEAD requests in parallel via `join_all`.
 pub(crate) async fn build_formats(
     video_data: Vec<VideoMetadata>,
     ctx: &ExtractionContext,
 ) -> Vec<Format> {
-    let mut formats = Vec::new();
+    // Build format structs (sync, no I/O)
+    let formats: Vec<Format> = video_data
+        .into_iter()
+        .map(|(format_id, video_url, ext, height, width)| {
+            let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
+            format.height = height;
+            format.width = width;
+            format.format_note = height.map(|h| format!("{h}p"));
+            if ext == "mp4" {
+                format.vcodec = Some(CODEC_H264.to_owned());
+                format.acodec = Some(CODEC_AAC.to_owned());
+            }
+            format
+        })
+        .collect();
 
-    for (format_id, video_url, ext, height, width) in video_data {
-        let mut format = Format::new(&format_id, &video_url, &ext, DownloadProtocol::Https);
-
-        format.height = height;
-        format.width = width;
-        format.format_note = height.map(|h| format!("{h}p"));
-
-        if ext == "mp4" {
-            format.vcodec = Some(CODEC_H264.to_owned());
-            format.acodec = Some(CODEC_AAC.to_owned());
-        }
-
-        format.filesize =
-            BaseExtractor::detect_file_size(&video_url, &ctx.http_client, Some("TNAFlix")).await;
-
-        formats.push(format);
-    }
+    // Parallel filesize detection — reuses the shared HLS module helper
+    // which runs HEAD requests concurrently. HLS flags are discarded
+    // since TNAFlix network formats are all direct HTTPS.
+    let (mut formats, _hls_flags) =
+        crate::hls::detect_format_sizes(formats, ctx, "TNAFlix").await;
 
     BaseExtractor::dedup_format_ids(&mut formats);
     formats

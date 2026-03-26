@@ -16,6 +16,8 @@ pub use hqporner::HQPornerExtractor;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
 pub use redtube::RedTubeExtractor;
-pub use tnaflix::{TNAFlixExtractor, TNAFlixSearchExtractor};
+pub use tnaflix::{
+    EMPFlixSearchExtractor, MovieFapSearchExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
+};
 pub use xhamster::XHamsterExtractor;
 pub use xtits::XTitsExtractor;
