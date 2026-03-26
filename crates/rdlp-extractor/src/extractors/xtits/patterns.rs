@@ -95,9 +95,10 @@ mod tests {
 
     #[test]
     fn test_url_pattern_com_domain() {
-        assert!(XTITS_URL_PATTERN.is_match(
-            "https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/"
-        ));
+        assert!(
+            XTITS_URL_PATTERN
+                .is_match("https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/")
+        );
         assert!(XTITS_URL_PATTERN.is_match("https://xtits.com/videos/12345/test-title/"));
     }
 

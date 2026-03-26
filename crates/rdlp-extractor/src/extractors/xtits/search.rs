@@ -9,8 +9,8 @@ use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 use std::time::Duration;
 
-use super::search_patterns;
 use super::XTitsExtractor;
+use super::search_patterns;
 use crate::base::common::BaseExtractor;
 
 const MAX_PLAYLIST_SIZE: usize = 500;

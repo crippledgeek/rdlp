@@ -94,16 +94,20 @@ pub(crate) fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
             display_name: "Sort By".to_string(),
             default: Some("relevance".to_string()),
             allowed_values: vec![
-                SearchFilterValue { value: "relevance".to_string(),
+                SearchFilterValue {
+                    value: "relevance".to_string(),
                     label: "Relevance".to_string(),
                 },
-                SearchFilterValue { value: "newest".to_string(),
+                SearchFilterValue {
+                    value: "newest".to_string(),
                     label: "Newest".to_string(),
                 },
-                SearchFilterValue { value: "rating".to_string(),
+                SearchFilterValue {
+                    value: "rating".to_string(),
                     label: "Top Rated".to_string(),
                 },
-                SearchFilterValue { value: "mostviewed".to_string(),
+                SearchFilterValue {
+                    value: "mostviewed".to_string(),
                     label: "Most Viewed".to_string(),
                 },
             ],
@@ -113,16 +117,20 @@ pub(crate) fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
             display_name: "Time Period".to_string(),
             default: Some("alltime".to_string()),
             allowed_values: vec![
-                SearchFilterValue { value: "alltime".to_string(),
+                SearchFilterValue {
+                    value: "alltime".to_string(),
                     label: "All Time".to_string(),
                 },
-                SearchFilterValue { value: "monthly".to_string(),
+                SearchFilterValue {
+                    value: "monthly".to_string(),
                     label: "This Month".to_string(),
                 },
-                SearchFilterValue { value: "weekly".to_string(),
+                SearchFilterValue {
+                    value: "weekly".to_string(),
                     label: "This Week".to_string(),
                 },
-                SearchFilterValue { value: "today".to_string(),
+                SearchFilterValue {
+                    value: "today".to_string(),
                     label: "Today".to_string(),
                 },
             ],
@@ -305,7 +313,6 @@ mod tests {
     }
 
     #[test]
-
     #[test]
     fn test_page_number_pattern() {
         let cap = PAGE_NUMBER_PATTERN
