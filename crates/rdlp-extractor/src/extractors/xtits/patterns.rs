@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 /// - Without trailing slash: `https://www.xtits.xxx/videos/183207/slug`
 /// - Without slug: `https://www.xtits.xxx/videos/183207/`
 pub static XTITS_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?xtits\.xxx/videos/(?P<id>\d+)/")
+    Regex::new(r"https?://(?:www\.)?xtits\.(?:xxx|com)/videos/(?P<id>\d+)/")
         .expect("Valid XTits URL pattern")
 });
 
@@ -20,7 +20,7 @@ pub static XTITS_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// Supports: `https://www.xtits.xxx/embed/183207`
 pub static XTITS_EMBED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?xtits\.xxx/embed/(?P<id>\d+)")
+    Regex::new(r"https?://(?:www\.)?xtits\.(?:xxx|com)/embed/(?P<id>\d+)")
         .expect("Valid XTits embed pattern")
 });
 
@@ -91,5 +91,38 @@ mod tests {
         let webpage =
             r#"var flashvars = { video_id: '123', video_url: 'https://example.com/v.mp4' };"#;
         assert!(FLASHVARS_PATTERN.is_match(webpage));
+    }
+
+    #[test]
+    fn test_url_pattern_com_domain() {
+        assert!(
+            XTITS_URL_PATTERN
+                .is_match("https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/")
+        );
+        assert!(XTITS_URL_PATTERN.is_match("https://xtits.com/videos/12345/test-title/"));
+    }
+
+    #[test]
+    fn test_embed_pattern_com_domain() {
+        assert!(XTITS_EMBED_PATTERN.is_match("https://www.xtits.com/embed/50088"));
+        assert!(XTITS_EMBED_PATTERN.is_match("https://xtits.com/embed/50088"));
+    }
+
+    #[test]
+    fn test_extract_video_id_com_domain() {
+        assert_eq!(
+            extract_video_id("https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/"),
+            Some("50088".to_string())
+        );
+        assert_eq!(
+            extract_video_id("https://www.xtits.com/embed/50088"),
+            Some("50088".to_string())
+        );
+    }
+
+    #[test]
+    fn test_suitable_com_domain() {
+        assert!(is_suitable("https://www.xtits.com/videos/50088/test/"));
+        assert!(is_suitable("https://www.xtits.com/embed/50088"));
     }
 }

@@ -131,6 +131,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(MovieFapSearchExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(XTitsExtractor::new()));
 
         registry
     }
