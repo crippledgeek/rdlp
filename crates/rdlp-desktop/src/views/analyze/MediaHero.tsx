@@ -1,4 +1,5 @@
 // MediaHero: compact card showing thumbnail, title, metadata, and stream badges.
+// Adapts display for playlist mode: shows playlist title + episode count.
 
 import { Thumbnail } from "@/components/Thumbnail";
 import { StreamBadge } from "@/components/StreamBadge";
@@ -41,13 +42,15 @@ export function MediaHero({ data, url }: MediaHeroProps) {
         }
     })();
 
+    const isPlaylist = data.is_playlist && data.playlist !== null;
+
     return (
         <div className="flex items-start gap-3 p-3 border-b border-[#1a1a2e] bg-[var(--surface-raised)] shrink-0">
             {/* Thumbnail */}
             <div className="w-20 h-[52px] shrink-0 rounded-[4px] overflow-hidden bg-[#0e0e1e]">
                 <Thumbnail
                     src={data.thumbnail_url}
-                    alt={data.title}
+                    alt={isPlaylist ? (data.playlist?.title ?? data.title) : data.title}
                     className="w-full h-full object-cover"
                 />
             </div>
@@ -63,30 +66,44 @@ export function MediaHero({ data, url }: MediaHeroProps) {
                         overflow: "hidden",
                     }}
                 >
-                    {data.title || "Untitled"}
+                    {isPlaylist
+                        ? (data.playlist?.title ?? "Untitled Playlist")
+                        : (data.title || "Untitled")}
                 </h1>
 
                 <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                    <span className="text-[11px] text-[#666666]">{hostname}</span>
-                    {data.duration !== null && (
+                    {isPlaylist ? (
                         <>
-                            <span className="text-[#444444]">·</span>
-                            <span className="text-[11px] text-[#666666]">
-                                {formatDuration(data.duration)}
+                            <span className="text-[11px] text-[#aaaaaa]">
+                                {data.playlist!.count} {data.playlist!.count === 1 ? "episode" : "episodes"}
                             </span>
-                        </>
-                    )}
-                    {bestFormat?.height && (
-                        <>
                             <span className="text-[#444444]">·</span>
-                            <StreamBadge value={`${bestFormat.height}p`} category="resolution" />
+                            <span className="text-[11px] text-[#666666]">{hostname}</span>
                         </>
-                    )}
-                    {bestFormat?.protocol && (
-                        <StreamBadge value={bestFormat.protocol.toUpperCase()} category="protocol" />
-                    )}
-                    {bestFormat?.vcodec && bestFormat.vcodec !== "none" && (
-                        <StreamBadge value={bestFormat.vcodec} category="codec" />
+                    ) : (
+                        <>
+                            <span className="text-[11px] text-[#666666]">{hostname}</span>
+                            {data.duration !== null && (
+                                <>
+                                    <span className="text-[#444444]">·</span>
+                                    <span className="text-[11px] text-[#666666]">
+                                        {formatDuration(data.duration)}
+                                    </span>
+                                </>
+                            )}
+                            {bestFormat?.height && (
+                                <>
+                                    <span className="text-[#444444]">·</span>
+                                    <StreamBadge value={`${bestFormat.height}p`} category="resolution" />
+                                </>
+                            )}
+                            {bestFormat?.protocol && (
+                                <StreamBadge value={bestFormat.protocol.toUpperCase()} category="protocol" />
+                            )}
+                            {bestFormat?.vcodec && bestFormat.vcodec !== "none" && (
+                                <StreamBadge value={bestFormat.vcodec} category="codec" />
+                            )}
+                        </>
                     )}
                 </div>
             </div>
