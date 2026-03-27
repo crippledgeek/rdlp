@@ -4,7 +4,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import { queryClient } from "../query/queryClient";
-import type { DownloadJob, DownloadOptions } from "../types";
+import type { DownloadJob, DownloadOptions, PlaylistContext } from "../types";
 
 /** Fetch the current download queue. */
 export function downloadsQueryOptions() {
@@ -19,11 +19,13 @@ export async function startDownload(
     url: string,
     options: DownloadOptions,
     title?: string,
+    playlistContext?: PlaylistContext,
 ): Promise<string> {
     const jobId = await invokeTyped<string>("start_download", {
         url,
         options,
         title: title ?? null,
+        playlistContext: playlistContext ?? null,
     });
     await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
     return jobId;

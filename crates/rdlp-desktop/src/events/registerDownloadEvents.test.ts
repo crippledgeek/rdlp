@@ -23,6 +23,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         completed_at: null,
         output_path: null,
         options: null,
+        playlist: null,
         statusMessage: null,
         logMessages: undefined,
         ...overrides,
