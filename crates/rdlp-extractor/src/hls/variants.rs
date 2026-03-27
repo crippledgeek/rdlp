@@ -114,11 +114,15 @@ impl HlsSizeDetector {
 
                 // Resolve and fetch the media playlist for segment info
                 let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+                    .map_err(|e| RdlpError::Extraction {
+                        message: format!("Invalid base URL: {e}"),
+                        url: Some(m3u8_url.to_string()),
+                    })?;
                 let media_url = base_url
                     .join(&variant.uri)
-                    .map_err(|e| {
-                        RdlpError::Extraction(format!("Failed to join media playlist URL: {e}"))
+                    .map_err(|e| RdlpError::Extraction {
+                        message: format!("Failed to join media playlist URL: {e}"),
+                        url: Some(m3u8_url.to_string()),
                     })?
                     .to_string();
 
@@ -235,7 +239,10 @@ impl HlsSizeDetector {
         }
 
         let base_url = url::Url::parse(m3u8_url)
-            .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+            .map_err(|e| RdlpError::Extraction {
+                message: format!("Invalid base URL: {e}"),
+                url: Some(m3u8_url.to_string()),
+            })?;
 
         // Resolve all variant media playlist URLs and extract per-variant metadata.
         // Skip I-frame-only variants (EXT-X-I-FRAME-STREAM-INF) — these are trick-play
@@ -279,7 +286,10 @@ impl HlsSizeDetector {
             .expect("master playlist has at least one non-I-frame variant");
         let best_media_url = base_url
             .join(&best_variant.uri)
-            .map_err(|e| RdlpError::Extraction(format!("Failed to join media URL: {e}")))?
+            .map_err(|e| RdlpError::Extraction {
+                message: format!("Failed to join media URL: {e}"),
+                url: Some(m3u8_url.to_string()),
+            })?
             .to_string();
 
         if let Ok(Some(media_info)) = self.fetch_and_extract_media_info(&best_media_url).await {

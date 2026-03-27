@@ -108,10 +108,10 @@ impl BaseExtractor {
     pub(crate) async fn fetch_webpage(url: &str, ctx: &ExtractionContext) -> Result<String> {
         // Security: Validate URL length
         if url.len() > MAX_URL_LENGTH {
-            return Err(RdlpError::Extraction(format!(
-                "URL too long: {} bytes (max: {MAX_URL_LENGTH})",
-                url.len()
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("URL too long: {} bytes (max: {MAX_URL_LENGTH})", url.len()),
+                url: Some(url.to_string()),
+            });
         }
 
         let response = ctx
@@ -119,14 +119,20 @@ impl BaseExtractor {
             .get(url)
             .send()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch webpage: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         check_http_response(&response)?;
 
         let webpage = response
             .text()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read response body: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to read response body: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         // Debug output if verbose
         if ctx.config.verbose {
@@ -161,10 +167,10 @@ impl BaseExtractor {
     ) -> Result<String> {
         // Security: Validate URL length
         if url.len() > MAX_URL_LENGTH {
-            return Err(RdlpError::Extraction(format!(
-                "URL too long: {} bytes (max: {MAX_URL_LENGTH})",
-                url.len()
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("URL too long: {} bytes (max: {MAX_URL_LENGTH})", url.len()),
+                url: Some(url.to_string()),
+            });
         }
 
         let mut request = ctx.http_client.get(url);
@@ -176,14 +182,20 @@ impl BaseExtractor {
         let response = request
             .send()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to fetch webpage: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch webpage: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         check_http_response(&response)?;
 
         let webpage = response
             .text()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read response body: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to read response body: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         if ctx.config.verbose {
             crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);
@@ -220,7 +232,10 @@ impl BaseExtractor {
     /// BaseExtractor::validate_url_security(segment_url)?;
     /// ```
     pub(crate) fn validate_url_security(url: &str) -> Result<()> {
-        rdlp_security::validate_url_security(url).map_err(|e| RdlpError::Extraction(e.to_string()))
+        rdlp_security::validate_url_security(url).map_err(|e| RdlpError::Extraction {
+            message: e.to_string(),
+            url: Some(url.to_string()),
+        })
     }
 
     // ========================================================================

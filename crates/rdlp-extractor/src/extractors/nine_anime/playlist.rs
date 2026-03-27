@@ -37,8 +37,9 @@ use crate::base::common::BaseExtractor;
 /// 5. Build remaining episodes as lightweight `InfoDict` with proper `webpage_url`
 /// 6. Return `Vec<InfoDict>` with playlist fields set
 pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
-    let anime_id = patterns::extract_anime_id(url).ok_or_else(|| {
-        RdlpError::Extraction(format!("Could not extract anime ID from URL: {url}"))
+    let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
+        message: format!("Could not extract anime ID from URL: {url}"),
+        url: Some(url.to_string()),
     })?;
 
     let slug = patterns::extract_slug(url).unwrap_or_default();
@@ -59,9 +60,10 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     let episodes = episodes::fetch_all_episodes(&anime_id, ctx).await?;
 
     if episodes.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "No episodes found for anime ID {anime_id}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("No episodes found for anime ID {anime_id}"),
+            url: Some(url.to_string()),
+        });
     }
 
     let total = episodes.len();
@@ -69,9 +71,10 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
 
     // Security: limit playlist size
     if total > MAX_PLAYLIST_SIZE {
-        return Err(RdlpError::Extraction(format!(
-            "Playlist too large: {total} episodes (max: {MAX_PLAYLIST_SIZE})"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("Playlist too large: {total} episodes (max: {MAX_PLAYLIST_SIZE})"),
+            url: Some(url.to_string()),
+        });
     }
 
     // Resolve one episode fully for audio type detection + subtitles.
@@ -159,9 +162,10 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     }
 
     if results.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "Failed to extract any episodes from anime: {url}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("Failed to extract any episodes from anime: {url}"),
+            url: Some(url.to_string()),
+        });
     }
 
     info!(

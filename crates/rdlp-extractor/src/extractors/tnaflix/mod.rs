@@ -96,8 +96,9 @@ impl InfoExtractor for TNAFlixExtractor {
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
         // Get video ID using BaseExtractor
-        let video_id = self.extract_id(url).ok_or_else(|| {
-            RdlpError::Extraction(format!("Could not extract video ID from URL: {url}"))
+        let video_id = self.extract_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID from URL: {url}"),
+            url: Some(url.to_string()),
         })?;
 
         // Check if this is MovieFap (uses different video loading mechanism)
@@ -123,10 +124,9 @@ impl InfoExtractor for TNAFlixExtractor {
         // Parse video data based on site type
         let video_data = if is_moviefap {
             // MovieFap: fetch XML from cdn.php
-            let cdn_url = cdn_url_opt.ok_or_else(|| {
-                RdlpError::Extraction(format!(
-                    "Could not find cdn.php URL in MovieFap page: {url}"
-                ))
+            let cdn_url = cdn_url_opt.ok_or_else(|| RdlpError::Extraction {
+                message: format!("Could not find cdn.php URL in MovieFap page: {url}"),
+                url: Some(url.to_string()),
             })?;
 
             BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
@@ -153,9 +153,12 @@ impl InfoExtractor for TNAFlixExtractor {
 
             // Return error if still no sources found
             if video_data.is_empty() {
-                return Err(RdlpError::Extraction(format!(
-                    "No video source tags found in HTML. Video may be unavailable. URL: {url}"
-                )));
+                return Err(RdlpError::Extraction {
+                    message: format!(
+                        "No video source tags found in HTML. Video may be unavailable. URL: {url}"
+                    ),
+                    url: Some(url.to_string()),
+                });
             }
 
             video_data
@@ -165,9 +168,10 @@ impl InfoExtractor for TNAFlixExtractor {
         let mut formats = self.base.build_formats(video_data, ctx).await;
 
         if formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video formats found for URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No video formats found for URL: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Set Referer header on all formats so the CDN receives it during download.

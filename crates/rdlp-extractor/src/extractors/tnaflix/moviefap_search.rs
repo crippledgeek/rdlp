@@ -153,17 +153,21 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
         match filter.key.as_str() {
             "ordering" => {
                 if !moviefap_search_patterns::VALID_ORDERINGS.contains(&filter.value.as_str()) {
-                    return Err(RdlpError::Extraction(format!(
-                        "Invalid MovieFap ordering value '{}'. Valid values: {}",
-                        filter.value,
-                        moviefap_search_patterns::VALID_ORDERINGS.join(", ")
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Invalid MovieFap ordering value '{}'. Valid values: {}",
+                            filter.value,
+                            moviefap_search_patterns::VALID_ORDERINGS.join(", ")
+                        ),
+                        url: None,
+                    });
                 }
             }
             other => {
-                return Err(RdlpError::Extraction(format!(
-                    "Unknown MovieFap search filter key '{other}'"
-                )));
+                return Err(RdlpError::Extraction {
+                    message: format!("Unknown MovieFap search filter key '{other}'"),
+                    url: None,
+                });
             }
         }
     }

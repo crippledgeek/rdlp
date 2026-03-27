@@ -79,9 +79,11 @@ pub(crate) async fn resolve_formats(
 
     // Check for blocked response
     if html.contains("This domain has been blocked") {
-        return Err(RdlpError::Extraction(
-            "mydaddy.cc embed blocked — Referer header may not have been accepted".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "mydaddy.cc embed blocked — Referer header may not have been accepted"
+                .to_string(),
+            url: Some(full_url),
+        });
     }
 
     let formats = parse_formats(&html);
@@ -106,9 +108,10 @@ fn resolve_from_html(html: &str) -> Result<MyDaddyResult> {
     let formats = parse_formats(html);
 
     if formats.is_empty() {
-        return Err(RdlpError::Extraction(
-            "No video formats found in mydaddy.cc embed or alt player".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "No video formats found in mydaddy.cc embed or alt player".to_string(),
+            url: None,
+        });
     }
 
     let thumbnail = extract_thumbnail(html);
@@ -123,14 +126,20 @@ async fn fetch_embed(url: &str, ctx: &ExtractionContext) -> Result<String> {
         .header("Referer", "https://hqporner.com/")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch mydaddy.cc embed: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch mydaddy.cc embed: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
     rdlp_core::check_http_response(&response)?;
 
     response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read mydaddy.cc response: {e}")))
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read mydaddy.cc response: {e}"),
+            url: Some(url.to_string()),
+        })
 }
 
 /// Parse MP4 format URLs from the embed HTML.

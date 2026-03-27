@@ -244,9 +244,10 @@ impl TnaFlixNetworkBase {
 
     /// Extract all metadata from HTML
     pub(crate) fn extract_metadata(&self, html: &Html) -> Result<ExtractedMetadata> {
-        let title = self
-            .extract_title(html)
-            .ok_or_else(|| RdlpError::Extraction("Could not find video title".to_string()))?;
+        let title = self.extract_title(html).ok_or_else(|| RdlpError::Extraction {
+            message: "Could not find video title".to_string(),
+            url: None,
+        })?;
 
         let description = self.extract_description(html);
         let uploader = self.extract_uploader(html);

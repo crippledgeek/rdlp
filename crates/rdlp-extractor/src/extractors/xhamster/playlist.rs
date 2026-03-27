@@ -28,7 +28,10 @@ impl XHamsterExtractor {
         ctx: &ExtractionContext,
     ) -> Result<Vec<InfoDict>> {
         let (user_id, _is_user) = patterns::extract_user_info(url)
-            .ok_or_else(|| RdlpError::Extraction(format!("Could not extract user ID: {url}")))?;
+            .ok_or_else(|| RdlpError::Extraction {
+                message: format!("Could not extract user ID: {url}"),
+                url: Some(url.to_string()),
+            })?;
 
         info!(user_id:?; "[XHamster] Extracting user playlist");
 
@@ -53,8 +56,9 @@ impl XHamsterExtractor {
                 )
                 .when(|e| e.is_timeout() || e.is_connect())
                 .await
-                .map_err(|e| {
-                    RdlpError::Network(format!("Failed to fetch user page {page}: {e}"))
+                .map_err(|e| RdlpError::Network {
+                    message: format!("Failed to fetch user page {page}: {e}"),
+                    url: Some(page_url.clone()),
                 })?;
 
             check_http_response(&response)?;
@@ -62,7 +66,10 @@ impl XHamsterExtractor {
             let webpage = response
                 .text()
                 .await
-                .map_err(|e| RdlpError::Network(format!("Failed to read user page {page}: {e}")))?;
+                .map_err(|e| RdlpError::Network {
+                    message: format!("Failed to read user page {page}: {e}"),
+                    url: Some(page_url.clone()),
+                })?;
 
             // Extract video URLs from the page
             let page_urls = extract_user_video_urls(&webpage);
@@ -97,15 +104,17 @@ impl XHamsterExtractor {
         debug!(total; "[XHamster] Found videos in user playlist");
 
         if total == 0 {
-            return Err(RdlpError::Extraction(format!(
-                "No videos found on user page: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No videos found on user page: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         if total > MAX_PLAYLIST_SIZE {
-            return Err(RdlpError::Extraction(format!(
-                "Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Extract videos in parallel
@@ -163,9 +172,10 @@ impl XHamsterExtractor {
         let results: Vec<InfoDict> = extracted.into_iter().map(|(_, info)| info).collect();
 
         if results.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "Failed to extract any videos from user page: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("Failed to extract any videos from user page: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         info!(extracted = results.len(), total; "[XHamster] Successfully extracted videos");

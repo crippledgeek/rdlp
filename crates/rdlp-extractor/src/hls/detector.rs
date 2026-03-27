@@ -222,25 +222,37 @@ impl HlsSizeDetector {
         }
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
-                RdlpError::Network(format!("Timeout fetching playlist: {m3u8_url}"))
+                RdlpError::Network {
+                    message: format!("Timeout fetching playlist: {m3u8_url}"),
+                    url: Some(m3u8_url.to_string()),
+                }
             } else if e.is_connect() {
-                RdlpError::Network(format!("Connection failed for playlist: {m3u8_url}: {e}"))
+                RdlpError::Network {
+                    message: format!("Connection failed for playlist: {m3u8_url}: {e}"),
+                    url: Some(m3u8_url.to_string()),
+                }
             } else {
-                RdlpError::Network(format!("Failed to fetch playlist: {e}"))
+                RdlpError::Network {
+                    message: format!("Failed to fetch playlist: {e}"),
+                    url: Some(m3u8_url.to_string()),
+                }
             }
         })?;
 
         if !response.status().is_success() {
-            return Err(RdlpError::Network(format!(
-                "HTTP {} for playlist: {m3u8_url}",
-                response.status()
-            )));
+            return Err(RdlpError::Network {
+                message: format!("HTTP {} for playlist: {m3u8_url}", response.status()),
+                url: Some(m3u8_url.to_string()),
+            });
         }
 
         response
             .text()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read playlist response: {e}")))
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to read playlist response: {e}"),
+                url: Some(m3u8_url.to_string()),
+            })
     }
 
     /// Fetch a media playlist and extract its metadata
@@ -252,11 +264,17 @@ impl HlsSizeDetector {
         let playlist = m3u8_rs::parse_playlist_res(text.as_bytes()).map_err(|e| {
             if !text.trim().starts_with("#EXTM3U") {
                 let preview: String = text.chars().take(200).collect();
-                RdlpError::Extraction(format!(
-                    "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
-                ))
+                RdlpError::Extraction {
+                    message: format!(
+                        "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
+                    ),
+                    url: Some(media_url.to_string()),
+                }
             } else {
-                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+                RdlpError::Extraction {
+                    message: format!("M3U8 parse error: {e:?}"),
+                    url: Some(media_url.to_string()),
+                }
             }
         })?;
 

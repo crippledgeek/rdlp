@@ -39,11 +39,17 @@ impl HlsSizeDetector {
         let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
             if !playlist_text.trim().starts_with("#EXTM3U") {
                 let preview: String = playlist_text.chars().take(200).collect();
-                RdlpError::Extraction(format!(
-                    "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
-                ))
+                RdlpError::Extraction {
+                    message: format!(
+                        "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
+                    ),
+                    url: Some(m3u8_url.to_string()),
+                }
             } else {
-                RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+                RdlpError::Extraction {
+                    message: format!("M3U8 parse error: {e:?}"),
+                    url: Some(m3u8_url.to_string()),
+                }
             }
         })?;
 
@@ -51,7 +57,10 @@ impl HlsSizeDetector {
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
                 let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+                    .map_err(|e| RdlpError::Extraction {
+                        message: format!("Invalid base URL: {e}"),
+                        url: Some(m3u8_url.to_string()),
+                    })?;
 
                 let segments: Vec<String> = media
                     .segments
@@ -67,10 +76,13 @@ impl HlsSizeDetector {
 
                 // Security check: limit max segments
                 if segments.len() > MAX_SEGMENTS {
-                    return Err(RdlpError::Extraction(format!(
-                        "Playlist has too many segments: {} (max: {MAX_SEGMENTS})",
-                        segments.len()
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Playlist has too many segments: {} (max: {MAX_SEGMENTS})",
+                            segments.len()
+                        ),
+                        url: Some(m3u8_url.to_string()),
+                    });
                 }
 
                 // Validate segment URLs using BaseExtractor SSRF protection
@@ -88,9 +100,10 @@ impl HlsSizeDetector {
             m3u8_rs::Playlist::MasterPlaylist(master) => {
                 // Master playlist contains variants - select the first one
                 if master.variants.is_empty() {
-                    return Err(RdlpError::Extraction(
-                        "Master playlist has no variants".into(),
-                    ));
+                    return Err(RdlpError::Extraction {
+                        message: "Master playlist has no variants".to_string(),
+                        url: Some(m3u8_url.to_string()),
+                    });
                 }
 
                 // Select the non-I-frame variant with the highest bandwidth (best quality)
@@ -114,12 +127,16 @@ impl HlsSizeDetector {
 
                 // Resolve relative URL for media playlist
                 let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+                    .map_err(|e| RdlpError::Extraction {
+                        message: format!("Invalid base URL: {e}"),
+                        url: Some(m3u8_url.to_string()),
+                    })?;
 
                 let media_playlist_url = base_url
                     .join(media_playlist_uri)
-                    .map_err(|e| {
-                        RdlpError::Extraction(format!("Failed to join media playlist URL: {e}"))
+                    .map_err(|e| RdlpError::Extraction {
+                        message: format!("Failed to join media playlist URL: {e}"),
+                        url: Some(m3u8_url.to_string()),
                     })?
                     .to_string();
 
@@ -174,19 +191,28 @@ impl HlsSizeDetector {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    RdlpError::Network(format!("Timeout for segment: {segment_url}"))
+                    RdlpError::Network {
+                        message: format!("Timeout for segment: {segment_url}"),
+                        url: Some(segment_url.to_string()),
+                    }
                 } else if e.is_connect() {
-                    RdlpError::Network(format!("Connection failed for segment: {segment_url}: {e}"))
+                    RdlpError::Network {
+                        message: format!("Connection failed for segment: {segment_url}: {e}"),
+                        url: Some(segment_url.to_string()),
+                    }
                 } else {
-                    RdlpError::Network(format!("Failed to fetch segment: {e}"))
+                    RdlpError::Network {
+                        message: format!("Failed to fetch segment: {e}"),
+                        url: Some(segment_url.to_string()),
+                    }
                 }
             })?;
 
         if !range_response.status().is_success() {
-            return Err(RdlpError::Network(format!(
-                "HTTP {} for segment: {segment_url}",
-                range_response.status()
-            )));
+            return Err(RdlpError::Network {
+                message: format!("HTTP {} for segment: {segment_url}", range_response.status()),
+                url: Some(segment_url.to_string()),
+            });
         }
 
         // Try Content-Range header: "bytes 0-0/123456"
@@ -205,9 +231,10 @@ impl HlsSizeDetector {
             return Ok(size);
         }
 
-        Err(RdlpError::Extraction(format!(
-            "Could not detect segment size for: {segment_url}"
-        )))
+        Err(RdlpError::Extraction {
+            message: format!("Could not detect segment size for: {segment_url}"),
+            url: Some(segment_url.to_string()),
+        })
     }
 
     /// Calculate total size from all segments using parallel requests
@@ -275,9 +302,12 @@ impl HlsSizeDetector {
 
         // Require at least 50% success rate
         if success_rate < 0.5 {
-            return Err(RdlpError::Extraction(format!(
-                "Too many segment failures: {failed}/{total_segments} failed (< 50% success rate)"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!(
+                    "Too many segment failures: {failed}/{total_segments} failed (< 50% success rate)"
+                ),
+                url: None,
+            });
         }
 
         // Warn if success rate is below 90%

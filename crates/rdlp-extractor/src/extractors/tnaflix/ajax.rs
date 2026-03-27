@@ -29,34 +29,47 @@ pub async fn parse_empflix_ajax(
         .header("Referer", referer)
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch EMPFlix AJAX: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch EMPFlix AJAX: {e}"),
+            url: Some(ajax_url.clone()),
+        })?;
 
     check_http_response(&response)?;
 
     let json_text = response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read AJAX response: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read AJAX response: {e}"),
+            url: Some(ajax_url.clone()),
+        })?;
 
     BaseExtractor::log_content_if_verbose(ctx, "EMPFlix", "AJAX Response", &json_text, 500);
 
     // Parse JSON to extract HTML field
     let json: serde_json::Value = serde_json::from_str(&json_text)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse AJAX JSON: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse AJAX JSON: {e}"),
+            url: Some(ajax_url.clone()),
+        })?;
 
     let html_str = json
         .get("html")
         .and_then(|h| h.as_str())
-        .ok_or_else(|| RdlpError::Extraction("No 'html' field in AJAX response".to_string()))?;
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "No 'html' field in AJAX response".to_string(),
+            url: Some(ajax_url.clone()),
+        })?;
 
     // Parse the HTML to extract <source> tags using base
     let html = Html::parse_document(html_str);
     let video_data = base.parse_video_sources(&html);
 
     if video_data.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "No video sources found in EMPFlix AJAX HTML. URL: {referer}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("No video sources found in EMPFlix AJAX HTML. URL: {referer}"),
+            url: Some(ajax_url),
+        });
     }
 
     Ok(video_data)
@@ -79,14 +92,20 @@ pub async fn parse_moviefap_xml(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch MovieFap XML: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch MovieFap XML: {e}"),
+            url: Some(cdn_url.to_string()),
+        })?;
 
     check_http_response(&response)?;
 
     let xml_text = response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read XML response: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read XML response: {e}"),
+            url: Some(cdn_url.to_string()),
+        })?;
 
     BaseExtractor::log_content_if_verbose(ctx, "MovieFap", "XML Response", &xml_text, 1000);
 
@@ -94,9 +113,10 @@ pub async fn parse_moviefap_xml(
     let video_data = base.parse_moviefap_xml(&xml_text);
 
     if video_data.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "No video sources found in MovieFap XML response from: {cdn_url}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("No video sources found in MovieFap XML response from: {cdn_url}"),
+            url: Some(cdn_url.to_string()),
+        });
     }
 
     Ok(video_data)

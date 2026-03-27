@@ -92,8 +92,10 @@ pub(crate) struct ApiCategory {
 /// # Returns
 /// A vector of search result previews.
 pub(crate) fn parse_api_search_results(json: &str) -> Result<Vec<SearchResultPreview>> {
-    let response: ApiSearchResponse = serde_json::from_str(json)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse PornHub API response: {e}")))?;
+    let response: ApiSearchResponse = serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
+        message: format!("Failed to parse PornHub API response: {e}"),
+        url: None,
+    })?;
 
     let results: Vec<SearchResultPreview> = response
         .videos
@@ -177,11 +179,14 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
         match descriptor {
             None => {
                 let valid_keys: Vec<&str> = descriptors.iter().map(|d| d.key.as_str()).collect();
-                return Err(RdlpError::Extraction(format!(
-                    "Unknown filter '{}' for PornHub. Available: {}",
-                    filter.key,
-                    valid_keys.join(", ")
-                )));
+                return Err(RdlpError::Extraction {
+                    message: format!(
+                        "Unknown filter '{}' for PornHub. Available: {}",
+                        filter.key,
+                        valid_keys.join(", ")
+                    ),
+                    url: None,
+                });
             }
             Some(desc) => {
                 // category and tags accept free-text — API validates server-side
@@ -196,12 +201,15 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
                         .iter()
                         .map(|v| v.value.as_str())
                         .collect();
-                    return Err(RdlpError::Extraction(format!(
-                        "Invalid value '{}' for filter '{}'. Allowed: {}",
-                        filter.value,
-                        filter.key,
-                        allowed.join(", ")
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Invalid value '{}' for filter '{}'. Allowed: {}",
+                            filter.value,
+                            filter.key,
+                            allowed.join(", ")
+                        ),
+                        url: None,
+                    });
                 }
             }
         }

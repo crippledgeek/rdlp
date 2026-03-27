@@ -105,8 +105,9 @@ pub(crate) struct ApiVideoMetadata {
 /// # Returns
 /// Parsed `ApiVideoMetadata` or an error if JSON parsing fails.
 pub(crate) fn parse_api_video_response(json: &str) -> Result<ApiVideoMetadata> {
-    let response: ApiVideoInfoResponse = serde_json::from_str(json).map_err(|e| {
-        RdlpError::Extraction(format!("Failed to parse RedTube video API response: {e}"))
+    let response: ApiVideoInfoResponse = serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
+        message: format!("Failed to parse RedTube video API response: {e}"),
+        url: None,
     })?;
 
     let video = response.video;

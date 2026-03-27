@@ -186,27 +186,31 @@ impl InfoExtractor for XTitsExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
-        let video_id = patterns::extract_video_id(url)
-            .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
+        let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID: {url}"),
+            url: Some(url.to_string()),
+        })?;
 
         // Extract flashvars block
         let flashvars_content = patterns::FLASHVARS_PATTERN
             .captures(&webpage)
             .and_then(|caps| caps.get(1))
             .map(|m| m.as_str().to_string())
-            .ok_or_else(|| {
-                RdlpError::Extraction(format!(
+            .ok_or_else(|| RdlpError::Extraction {
+                message: format!(
                     "Could not find KVS flashvars on page. Video may be unavailable. URL: {url}"
-                ))
+                ),
+                url: Some(url.to_string()),
             })?;
 
         // Extract formats from flashvars
         let video_formats = formats::extract_formats(&flashvars_content);
 
         if video_formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video formats found in flashvars. URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No video formats found in flashvars. URL: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Parse flashvars for metadata

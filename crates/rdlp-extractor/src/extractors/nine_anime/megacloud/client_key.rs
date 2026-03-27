@@ -60,12 +60,18 @@ pub(super) async fn extract_client_key(source_id: &str, ctx: &ExtractionContext)
         .header("Referer", "https://9animetv.to/")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch v3 embed page: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch v3 embed page: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let html = response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read v3 embed body: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read v3 embed body: {e}"),
+            url: Some(url),
+        })?;
 
     parse_client_key(&html)
 }
@@ -77,17 +83,17 @@ pub(super) fn parse_client_key(html: &str) -> Result<String> {
         .iter()
         .enumerate()
         .find_map(|(idx, pattern)| pattern.find(html).map(|m| (idx, m.as_str().to_string())))
-        .ok_or_else(|| {
-            RdlpError::Extraction(
-                "Could not find client key in embed page (no pattern matched)".to_string(),
-            )
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "Could not find client key in embed page (no pattern matched)".to_string(),
+            url: None,
         })?;
 
     match pattern_idx {
         // Pattern 1: Comment -- key follows colon, no quotes
         1 => {
-            let key_match = COMMENT_KEY.find(&text).ok_or_else(|| {
-                RdlpError::Extraction("Failed to extract key from comment".to_string())
+            let key_match = COMMENT_KEY.find(&text).ok_or_else(|| RdlpError::Extraction {
+                message: "Failed to extract key from comment".to_string(),
+                url: None,
             })?;
             Ok(key_match.as_str().replace([':', ' '], ""))
         }
@@ -95,11 +101,13 @@ pub(super) fn parse_client_key(html: &str) -> Result<String> {
         2 => {
             let mut parts = Vec::new();
             for part_re in LK_DB_PARTS.iter() {
-                let part_match = part_re.find(&text).ok_or_else(|| {
-                    RdlpError::Extraction("Failed to extract _lk_db key part".to_string())
+                let part_match = part_re.find(&text).ok_or_else(|| RdlpError::Extraction {
+                    message: "Failed to extract _lk_db key part".to_string(),
+                    url: None,
                 })?;
-                let val = QUOTED_KEY.find(part_match.as_str()).ok_or_else(|| {
-                    RdlpError::Extraction("Failed to extract quoted value from _lk_db".to_string())
+                let val = QUOTED_KEY.find(part_match.as_str()).ok_or_else(|| RdlpError::Extraction {
+                    message: "Failed to extract quoted value from _lk_db".to_string(),
+                    url: None,
                 })?;
                 parts.push(val.as_str().replace('"', ""));
             }
@@ -107,8 +115,9 @@ pub(super) fn parse_client_key(html: &str) -> Result<String> {
         }
         // All other patterns -- extract quoted key
         _ => {
-            let key_match = QUOTED_KEY.find(&text).ok_or_else(|| {
-                RdlpError::Extraction("Failed to extract quoted key from matched pattern".into())
+            let key_match = QUOTED_KEY.find(&text).ok_or_else(|| RdlpError::Extraction {
+                message: "Failed to extract quoted key from matched pattern".to_string(),
+                url: None,
             })?;
             Ok(key_match.as_str().replace('"', ""))
         }
