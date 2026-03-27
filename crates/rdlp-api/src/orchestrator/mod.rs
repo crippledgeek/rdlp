@@ -3,7 +3,7 @@
 mod archive;
 mod container_resolver;
 mod download;
-mod errors;
+pub(crate) mod errors;
 mod execution;
 mod extraction;
 mod interactive;

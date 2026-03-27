@@ -88,6 +88,10 @@ pub enum OrchestratorError {
     /// Interactive callback not configured but interactive mode was requested
     #[error("Interactive format selection requested but no interactive callback is configured")]
     InteractiveNotConfigured,
+
+    /// Catch-all for errors with context chains from internal operations.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 /// Check if an error warrants re-extracting fresh URLs.
@@ -95,7 +99,7 @@ pub enum OrchestratorError {
 /// CDN failures (Cloudflare challenges, expired tokens, server errors)
 /// return `Extraction` errors containing "invalid M3U8". These can be
 /// resolved by calling `extract_lazy()` again for a fresh CDN assignment.
-pub(super) fn is_reextractable_error(err: &OrchestratorError) -> bool {
+pub(crate) fn is_reextractable_error(err: &OrchestratorError) -> bool {
     match err {
         OrchestratorError::DownloadFailed(RdlpError::Extraction { message, .. }) => {
             message.contains("invalid M3U8")
