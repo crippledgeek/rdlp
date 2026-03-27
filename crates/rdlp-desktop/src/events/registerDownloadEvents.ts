@@ -55,7 +55,20 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                 if (!old) return old;
                 return old.map((job) => {
                     const entry = batch.get(job.id);
-                    return entry ? { ...job, ...entry } : job;
+                    if (!entry) return job;
+
+                    // For merge downloads, show "Video — 67%" or "Audio — 23%"
+                    const unit = job.currentUnit;
+                    const isMerge = unit
+                        && unit.unitTotal === 2
+                        && (unit.unitTitle === "Video" || unit.unitTitle === "Audio");
+
+                    const updates: Partial<DownloadJob> = { ...entry };
+                    if (isMerge) {
+                        updates.statusMessage = `${unit.unitTitle} \u2014 ${Math.round(entry.progress)}%`;
+                    }
+
+                    return { ...job, ...updates };
                 });
             },
         );
@@ -96,6 +109,9 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                                   progress: 100,
                                   output_path: p.filepath || null,
                                   completed_at: Math.floor(Date.now() / 1000),
+                                  statusMessage: null,
+                                  currentUnit: null,
+                                  completedUnits: 0,
                               }
                             : job,
                     ),
@@ -186,6 +202,14 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
     unlisteners.push(
         onUnitStarted((p) => {
             if (!mounted) return;
+            // Determine if this is a merge download (Video/Audio) or a playlist episode
+            const isMerge = p.unitTotal === 2
+                && (p.unitTitle === "Video" || p.unitTitle === "Audio");
+
+            const statusMessage = isMerge
+                ? p.unitTitle   // "Video" or "Audio" — percentage appended by progress handler
+                : `Ep ${p.unitIndex}/${p.unitTotal} \u2014 ${p.unitTitle}`;
+
             qc.setQueryData<DownloadJob[]>(
                 queryKeys.downloads.list(),
                 (old) =>
@@ -193,7 +217,12 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
-                                  statusMessage: `Ep ${p.unitIndex}/${p.unitTotal} — ${p.unitTitle}`,
+                                  statusMessage,
+                                  currentUnit: {
+                                      unitIndex: p.unitIndex,
+                                      unitTotal: p.unitTotal,
+                                      unitTitle: p.unitTitle,
+                                  },
                               }
                             : job,
                     ),
@@ -202,9 +231,20 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
     );
 
     unlisteners.push(
-        onUnitCompleted((_p) => {
-            // Future: update aggregate playlist progress
-            // For now, the next unit-started or download-complete will update status
+        onUnitCompleted((p) => {
+            if (!mounted) return;
+            qc.setQueryData<DownloadJob[]>(
+                queryKeys.downloads.list(),
+                (old) =>
+                    old?.map((job) =>
+                        job.id === p.jobId
+                            ? {
+                                  ...job,
+                                  completedUnits: (job.completedUnits ?? 0) + 1,
+                              }
+                            : job,
+                    ),
+            );
         }),
     );
 

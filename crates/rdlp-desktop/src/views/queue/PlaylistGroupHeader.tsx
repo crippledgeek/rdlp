@@ -85,7 +85,7 @@ export function PlaylistGroupHeader({
                     {playlistTitle}
                 </span>
 
-                <span className="text-[11px] text-[#888888] tabular-nums shrink-0">
+                <span className="text-[11px] text-[#888888] tabular-nums shrink-0" aria-live="polite">
                     {stats.completed}/{stats.total} completed
                 </span>
 
@@ -110,6 +110,16 @@ export function PlaylistGroupHeader({
                     style={{ width: `${Math.round(stats.progressFraction * 100)}%` }}
                 />
             </div>
+
+            {/* Active episode indicator */}
+            {stats.running > 0 && (() => {
+                const activeJob = jobs.find((j) => j.status === "running");
+                return activeJob?.statusMessage ? (
+                    <p className="text-[10px] text-[#aaaaaa] truncate" aria-live="polite">
+                        {activeJob.statusMessage}
+                    </p>
+                ) : null;
+            })()}
 
             {/* Status summary */}
             <div className="flex items-center gap-2 text-[10px]">
