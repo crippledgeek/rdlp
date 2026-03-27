@@ -176,9 +176,8 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             }
         }
 
-        Event::Completed { result, .. } => {
-            let filepath = result
-                .output_files
+        Event::Completed { output_files, .. } => {
+            let filepath = output_files
                 .first()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();

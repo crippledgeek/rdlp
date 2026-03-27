@@ -188,53 +188,54 @@ impl FFmpegRunner {
             let in_video_stream = *(*video_ctx).streams.add(video_ist_index);
             let in_audio_stream = *(*audio_ctx).streams.add(audio_ist_index);
 
-            // SAFETY: AVPacket is a plain C struct where zeroing all fields
-            // is equivalent to the deprecated av_init_packet() behaviour.
-            // pts/dts/pos are explicitly set to sentinel values immediately
-            // after. av_packet_unref() is called after each write to release
-            // any buffer references before the next av_read_frame() refills
-            // the packet.
-            let mut vpkt: ffi::AVPacket = std::mem::zeroed();
-            vpkt.pts = ffi::AV_NOPTS_VALUE;
-            vpkt.dts = ffi::AV_NOPTS_VALUE;
-            vpkt.pos = -1;
+            // SAFETY: av_packet_alloc returns a fully initialised AVPacket on the
+            // heap. Null check guards against allocation failure. av_packet_free
+            // is called in all exit paths to prevent leaks.
+            let vpkt = ffi::av_packet_alloc();
+            if vpkt.is_null() {
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "av_packet_alloc failed for video packet".into(),
+                });
+            }
+            let apkt = ffi::av_packet_alloc();
+            if apkt.is_null() {
+                ffi::av_packet_free(&mut (vpkt as *mut _));
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "av_packet_alloc failed for audio packet".into(),
+                });
+            }
 
-            let mut apkt: ffi::AVPacket = std::mem::zeroed();
-            apkt.pts = ffi::AV_NOPTS_VALUE;
-            apkt.dts = ffi::AV_NOPTS_VALUE;
-            apkt.pos = -1;
-
-            let mut have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
-            let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+            let mut have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
+            let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
 
             loop {
                 match (have_video, have_audio) {
                     (false, false) => break,
                     (true, false) => {
-                        bytes_written += vpkt.size as u64;
+                        bytes_written += (*vpkt).size as u64;
                         rescale_and_write_raw(
-                            &mut vpkt,
+                            vpkt,
                             in_video_stream,
                             out_ctx,
                             video_ost_index as i32,
                         )?;
-                        ffi::av_packet_unref(&mut vpkt);
-                        have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
+                        ffi::av_packet_unref(vpkt);
+                        have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
                     }
                     (false, true) => {
-                        bytes_written += apkt.size as u64;
+                        bytes_written += (*apkt).size as u64;
                         rescale_and_write_raw(
-                            &mut apkt,
+                            apkt,
                             in_audio_stream,
                             out_ctx,
                             audio_ost_index as i32,
                         )?;
-                        ffi::av_packet_unref(&mut apkt);
-                        have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+                        ffi::av_packet_unref(apkt);
+                        have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
                     }
                     (true, true) => {
-                        let v_us = dts_in_us(vpkt.dts, in_video_stream);
-                        let a_us = dts_in_us(apkt.dts, in_audio_stream);
+                        let v_us = dts_in_us((*vpkt).dts, in_video_stream);
+                        let a_us = dts_in_us((*apkt).dts, in_audio_stream);
 
                         let write_video = match (v_us, a_us) {
                             // Both NOPTS: write video first (arbitrary)
@@ -248,25 +249,25 @@ impl FFmpegRunner {
                         };
 
                         if write_video {
-                            bytes_written += vpkt.size as u64;
+                            bytes_written += (*vpkt).size as u64;
                             rescale_and_write_raw(
-                                &mut vpkt,
+                                vpkt,
                                 in_video_stream,
                                 out_ctx,
                                 video_ost_index as i32,
                             )?;
-                            ffi::av_packet_unref(&mut vpkt);
-                            have_video = read_next_raw(video_ctx, video_ist_index, &mut vpkt);
+                            ffi::av_packet_unref(vpkt);
+                            have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
                         } else {
-                            bytes_written += apkt.size as u64;
+                            bytes_written += (*apkt).size as u64;
                             rescale_and_write_raw(
-                                &mut apkt,
+                                apkt,
                                 in_audio_stream,
                                 out_ctx,
                                 audio_ost_index as i32,
                             )?;
-                            ffi::av_packet_unref(&mut apkt);
-                            have_audio = read_next_raw(audio_ctx, audio_ist_index, &mut apkt);
+                            ffi::av_packet_unref(apkt);
+                            have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
                         }
                     }
                 }
@@ -283,8 +284,10 @@ impl FFmpegRunner {
             }
 
             // Clean up any unreleased packets
-            ffi::av_packet_unref(&mut vpkt);
-            ffi::av_packet_unref(&mut apkt);
+            ffi::av_packet_unref(vpkt);
+            ffi::av_packet_unref(apkt);
+            ffi::av_packet_free(&mut (vpkt as *mut _));
+            ffi::av_packet_free(&mut (apkt as *mut _));
         }
 
         // Emit final 1.0 on completion

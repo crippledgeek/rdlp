@@ -102,9 +102,8 @@ impl From<&Event> for EventDto {
 
             Event::Warning { message, .. } => ("warning", json!({ "message": message })),
 
-            Event::Completed { result, .. } => {
-                let output_files: Vec<String> = result
-                    .output_files
+            Event::Completed { output_files, .. } => {
+                let output_files: Vec<String> = output_files
                     .iter()
                     .map(|p| p.display().to_string())
                     .collect();
