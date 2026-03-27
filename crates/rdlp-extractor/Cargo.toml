@@ -11,6 +11,7 @@ rdlp-types = { path = "../rdlp-types" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-crypto = { path = "../rdlp-crypto" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
