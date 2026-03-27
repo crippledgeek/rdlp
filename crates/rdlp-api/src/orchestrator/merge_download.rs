@@ -6,6 +6,7 @@
 
 use super::Orchestrator;
 use super::errors::*;
+use crate::events::Event;
 use log::{debug, info, warn};
 use rdlp_types::Format;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,13 @@ impl Orchestrator {
         );
 
         // Download video first
+        let _ = self.event_tx.try_send(Event::PlaylistItemStarted {
+            id: self.download_id,
+            index: 1,
+            total: 2,
+            url: video.url.clone(),
+            title: "Video".to_string(),
+        });
         let video_outcome = match self
             .download_with_cdn_fallback(video, &video_path, 0)
             .await
@@ -70,13 +78,28 @@ impl Orchestrator {
                 return Err(e);
             }
         };
+        let _ = self.event_tx.try_send(Event::UnitCompleted {
+            id: self.download_id,
+            index: 1,
+        });
 
         // Then download audio
+        let _ = self.event_tx.try_send(Event::PlaylistItemStarted {
+            id: self.download_id,
+            index: 2,
+            total: 2,
+            url: audio.url.clone(),
+            title: "Audio".to_string(),
+        });
         match self
             .download_with_cdn_fallback(audio, &audio_path, 0)
             .await
         {
             Ok(Some(audio_outcome)) => {
+                let _ = self.event_tx.try_send(Event::UnitCompleted {
+                    id: self.download_id,
+                    index: 2,
+                });
                 let is_hls = video_outcome.is_hls || audio_outcome.is_hls;
                 debug!(
                     video_hls = video_outcome.is_hls,
