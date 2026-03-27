@@ -9,6 +9,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::download::PlaylistContext;
+
 /// Lifecycle status of a download job.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +60,8 @@ pub struct DownloadJob {
     pub(crate) output_path: Option<String>,
     /// The options used when this download was started (for retry).
     pub(crate) options: Option<SavedDownloadOptions>,
+    /// Playlist membership — `None` for standalone downloads.
+    pub(crate) playlist: Option<PlaylistContext>,
 }
 
 /// A serializable snapshot of the options used when a download was started.
@@ -103,6 +107,7 @@ impl DownloadQueue {
     /// * `id` - Unique job identifier (typically a UUID v4).
     /// * `url` - Source URL to download.
     /// * `title` - Optional title to display immediately (e.g. from search results).
+    /// * `playlist` - Optional playlist membership context for batch downloads.
     ///
     /// # Returns
     ///
@@ -112,6 +117,7 @@ impl DownloadQueue {
         id: impl Into<String>,
         url: impl Into<String>,
         title: Option<String>,
+        playlist: Option<PlaylistContext>,
     ) -> &DownloadJob {
         let id = id.into();
         let job = DownloadJob {
@@ -128,6 +134,7 @@ impl DownloadQueue {
             completed_at: None,
             output_path: None,
             options: None,
+            playlist,
         };
         self.order.push(id.clone());
         self.jobs.insert(id.clone(), job);
@@ -274,7 +281,7 @@ mod tests {
     #[test]
     fn test_add_and_get_job() {
         let mut queue = DownloadQueue::new();
-        let job = queue.add_job("job-1", "https://example.com/v1", None);
+        let job = queue.add_job("job-1", "https://example.com/v1", None, None);
         assert_eq!(job.id, "job-1");
         assert_eq!(job.url, "https://example.com/v1");
         assert_eq!(job.status, JobStatus::Pending);
@@ -288,9 +295,9 @@ mod tests {
     #[test]
     fn test_all_jobs_order() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("a", "https://example.com/a", None);
-        queue.add_job("b", "https://example.com/b", None);
-        queue.add_job("c", "https://example.com/c", None);
+        queue.add_job("a", "https://example.com/a", None, None);
+        queue.add_job("b", "https://example.com/b", None, None);
+        queue.add_job("c", "https://example.com/c", None, None);
 
         let ids: Vec<&str> = queue.all_jobs().iter().map(|j| j.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
@@ -299,7 +306,7 @@ mod tests {
     #[test]
     fn test_remove_completed_job() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("job-1", "https://example.com/v1", None);
+        queue.add_job("job-1", "https://example.com/v1", None, None);
 
         // Cannot remove a pending job
         assert!(!queue.remove_job("job-1"));
@@ -314,7 +321,7 @@ mod tests {
     #[test]
     fn test_cannot_remove_running_job() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("job-1", "https://example.com/v1", None);
+        queue.add_job("job-1", "https://example.com/v1", None, None);
         queue.get_job_mut("job-1").unwrap().status = JobStatus::Running;
 
         assert!(!queue.remove_job("job-1"));
@@ -324,7 +331,7 @@ mod tests {
     #[test]
     fn test_job_serializes() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("job-1", "https://example.com/v1", None);
+        queue.add_job("job-1", "https://example.com/v1", None, None);
 
         let job = queue.get_job("job-1").unwrap();
         let json = serde_json::to_value(job).expect("serialization should succeed");
@@ -340,7 +347,7 @@ mod tests {
     #[test]
     fn test_start_job_sets_running_and_cancel() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("job-1", "https://example.com/v1", None);
+        queue.add_job("job-1", "https://example.com/v1", None, None);
 
         let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = called.clone();
@@ -364,9 +371,9 @@ mod tests {
     #[test]
     fn test_clear_completed_removes_terminal_jobs() {
         let mut queue = DownloadQueue::new();
-        queue.add_job("a", "https://example.com/a", None);
-        queue.add_job("b", "https://example.com/b", None);
-        queue.add_job("c", "https://example.com/c", None);
+        queue.add_job("a", "https://example.com/a", None, None);
+        queue.add_job("b", "https://example.com/b", None, None);
+        queue.add_job("c", "https://example.com/c", None, None);
 
         // a: completed, b: running, c: cancelled
         queue.get_job_mut("a").unwrap().status = JobStatus::Completed;
@@ -401,7 +408,7 @@ mod tests {
         // Verifies that after start_job, the job is atomically
         // Running with a cancel function — never one without the other
         let mut queue = DownloadQueue::new();
-        queue.add_job("job-1", "https://example.com/v1", None);
+        queue.add_job("job-1", "https://example.com/v1", None, None);
 
         // Before start_job: Pending, no cancel
         assert_eq!(queue.get_job("job-1").unwrap().status, JobStatus::Pending);
