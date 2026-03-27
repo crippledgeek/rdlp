@@ -4,7 +4,7 @@
 //! CLI arguments with file-based and default configuration using
 //! a three-layer precedence: CLI > config file > defaults.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rdlp_api::{
     AudioFormat, BrowserType, Config, ContainerFormat, RecodeAudioMode, SubtitleFormat, config_io,
 };
@@ -27,17 +27,23 @@ pub(crate) struct ResolvedInteractiveValues {
 /// Returns `None` values for fields that weren't set to "interactive".
 fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> {
     let audio_format = match args.audio_format.as_deref() {
-        Some("interactive") => select_audio_format()?,
+        Some("interactive") => {
+            select_audio_format().context("interactive audio format selection failed")?
+        }
         _ => None,
     };
 
     let recode_video = match args.recode_video.as_deref() {
-        Some("interactive") => select_recode_video()?,
+        Some("interactive") => {
+            select_recode_video().context("interactive recode video format selection failed")?
+        }
         _ => None,
     };
 
     let remux_container = match args.remux.as_deref() {
-        Some("interactive") => select_remux_container()?,
+        Some("interactive") => {
+            select_remux_container().context("interactive remux container selection failed")?
+        }
         _ => None,
     };
 
@@ -110,7 +116,8 @@ pub(crate) fn merge_config(
         config.audio_format = Some(
             audio_format
                 .parse::<AudioFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid audio format '{audio_format}'"))?,
         );
     }
 
@@ -141,7 +148,8 @@ pub(crate) fn merge_config(
         config.subtitle_format = Some(
             format
                 .parse::<SubtitleFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid subtitle format '{format}'"))?,
         );
     }
     if args.embed_subtitles {
@@ -175,7 +183,8 @@ pub(crate) fn merge_config(
         config.recode_video = Some(
             recode_video
                 .parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid recode video container '{recode_video}'"))?,
         );
     }
 
@@ -187,7 +196,8 @@ pub(crate) fn merge_config(
     if let Some(ref fmt) = args.recode_container {
         config.recode_container = Some(
             fmt.parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid recode container '{fmt}'"))?,
         );
     }
 
@@ -249,14 +259,17 @@ pub(crate) fn merge_config(
         config.proxy = Some(proxy.clone());
     }
     if let Some(ref rate_str) = args.limit_rate {
-        let bps = rdlp_ratelimit::parse_rate_limit(rate_str).map_err(|e| anyhow::anyhow!(e))?;
+        let bps = rdlp_ratelimit::parse_rate_limit(rate_str)
+            .map_err(|e| anyhow::anyhow!(e))
+            .with_context(|| format!("invalid rate limit '{rate_str}'"))?;
         config.rate_limit = Some(bps);
     }
     if let Some(ref browser) = args.cookies_from_browser {
         config.cookies_from_browser = Some(
             browser
                 .parse::<BrowserType>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid browser type '{browser}'"))?,
         );
     }
     if let Some(ref cookies) = args.cookies {
@@ -275,7 +288,8 @@ pub(crate) fn merge_config(
         config.remux_container = Some(
             container
                 .parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))?,
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| format!("invalid remux container '{container}'"))?,
         );
     }
 
@@ -297,7 +311,8 @@ pub(crate) fn merge_config(
 /// Build Config by: resolve interactive prompts -> load file -> merge.
 pub(crate) fn build_config(args: &Args) -> Result<Config> {
     // Step 1: Resolve interactive values (side effects isolated here)
-    let interactive_values = resolve_interactive_values(args)?;
+    let interactive_values = resolve_interactive_values(args)
+        .context("failed to resolve interactive configuration values")?;
 
     // Step 2: Load config file (or use defaults)
     let file_config = if args.ignore_config {

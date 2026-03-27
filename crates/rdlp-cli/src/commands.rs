@@ -3,7 +3,7 @@
 //! Contains codec listing, field printing, exit code mapping,
 //! and the error exit helper.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
 use tracing::error;
@@ -57,7 +57,7 @@ pub(crate) fn print_codecs() {
 
 /// Print specific fields from an InfoDict
 pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
-    let value = serde_json::to_value(info)?;
+    let value = serde_json::to_value(info).context("failed to serialize InfoDict to JSON value")?;
     let map = value.as_object().expect("InfoDict serializes to object");
 
     for field in fields.split(',') {
