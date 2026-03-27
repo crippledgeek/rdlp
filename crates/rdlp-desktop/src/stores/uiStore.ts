@@ -12,6 +12,8 @@ export interface UiState {
     selectedJobId: string | null;
     commandPaletteOpen: boolean;
     analyzeUrl: string | null;
+    /** When viewing a single episode from a playlist, stores the playlist URL for back navigation. */
+    playlistBackUrl: string | null;
 }
 
 const initialState: UiState = {
@@ -22,6 +24,7 @@ const initialState: UiState = {
     selectedJobId: null,
     commandPaletteOpen: false,
     analyzeUrl: null,
+    playlistBackUrl: null,
 };
 
 export const uiStore = new Store<UiState>(initialState);
@@ -54,5 +57,10 @@ export function setCommandPaletteOpen(open: boolean): void {
 }
 
 export function setAnalyzeUrl(url: string | null): void {
-    uiStore.setState((prev) => ({ ...prev, analyzeUrl: url }));
+    uiStore.setState((prev) => ({
+        ...prev,
+        analyzeUrl: url,
+        // Clear playlist back URL when navigating to a non-playlist context
+        playlistBackUrl: url === null ? null : prev.playlistBackUrl,
+    }));
 }
