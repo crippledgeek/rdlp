@@ -155,6 +155,7 @@ impl RdlpClient {
                         .to_string();
                     error!("Cookie loading failed (explicit request): {e}");
                     let api_err = RdlpApiError::IoError { message: safe_msg };
+                    // intentional: receiver may have disconnected
                     let _ = tx
                         .send(Event::Failed {
                             id,
@@ -163,6 +164,7 @@ impl RdlpClient {
                         .await;
                     return Err(api_err);
                 }
+                // intentional: receiver may have disconnected
                 let _ = tx
                     .send(Event::Warning {
                         id,
@@ -190,6 +192,7 @@ impl RdlpClient {
                         MAX_REEXTRACT_RETRIES + 1,
                         reason,
                     );
+                    // intentional: receiver may have disconnected
                     let _ = tx
                         .send(Event::Retrying {
                             id,
@@ -216,6 +219,7 @@ impl RdlpClient {
                             info: InfoDict::new("", "", "", &url),
                             stats: DownloadStats::new(0, Duration::ZERO, 0),
                         };
+                        // intentional: receiver may have disconnected
                         let _ = tx
                             .send(Event::Completed {
                                 id,
@@ -235,6 +239,7 @@ impl RdlpClient {
                             continue;
                         }
                         // Final failure — emit and return
+                        // intentional: receiver may have disconnected
                         let _ = tx
                             .send(Event::Failed {
                                 id,
@@ -251,6 +256,7 @@ impl RdlpClient {
                 message: "All re-extraction attempts failed".into(),
                 status: None,
             });
+            // intentional: receiver may have disconnected
             let _ = tx
                 .send(Event::Failed {
                     id,
@@ -505,6 +511,7 @@ impl RdlpClient {
                 "local",
                 format!("file://{}", path.display()),
             );
+            // intentional: receiver may have disconnected
             let _ = tx
                 .send(Event::PostProcessing {
                     id,
@@ -516,6 +523,7 @@ impl RdlpClient {
                 let err = RdlpApiError::IoError {
                     message: format!("File not found: {}", path.display()),
                 };
+                // intentional: receiver may have disconnected
                 let _ = tx
                     .send(Event::Failed {
                         id,
@@ -536,6 +544,7 @@ impl RdlpClient {
                         info,
                         stats: rdlp_core::DownloadStats::new(0, std::time::Duration::ZERO, 0),
                     };
+                    // intentional: receiver may have disconnected
                     let _ = tx
                         .send(Event::Completed {
                             id,
@@ -546,6 +555,7 @@ impl RdlpClient {
                 }
                 Err(e) => {
                     let err = RdlpApiError::from(e);
+                    // intentional: receiver may have disconnected
                     let _ = tx
                         .send(Event::Failed {
                             id,
