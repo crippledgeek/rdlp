@@ -27,6 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use log::{debug, info, warn};
 
 use crate::error::{CorruptionKind, PostProcessError, Result};
@@ -151,7 +152,7 @@ pub(crate) fn check_matroska_integrity(input: &Path) -> Result<()> {
 ///
 /// Returns the path to the salvaged temporary file. The caller is responsible
 /// for cleaning up this file when done.
-pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
+pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     ensure_init()?;
 
     // Always use MKV for salvage output. Matroska writes metadata
@@ -190,19 +191,18 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
     let _log_suppress = LogSuppressGuard::new();
 
     // Open corrupt input — FFmpeg will log warnings but continue reading
-    let mut ictx =
-        ffmpeg_the_third::format::input(input).map_err(|e| PostProcessError::SalvageFailed {
-            message: format!("failed to open corrupt input {}: {e}", input.display()),
-        })?;
+    let mut ictx = ffmpeg_the_third::format::input(input)
+        .map_err(PostProcessError::from)
+        .with_context(|| format!("failed to open corrupt input for salvage {}", input.display()))?;
 
-    let mut octx = ffmpeg_the_third::format::output(&salvage_path).map_err(|e| {
-        PostProcessError::SalvageFailed {
-            message: format!(
-                "failed to create salvage output {}: {e}",
+    let mut octx = ffmpeg_the_third::format::output(&salvage_path)
+        .map_err(PostProcessError::from)
+        .with_context(|| {
+            format!(
+                "failed to create salvage output {}",
                 salvage_path.display()
-            ),
-        }
-    })?;
+            )
+        })?;
 
     // Map all input streams to output (stream copy, no re-encoding)
     let stream_count = ictx.streams().count();
@@ -211,9 +211,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
             ))
-            .map_err(|e| PostProcessError::SalvageFailed {
-                message: format!("failed to add output stream: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to add output stream for salvage")?;
         ost.set_parameters(ist.parameters());
         FFmpegRunner::clear_codec_tag(ost.parameters().as_ptr());
     }
@@ -230,9 +229,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
     muxer_opts.set("cluster_time_limit", "500");
 
     octx.write_header_with(muxer_opts)
-        .map_err(|e| PostProcessError::SalvageFailed {
-            message: format!("failed to write salvage output header: {e}"),
-        })?;
+        .map_err(PostProcessError::from)
+        .context("failed to write salvage output header")?;
 
     // Copy all recoverable packets, skipping ones that fail to read or write
     let mut copied = 0u64;
@@ -277,9 +275,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
     drop(_log_suppress);
 
     octx.write_trailer()
-        .map_err(|e| PostProcessError::SalvageFailed {
-            message: format!("failed to write salvage output trailer: {e}"),
-        })?;
+        .map_err(PostProcessError::from)
+        .context("failed to write salvage output trailer")?;
 
     info!("Salvage remux complete: {copied} packets copied, {skipped} skipped");
 
@@ -287,7 +284,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> Result<PathBuf> {
         let _ = std::fs::remove_file(&salvage_path);
         return Err(PostProcessError::SalvageFailed {
             message: "no packets could be recovered from corrupt input".into(),
-        });
+        }
+        .into());
     }
 
     Ok(salvage_path)

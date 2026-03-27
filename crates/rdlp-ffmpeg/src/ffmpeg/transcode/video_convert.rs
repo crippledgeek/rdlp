@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use log::debug;
 
 use crate::error::{PostProcessError, Result};
@@ -69,7 +70,7 @@ impl FFmpegRunner {
                 let _ = std::fs::remove_file(temp);
             }
 
-            result
+            Ok(result?)
         })
         .await
     }
@@ -80,7 +81,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &VideoConvertOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         if opts.remux_only {
             // Determine if output is MP4/MOV for faststart
             let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -88,7 +89,8 @@ impl FFmpegRunner {
                 faststart: ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mov"),
                 ..Default::default()
             };
-            Self::remux_sync(input, output, &remux_opts, progress_fn)
+            Ok(Self::remux_sync(input, output, &remux_opts, progress_fn)
+                .map_err(|e| PostProcessError::ffmpeg_failed(format!("{e:#}")))?)
         } else {
             Self::convert_video_transcode_sync(input, output, opts, progress_fn)
         }
@@ -105,15 +107,13 @@ impl FFmpegRunner {
         output: &Path,
         opts: &VideoConvertOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // Open input
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open input for video transcode {}", input.display()))?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
@@ -191,11 +191,9 @@ impl FFmpegRunner {
         let mut video_decoder = video_dec_ctx.decoder().video()?;
 
         // Open output
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to create output for video transcode {}", output.display()))?;
 
         // Find video encoder
         let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
@@ -214,11 +212,10 @@ impl FFmpegRunner {
         // Add video output stream (scoped to release octx borrow)
         let video_ost_index;
         {
-            let ost = octx.add_stream(video_enc_codec).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to add video output stream: {e}"),
-                }
-            })?;
+            let ost = octx
+                .add_stream(video_enc_codec)
+                .map_err(PostProcessError::from)
+                .context("failed to add video output stream for transcode")?;
             video_ost_index = ost.index();
         }
 
@@ -269,9 +266,8 @@ impl FFmpegRunner {
         }
         let mut video_encoder = video_encoder
             .open_as_with(video_enc_codec, enc_opts)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open video encoder: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to open video encoder for transcode")?;
 
         // The encoder's ctx->time_base is NOT the timebase of output packets.
         // Packets inherit the timebase from the filter graph input, which is
@@ -312,9 +308,8 @@ impl FFmpegRunner {
                         .add_stream(ffmpeg_the_third::encoder::find(
                             ffmpeg_the_third::codec::Id::None,
                         ))
-                        .map_err(|e| PostProcessError::FFmpegLibraryError {
-                            message: format!("failed to add audio output stream: {e}"),
-                        })?;
+                        .map_err(PostProcessError::from)
+                        .context("failed to add audio output stream for video transcode")?;
                     ost.set_parameters(
                         ictx.stream(audio_idx)
                             .ok_or_else(|| {
@@ -374,11 +369,10 @@ impl FFmpegRunner {
                 // Add audio output stream with encoder
                 let audio_enc_ost_idx;
                 {
-                    let ost = octx.add_stream(audio_enc_codec).map_err(|e| {
-                        PostProcessError::FFmpegLibraryError {
-                            message: format!("failed to add audio encode output stream: {e}"),
-                        }
-                    })?;
+                    let ost = octx
+                        .add_stream(audio_enc_codec)
+                        .map_err(PostProcessError::from)
+                        .context("failed to add audio encode output stream for video transcode")?;
                     audio_enc_ost_idx = ost.index();
                 }
 
@@ -416,11 +410,10 @@ impl FFmpegRunner {
                     unsafe { Self::set_global_header_flag(audio_encoder.as_mut_ptr()) };
                 }
 
-                let audio_encoder = audio_encoder.open_as(audio_enc_codec).map_err(|e| {
-                    PostProcessError::FFmpegLibraryError {
-                        message: format!("failed to open audio encoder '{enc_name}': {e}"),
-                    }
-                })?;
+                let audio_encoder = audio_encoder
+                    .open_as(audio_enc_codec)
+                    .map_err(PostProcessError::from)
+                    .with_context(|| format!("failed to open audio encoder '{enc_name}' for video transcode"))?;
 
                 // Copy encoder parameters back to output stream
                 unsafe {
@@ -466,9 +459,8 @@ impl FFmpegRunner {
 
         // Write header with options
         octx.write_header_with(dict)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for video transcode")?;
 
         // Build video filter graph for pixel format conversion
         let mut filter_graph =
@@ -493,10 +485,9 @@ impl FFmpegRunner {
 
         // Process packets: video -> decode/filter/encode, audio -> copy or transcode
         for result in ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read packet: {e}"),
-                })?;
+            let (stream, mut packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during video transcode")?;
             let ist_index = stream.index();
 
             if ist_index == video_ist_index {
@@ -541,11 +532,10 @@ impl FFmpegRunner {
                     packet.rescale_ts(audio_tb, ost_time_base);
                     packet.set_position(-1);
                     packet.set_stream(audio_ost_idx);
-                    packet.write_interleaved(&mut octx).map_err(|e| {
-                        PostProcessError::FFmpegLibraryError {
-                            message: format!("failed to write audio packet: {e}"),
-                        }
-                    })?;
+                    packet
+                        .write_interleaved(&mut octx)
+                        .map_err(PostProcessError::from)
+                        .context("failed to write audio packet during video transcode")?;
                 } else if let (
                     Some(ref mut audio_dec),
                     Some(ref mut audio_enc),
@@ -657,9 +647,8 @@ impl FFmpegRunner {
         flush_interleave_queue(&mut octx);
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for video transcode")?;
 
         Ok(())
     }

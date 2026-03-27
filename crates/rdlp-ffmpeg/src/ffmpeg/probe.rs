@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PostProcessError, Result};
@@ -74,18 +75,19 @@ impl FFmpegRunner {
             return Err(PostProcessError::InputNotFound { path });
         }
 
-        Self::spawn_blocking("probe", move || Self::probe_sync(&path)).await
+        Self::spawn_blocking("probe", move || -> Result<MediaInfo> {
+            Ok(Self::probe_sync(&path)?)
+        })
+        .await
     }
 
     /// Probe a media file synchronously using ffmpeg-the-third library.
-    fn probe_sync(path: &Path) -> Result<MediaInfo> {
+    fn probe_sync(path: &Path) -> anyhow::Result<MediaInfo> {
         ensure_init()?;
 
-        let ictx = ffmpeg_the_third::format::input(path).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open {}: {e}", path.display()),
-            }
-        })?;
+        let ictx = ffmpeg_the_third::format::input(path)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to probe input {}", path.display()))?;
 
         let mut info = MediaInfo {
             path: path.to_path_buf(),

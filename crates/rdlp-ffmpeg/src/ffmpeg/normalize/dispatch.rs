@@ -6,7 +6,9 @@
 
 use std::path::Path;
 
-use crate::error::{PostProcessError, Result};
+use anyhow::Context as _;
+
+use crate::error::PostProcessError;
 
 use super::super::{FFmpegRunner, LoudnormMeasurements, NormalizeOptions, PeakAnalysis};
 use super::helpers::{
@@ -22,7 +24,7 @@ impl FFmpegRunner {
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         Self::dispatch_normalize_sync(
             input,
             output,
@@ -43,7 +45,7 @@ impl FFmpegRunner {
         opts: &NormalizeOptions,
         resilient: bool,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let gain_db = opts.target_peak_db - analysis.peak_db;
         let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
         Self::encode_audio_only_sync(
@@ -77,7 +79,7 @@ impl FFmpegRunner {
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         Self::dispatch_normalize_sync(
             input,
             output,
@@ -98,7 +100,7 @@ impl FFmpegRunner {
         measurements: &LoudnormMeasurements,
         resilient: bool,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
         let limiter = build_alimiter_spec(opts.target_tp);
         Self::encode_audio_only_sync(
@@ -129,16 +131,14 @@ impl FFmpegRunner {
         output: &Path,
         salvage: bool,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-        encode_fn: impl Fn(&Path, &Path, &str, bool, Option<&(dyn Fn(f64) + Send + Sync)>) -> Result<()>,
-    ) -> Result<()> {
+        encode_fn: impl Fn(&Path, &Path, &str, bool, Option<&(dyn Fn(f64) + Send + Sync)>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         crate::ffmpeg::ensure_init()?;
 
         let has_video = {
-            let ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open input {}: {e}", input.display()),
-                }
-            })?;
+            let ictx = ffmpeg_the_third::format::input(input)
+                .map_err(PostProcessError::from)
+                .with_context(|| format!("failed to open input for normalize dispatch {}", input.display()))?;
             ictx.streams()
                 .best(ffmpeg_the_third::media::Type::Video)
                 .is_some()
@@ -158,7 +158,7 @@ impl FFmpegRunner {
 
             if salvage {
                 with_mux_retry(input, &temp_audio, |effective_input, resilient| {
-                    encode_fn(effective_input, &temp_audio, ext, resilient, progress_fn)
+                    Ok(encode_fn(effective_input, &temp_audio, ext, resilient, progress_fn)?)
                 })?;
             } else {
                 encode_fn(input, &temp_audio, ext, false, progress_fn)?;
@@ -174,8 +174,9 @@ impl FFmpegRunner {
             merge_result
         } else if salvage {
             with_mux_retry(input, output, |effective_input, resilient| {
-                encode_fn(effective_input, output, ext, resilient, progress_fn)
-            })
+                Ok(encode_fn(effective_input, output, ext, resilient, progress_fn)?)
+            })?;
+            Ok(())
         } else {
             encode_fn(input, output, ext, false, progress_fn)
         }

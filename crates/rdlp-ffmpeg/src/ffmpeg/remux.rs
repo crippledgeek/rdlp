@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use log::debug;
 
 use crate::error::{PostProcessError, Result};
@@ -28,8 +29,8 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        Self::spawn_blocking("remux", move || {
-            Self::remux_sync(&input, &output, &opts, progress_fn.as_deref())
+        Self::spawn_blocking("remux", move || -> Result<()> {
+            Ok(Self::remux_sync(&input, &output, &opts, progress_fn.as_deref())?)
         })
         .await
     }
@@ -43,7 +44,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &RemuxOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block"
@@ -59,17 +60,13 @@ impl FFmpegRunner {
             return Self::remux_mkv_raw_ffi(input, output, progress_fn);
         }
 
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open input for remux {}", input.display()))?;
 
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open output for remux {}", output.display()))?;
 
         let stream_count = ictx.streams().count();
         let mut stream_mapping: Vec<i32> = vec![-1; stream_count];
@@ -123,9 +120,8 @@ impl FFmpegRunner {
                 .add_stream(ffmpeg_the_third::encoder::find(
                     ffmpeg_the_third::codec::Id::None,
                 ))
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to add output stream: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("failed to add output stream for remux")?;
             ost.set_parameters(ist.parameters());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
@@ -143,9 +139,8 @@ impl FFmpegRunner {
 
         // Write header with muxer options
         octx.write_header_with(dict)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for remux")?;
 
         // Read input duration for progress reporting (AV_TIME_BASE microseconds)
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
@@ -154,10 +149,9 @@ impl FFmpegRunner {
 
         // Copy packets with PTS normalization (shifts timestamps to start at 0)
         for result in ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read packet: {e}"),
-                })?;
+            let (stream, mut packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during remux")?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
@@ -199,11 +193,10 @@ impl FFmpegRunner {
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
             packet.set_stream(ost_idx);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write packet: {e}"),
-                }
-            })?;
+            packet
+                .write_interleaved(&mut octx)
+                .map_err(PostProcessError::from)
+                .context("failed to write packet during remux")?;
         }
 
         // Emit final 1.0 on completion
@@ -212,9 +205,8 @@ impl FFmpegRunner {
         }
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for remux")?;
 
         Ok(())
     }
@@ -235,7 +227,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
         use std::ptr;
@@ -265,7 +257,8 @@ impl FFmpegRunner {
             if ret < 0 {
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: format!("Failed to open input: error code {ret}"),
-                });
+                }
+                .into());
             }
 
             let ret = ffi::avformat_find_stream_info(ifmt_ctx, ptr::null_mut());
@@ -273,7 +266,8 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: format!("Failed to find stream info: error code {ret}"),
-                });
+                }
+                .into());
             }
 
             // 2. Create output context - EXPLICITLY request Matroska muxer
@@ -289,7 +283,8 @@ impl FFmpegRunner {
                 ffi::avformat_close_input(&mut ifmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: format!("Failed to create output context: error code {ret}"),
-                });
+                }
+                .into());
             }
 
             // 3. Copy streams with FULL property preservation (like CLI does)
@@ -319,7 +314,8 @@ impl FFmpegRunner {
                     ffi::avformat_free_context(ofmt_ctx);
                     return Err(PostProcessError::FFmpegLibraryError {
                         message: "Failed to create output stream".into(),
-                    });
+                    }
+                    .into());
                 }
 
                 // Copy codec parameters
@@ -329,7 +325,8 @@ impl FFmpegRunner {
                     ffi::avformat_free_context(ofmt_ctx);
                     return Err(PostProcessError::FFmpegLibraryError {
                         message: format!("Failed to copy codec params: error code {ret}"),
-                    });
+                    }
+                    .into());
                 }
 
                 // Reset codec tag for container compatibility
@@ -386,7 +383,8 @@ impl FFmpegRunner {
                     ffi::avformat_free_context(ofmt_ctx);
                     return Err(PostProcessError::FFmpegLibraryError {
                         message: format!("Failed to open output file: error code {ret}"),
-                    });
+                    }
+                    .into());
                 }
             }
 
@@ -420,7 +418,8 @@ impl FFmpegRunner {
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: format!("avformat_init_output failed: error code {ret}"),
-                });
+                }
+                .into());
             }
 
             // 8. Write header
@@ -433,7 +432,8 @@ impl FFmpegRunner {
                 ffi::avformat_free_context(ofmt_ctx);
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: format!("avformat_write_header failed: error code {ret}"),
-                });
+                }
+                .into());
             }
 
             // 9. Copy packets

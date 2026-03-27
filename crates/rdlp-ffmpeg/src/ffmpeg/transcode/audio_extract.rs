@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use log::{debug, info};
 
 use crate::error::{PostProcessError, Result};
@@ -45,7 +46,7 @@ impl FFmpegRunner {
                 let _ = std::fs::remove_file(temp);
             }
 
-            result
+            Ok(result?)
         })
         .await
     }
@@ -56,7 +57,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &AudioExtractOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         if opts.copy {
             Self::extract_audio_copy_sync(input, output, progress_fn)
         } else {
@@ -71,25 +72,21 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
         let _log_suppress = LogSuppressGuard::error_level();
 
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open input for audio copy extract {}", input.display()))?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to create output for audio copy extract {}", output.display()))?;
 
         // Find best audio stream
         let ist_index = ictx
@@ -110,9 +107,8 @@ impl FFmpegRunner {
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
             ))
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add output stream: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to add output stream for audio copy extract")?;
         ost.set_parameters(
             ictx.stream(ist_index)
                 .ok_or_else(|| {
@@ -125,19 +121,17 @@ impl FFmpegRunner {
         Self::clear_codec_tag(ost.parameters().as_ptr());
 
         octx.write_header()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for audio copy extract")?;
 
         let mut last_progress = Instant::now();
         let throttle = Duration::from_millis(100);
 
         // Copy only audio packets
         for result in ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read packet: {e}"),
-                })?;
+            let (stream, mut packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during audio copy extract")?;
             if stream.index() != ist_index {
                 continue;
             }
@@ -160,11 +154,10 @@ impl FFmpegRunner {
             packet.rescale_ts(ist_time_base, ost_time_base);
             packet.set_position(-1);
             packet.set_stream(0);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write packet: {e}"),
-                }
-            })?;
+            packet
+                .write_interleaved(&mut octx)
+                .map_err(PostProcessError::from)
+                .context("failed to write packet during audio copy extract")?;
         }
 
         if let Some(ref progress) = progress_fn {
@@ -172,9 +165,8 @@ impl FFmpegRunner {
         }
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for audio copy extract")?;
 
         Ok(())
     }
@@ -189,18 +181,16 @@ impl FFmpegRunner {
         output: &Path,
         opts: &AudioExtractOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
         let _log_suppress = LogSuppressGuard::error_level();
 
         // Open input and find audio stream
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open input for audio transcode {}", input.display()))?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
@@ -226,11 +216,9 @@ impl FFmpegRunner {
         let mut decoder = decoder_ctx.decoder().audio()?;
 
         // Open output
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to create output for audio transcode {}", output.display()))?;
 
         // Find encoder codec
         let enc_codec = if let Some(ref name) = opts.encoder_name {
@@ -261,9 +249,8 @@ impl FFmpegRunner {
         {
             let ost =
                 octx.add_stream(enc_codec)
-                    .map_err(|e| PostProcessError::FFmpegLibraryError {
-                        message: format!("failed to add output stream: {e}"),
-                    })?;
+                    .map_err(PostProcessError::from)
+                    .context("failed to add output stream for audio transcode")?;
             ost_index = ost.index();
             enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -313,9 +300,8 @@ impl FFmpegRunner {
         let mut audio_encoder =
             audio_encoder
                 .open_as(enc_codec)
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open audio encoder: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("failed to open audio encoder for transcode")?;
 
         // Read actual encoder time_base via FFI (may differ from configured after open)
         // SAFETY: audio_encoder is a valid opened encoder context.
@@ -337,9 +323,8 @@ impl FFmpegRunner {
         });
 
         octx.write_header()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for audio transcode")?;
 
         // Read ost_time_base AFTER write_header (Matroska may change it)
         let ost_time_base = octx
@@ -388,9 +373,9 @@ impl FFmpegRunner {
 
         // Transcode loop: read -> decode -> filter -> encode -> write
         for result in ictx.packets() {
-            let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to read packet: {e}"),
-            })?;
+            let (stream, packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during audio transcode")?;
             if stream.index() != ist_index {
                 continue;
             }
@@ -463,9 +448,8 @@ impl FFmpegRunner {
         flush_interleave_queue(&mut octx);
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for audio transcode")?;
 
         Ok(())
     }

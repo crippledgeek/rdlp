@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use log::info;
 
 use crate::error::{PostProcessError, Result};
@@ -38,14 +39,14 @@ impl FFmpegRunner {
         let audio_input = audio_input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
-        Self::spawn_blocking("merge", move || {
-            Self::merge_sync(
+        Self::spawn_blocking("merge", move || -> Result<()> {
+            Ok(Self::merge_sync(
                 &video_input,
                 &audio_input,
                 &output,
                 &opts,
                 progress_fn.as_deref(),
-            )
+            )?)
         })
         .await
     }
@@ -57,7 +58,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &RemuxOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block"
@@ -70,26 +71,20 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Self::merge_mkv_raw_ffi(video_input, audio_input, output, progress_fn);
+            return Ok(Self::merge_mkv_raw_ffi(video_input, audio_input, output, progress_fn)?);
         }
 
-        let mut ictx_video = ffmpeg_the_third::format::input(video_input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open video input {}: {e}", video_input.display()),
-            }
-        })?;
+        let mut ictx_video = ffmpeg_the_third::format::input(video_input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open video input for merge {}", video_input.display()))?;
 
-        let mut ictx_audio = ffmpeg_the_third::format::input(audio_input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open audio input {}: {e}", audio_input.display()),
-            }
-        })?;
+        let mut ictx_audio = ffmpeg_the_third::format::input(audio_input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open audio input for merge {}", audio_input.display()))?;
 
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open output for merge {}", output.display()))?;
 
         // Find best video stream from video input
         let video_ist_index = ictx_video
@@ -102,9 +97,8 @@ impl FFmpegRunner {
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
             ))
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add video output stream: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to add video output stream for merge")?;
         ost_video.set_parameters(
             ictx_video
                 .stream(video_ist_index)
@@ -129,9 +123,8 @@ impl FFmpegRunner {
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
             ))
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add audio output stream: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to add audio output stream for merge")?;
         ost_audio.set_parameters(
             ictx_audio
                 .stream(audio_ist_index)
@@ -159,9 +152,8 @@ impl FFmpegRunner {
 
         // Write header with options
         octx.write_header_with(dict)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for merge")?;
 
         info!("Merge: video=stream#{video_ost_index}, audio=stream#{audio_ost_index} (DEFAULT)");
 
@@ -195,14 +187,16 @@ impl FFmpegRunner {
             if vpkt.is_null() {
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: "av_packet_alloc failed for video packet".into(),
-                });
+                }
+                .into());
             }
             let apkt = ffi::av_packet_alloc();
             if apkt.is_null() {
                 ffi::av_packet_free(&mut (vpkt as *mut _));
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: "av_packet_alloc failed for audio packet".into(),
-                });
+                }
+                .into());
             }
 
             let mut have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
@@ -296,9 +290,8 @@ impl FFmpegRunner {
         }
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for merge")?;
 
         Ok(())
     }

@@ -6,9 +6,10 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use log::{debug, warn};
 
-use crate::error::{PostProcessError, Result};
+use crate::error::PostProcessError;
 
 use super::super::FFmpegRunner;
 use super::super::ffi_helpers::set_single_thread_codec;
@@ -47,18 +48,16 @@ impl FFmpegRunner {
             /*rate:*/ u32,
             /*ch_layout:*/ &str,
         ) -> String,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         crate::ffmpeg::ensure_init()?;
 
         let mut ictx = if resilient {
             debug!("[{label}] opening input with resilient flags (discardcorrupt+genpts)");
             open_input_resilient(input)?
         } else {
-            ffmpeg_the_third::format::input(input).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open input {}: {e}", input.display()),
-                }
-            })?
+            ffmpeg_the_third::format::input(input)
+                .map_err(PostProcessError::from)
+                .with_context(|| format!("failed to open input for audio encode {}", input.display()))?
         };
 
         // Read the format-level start_time and duration (in AV_TIME_BASE = µs) before
@@ -89,11 +88,9 @@ impl FFmpegRunner {
 
         let input_audio_bitrate = audio_ist.parameters().bit_rate() as usize;
 
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to create output for audio encode {}", output.display()))?;
 
         let enc_name = select_audio_encoder_for_container(final_output_ext);
         let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
@@ -113,9 +110,8 @@ impl FFmpegRunner {
         {
             let ost =
                 octx.add_stream(enc_codec)
-                    .map_err(|e| PostProcessError::FFmpegLibraryError {
-                        message: format!("failed to add audio output stream: {e}"),
-                    })?;
+                    .map_err(PostProcessError::from)
+                    .context("failed to add audio output stream for encode")?;
             audio_ost_index = ost.index();
             audio_enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -170,9 +166,8 @@ impl FFmpegRunner {
         let mut audio_encoder =
             audio_encoder
                 .open_as(enc_codec)
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to open audio encoder: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("failed to open audio encoder")?;
 
         let enc_time_base = unsafe {
             let tb = (*audio_encoder.as_ptr()).time_base;
@@ -199,9 +194,8 @@ impl FFmpegRunner {
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
         muxer_opts.set("cluster_time_limit", "500");
         octx.write_header_with(muxer_opts)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for audio encode")?;
 
         // Validate mux header state (threading, IO, seekability, file size)
         unsafe {
@@ -305,9 +299,9 @@ impl FFmpegRunner {
         let mut last_progress = Instant::now();
         let progress_throttle = Duration::from_millis(100);
         for result in ictx.packets() {
-            let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to read packet: {e}"),
-            })?;
+            let (stream, packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during audio encode")?;
             if stream.index() != audio_ist_index {
                 continue;
             }
@@ -347,14 +341,15 @@ impl FFmpegRunner {
                     Some(output),
                 ) {
                     if drain_err.is_mux_write_error() {
-                        return Err(drain_err);
+                        return Err(drain_err.into());
                     }
                     return Err(PostProcessError::FFmpegLibraryError {
                         message: format!(
                             "({label}) mux/encode pipeline failed while \
                              draining after decoder error: {drain_err}"
                         ),
-                    });
+                    }
+                    .into());
                 }
                 continue;
             }
@@ -387,7 +382,8 @@ impl FFmpegRunner {
                 message: format!(
                     "audio decoder failed on all {packets_skipped} packets — cannot normalize"
                 ),
-            });
+            }
+            .into());
         }
 
         // Flush
@@ -442,9 +438,8 @@ impl FFmpegRunner {
         debug!("[mem] filter graph freed");
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for audio encode")?;
 
         drop(octx);
         drop(ictx);
