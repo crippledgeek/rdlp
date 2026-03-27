@@ -11,6 +11,7 @@ rdlp-types = { path = "../rdlp-types" }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 rdlp-security = { path = "../rdlp-security" }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }

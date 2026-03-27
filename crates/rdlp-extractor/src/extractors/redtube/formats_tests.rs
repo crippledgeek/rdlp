@@ -237,7 +237,7 @@ fn test_parse_api_video_response_string_views() {
 fn test_parse_api_video_response_invalid_json() {
     let result = parse_api_video_response("not json");
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+    assert!(result.unwrap_err().to_string().contains("failed to parse"));
 }
 
 #[test]

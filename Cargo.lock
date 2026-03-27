@@ -4382,6 +4382,7 @@ dependencies = [
 name = "rdlp-downloader"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "backon",
  "bytes",
@@ -4410,6 +4411,7 @@ dependencies = [
 name = "rdlp-extractor"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "futures",

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 
@@ -198,7 +199,11 @@ impl PipelineStage for RecodeStage {
             target_format
         );
 
-        let media_info = self.ffmpeg.probe(&input_file).await?;
+        let media_info = self
+            .ffmpeg
+            .probe(&input_file)
+            .await
+            .context("recode stage: failed to probe input file")?;
         // When a video encoder is explicitly requested, always transcode — never remux
         let can_remux = msg.config.video_encoder.is_none()
             && Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
@@ -337,7 +342,8 @@ impl PipelineStage for RecodeStage {
                 progress_callback,
                 log_callback,
             )
-            .await?;
+            .await
+            .context("recode stage failed")?;
 
         if let Some(ref cb) = stage_callback {
             cb.on_log(&format!(

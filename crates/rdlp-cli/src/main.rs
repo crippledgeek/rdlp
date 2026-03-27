@@ -7,7 +7,7 @@ mod commands;
 mod config;
 mod selection;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::MultiProgress;
 use rdlp_api::TempRegistry;
@@ -64,7 +64,8 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(optimal_worker_threads())
         .enable_all()
-        .build()?;
+        .build()
+        .context("failed to build Tokio runtime")?;
 
     runtime.block_on(async_main())
 }
@@ -73,7 +74,7 @@ async fn async_main() -> Result<()> {
     let args = Args::parse();
 
     // Build config with precedence: CLI > config file > defaults
-    let config = build_config(&args)?;
+    let config = build_config(&args).context("failed to build configuration")?;
 
     // Create shared MultiProgress for managing progress bars with log output
     let multi_progress = Arc::new(MultiProgress::new());
@@ -276,7 +277,8 @@ async fn async_main() -> Result<()> {
 
         if args.dump_json {
             for info in &infos {
-                let json = serde_json::to_string_pretty(info)?;
+                let json = serde_json::to_string_pretty(info)
+                    .context("failed to serialize metadata to JSON")?;
                 println!("{json}");
             }
         }
@@ -295,7 +297,7 @@ async fn async_main() -> Result<()> {
 
         if let Some(ref fields) = args.print {
             for info in &infos {
-                print_fields(info, fields)?;
+                print_fields(info, fields).context("failed to print metadata fields")?;
             }
         }
 

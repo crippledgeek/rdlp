@@ -251,7 +251,9 @@ impl HttpDownloader {
         })
         .await?;
 
-        let file = File::create(chunk_path).await.map_err(RdlpError::Io)?;
+        let file = File::create(chunk_path).await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to create chunk file '{}': {e}", chunk_path.display()))
+        ))?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
         let mut stream = response.bytes_stream();
@@ -266,9 +268,11 @@ impl HttpDownloader {
             })?
         {
             let chunk = chunk_result
-                .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url.clone()) })?;
+                .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk body from {url}: {e}"), url: Some(url.clone()) })?;
 
-            writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
+            writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
+                std::io::Error::new(e.kind(), format!("failed to write to chunk file '{}': {e}", chunk_path.display()))
+            ))?;
             downloaded += chunk.len() as u64;
 
             if let Some(ref counter) = progress_counter {
@@ -280,7 +284,9 @@ impl HttpDownloader {
             }
         }
 
-        writer.flush().await.map_err(RdlpError::Io)?;
+        writer.flush().await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to flush chunk file '{}': {e}", chunk_path.display()))
+        ))?;
         Ok(downloaded)
     }
 
@@ -316,7 +322,9 @@ impl HttpDownloader {
         .await?;
 
         let total_size = response.content_length();
-        let file = File::create(path).await.map_err(RdlpError::Io)?;
+        let file = File::create(path).await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to create output file '{}': {e}", path.display()))
+        ))?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
         let mut stream = response.bytes_stream();
@@ -333,9 +341,11 @@ impl HttpDownloader {
             })?
         {
             let chunk = chunk_result
-                .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url_string.to_string()) })?;
+                .map_err(|e| RdlpError::Network { message: format!("Failed to read response body from {url_string}: {e}"), url: Some(url_string.to_string()) })?;
 
-            writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
+            writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
+                std::io::Error::new(e.kind(), format!("failed to write to output file '{}': {e}", path.display()))
+            ))?;
             downloaded += chunk.len() as u64;
 
             if let Some(ref callback) = progress {
@@ -359,7 +369,9 @@ impl HttpDownloader {
             }
         }
 
-        writer.flush().await.map_err(RdlpError::Io)?;
+        writer.flush().await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to flush output file '{}': {e}", path.display()))
+        ))?;
 
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(downloaded, duration, 0);

@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
@@ -70,8 +71,16 @@ impl PipelineStage for MergeStage {
 
         // Probe to determine which is video and which is audio.
         let (video_file, audio_file) = if files.len() == 2 {
-            let info1 = self.ffmpeg.probe(&files[0]).await?;
-            let info2 = self.ffmpeg.probe(&files[1]).await?;
+            let info1 = self
+                .ffmpeg
+                .probe(&files[0])
+                .await
+                .context("merge stage: failed to probe first input file")?;
+            let info2 = self
+                .ffmpeg
+                .probe(&files[1])
+                .await
+                .context("merge stage: failed to probe second input file")?;
 
             if info1.has_video && !info1.has_audio && info2.has_audio {
                 (files[0].clone(), files[1].clone())
@@ -115,7 +124,8 @@ impl PipelineStage for MergeStage {
 
         self.ffmpeg
             .merge(&video_file, &audio_file, &output_path, &opts, callback)
-            .await?;
+            .await
+            .context("merge stage failed")?;
 
         info!("MergeStage: merged to {}", output_path.display());
 

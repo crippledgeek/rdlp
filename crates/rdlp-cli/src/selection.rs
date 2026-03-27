@@ -3,7 +3,7 @@
 //! Provides inquire-based selection prompts for remux containers,
 //! audio formats, and video recode formats.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rdlp_api::{AudioFormat, ContainerFormat};
 
 /// Interactive remux container selection
@@ -58,8 +58,9 @@ pub(crate) fn select_remux_container() -> Result<Option<ContainerFormat>> {
         .map(|(fmt, desc)| format!("{:<6} {desc}", fmt.as_ext()))
         .collect();
 
-    let selection =
-        inquire::Select::new("Select remux container:", items).raw_prompt_skippable()?;
+    let selection = inquire::Select::new("Select remux container:", items)
+        .raw_prompt_skippable()
+        .context("remux container selection prompt failed")?;
 
     Ok(selection.map(|opt| containers[opt.index].0))
 }
@@ -88,7 +89,9 @@ pub(crate) fn select_audio_format() -> Result<Option<AudioFormat>> {
         .map(|(fmt, desc)| format!("{:<8} {desc}", fmt.as_ext()))
         .collect();
 
-    let selection = inquire::Select::new("Select audio format:", items).raw_prompt_skippable()?;
+    let selection = inquire::Select::new("Select audio format:", items)
+        .raw_prompt_skippable()
+        .context("audio format selection prompt failed")?;
 
     Ok(selection.map(|opt| formats[opt.index].0))
 }
@@ -113,7 +116,9 @@ pub(crate) fn select_recode_video() -> Result<Option<ContainerFormat>> {
         .map(|(fmt, codec, desc)| format!("{:<6} [{codec}] {desc}", fmt.as_ext()))
         .collect();
 
-    let selection = inquire::Select::new("Select video format:", items).raw_prompt_skippable()?;
+    let selection = inquire::Select::new("Select video format:", items)
+        .raw_prompt_skippable()
+        .context("video recode format selection prompt failed")?;
 
     Ok(selection.map(|opt| formats[opt.index].0))
 }

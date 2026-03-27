@@ -2,6 +2,7 @@
 //!
 //! Extracts video formats from various sources in the page.
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::Format;
@@ -78,29 +79,28 @@ fn dedup_format_ids(formats: &mut [Format]) {
 
 /// Extract formats from flashvars JavaScript object
 async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Result<Vec<Format>> {
+    extract_from_flashvars_impl(webpage, ctx).await.map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+async fn extract_from_flashvars_impl(webpage: &str, ctx: &ExtractionContext) -> anyhow::Result<Vec<Format>> {
     let flashvars_json = FLASHVARS_PATTERN
         .captures(webpage)
         .and_then(|cap| cap.get(1))
         .map(|m| m.as_str())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "No flashvars found".to_string(),
-            url: None,
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("no flashvars block found in PornHub page"))?;
 
-    let flashvars: Value = serde_json::from_str(flashvars_json).map_err(|e| RdlpError::Extraction {
-        message: format!("Failed to parse flashvars: {e}"),
-        url: None,
-    })?;
+    let flashvars: Value = serde_json::from_str(flashvars_json)
+        .context("failed to parse PornHub flashvars JSON")?;
 
     let mut formats = Vec::new();
 
     let media_definitions = flashvars
         .get("mediaDefinitions")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "No mediaDefinitions in flashvars".to_string(),
-            url: None,
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("no mediaDefinitions array in PornHub flashvars"))?;
 
     // Separate get_media endpoints (need async fetch) from direct URLs (sync)
     let mut media_futures = Vec::new();
@@ -124,10 +124,7 @@ async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Resul
     }
 
     if formats.is_empty() {
-        return Err(RdlpError::Extraction {
-            message: "No formats in mediaDefinitions".to_string(),
-            url: None,
-        });
+        return Err(anyhow::anyhow!("no formats found in PornHub mediaDefinitions"));
     }
 
     Ok(formats)

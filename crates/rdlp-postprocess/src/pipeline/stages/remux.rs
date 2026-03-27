@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
@@ -112,7 +113,8 @@ impl PipelineStage for RemuxStage {
 
         self.ffmpeg
             .remux(&input_file, &output_path, &opts, callback)
-            .await?;
+            .await
+            .context("remux stage failed")?;
 
         debug!("RemuxStage: remuxed to {}", output_path.display());
 

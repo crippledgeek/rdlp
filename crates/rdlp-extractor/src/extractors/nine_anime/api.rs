@@ -4,6 +4,7 @@
 //! - `/ajax/episode/servers?episodeId={id}` — lists SUB/DUB streaming servers
 //! - `/ajax/episode/sources?id={data-id}` — resolves to an embed iframe URL
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
@@ -79,6 +80,13 @@ static DATA_TYPE_ATTR: LazyLock<Regex> =
 /// Calls `/ajax/episode/servers?episodeId={episode_id}` and parses
 /// the HTML response for SUB and DUB server entries.
 pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<Vec<ServerEntry>> {
+    fetch_servers_impl(episode_id, ctx).await.map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+async fn fetch_servers_impl(episode_id: &str, ctx: &ExtractionContext) -> anyhow::Result<Vec<ServerEntry>> {
     let url = format!("{BASE_URL}/ajax/episode/servers?episodeId={episode_id}");
     debug!(url:%; "Fetching 9anime servers");
 
@@ -89,18 +97,12 @@ pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to fetch servers: {e}"),
-            url: Some(url.clone()),
-        })?;
+        .with_context(|| format!("failed to fetch 9anime servers for episode {episode_id}"))?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to parse servers JSON: {e}"),
-            url: Some(url),
-        })?;
+        .with_context(|| format!("failed to parse 9anime servers JSON for episode {episode_id}"))?;
 
     let html = json["html"].as_str().unwrap_or_default();
 
@@ -197,6 +199,13 @@ pub fn sort_by_preference(servers: &mut [ServerEntry]) {
 ///
 /// Calls `/ajax/episode/sources?id={data_id}` and returns the embed URL.
 pub async fn fetch_source(data_id: &str, ctx: &ExtractionContext) -> Result<SourceResult> {
+    fetch_source_impl(data_id, ctx).await.map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+async fn fetch_source_impl(data_id: &str, ctx: &ExtractionContext) -> anyhow::Result<SourceResult> {
     let url = format!("{BASE_URL}/ajax/episode/sources?id={data_id}");
     debug!(url:%; "Fetching 9anime source");
 
@@ -207,34 +216,22 @@ pub async fn fetch_source(data_id: &str, ctx: &ExtractionContext) -> Result<Sour
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to fetch source: {e}"),
-            url: Some(url.clone()),
-        })?;
+        .with_context(|| format!("failed to fetch 9anime source for data_id={data_id}"))?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to parse source JSON: {e}"),
-            url: Some(url.clone()),
-        })?;
+        .with_context(|| format!("failed to parse 9anime source JSON for data_id={data_id}"))?;
 
     let embed_url = json["link"]
         .as_str()
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "No 'link' field in source response".to_string(),
-            url: Some(url.clone()),
-        })?
+        .ok_or_else(|| anyhow::anyhow!("no 'link' field in 9anime source response for data_id={data_id}"))?
         .to_string();
 
     let server_id = json["server"].as_u64().unwrap_or(0) as u32;
 
     if embed_url.is_empty() {
-        return Err(RdlpError::Extraction {
-            message: "Empty embed URL in source response".to_string(),
-            url: Some(url),
-        });
+        return Err(anyhow::anyhow!("empty embed URL in 9anime source response for data_id={data_id}"));
     }
 
     debug!(embed_url:%, server_id; "Resolved 9anime source");

@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 
@@ -92,7 +93,8 @@ impl ThumbnailStage {
         let thumb = thumbnail_file.to_path_buf();
 
         let result = tokio::task::spawn_blocking(move || {
-            let cover_bytes = std::fs::read(&thumb)?;
+            let cover_bytes =
+                std::fs::read(&thumb).context("thumbnail stage: failed to read thumbnail file")?;
             let ext = thumb.extension().and_then(|e| e.to_str()).unwrap_or("");
             let img = if ext.eq_ignore_ascii_case("png") {
                 mp4ameta::Img::png(cover_bytes)
@@ -102,7 +104,8 @@ impl ThumbnailStage {
             let mut tag =
                 mp4ameta::Tag::read_from_path(&media).unwrap_or_else(|_| mp4ameta::Tag::default());
             tag.set_artwork(img);
-            tag.write_to_path(&media)?;
+            tag.write_to_path(&media)
+                .context("thumbnail stage: failed to write covr atom to media file")?;
             Ok::<(), anyhow::Error>(())
         })
         .await;

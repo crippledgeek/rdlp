@@ -128,6 +128,9 @@ impl CliEventHandler {
             Event::Debug { message, .. } => {
                 debug!("{message}");
             }
+            Event::UnitCompleted { .. } => {
+                // Individual unit completions are tracked internally; no CLI output needed.
+            }
         }
     }
 
