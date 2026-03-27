@@ -37,7 +37,9 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                     className="flex items-center gap-2 text-left w-full px-1 py-0.5 rounded-[3px] hover:bg-[#141428] transition-colors"
                 >
                     <span className="text-[11px] text-[#aaaaaa] truncate flex-1 min-w-0">
-                        {job.title ?? job.url}
+                        {job.playlist
+                            ? `Ep ${job.playlist.playlistIndex} \u2014 ${job.title ?? "Untitled"}`
+                            : (job.title ?? job.url)}
                     </span>
                     <StatusBadge status={job.status} className="shrink-0" />
                     {(job.status === "running" || job.status === "pending") && job.progress !== null && (
@@ -94,7 +96,9 @@ export function BottomDrawer() {
                         <>
                             <span className="w-1.5 h-1.5 rounded-full bg-[#e8a838] animate-pulse shrink-0" />
                             <span className="text-[10px] text-[#666666] truncate">
-                                {activeJob.title ?? activeJob.url}
+                                {activeJob.playlist
+                                    ? `${activeJob.playlist.playlistTitle} ${activeJob.playlist.playlistIndex}/${activeJob.playlist.playlistCount} \u2014 ${activeJob.title ?? "Untitled"}`
+                                    : (activeJob.title ?? activeJob.url)}
                             </span>
                             {activeJob.progress !== null && (
                                 <span className="text-[10px] text-[#aaaaaa] font-mono shrink-0">

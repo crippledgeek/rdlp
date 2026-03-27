@@ -217,6 +217,14 @@ export interface DownloadJob {
     statusMessage: string | null;
     /** Accumulated log messages from download-log events (frontend-only, not from Rust). */
     logMessages?: string[];
+    /** Current unit info set by unit-started (frontend-only, not from Rust). */
+    currentUnit?: {
+        unitIndex: number;
+        unitTotal: number;
+        unitTitle: string;
+    } | null;
+    /** Number of completed units tracked by unit-completed events (frontend-only). */
+    completedUnits?: number;
 }
 
 /**
