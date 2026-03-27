@@ -138,7 +138,7 @@ impl Pipeline {
             .concurrency
             .acquire()
             .await
-            .expect("semaphore should not be closed");
+            .map_err(|_| anyhow::anyhow!("pipeline concurrency semaphore closed unexpectedly"))?;
 
         let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
 

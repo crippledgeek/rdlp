@@ -133,3 +133,9 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 1
 debug = false
+
+# ── Release profile: maximize runtime performance ───────────────────────
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

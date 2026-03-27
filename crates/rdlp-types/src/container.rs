@@ -75,6 +75,7 @@ pub enum ContainerFormat {
 
 impl ContainerFormat {
     /// File extension for this container format.
+    #[inline]
     #[must_use]
     pub fn as_ext(&self) -> &'static str {
         match self {
@@ -110,12 +111,14 @@ impl ContainerFormat {
     }
 
     /// Whether this container supports faststart (moov atom at beginning).
+    #[inline]
     #[must_use]
     pub fn supports_faststart(&self) -> bool {
         matches!(self, Self::Mp4 | Self::Mov | Self::F4v)
     }
 
     /// Whether this is an audio-only container format.
+    #[inline]
     #[must_use]
     pub fn is_audio_only(&self) -> bool {
         matches!(

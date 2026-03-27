@@ -152,6 +152,13 @@ impl RdlpApiError {
 }
 
 impl From<RdlpError> for RdlpApiError {
+    /// Convert an internal [`RdlpError`] to a stable API error.
+    ///
+    /// **Note:** `RdlpError` variants do not carry the source URL, so
+    /// `ExtractError::source_url` is left empty in this blanket conversion.
+    /// Call sites that have the URL available should use
+    /// `RdlpApiError::ExtractError { message, source_url }` directly instead
+    /// of relying on this `From` impl.
     fn from(err: RdlpError) -> Self {
         match err {
             RdlpError::Network(msg) => Self::NetworkError {

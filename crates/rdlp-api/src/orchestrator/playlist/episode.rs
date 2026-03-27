@@ -169,7 +169,10 @@ impl Orchestrator {
                         output_path = Some(path);
                     }
 
-                    let path = output_path.as_ref().unwrap();
+                    // output_path is always set: the is_none() guard above runs on first iteration.
+                    let path = output_path
+                        .as_ref()
+                        .expect("output_path set in is_none guard above");
 
                     // Detect resume point (recalculate on retry for partial HLS)
                     let resume_offset = self.detect_resume_point(path, format.filesize).await?;
@@ -250,7 +253,10 @@ impl Orchestrator {
                         output_path = Some(path);
                     }
 
-                    let path = output_path.as_ref().unwrap();
+                    // output_path is always set: the is_none() guard above runs on first iteration.
+                    let path = output_path
+                        .as_ref()
+                        .expect("output_path set in is_none guard above");
 
                     // Parallel download of video + audio
                     match self.download_merge_pair(&video, &audio, path).await {
@@ -280,7 +286,11 @@ impl Orchestrator {
             ))
         })?;
 
-        let output_path = output_path.unwrap();
+        let output_path = output_path.ok_or_else(|| {
+            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction(
+                "output path was not set during download".to_string(),
+            ))
+        })?;
         let mut final_info_owned = last_info_ref.unwrap_or_else(|| info.clone());
         if let Some(fmts) = merge_formats {
             final_info_owned.requested_formats = Some(fmts);

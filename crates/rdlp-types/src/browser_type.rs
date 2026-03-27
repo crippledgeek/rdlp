@@ -18,6 +18,7 @@ pub enum BrowserType {
 
 impl BrowserType {
     /// Canonical name for display and matching.
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {

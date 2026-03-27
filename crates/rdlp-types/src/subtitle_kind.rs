@@ -38,6 +38,7 @@ impl SubtitleKind {
     /// use rdlp_types::SubtitleKind;
     /// assert_eq!(SubtitleKind::HearingImpaired.as_str(), "hearing_impaired");
     /// ```
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {

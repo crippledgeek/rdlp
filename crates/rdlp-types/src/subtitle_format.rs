@@ -24,6 +24,7 @@ pub enum SubtitleFormat {
 
 impl SubtitleFormat {
     /// File extension for this subtitle format.
+    #[inline]
     #[must_use]
     pub fn as_ext(&self) -> &'static str {
         match self {
