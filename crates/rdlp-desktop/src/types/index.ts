@@ -269,6 +269,20 @@ export interface PostProcessProgressPayload {
     progress: number; // 0.0–1.0
 }
 
+/** Unit-started payload emitted as "unit-started" (playlist episode or merge stream start). */
+export interface UnitStartedPayload {
+    jobId: string;
+    unitIndex: number;
+    unitTotal: number;
+    unitTitle: string;
+}
+
+/** Unit-completed payload emitted as "unit-completed" (playlist episode or merge stream done). */
+export interface UnitCompletedPayload {
+    jobId: string;
+    unitIndex: number;
+}
+
 // ========== Settings Types ==========
 
 /**

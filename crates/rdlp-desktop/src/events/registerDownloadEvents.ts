@@ -15,6 +15,8 @@ import {
     onDownloadLog,
     onFormatSelected,
     onPostProcessProgress,
+    onUnitStarted,
+    onUnitCompleted,
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
 import { appendLog } from "../components/LogViewer";
@@ -178,6 +180,31 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                             : job,
                     ),
             );
+        }),
+    );
+
+    unlisteners.push(
+        onUnitStarted((p) => {
+            if (!mounted) return;
+            qc.setQueryData<DownloadJob[]>(
+                queryKeys.downloads.list(),
+                (old) =>
+                    old?.map((job) =>
+                        job.id === p.jobId
+                            ? {
+                                  ...job,
+                                  statusMessage: `Ep ${p.unitIndex}/${p.unitTotal} — ${p.unitTitle}`,
+                              }
+                            : job,
+                    ),
+            );
+        }),
+    );
+
+    unlisteners.push(
+        onUnitCompleted((_p) => {
+            // Future: update aggregate playlist progress
+            // For now, the next unit-started or download-complete will update status
         }),
     );
 

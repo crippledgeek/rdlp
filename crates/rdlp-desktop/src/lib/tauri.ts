@@ -20,6 +20,8 @@ import type {
     SearchFilterDescriptor,
     SearchPageResponse,
     SearchSiteInfo,
+    UnitCompletedPayload,
+    UnitStartedPayload,
 } from "../types";
 
 // ========== Search ==========
@@ -150,6 +152,20 @@ export function onPostProcessProgress(
     return listen<PostProcessProgressPayload>("postprocess-progress", (event) =>
         callback(event.payload),
     );
+}
+
+/** Subscribe to unit-started events (playlist episode or merge stream start). Returns an unlisten function. */
+export function onUnitStarted(
+    handler: (payload: UnitStartedPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<UnitStartedPayload>("unit-started", (e) => handler(e.payload));
+}
+
+/** Subscribe to unit-completed events (playlist episode or merge stream done). Returns an unlisten function. */
+export function onUnitCompleted(
+    handler: (payload: UnitCompletedPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<UnitCompletedPayload>("unit-completed", (e) => handler(e.payload));
 }
 
 /** Validate a format expression and return matching format IDs. */
