@@ -19,6 +19,7 @@
 pub mod cipher;
 mod client_key;
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
@@ -280,30 +281,36 @@ fn parse_sources_response(
     client_key: Option<&str>,
     megacloud_key: Option<&str>,
 ) -> Result<MegacloudSources> {
+    parse_sources_response_impl(json, client_key, megacloud_key).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+fn parse_sources_response_impl(
+    json: &serde_json::Value,
+    client_key: Option<&str>,
+    megacloud_key: Option<&str>,
+) -> anyhow::Result<MegacloudSources> {
     let encrypted = json["encrypted"].as_bool().unwrap_or(false);
 
     let sources = if encrypted {
-        let encrypted_str = json["sources"].as_str().ok_or_else(|| RdlpError::Extraction {
-            message: "Encrypted sources field is not a string".to_string(),
-            url: None,
-        })?;
+        let encrypted_str = json["sources"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("encrypted sources field is not a string"))?;
 
         match (client_key, megacloud_key) {
             (Some(ck), Some(mk)) => {
                 debug!("Decrypting sources with custom cipher");
                 let decrypted = cipher::decrypt_src(encrypted_str, ck, mk)?;
-                let arr: Vec<serde_json::Value> =
-                    serde_json::from_str(&decrypted).map_err(|e| RdlpError::Extraction {
-                        message: format!("Failed to parse decrypted sources: {e}"),
-                        url: None,
-                    })?;
+                let arr: Vec<serde_json::Value> = serde_json::from_str(&decrypted)
+                    .context("failed to parse decrypted megacloud sources JSON")?;
                 parse_source_array_from_values(&arr)
             }
             _ => {
-                return Err(RdlpError::Extraction {
-                    message: "Sources are encrypted but no decryption keys available".to_string(),
-                    url: None,
-                });
+                return Err(anyhow::anyhow!(
+                    "sources are encrypted but no decryption keys available"
+                ));
             }
         }
     } else {
@@ -333,11 +340,10 @@ fn parse_sources_response(
 }
 
 /// Parse a plaintext sources array from JSON.
-fn parse_source_array(sources_json: &serde_json::Value) -> Result<Vec<VideoSource>> {
-    let arr = sources_json.as_array().ok_or_else(|| RdlpError::Extraction {
-        message: "Sources field is not an array".to_string(),
-        url: None,
-    })?;
+fn parse_source_array(sources_json: &serde_json::Value) -> anyhow::Result<Vec<VideoSource>> {
+    let arr = sources_json
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("sources field is not a JSON array"))?;
 
     Ok(parse_source_array_from_values(arr))
 }

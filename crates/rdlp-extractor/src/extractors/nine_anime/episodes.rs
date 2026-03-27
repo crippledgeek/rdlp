@@ -3,6 +3,7 @@
 //! Handles fetching and parsing the episode list from the AJAX API,
 //! including individual episode info lookup and full episode list parsing.
 
+use anyhow::Context as _;
 use crate::utils::decode_html_entities;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
@@ -59,6 +60,17 @@ pub async fn fetch_episode_info(
     episode_data_id: &str,
     ctx: &ExtractionContext,
 ) -> Result<Option<EpisodeInfo>> {
+    fetch_episode_info_impl(anime_id, episode_data_id, ctx).await.map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+async fn fetch_episode_info_impl(
+    anime_id: &str,
+    episode_data_id: &str,
+    ctx: &ExtractionContext,
+) -> anyhow::Result<Option<EpisodeInfo>> {
     let url = format!("{BASE_URL}/ajax/episode/list/{anime_id}");
     debug!(url:%; "Fetching 9anime episode list");
 
@@ -69,18 +81,12 @@ pub async fn fetch_episode_info(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to fetch episode list: {e}"),
-            url: Some(url.clone()),
-        })?;
+        .with_context(|| format!("failed to fetch 9anime episode list for anime_id={anime_id}"))?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to parse episode list: {e}"),
-            url: Some(url),
-        })?;
+        .with_context(|| format!("failed to parse 9anime episode list JSON for anime_id={anime_id}"))?;
 
     let html = json["html"].as_str().unwrap_or_default();
 
@@ -152,6 +158,16 @@ pub async fn fetch_all_episodes(
     anime_id: &str,
     ctx: &ExtractionContext,
 ) -> Result<Vec<EpisodeListEntry>> {
+    fetch_all_episodes_impl(anime_id, ctx).await.map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+async fn fetch_all_episodes_impl(
+    anime_id: &str,
+    ctx: &ExtractionContext,
+) -> anyhow::Result<Vec<EpisodeListEntry>> {
     let url = format!("{BASE_URL}/ajax/episode/list/{anime_id}");
     debug!(url:%; "Fetching 9anime full episode list");
 
@@ -162,18 +178,12 @@ pub async fn fetch_all_episodes(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to fetch episode list: {e}"),
-            url: Some(url.clone()),
-        })?;
+        .with_context(|| format!("failed to fetch 9anime full episode list for anime_id={anime_id}"))?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to parse episode list: {e}"),
-            url: Some(url),
-        })?;
+        .with_context(|| format!("failed to parse 9anime episode list JSON for anime_id={anime_id}"))?;
 
     let html = json["html"].as_str().unwrap_or_default();
     let episodes = parse_all_episodes(html);

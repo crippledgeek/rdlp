@@ -3,6 +3,7 @@
 //! Provides serde structs for the PornHub Webmaster JSON API response,
 //! conversion to `SearchResultPreview`, and filter validation.
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchResultPreview};
@@ -92,10 +93,15 @@ pub(crate) struct ApiCategory {
 /// # Returns
 /// A vector of search result previews.
 pub(crate) fn parse_api_search_results(json: &str) -> Result<Vec<SearchResultPreview>> {
-    let response: ApiSearchResponse = serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
-        message: format!("Failed to parse PornHub API response: {e}"),
+    parse_api_search_results_impl(json).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
         url: None,
-    })?;
+    })
+}
+
+fn parse_api_search_results_impl(json: &str) -> anyhow::Result<Vec<SearchResultPreview>> {
+    let response: ApiSearchResponse = serde_json::from_str(json)
+        .context("failed to parse PornHub API search response")?;
 
     let results: Vec<SearchResultPreview> = response
         .videos
@@ -303,7 +309,7 @@ mod tests {
     fn test_parse_api_search_results_invalid_json() {
         let result = parse_api_search_results("not json");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+        assert!(result.unwrap_err().to_string().contains("failed to parse"));
     }
 
     #[test]

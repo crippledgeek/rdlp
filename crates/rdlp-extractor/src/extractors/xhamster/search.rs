@@ -1,5 +1,6 @@
 //! XHamster search result parsing and filter validation.
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 use rdlp_types::{SearchFilter, SearchResultPreview};
@@ -9,6 +10,13 @@ use super::patterns;
 
 /// Parse `window.initials` JSON from the search page HTML.
 pub fn extract_initials_json(html: &str) -> Result<Value> {
+    extract_initials_json_impl(html).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+fn extract_initials_json_impl(html: &str) -> anyhow::Result<Value> {
     let json_str = [
         &*patterns::INITIALS_PATTERN,
         &*patterns::INITIALS_FALLBACK_PATTERN,
@@ -17,26 +25,25 @@ pub fn extract_initials_json(html: &str) -> Result<Value> {
     .find_map(|pat| pat.captures(html))
     .and_then(|caps| caps.get(1))
     .map(|m| m.as_str())
-    .ok_or_else(|| RdlpError::Extraction {
-        message: "Could not find window.initials in search page".to_string(),
-        url: None,
-    })?;
+    .ok_or_else(|| anyhow::anyhow!("could not find window.initials in search page"))?;
 
-    serde_json::from_str(json_str).map_err(|e| RdlpError::Extraction {
-        message: format!("Failed to parse window.initials JSON: {e}"),
-        url: None,
-    })
+    serde_json::from_str(json_str)
+        .context("failed to parse window.initials JSON")
 }
 
 /// Parse search result previews from the `window.initials` JSON.
 pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPreview>> {
+    parse_search_results_json_impl(initials).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+fn parse_search_results_json_impl(initials: &Value) -> anyhow::Result<Vec<SearchResultPreview>> {
     let data = initials
         .pointer("/searchResult/videoThumbProps")
         .and_then(|d| d.as_array())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "Missing searchResult.videoThumbProps array".to_string(),
-            url: None,
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("missing searchResult.videoThumbProps array in initials JSON"))?;
 
     let mut results = Vec::with_capacity(data.len());
     for item in data {

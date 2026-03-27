@@ -3,6 +3,7 @@
 //! Extracts video formats from JavaScript sources, mediaDefinition arrays,
 //! and the `getVideoById` JSON API response.
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::{Format, Thumbnail};
@@ -105,10 +106,15 @@ pub(crate) struct ApiVideoMetadata {
 /// # Returns
 /// Parsed `ApiVideoMetadata` or an error if JSON parsing fails.
 pub(crate) fn parse_api_video_response(json: &str) -> Result<ApiVideoMetadata> {
-    let response: ApiVideoInfoResponse = serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
-        message: format!("Failed to parse RedTube video API response: {e}"),
+    parse_api_video_response_impl(json).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
         url: None,
-    })?;
+    })
+}
+
+fn parse_api_video_response_impl(json: &str) -> anyhow::Result<ApiVideoMetadata> {
+    let response: ApiVideoInfoResponse = serde_json::from_str(json)
+        .context("failed to parse RedTube video API JSON response")?;
 
     let video = response.video;
 

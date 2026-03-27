@@ -16,6 +16,7 @@
 //! Based on the `decryptSrc2` / `keygen2` / `seedShuffle2` /
 //! `columnarCipher2` functions from the aniwatch project.
 
+use anyhow::Context as _;
 use rdlp_core::{RdlpError, Result};
 
 /// Number of decryption layers to apply (matches the JS `layers = 3`).
@@ -36,14 +37,18 @@ fn char_array() -> Vec<char> {
 /// # Returns
 /// The decrypted JSON string containing video source URLs.
 pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<String> {
+    decrypt_src_impl(src, client_key, megacloud_key).map_err(|e| RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: None,
+    })
+}
+
+fn decrypt_src_impl(src: &str, client_key: &str, megacloud_key: &str) -> anyhow::Result<String> {
     use base64::Engine;
     let gen_key = keygen(megacloud_key, client_key);
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(src)
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to base64 decode sources: {e}"),
-            url: None,
-        })?;
+        .context("failed to base64-decode megacloud encrypted sources")?;
     let mut dec_src: Vec<char> = decoded.iter().map(|&b| b as char).collect();
     let chars = char_array();
 
@@ -59,20 +64,14 @@ pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<S
     let data_len: usize = result
         .get(..4)
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "Invalid data length prefix in decrypted source".to_string(),
-            url: None,
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("invalid data length prefix in decrypted megacloud source"))?;
 
     result
         .get(4..4 + data_len)
         .map(|s| s.to_string())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: format!(
-                "Decrypted source too short: expected {data_len} chars after prefix"
-            ),
-            url: None,
-        })
+        .ok_or_else(|| anyhow::anyhow!(
+            "decrypted megacloud source too short: expected {data_len} chars after prefix"
+        ))
 }
 
 /// Reverse one layer of the cipher.
