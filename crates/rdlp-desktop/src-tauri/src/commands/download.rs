@@ -345,12 +345,12 @@ pub async fn start_download(
                     Event::MetadataReady { info, .. } => {
                         job.title = Some(info.title.clone());
                     }
-                    Event::Completed { result, .. } => {
+                    Event::Completed { output_files, .. } => {
                         job.status = JobStatus::Completed;
                         job.progress = Some(1.0);
                         job.completed_at = Some(chrono::Utc::now().timestamp());
                         job.output_path =
-                            result.output_files.first().map(|p| p.display().to_string());
+                            output_files.first().map(|p| p.display().to_string());
                     }
                     Event::Failed { error, .. } => {
                         job.status = JobStatus::Failed;

@@ -223,7 +223,7 @@ impl RdlpClient {
                         let _ = tx
                             .send(Event::Completed {
                                 id,
-                                result: Box::new(result.clone()),
+                                output_files: result.output_files.clone(),
                             })
                             .await;
                         return Ok(result);
@@ -548,7 +548,7 @@ impl RdlpClient {
                     let _ = tx
                         .send(Event::Completed {
                             id,
-                            result: Box::new(result.clone()),
+                            output_files: result.output_files.clone(),
                         })
                         .await;
                     Ok(result)

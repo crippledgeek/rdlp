@@ -6,7 +6,6 @@
 
 use crate::errors::RdlpApiError;
 use crate::handle::DownloadId;
-use crate::result::DownloadResult;
 use rdlp_core::DownloadProgress;
 use rdlp_types::InfoDict;
 
@@ -94,11 +93,14 @@ pub enum Event {
     },
 
     /// Download completed successfully.
+    ///
+    /// Carries only the output file paths. Consumers needing full metadata
+    /// (InfoDict, stats) should use the return value from `download()`.
     Completed {
         /// The download this event belongs to.
         id: DownloadId,
-        /// Download result (boxed to reduce enum size).
-        result: Box<DownloadResult>,
+        /// Output files produced by the download.
+        output_files: Vec<std::path::PathBuf>,
     },
 
     /// Download failed with an error.
@@ -287,5 +289,42 @@ mod tests {
                 "download_id() mismatch for {event:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_completed_event_carries_output_files() {
+        let id = DownloadId::next();
+        let files = vec![std::path::PathBuf::from("/tmp/video.mp4")];
+        let event = Event::Completed {
+            id,
+            output_files: files.clone(),
+        };
+        assert_eq!(event.download_id(), id);
+        if let Event::Completed { output_files, .. } = &event {
+            assert_eq!(output_files, &files);
+        }
+    }
+
+    #[test]
+    fn test_completed_event_empty_output_files() {
+        let id = DownloadId::next();
+        let event = Event::Completed {
+            id,
+            output_files: vec![],
+        };
+        if let Event::Completed { output_files, .. } = &event {
+            assert!(output_files.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_completed_event_clone() {
+        let id = DownloadId::next();
+        let event = Event::Completed {
+            id,
+            output_files: vec![std::path::PathBuf::from("/tmp/a.mp4")],
+        };
+        let cloned = event.clone();
+        assert_eq!(cloned.download_id(), id);
     }
 }
