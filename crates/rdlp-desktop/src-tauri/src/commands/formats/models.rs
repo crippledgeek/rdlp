@@ -71,6 +71,42 @@ pub struct FormatListResponse {
     pub thumbnail_url: Option<String>,
     /// Video duration in seconds.
     pub duration: Option<f64>,
+    /// Whether this URL resolved to a playlist (multiple episodes).
+    pub is_playlist: bool,
+    /// Playlist metadata — `None` for single videos.
+    pub playlist: Option<PlaylistInfo>,
+}
+
+/// A single episode entry in a playlist.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    /// 1-based position in the playlist.
+    pub index: usize,
+    /// Episode title.
+    pub title: String,
+    /// Full URL with ?ep= parameter for direct single-episode download.
+    pub url: String,
+    /// Thumbnail URL for this episode.
+    pub thumbnail_url: Option<String>,
+    /// Duration in seconds.
+    pub duration: Option<f64>,
+    /// Whether SUB (subtitled) audio is available.
+    pub has_sub: bool,
+    /// Whether DUB (dubbed) audio is available.
+    pub has_dub: bool,
+}
+
+/// Playlist metadata returned when a URL resolves to multiple episodes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistInfo {
+    /// Playlist/series title.
+    pub title: String,
+    /// Total number of episodes.
+    pub count: usize,
+    /// Episode entries with metadata.
+    pub entries: Vec<PlaylistEntry>,
 }
 
 /// Format metadata sent from the frontend for expression validation.
