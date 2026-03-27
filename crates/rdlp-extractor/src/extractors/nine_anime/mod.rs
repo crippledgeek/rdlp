@@ -90,9 +90,10 @@ pub(crate) async fn resolve_episode_formats(
 ) -> Result<(Vec<Format>, HlsStreamFlags, Vec<megacloud::SubtitleTrack>)> {
     let mut servers = api::fetch_servers(episode_id, ctx).await?;
     if servers.is_empty() {
-        return Err(RdlpError::Extraction(
-            "No streaming servers found for this episode".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "No streaming servers found for this episode".to_string(),
+            url: None,
+        });
     }
 
     api::sort_by_preference(&mut servers);
@@ -216,8 +217,9 @@ pub(crate) async fn resolve_episode_formats(
     }
 
     if all_formats.is_empty() {
-        return Err(last_error.unwrap_or_else(|| {
-            RdlpError::Extraction("No video sources found from any server".to_string())
+        return Err(last_error.unwrap_or_else(|| RdlpError::Extraction {
+            message: "No video sources found from any server".to_string(),
+            url: None,
         }));
     }
 
@@ -291,15 +293,17 @@ impl InfoExtractor for NineAnimeExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         // Extract IDs from URL
-        let anime_id = patterns::extract_anime_id(url).ok_or_else(|| {
-            RdlpError::Extraction(format!("Could not extract anime ID from URL: {url}"))
+        let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract anime ID from URL: {url}"),
+            url: Some(url.to_string()),
         })?;
 
-        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| {
-            RdlpError::Extraction(format!(
+        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!(
                 "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
-            ))
+            ),
+            url: Some(url.to_string()),
         })?;
 
         let slug = patterns::extract_slug(url).unwrap_or_default();
@@ -369,11 +373,12 @@ impl InfoExtractor for NineAnimeExtractor {
     /// already available from playlist extraction). Only resolves Megacloud
     /// video sources and subtitles, avoiding Cloudflare rate-limiting.
     async fn extract_lazy(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| {
-            RdlpError::Extraction(format!(
+        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!(
                 "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
-            ))
+            ),
+            url: Some(url.to_string()),
         })?;
 
         debug!(episode_id:%; "Lazily resolving 9anime episode formats");

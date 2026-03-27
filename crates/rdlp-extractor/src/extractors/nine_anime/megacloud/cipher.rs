@@ -40,7 +40,10 @@ pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<S
     let gen_key = keygen(megacloud_key, client_key);
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(src)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to base64 decode sources: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to base64 decode sources: {e}"),
+            url: None,
+        })?;
     let mut dec_src: Vec<char> = decoded.iter().map(|&b| b as char).collect();
     let chars = char_array();
 
@@ -56,17 +59,19 @@ pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<S
     let data_len: usize = result
         .get(..4)
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            RdlpError::Extraction("Invalid data length prefix in decrypted source".to_string())
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "Invalid data length prefix in decrypted source".to_string(),
+            url: None,
         })?;
 
     result
         .get(4..4 + data_len)
         .map(|s| s.to_string())
-        .ok_or_else(|| {
-            RdlpError::Extraction(format!(
+        .ok_or_else(|| RdlpError::Extraction {
+            message: format!(
                 "Decrypted source too short: expected {data_len} chars after prefix"
-            ))
+            ),
+            url: None,
         })
 }
 

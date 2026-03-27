@@ -17,12 +17,15 @@ pub fn extract_initials_json(html: &str) -> Result<Value> {
     .find_map(|pat| pat.captures(html))
     .and_then(|caps| caps.get(1))
     .map(|m| m.as_str())
-    .ok_or_else(|| {
-        RdlpError::Extraction("Could not find window.initials in search page".to_string())
+    .ok_or_else(|| RdlpError::Extraction {
+        message: "Could not find window.initials in search page".to_string(),
+        url: None,
     })?;
 
-    serde_json::from_str(json_str)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse window.initials JSON: {e}")))
+    serde_json::from_str(json_str).map_err(|e| RdlpError::Extraction {
+        message: format!("Failed to parse window.initials JSON: {e}"),
+        url: None,
+    })
 }
 
 /// Parse search result previews from the `window.initials` JSON.
@@ -30,8 +33,9 @@ pub fn parse_search_results_json(initials: &Value) -> Result<Vec<SearchResultPre
     let data = initials
         .pointer("/searchResult/videoThumbProps")
         .and_then(|d| d.as_array())
-        .ok_or_else(|| {
-            RdlpError::Extraction("Missing searchResult.videoThumbProps array".to_string())
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "Missing searchResult.videoThumbProps array".to_string(),
+            url: None,
         })?;
 
     let mut results = Vec::with_capacity(data.len());
@@ -92,20 +96,26 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
         match descriptor {
             None => {
                 let valid_keys: Vec<&str> = descriptors.iter().map(|d| d.key.as_str()).collect();
-                return Err(RdlpError::Extraction(format!(
-                    "Unknown filter '{}' for XHamster. Available: {}",
-                    filter.key,
-                    valid_keys.join(", ")
-                )));
+                return Err(RdlpError::Extraction {
+                    message: format!(
+                        "Unknown filter '{}' for XHamster. Available: {}",
+                        filter.key,
+                        valid_keys.join(", ")
+                    ),
+                    url: None,
+                });
             }
             Some(desc) => {
                 // Duration min/max are numeric, allow any reasonable value
                 if filter.key == "min-duration" || filter.key == "max-duration" {
                     if filter.value.parse::<u32>().is_err() {
-                        return Err(RdlpError::Extraction(format!(
-                            "Invalid value '{}' for filter '{}'. Must be a number.",
-                            filter.value, filter.key
-                        )));
+                        return Err(RdlpError::Extraction {
+                            message: format!(
+                                "Invalid value '{}' for filter '{}'. Must be a number.",
+                                filter.value, filter.key
+                            ),
+                            url: None,
+                        });
                     }
                     continue;
                 }
@@ -117,12 +127,15 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
                         .iter()
                         .map(|v| v.value.as_str())
                         .collect();
-                    return Err(RdlpError::Extraction(format!(
-                        "Invalid value '{}' for filter '{}'. Allowed: {}",
-                        filter.value,
-                        filter.key,
-                        allowed.join(", ")
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Invalid value '{}' for filter '{}'. Allowed: {}",
+                            filter.value,
+                            filter.key,
+                            allowed.join(", ")
+                        ),
+                        url: None,
+                    });
                 }
             }
         }

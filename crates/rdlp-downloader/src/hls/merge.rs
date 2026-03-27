@@ -190,7 +190,7 @@ pub(crate) async fn download_segments_with_resume(
                 let _permit = sem
                     .acquire_owned()
                     .await
-                    .map_err(|_| RdlpError::Download("Semaphore closed".to_string()))?;
+                    .map_err(|_| RdlpError::Download { message: "Semaphore closed".to_string(), url: Some(seg_url.clone()) })?;
 
                 let download_start = Instant::now();
 
@@ -267,9 +267,10 @@ pub(crate) async fn download_segments_with_resume(
                 if segment_failures >= max_segment_failures {
                     let snapshot = state.lock().await.clone();
                     let _ = snapshot.save(output_path).await;
-                    return Err(RdlpError::Download(format!(
-                        "Too many segment failures ({segment_failures}), aborting"
-                    )));
+                    return Err(RdlpError::Download {
+                        message: format!("Too many segment failures ({segment_failures}), aborting"),
+                        url: None,
+                    });
                 }
             }
         }
@@ -303,9 +304,10 @@ pub(crate) async fn download_segments_with_resume(
     let expected_count = total_segments - segment_failures;
     let actual_count = all_segment_paths.len();
     if actual_count != expected_count {
-        return Err(RdlpError::Download(format!(
-            "Missing segments: expected {expected_count}, got {actual_count}"
-        )));
+        return Err(RdlpError::Download {
+            message: format!("Missing segments: expected {expected_count}, got {actual_count}"),
+            url: None,
+        });
     }
 
     let segment_paths: Vec<PathBuf> = all_segment_paths
@@ -386,11 +388,9 @@ pub(crate) async fn merge_segments(
         Ok(total_bytes)
     })
     .await
-    .map_err(|_| {
-        RdlpError::Download(format!(
-            "Merge timed out after {}s",
-            merge_timeout.as_secs()
-        ))
+    .map_err(|_| RdlpError::Download {
+        message: format!("Merge timed out after {}s", merge_timeout.as_secs()),
+        url: None,
     })?
 }
 

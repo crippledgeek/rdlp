@@ -184,8 +184,10 @@ impl InfoExtractor for HQPornerExtractor {
     }
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        let video_id = patterns::extract_video_id(url)
-            .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
+        let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID: {url}"),
+            url: Some(url.to_string()),
+        })?;
 
         let webpage = BaseExtractor::fetch_webpage_with_headers(
             url,
@@ -195,8 +197,9 @@ impl InfoExtractor for HQPornerExtractor {
         .await?;
 
         // Extract iframe URL from raw HTML (regex, before DOM parse)
-        let iframe_url = extract_iframe_url(&webpage).ok_or_else(|| {
-            RdlpError::Extraction("No mydaddy.cc iframe found on page".to_string())
+        let iframe_url = extract_iframe_url(&webpage).ok_or_else(|| RdlpError::Extraction {
+            message: "No mydaddy.cc iframe found on page".to_string(),
+            url: Some(url.to_string()),
         })?;
 
         // Parse HTML once for all metadata extraction
@@ -216,9 +219,10 @@ impl InfoExtractor for HQPornerExtractor {
         let mydaddy_result = mydaddy::resolve_formats(&iframe_url, ctx).await?;
 
         if mydaddy_result.formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video formats found for URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No video formats found for URL: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Detect file sizes

@@ -109,7 +109,7 @@ impl Default for RetryConfig {
 /// use rdlp_core::{is_retryable_error, RetryConfig, Retryable, RdlpError};
 ///
 /// async fn fetch_data() -> Result<String, RdlpError> {
-///     Err(RdlpError::Network("timeout".to_string()))
+///     Err(RdlpError::Network { message: "timeout".to_string(), url: None })
 /// }
 ///
 /// #[tokio::main]
@@ -127,7 +127,7 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
         // Structured HTTP errors: retry 5xx and 429, not other 4xx
         RdlpError::Http { status, .. } => *status == 429 || *status >= 500,
         // Network and I/O errors are generally retryable (transient)
-        RdlpError::Network(_) | RdlpError::Io(_) => true,
+        RdlpError::Network { .. } | RdlpError::Io(_) => true,
         _ => false,
     }
 }
@@ -190,10 +190,11 @@ mod tests {
             reason: "Forbidden".to_string(),
         }));
 
-        // Legacy network errors are retryable
-        assert!(is_retryable_error(&RdlpError::Network(
-            "timeout".to_string()
-        )));
+        // Network errors are retryable
+        assert!(is_retryable_error(&RdlpError::Network {
+            message: "timeout".to_string(),
+            url: None,
+        }));
 
         // I/O errors are retryable
         assert!(is_retryable_error(&RdlpError::Io(std::io::Error::new(
@@ -202,9 +203,10 @@ mod tests {
         ))));
 
         // Other errors are not retryable
-        assert!(!is_retryable_error(&RdlpError::Extraction(
-            "invalid format".to_string()
-        )));
+        assert!(!is_retryable_error(&RdlpError::Extraction {
+            message: "invalid format".to_string(),
+            url: None,
+        }));
     }
 
     // =========================================================================
@@ -226,7 +228,7 @@ mod tests {
                 let attempts = counter.fetch_add(1, Ordering::SeqCst);
                 if attempts < 1 {
                     // Fail on first attempt
-                    Err(RdlpError::Network("temporary failure".to_string()))
+                    Err(RdlpError::Network { message: "temporary failure".to_string(), url: None })
                 } else {
                     // Succeed on second attempt
                     Ok(42)
@@ -261,7 +263,7 @@ mod tests {
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 // Always fail with retryable error
-                Err(RdlpError::Network("persistent failure".to_string()))
+                Err(RdlpError::Network { message: "persistent failure".to_string(), url: None })
             }
         })
         .retry(config.to_backoff())
@@ -317,7 +319,7 @@ mod tests {
             let counter = counter_clone.clone();
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
-                Err(RdlpError::Network("always fails".to_string()))
+                Err(RdlpError::Network { message: "always fails".to_string(), url: None })
             }
         })
         .retry(config.to_backoff())
@@ -347,7 +349,7 @@ mod tests {
                 let attempts = counter.fetch_add(1, Ordering::SeqCst);
                 if attempts < 2 {
                     // First two attempts: retryable error
-                    Err(RdlpError::Network("timeout".to_string()))
+                    Err(RdlpError::Network { message: "timeout".to_string(), url: None })
                 } else {
                     // Third attempt: permanent error
                     Err(RdlpError::Http {

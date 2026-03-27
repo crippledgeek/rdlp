@@ -102,14 +102,20 @@ impl PornHubExtractor {
             )
             .when(|e| e.is_timeout() || e.is_connect())
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to fetch PornHub search API: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch PornHub search API: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response
             .text()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read PornHub API response: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to read PornHub API response: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         search::parse_api_search_results(&body)
     }
@@ -129,9 +135,10 @@ impl PornHubExtractor {
         _url: &str,
         _ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        Err(RdlpError::Extraction(
-            "PornHub HTML search fallback not yet implemented".to_string(),
-        ))
+        Err(RdlpError::Extraction {
+            message: "PornHub HTML search fallback not yet implemented".to_string(),
+            url: None,
+        })
     }
 
     /// Paginated search across all pages, collecting up to `max_results` results.
@@ -291,12 +298,18 @@ impl InfoExtractor for PornHubExtractor {
 
         // Check for video unavailability errors
         if let Some(error_msg) = utils::detect_video_unavailable(&webpage) {
-            return Err(RdlpError::Extraction(error_msg));
+            return Err(RdlpError::Extraction {
+                message: error_msg,
+                url: Some(url.to_string()),
+            });
         }
 
         // Get video ID
         let video_id = patterns::extract_video_id(url)
-            .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
+            .ok_or_else(|| RdlpError::Extraction {
+                message: format!("Could not extract video ID: {url}"),
+                url: Some(url.to_string()),
+            })?;
 
         // Parse HTML and extract all metadata before async operations
         // Extract duration from flashvars (before HTML parsing drops webpage borrow)
@@ -331,9 +344,10 @@ impl InfoExtractor for PornHubExtractor {
         let formats = formats::extract_all_formats(&webpage, ctx).await?;
 
         if formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video formats found for URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No video formats found for URL: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Detect file sizes and segment counts

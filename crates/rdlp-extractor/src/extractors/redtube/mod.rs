@@ -73,14 +73,16 @@ impl RedTubeExtractor {
         debug!("[RedTube] Fetching API video info: {api_url}");
 
         let response =
-            ctx.http_client.get(&api_url).send().await.map_err(|e| {
-                RdlpError::Network(format!("Failed to fetch RedTube video API: {e}"))
+            ctx.http_client.get(&api_url).send().await.map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch RedTube video API: {e}"),
+                url: Some(api_url.clone()),
             })?;
 
         rdlp_core::check_http_response(&response)?;
 
-        let body = response.text().await.map_err(|e| {
-            RdlpError::Network(format!("Failed to read RedTube video API response: {e}"))
+        let body = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read RedTube video API response: {e}"),
+            url: Some(api_url),
         })?;
 
         BaseExtractor::log_content_if_verbose(ctx, "RedTube", "API video response", &body, 500);
@@ -198,8 +200,9 @@ impl InfoExtractor for RedTubeExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         // Get video ID using BaseExtractor
-        let video_id = self.extract_id(url).ok_or_else(|| {
-            RdlpError::Extraction(format!("Could not extract video ID from URL: {url}"))
+        let video_id = self.extract_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID from URL: {url}"),
+            url: Some(url.to_string()),
         })?;
 
         // Try API first for metadata
@@ -230,10 +233,13 @@ impl InfoExtractor for RedTubeExtractor {
 
         // Return error if still no sources found
         if formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video sources found in JavaScript or HTML. \
-                 Video may be unavailable. URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!(
+                    "No video sources found in JavaScript or HTML. \
+                     Video may be unavailable. URL: {url}"
+                ),
+                url: Some(url.to_string()),
+            });
         }
 
         // Convert relative URLs to absolute using utility
@@ -373,14 +379,20 @@ impl RedTubeExtractor {
             )
             .when(|e| e.is_timeout() || e.is_connect())
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to fetch search API: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch search API: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response
             .text()
             .await
-            .map_err(|e| RdlpError::Network(format!("Failed to read search API response: {e}")))?;
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to read search API response: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
         search::parse_api_search_results(&body)
     }

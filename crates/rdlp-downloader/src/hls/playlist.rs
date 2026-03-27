@@ -31,21 +31,25 @@ pub(crate) async fn parse_playlist(
         .headers(http_downloader.headers())
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch playlist: {e}")))?
+        .map_err(|e| RdlpError::Network { message: format!("Failed to fetch playlist: {e}"), url: Some(m3u8_url.to_string()) })?
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read playlist: {e}")))?;
+        .map_err(|e| RdlpError::Network { message: format!("Failed to read playlist: {e}"), url: Some(m3u8_url.to_string()) })?;
 
     // Parse with m3u8-rs
     let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
         // Show the actual response content when parsing fails (e.g. CDN error pages)
         if !playlist_text.trim().starts_with("#EXTM3U") {
             let preview: String = playlist_text.chars().take(200).collect();
-            RdlpError::Extraction(format!(
-                "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
-            ))
+            RdlpError::Extraction {
+                message: format!("Server returned invalid M3U8 (likely expired token or CDN error): {preview}"),
+                url: Some(m3u8_url.to_string()),
+            }
         } else {
-            RdlpError::Extraction(format!("M3U8 parse error: {e:?}"))
+            RdlpError::Extraction {
+                message: format!("M3U8 parse error: {e:?}"),
+                url: Some(m3u8_url.to_string()),
+            }
         }
     })?;
 
@@ -73,7 +77,7 @@ fn parse_media_playlist(
 
     // Direct media playlist - extract segments with durations
     let base_url = url::Url::parse(m3u8_url)
-        .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+        .map_err(|e| RdlpError::Extraction { message: format!("Invalid base URL: {e}"), url: Some(m3u8_url.to_string()) })?;
 
     // Build per-segment init info from EXT-X-MAP.
     // m3u8_rs sets `seg.map` on each segment the tag applies to,
@@ -107,7 +111,7 @@ fn parse_media_playlist(
         .collect();
 
     if segments.is_empty() {
-        return Err(RdlpError::Extraction("Playlist has no segments".into()));
+        return Err(RdlpError::Extraction { message: "Playlist has no segments".into(), url: Some(m3u8_url.to_string()) });
     }
 
     // Log init segment info
@@ -125,10 +129,10 @@ fn parse_media_playlist(
     // Security check: limit max segments
     const MAX_SEGMENTS: usize = 10_000;
     if segments.len() > MAX_SEGMENTS {
-        return Err(RdlpError::Extraction(format!(
-            "Playlist has too many segments: {} (max: {MAX_SEGMENTS})",
-            segments.len()
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("Playlist has too many segments: {} (max: {MAX_SEGMENTS})", segments.len()),
+            url: Some(m3u8_url.to_string()),
+        });
     }
 
     // Check for potentially incomplete playlists (XHamster CDN bug: first segment > 1)
@@ -156,9 +160,10 @@ async fn parse_master_playlist(
     m3u8_url: &str,
 ) -> Result<PlaylistParseResult> {
     if master.variants.is_empty() {
-        return Err(RdlpError::Extraction(
-            "Master playlist has no variants".into(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "Master playlist has no variants".into(),
+            url: Some(m3u8_url.to_string()),
+        });
     }
 
     let variant = master
@@ -170,11 +175,11 @@ async fn parse_master_playlist(
         .expect("master playlist has at least one variant");
 
     let base_url = url::Url::parse(m3u8_url)
-        .map_err(|e| RdlpError::Extraction(format!("Invalid base URL: {e}")))?;
+        .map_err(|e| RdlpError::Extraction { message: format!("Invalid base URL: {e}"), url: Some(m3u8_url.to_string()) })?;
 
     let media_playlist_url = base_url
         .join(&variant.uri)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to join URL: {e}")))?
+        .map_err(|e| RdlpError::Extraction { message: format!("Failed to join URL: {e}"), url: Some(m3u8_url.to_string()) })?
         .to_string();
 
     debug!(

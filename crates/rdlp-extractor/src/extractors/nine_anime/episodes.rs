@@ -69,12 +69,18 @@ pub async fn fetch_episode_info(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch episode list: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch episode list: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse episode list: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse episode list: {e}"),
+            url: Some(url),
+        })?;
 
     let html = json["html"].as_str().unwrap_or_default();
 
@@ -156,12 +162,18 @@ pub async fn fetch_all_episodes(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch episode list: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch episode list: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse episode list: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse episode list: {e}"),
+            url: Some(url),
+        })?;
 
     let html = json["html"].as_str().unwrap_or_default();
     let episodes = parse_all_episodes(html);

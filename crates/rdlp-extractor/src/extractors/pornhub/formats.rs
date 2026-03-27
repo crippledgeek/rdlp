@@ -56,9 +56,10 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
     );
 
     if all_formats.is_empty() {
-        return Err(RdlpError::Extraction(
-            "No video formats found with any strategy".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "No video formats found with any strategy".to_string(),
+            url: None,
+        });
     }
 
     dedup_format_ids(&mut all_formats);
@@ -81,17 +82,25 @@ async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Resul
         .captures(webpage)
         .and_then(|cap| cap.get(1))
         .map(|m| m.as_str())
-        .ok_or_else(|| RdlpError::Extraction("No flashvars found".to_string()))?;
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "No flashvars found".to_string(),
+            url: None,
+        })?;
 
-    let flashvars: Value = serde_json::from_str(flashvars_json)
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse flashvars: {e}")))?;
+    let flashvars: Value = serde_json::from_str(flashvars_json).map_err(|e| RdlpError::Extraction {
+        message: format!("Failed to parse flashvars: {e}"),
+        url: None,
+    })?;
 
     let mut formats = Vec::new();
 
     let media_definitions = flashvars
         .get("mediaDefinitions")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| RdlpError::Extraction("No mediaDefinitions in flashvars".to_string()))?;
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "No mediaDefinitions in flashvars".to_string(),
+            url: None,
+        })?;
 
     // Separate get_media endpoints (need async fetch) from direct URLs (sync)
     let mut media_futures = Vec::new();
@@ -115,9 +124,10 @@ async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Resul
     }
 
     if formats.is_empty() {
-        return Err(RdlpError::Extraction(
-            "No formats in mediaDefinitions".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "No formats in mediaDefinitions".to_string(),
+            url: None,
+        });
     }
 
     Ok(formats)

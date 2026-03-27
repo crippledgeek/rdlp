@@ -89,12 +89,18 @@ pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch servers: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch servers: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse servers JSON: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse servers JSON: {e}"),
+            url: Some(url),
+        })?;
 
     let html = json["html"].as_str().unwrap_or_default();
 
@@ -201,24 +207,34 @@ pub async fn fetch_source(data_id: &str, ctx: &ExtractionContext) -> Result<Sour
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch source: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch source: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse source JSON: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse source JSON: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     let embed_url = json["link"]
         .as_str()
-        .ok_or_else(|| RdlpError::Extraction("No 'link' field in source response".to_string()))?
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "No 'link' field in source response".to_string(),
+            url: Some(url.clone()),
+        })?
         .to_string();
 
     let server_id = json["server"].as_u64().unwrap_or(0) as u32;
 
     if embed_url.is_empty() {
-        return Err(RdlpError::Extraction(
-            "Empty embed URL in source response".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "Empty embed URL in source response".to_string(),
+            url: Some(url),
+        });
     }
 
     debug!(embed_url:%, server_id; "Resolved 9anime source");

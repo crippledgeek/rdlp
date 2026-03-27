@@ -78,7 +78,10 @@ impl XHamsterExtractor {
 
         // Extract video ID and display ID
         let video_id = patterns::extract_video_id(&url)
-            .ok_or_else(|| RdlpError::Extraction(format!("Could not extract video ID: {url}")))?;
+            .ok_or_else(|| RdlpError::Extraction {
+                message: format!("Could not extract video ID: {url}"),
+                url: Some(url.to_string()),
+            })?;
         let display_id = patterns::extract_display_id(&url);
 
         // Fetch the webpage
@@ -86,7 +89,10 @@ impl XHamsterExtractor {
 
         // Check for video unavailability
         if let Some(error_msg) = utils::detect_video_unavailable(&webpage) {
-            return Err(RdlpError::Extraction(error_msg));
+            return Err(RdlpError::Extraction {
+                message: error_msg,
+                url: Some(url.to_string()),
+            });
         }
 
         // Extract age limit
@@ -157,9 +163,10 @@ impl XHamsterExtractor {
         };
 
         if formats.is_empty() {
-            return Err(RdlpError::Extraction(format!(
-                "No video formats found for URL: {url}"
-            )));
+            return Err(RdlpError::Extraction {
+                message: format!("No video formats found for URL: {url}"),
+                url: Some(url.to_string()),
+            });
         }
 
         // Detect file sizes and segment counts for HLS
@@ -206,9 +213,10 @@ impl XHamsterExtractor {
             return self.extract_video(&video_url, ctx).await;
         }
 
-        Err(RdlpError::Extraction(format!(
-            "Could not extract video URL from embed page: {url}"
-        )))
+        Err(RdlpError::Extraction {
+            message: format!("Could not extract video URL from embed page: {url}"),
+            url: Some(url.to_string()),
+        })
     }
 
     /// Fetch a single search page, returning its results and the max page count.

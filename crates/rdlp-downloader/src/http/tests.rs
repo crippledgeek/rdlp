@@ -82,7 +82,7 @@ async fn test_resume_fails_when_server_returns_200() {
 
     // Verify the error message mentions resume not supported
     let err = result.unwrap_err();
-    assert!(matches!(err, RdlpError::Download(_)));
+    assert!(matches!(err, RdlpError::Download { .. }));
     assert!(err.to_string().contains("does not support resume"));
     assert!(err.to_string().contains("206"));
 
@@ -194,7 +194,7 @@ async fn test_parallel_download_error_propagation() {
 
     let err = result.unwrap_err();
     assert!(
-        matches!(err, RdlpError::Http { .. } | RdlpError::Network(_)),
+        matches!(err, RdlpError::Http { .. } | RdlpError::Network { .. }),
         "Should be an HTTP or network error, got: {err:?}"
     );
 

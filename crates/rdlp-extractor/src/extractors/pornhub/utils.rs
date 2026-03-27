@@ -67,7 +67,10 @@ pub async fn set_age_cookies(host: &str, ctx: &ExtractionContext) -> Result<()> 
         ctx.cookie_jar
             .add_cookie(&base_url, cookie)
             .await
-            .map_err(|e| RdlpError::Extraction(format!("Failed to set age cookie: {e}")))?;
+            .map_err(|e| RdlpError::Extraction {
+                message: format!("Failed to set age cookie: {e}"),
+                url: None,
+            })?;
     }
 
     Ok(())

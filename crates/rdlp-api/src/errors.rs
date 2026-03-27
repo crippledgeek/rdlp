@@ -161,22 +161,22 @@ impl From<RdlpError> for RdlpApiError {
     /// of relying on this `From` impl.
     fn from(err: RdlpError) -> Self {
         match err {
-            RdlpError::Network(msg) => Self::NetworkError {
-                message: msg,
+            RdlpError::Network { message, .. } => Self::NetworkError {
+                message,
                 status: None,
             },
             RdlpError::Http { status, reason } => Self::NetworkError {
                 message: reason,
                 status: Some(status),
             },
-            RdlpError::Extraction(msg) => Self::ExtractError {
-                message: msg,
-                source_url: String::new(),
+            RdlpError::Extraction { message, url } => Self::ExtractError {
+                message,
+                source_url: url.unwrap_or_default(),
             },
             RdlpError::NoExtractor(url) => Self::UnsupportedUrl { url },
             RdlpError::InvalidUrl(msg) => Self::InvalidInput { message: msg },
-            RdlpError::Download(msg) => Self::NetworkError {
-                message: msg,
+            RdlpError::Download { message, .. } => Self::NetworkError {
+                message,
                 status: None,
             },
             RdlpError::PostProcess(msg) => Self::FfmpegError { message: msg },
@@ -455,6 +455,91 @@ mod tests {
                 assert!(message.contains("file missing"));
             }
             other => panic!("Expected IoError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_extraction_url_propagates_to_api_error() {
+        let err: RdlpApiError = RdlpError::Extraction {
+            message: "no formats".into(),
+            url: Some("https://example.com/video".into()),
+        }
+        .into();
+        match err {
+            RdlpApiError::ExtractError { source_url, .. } => {
+                assert_eq!(source_url, "https://example.com/video");
+            }
+            other => panic!("Expected ExtractError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_extraction_none_url_becomes_empty() {
+        let err: RdlpApiError = RdlpError::Extraction {
+            message: "parse failed".into(),
+            url: None,
+        }
+        .into();
+        match err {
+            RdlpApiError::ExtractError { source_url, .. } => {
+                assert!(source_url.is_empty());
+            }
+            other => panic!("Expected ExtractError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_network_url_propagates_to_api_error() {
+        let err: RdlpApiError = RdlpError::Network {
+            message: "timeout".into(),
+            url: Some("https://cdn.example.com".into()),
+        }
+        .into();
+        match err {
+            RdlpApiError::NetworkError { message, .. } => {
+                assert!(message.contains("timeout"));
+            }
+            other => panic!("Expected NetworkError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_download_url_propagates_to_api_error() {
+        let err: RdlpApiError = RdlpError::Download {
+            message: "chunk failed".into(),
+            url: Some("https://cdn.example.com/seg.ts".into()),
+        }
+        .into();
+        match err {
+            RdlpApiError::NetworkError { message, .. } => {
+                assert!(message.contains("chunk failed"));
+            }
+            other => panic!("Expected NetworkError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_all_rdlp_error_variants_convert() {
+        let variants: Vec<RdlpError> = vec![
+            RdlpError::Network { message: "a".into(), url: None },
+            RdlpError::Http { status: 500, reason: "b".into() },
+            RdlpError::Extraction { message: "c".into(), url: None },
+            RdlpError::NoExtractor("d".into()),
+            RdlpError::InvalidUrl("e".into()),
+            RdlpError::Download { message: "f".into(), url: None },
+            RdlpError::PostProcess("g".into()),
+            RdlpError::FFmpeg("h".into()),
+            RdlpError::JavaScript("i".into()),
+            RdlpError::Cookie("j".into()),
+            RdlpError::Plugin("k".into()),
+            RdlpError::FormatSelection("l".into()),
+            RdlpError::Config("m".into()),
+            RdlpError::Io(std::io::Error::new(std::io::ErrorKind::Other, "n")),
+            RdlpError::Unsupported("o".into()),
+            RdlpError::Other("p".into()),
+        ];
+        for v in variants {
+            let _api: RdlpApiError = v.into();
         }
     }
 }

@@ -96,10 +96,9 @@ const KEYS_URL: &str = "https://raw.githubusercontent.com/yogesh-hacker/Megaclou
 /// 2. **v3 megacloud.blog**: Client key extraction + custom 3-layer cipher
 ///    (works for `megacloud.blog` embeds)
 pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result<MegacloudSources> {
-    let source_id = extract_source_id(embed_url).ok_or_else(|| {
-        RdlpError::Extraction(format!(
-            "Could not extract source ID from embed URL: {embed_url}"
-        ))
+    let source_id = extract_source_id(embed_url).ok_or_else(|| RdlpError::Extraction {
+        message: format!("Could not extract source ID from embed URL: {embed_url}"),
+        url: Some(embed_url.to_string()),
     })?;
     debug!(source_id:%; "Extracted Megacloud source ID");
 
@@ -127,9 +126,10 @@ pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result
         }
     }
 
-    Err(RdlpError::Extraction(
-        "All Megacloud extraction strategies failed".to_string(),
-    ))
+    Err(RdlpError::Extraction {
+        message: "All Megacloud extraction strategies failed".to_string(),
+        url: Some(embed_url.to_string()),
+    })
 }
 
 /// Strategy 2: v3 endpoint on megacloud.blog with client key + custom cipher.
@@ -176,31 +176,45 @@ async fn fetch_megacloud_key(ctx: &ExtractionContext) -> Result<String> {
         .get(KEYS_URL)
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch megacloud keys: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch megacloud keys: {e}"),
+            url: Some(KEYS_URL.to_string()),
+        })?;
 
     let json: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| RdlpError::Extraction(format!("Failed to parse megacloud keys: {e}")))?;
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse megacloud keys: {e}"),
+            url: Some(KEYS_URL.to_string()),
+        })?;
 
-    let key = json["mega"].as_str().ok_or_else(|| {
-        RdlpError::Extraction("No 'mega' field in megacloud keys response".to_string())
+    let key = json["mega"].as_str().ok_or_else(|| RdlpError::Extraction {
+        message: "No 'mega' field in megacloud keys response".to_string(),
+        url: Some(KEYS_URL.to_string()),
     })?;
 
     // Validate key: non-empty, ASCII-only printable characters, reasonable length
     if key.is_empty() {
-        return Err(RdlpError::Extraction("Megacloud key is empty".to_string()));
+        return Err(RdlpError::Extraction {
+            message: "Megacloud key is empty".to_string(),
+            url: Some(KEYS_URL.to_string()),
+        });
     }
     if !key.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
-        return Err(RdlpError::Extraction(
-            "Megacloud key contains non-ASCII or non-printable characters".to_string(),
-        ));
+        return Err(RdlpError::Extraction {
+            message: "Megacloud key contains non-ASCII or non-printable characters".to_string(),
+            url: Some(KEYS_URL.to_string()),
+        });
     }
     if key.len() > 512 {
-        return Err(RdlpError::Extraction(format!(
-            "Megacloud key length {} exceeds maximum of 512 bytes",
-            key.len()
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!(
+                "Megacloud key length {} exceeds maximum of 512 bytes",
+                key.len()
+            ),
+            url: Some(KEYS_URL.to_string()),
+        });
     }
 
     Ok(key.to_string())
@@ -223,28 +237,38 @@ async fn fetch_get_sources(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch getSources: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch getSources: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read getSources body: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read getSources body: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
     if !status.is_success() {
-        return Err(RdlpError::Extraction(format!(
-            "getSources returned HTTP {status}: {}",
-            &body[..body.len().min(200)]
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!(
+                "getSources returned HTTP {status}: {}",
+                &body[..body.len().min(200)]
+            ),
+            url: Some(url.to_string()),
+        });
     }
 
     debug!(body_len = body.len(); "getSources response received");
 
-    serde_json::from_str(&body).map_err(|e| {
-        RdlpError::Extraction(format!(
+    serde_json::from_str(&body).map_err(|e| RdlpError::Extraction {
+        message: format!(
             "Failed to parse getSources JSON: {e}. Body: {}",
             &body[..body.len().min(200)]
-        ))
+        ),
+        url: Some(url.to_string()),
     })
 }
 
@@ -259,8 +283,9 @@ fn parse_sources_response(
     let encrypted = json["encrypted"].as_bool().unwrap_or(false);
 
     let sources = if encrypted {
-        let encrypted_str = json["sources"].as_str().ok_or_else(|| {
-            RdlpError::Extraction("Encrypted sources field is not a string".to_string())
+        let encrypted_str = json["sources"].as_str().ok_or_else(|| RdlpError::Extraction {
+            message: "Encrypted sources field is not a string".to_string(),
+            url: None,
         })?;
 
         match (client_key, megacloud_key) {
@@ -268,15 +293,17 @@ fn parse_sources_response(
                 debug!("Decrypting sources with custom cipher");
                 let decrypted = cipher::decrypt_src(encrypted_str, ck, mk)?;
                 let arr: Vec<serde_json::Value> =
-                    serde_json::from_str(&decrypted).map_err(|e| {
-                        RdlpError::Extraction(format!("Failed to parse decrypted sources: {e}"))
+                    serde_json::from_str(&decrypted).map_err(|e| RdlpError::Extraction {
+                        message: format!("Failed to parse decrypted sources: {e}"),
+                        url: None,
                     })?;
                 parse_source_array_from_values(&arr)
             }
             _ => {
-                return Err(RdlpError::Extraction(
-                    "Sources are encrypted but no decryption keys available".to_string(),
-                ));
+                return Err(RdlpError::Extraction {
+                    message: "Sources are encrypted but no decryption keys available".to_string(),
+                    url: None,
+                });
             }
         }
     } else {
@@ -307,9 +334,10 @@ fn parse_sources_response(
 
 /// Parse a plaintext sources array from JSON.
 fn parse_source_array(sources_json: &serde_json::Value) -> Result<Vec<VideoSource>> {
-    let arr = sources_json
-        .as_array()
-        .ok_or_else(|| RdlpError::Extraction("Sources field is not an array".to_string()))?;
+    let arr = sources_json.as_array().ok_or_else(|| RdlpError::Extraction {
+        message: "Sources field is not an array".to_string(),
+        url: None,
+    })?;
 
     Ok(parse_source_array_from_values(arr))
 }

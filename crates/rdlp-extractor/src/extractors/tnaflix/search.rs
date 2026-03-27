@@ -172,25 +172,32 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
         match filter.key.as_str() {
             "ordering" => {
                 if !VALID_ORDERINGS.contains(&filter.value.as_str()) {
-                    return Err(RdlpError::Extraction(format!(
-                        "Invalid TNAFlix ordering value '{}'. Valid values: {}",
-                        filter.value,
-                        VALID_ORDERINGS.join(", ")
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Invalid TNAFlix ordering value '{}'. Valid values: {}",
+                            filter.value,
+                            VALID_ORDERINGS.join(", ")
+                        ),
+                        url: None,
+                    });
                 }
             }
             "category" => {
                 if !search_patterns::is_valid_category(&filter.value) {
-                    return Err(RdlpError::Extraction(format!(
-                        "Invalid TNAFlix category '{}'. Use search_filters() to see valid values.",
-                        filter.value
-                    )));
+                    return Err(RdlpError::Extraction {
+                        message: format!(
+                            "Invalid TNAFlix category '{}'. Use search_filters() to see valid values.",
+                            filter.value
+                        ),
+                        url: None,
+                    });
                 }
             }
             other => {
-                return Err(RdlpError::Extraction(format!(
-                    "Unknown TNAFlix search filter key '{other}'"
-                )));
+                return Err(RdlpError::Extraction {
+                    message: format!("Unknown TNAFlix search filter key '{other}'"),
+                    url: None,
+                });
             }
         }
     }

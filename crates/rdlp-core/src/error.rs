@@ -4,8 +4,13 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum RdlpError {
     /// HTTP/Network related errors
-    #[error("Network error: {0}")]
-    Network(String),
+    #[error("Network error: {message}")]
+    Network {
+        /// Human-readable description of the error
+        message: String,
+        /// The URL that was being accessed, if applicable
+        url: Option<String>,
+    },
 
     /// HTTP response error with status code
     #[error("HTTP error {status}: {reason}")]
@@ -17,8 +22,13 @@ pub enum RdlpError {
     },
 
     /// Extraction errors
-    #[error("Extraction failed: {0}")]
-    Extraction(String),
+    #[error("Extraction failed: {message}")]
+    Extraction {
+        /// Human-readable description of the error
+        message: String,
+        /// The URL that was being extracted, if applicable
+        url: Option<String>,
+    },
 
     /// No suitable extractor found for URL
     #[error("No extractor found for URL: {0}")]
@@ -29,8 +39,13 @@ pub enum RdlpError {
     InvalidUrl(String),
 
     /// Download errors
-    #[error("Download failed: {0}")]
-    Download(String),
+    #[error("Download failed: {message}")]
+    Download {
+        /// Human-readable description of the error
+        message: String,
+        /// The URL that was being downloaded, if applicable
+        url: Option<String>,
+    },
 
     /// Post-processing errors
     #[error("Post-processing failed: {0}")]
@@ -116,4 +131,65 @@ pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_error_with_url() {
+        let err = RdlpError::Network {
+            message: "timeout".into(),
+            url: Some("https://example.com".into()),
+        };
+        assert!(err.to_string().contains("timeout"));
+        if let RdlpError::Network { url, .. } = &err {
+            assert_eq!(url.as_deref(), Some("https://example.com"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_network_error_without_url() {
+        let err = RdlpError::Network {
+            message: "dns failed".into(),
+            url: None,
+        };
+        assert!(err.to_string().contains("dns failed"));
+        if let RdlpError::Network { url, .. } = &err {
+            assert!(url.is_none());
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_extraction_error_with_url() {
+        let err = RdlpError::Extraction {
+            message: "no formats".into(),
+            url: Some("https://example.com/video".into()),
+        };
+        assert!(err.to_string().contains("no formats"));
+        if let RdlpError::Extraction { url, .. } = &err {
+            assert_eq!(url.as_deref(), Some("https://example.com/video"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn test_download_error_with_url() {
+        let err = RdlpError::Download {
+            message: "chunk failed".into(),
+            url: Some("https://cdn.example.com/seg1.ts".into()),
+        };
+        assert!(err.to_string().contains("chunk failed"));
+        if let RdlpError::Download { url, .. } = &err {
+            assert_eq!(url.as_deref(), Some("https://cdn.example.com/seg1.ts"));
+        } else {
+            panic!("wrong variant");
+        }
+    }
 }

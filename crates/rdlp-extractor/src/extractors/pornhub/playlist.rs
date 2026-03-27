@@ -47,7 +47,10 @@ pub async fn extract_playlist(
     ctx: &ExtractionContext,
 ) -> Result<Vec<InfoDict>> {
     let playlist_id = super::patterns::extract_playlist_id(url)
-        .ok_or_else(|| RdlpError::Extraction(format!("Could not extract playlist ID: {url}")))?;
+        .ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract playlist ID: {url}"),
+            url: Some(url.to_string()),
+        })?;
 
     let host = extract_host(url);
 
@@ -62,14 +65,20 @@ pub async fn extract_playlist(
         .get(url)
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch playlist: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch playlist: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
     check_http_response(&response)?;
 
     let webpage = response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read response: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read response: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
     // Extract metadata
     let (playlist_title, pagination_info, mut all_video_urls) = {
@@ -90,9 +99,10 @@ pub async fn extract_playlist(
     );
 
     if all_video_urls.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "No videos found in playlist: {url}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("No videos found in playlist: {url}"),
+            url: Some(url.to_string()),
+        });
     }
 
     // Handle pagination
@@ -129,9 +139,10 @@ pub async fn extract_playlist(
 
     // Security check: limit playlist size to prevent memory exhaustion
     if total > MAX_PLAYLIST_SIZE {
-        return Err(RdlpError::Extraction(format!(
-            "Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"),
+            url: Some(url.to_string()),
+        });
     }
 
     // Extract videos in parallel using buffer_unordered for concurrent processing
@@ -199,9 +210,10 @@ pub async fn extract_playlist(
     let results: Vec<InfoDict> = extracted.into_iter().map(|(_, info)| info).collect();
 
     if results.is_empty() {
-        return Err(RdlpError::Extraction(format!(
-            "Failed to extract any videos from playlist: {url}"
-        )));
+        return Err(RdlpError::Extraction {
+            message: format!("Failed to extract any videos from playlist: {url}"),
+            url: Some(url.to_string()),
+        });
     }
 
     info!(extracted = results.len(), total; "[PornHub] Successfully extracted videos");
@@ -316,14 +328,20 @@ async fn download_page(
         ])
         .send()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to fetch page {page_num}: {e}")))?;
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch page {page_num}: {e}"),
+            url: Some(url.clone()),
+        })?;
 
     check_http_response(&response)?;
 
     response
         .text()
         .await
-        .map_err(|e| RdlpError::Network(format!("Failed to read page {page_num}: {e}")))
+        .map_err(|e| RdlpError::Network {
+            message: format!("Failed to read page {page_num}: {e}"),
+            url: Some(url),
+        })
 }
 
 #[cfg(test)]

@@ -359,8 +359,9 @@ impl Downloader for HlsDownloader {
             Ok(stats)
         })
         .await
-        .map_err(|_| {
-            RdlpError::Download(format!("Download timed out after {}s", timeout.as_secs()))
+        .map_err(|_| RdlpError::Download {
+            message: format!("Download timed out after {}s", timeout.as_secs()),
+            url: Some(url.to_string()),
         })?
     }
 }
