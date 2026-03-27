@@ -4,6 +4,7 @@
 
 use super::template::{OutputTemplate, RenderContext};
 use super::{Orchestrator, Result};
+use anyhow::Context;
 use std::path::PathBuf;
 
 impl Orchestrator {
@@ -19,7 +20,10 @@ impl Orchestrator {
     ) -> Result<PathBuf> {
         let file_ext = self.determine_file_extension(format);
         let template = OutputTemplate::parse(&self.config.output_template).map_err(|e| {
-            super::OrchestratorError::Configuration(format!("Invalid output template: {e}"))
+            super::OrchestratorError::Configuration(format!(
+                "Invalid output template '{}': {e}",
+                self.config.output_template
+            ))
         })?;
         let ctx = RenderContext {
             epoch: chrono::Utc::now().timestamp(),
@@ -28,7 +32,10 @@ impl Orchestrator {
         let rendered = template
             .render(info, format, &file_ext, &ctx)
             .map_err(|e| {
-                super::OrchestratorError::Configuration(format!("Template rendering failed: {e}"))
+                super::OrchestratorError::Configuration(format!(
+                    "Template rendering failed for '{}' (format {}): {e}",
+                    info.title, format.format_id
+                ))
             })?;
 
         let path = self.sanitize_template_path(&rendered);
@@ -43,12 +50,11 @@ impl Orchestrator {
         if let Some(parent) = full_path.parent()
             && !parent.exists()
         {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                super::OrchestratorError::Configuration(format!(
-                    "Failed to create output directory {}: {e}",
-                    parent.display()
-                ))
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| {
+                    format!("failed to create output directory {}", parent.display())
+                })
+                .map_err(super::OrchestratorError::Other)?;
         }
 
         Ok(full_path)

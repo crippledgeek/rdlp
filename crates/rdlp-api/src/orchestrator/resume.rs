@@ -1,6 +1,7 @@
 //! Resume detection and chunk merging functionality
 
 use super::{Orchestrator, errors::*};
+use anyhow::Context;
 use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use tracing::instrument;
@@ -99,7 +100,10 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
 /// Merge chunk files into the output file
 ///
 /// Supports both old-style and new-style chunk patterns
-pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> Result<u64> {
+pub(crate) async fn merge_chunk_files(
+    output_path: &Path,
+    chunk_info: &ChunkInfo,
+) -> anyhow::Result<u64> {
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, BufWriter};
 
@@ -114,7 +118,7 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
     // Create output file
     let file = File::create(output_path)
         .await
-        .map_err(OrchestratorError::ChunkMergeFailed)?;
+        .with_context(|| format!("failed to create output file {}", output_path.display()))?;
     let mut writer = BufWriter::with_capacity(2 * 1024 * 1024, file); // 2 MB buffer
 
     let mut total_size = 0u64;
@@ -122,18 +126,16 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
     // Merge each chunk in order
     for (idx, chunk_path) in chunk_info.chunk_paths.iter().enumerate() {
         if !chunk_path.exists() {
-            return Err(OrchestratorError::MissingChunk {
-                path: chunk_path.clone(),
-            });
+            anyhow::bail!("missing chunk file: {}", chunk_path.display());
         }
 
         let mut chunk_file = File::open(chunk_path)
             .await
-            .map_err(OrchestratorError::ChunkMergeFailed)?;
+            .with_context(|| format!("failed to open chunk file {}", chunk_path.display()))?;
 
         let bytes_copied = tokio::io::copy(&mut chunk_file, &mut writer)
             .await
-            .map_err(OrchestratorError::ChunkMergeFailed)?;
+            .with_context(|| format!("failed to copy chunk {} to output", chunk_path.display()))?;
 
         total_size += bytes_copied;
 
@@ -145,13 +147,13 @@ pub(crate) async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo
         // Delete chunk file after successful merge
         tokio::fs::remove_file(chunk_path)
             .await
-            .map_err(OrchestratorError::ChunkMergeFailed)?;
+            .with_context(|| format!("failed to remove chunk file {}", chunk_path.display()))?;
     }
 
     writer
         .flush()
         .await
-        .map_err(OrchestratorError::ChunkMergeFailed)?;
+        .context("failed to flush merged output file")?;
 
     debug!(chunk_count; "Cleaned up chunk files");
 
