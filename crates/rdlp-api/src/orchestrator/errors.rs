@@ -97,8 +97,8 @@ pub enum OrchestratorError {
 /// resolved by calling `extract_lazy()` again for a fresh CDN assignment.
 pub(super) fn is_reextractable_error(err: &OrchestratorError) -> bool {
     match err {
-        OrchestratorError::DownloadFailed(RdlpError::Extraction(msg)) => {
-            msg.contains("invalid M3U8")
+        OrchestratorError::DownloadFailed(RdlpError::Extraction { message, .. }) => {
+            message.contains("invalid M3U8")
         }
         OrchestratorError::DownloadFailed(RdlpError::Http {
             status: 403 | 503, ..
