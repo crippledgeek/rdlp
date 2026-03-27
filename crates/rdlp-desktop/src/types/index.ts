@@ -92,6 +92,26 @@ export interface FormatListResponse {
     subtitles: SubtitleInfo[];
     thumbnail_url: string | null;
     duration: number | null;
+    is_playlist: boolean;
+    playlist: PlaylistInfo | null;
+}
+
+/** A single episode entry in a playlist (camelCase — Rust uses #[serde(rename_all = "camelCase")]). */
+export interface PlaylistEntry {
+    index: number;
+    title: string;
+    url: string;
+    thumbnailUrl: string | null;
+    duration: number | null;
+    hasSub: boolean;
+    hasDub: boolean;
+}
+
+/** Playlist metadata returned when a URL resolves to multiple episodes (camelCase). */
+export interface PlaylistInfo {
+    title: string;
+    count: number;
+    entries: PlaylistEntry[];
 }
 
 // ========== Video Codec Types (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
