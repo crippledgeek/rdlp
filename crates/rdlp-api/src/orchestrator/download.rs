@@ -62,9 +62,10 @@ impl Orchestrator {
 
         // SSRF protection: validate primary URL before passing to downloader
         validate_url_security(&format.url).map_err(|e| {
-            OrchestratorError::DownloadFailed(RdlpError::Network(format!(
-                "Security validation failed for format URL: {e}"
-            )))
+            OrchestratorError::DownloadFailed(RdlpError::Network {
+                message: format!("Security validation failed for format URL: {e}"),
+                url: Some(format.url.clone()),
+            })
         })?;
 
         // Find downloader (with extra HTTP headers if the format specifies them)
@@ -90,9 +91,10 @@ impl Orchestrator {
                 // SSRF protection: validate each fallback URL before use
                 if let Err(e) = validate_url_security(download_url) {
                     warn!(fallback = i; "Skipping fallback URL that failed security validation: {e}");
-                    last_err = Some(OrchestratorError::DownloadFailed(RdlpError::Network(
-                        format!("Security validation failed for fallback URL: {e}"),
-                    )));
+                    last_err = Some(OrchestratorError::DownloadFailed(RdlpError::Network {
+                        message: format!("Security validation failed for fallback URL: {e}"),
+                        url: Some(download_url.to_string()),
+                    }));
                     continue;
                 }
                 warn!(
@@ -179,9 +181,10 @@ impl Orchestrator {
 
         // SSRF protection: validate URL before passing to downloader
         validate_url_security(&format.url).map_err(|e| {
-            OrchestratorError::DownloadFailed(RdlpError::Network(format!(
-                "Security validation failed for format URL: {e}"
-            )))
+            OrchestratorError::DownloadFailed(RdlpError::Network {
+                message: format!("Security validation failed for format URL: {e}"),
+                url: Some(format.url.clone()),
+            })
         })?;
 
         let downloader = self
@@ -222,12 +225,13 @@ impl Orchestrator {
                 .unwrap_or_default()
                 .as_secs();
             if now >= expires {
-                return Err(OrchestratorError::DownloadFailed(RdlpError::Network(
-                    format!(
+                return Err(OrchestratorError::DownloadFailed(RdlpError::Network {
+                    message: format!(
                         "CDN token expired {}s ago — re-run the command to get a fresh URL",
                         now - expires
                     ),
-                )));
+                    url: Some(url.to_string()),
+                }));
             } else if expires - now < 60 {
                 warn!("CDN token expires in less than 60 seconds — download may fail");
             }

@@ -404,9 +404,10 @@ impl Orchestrator {
 
         if downloaded.is_empty() {
             Err(OrchestratorError::ExtractionFailed(
-                rdlp_core::RdlpError::Extraction(
-                    "All playlist videos failed to download".to_string(),
-                ),
+                rdlp_core::RdlpError::Extraction {
+                    message: "All playlist videos failed to download".to_string(),
+                    url: None,
+                },
             ))
         } else {
             Ok(Some(downloaded))

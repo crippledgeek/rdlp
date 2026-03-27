@@ -281,15 +281,17 @@ impl Orchestrator {
         }
 
         let (download_files, is_hls, merge_formats) = download_result.ok_or_else(|| {
-            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction(
-                "All extraction retry attempts exhausted".to_string(),
-            ))
+            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction {
+                message: "All extraction retry attempts exhausted".to_string(),
+                url: None,
+            })
         })?;
 
         let output_path = output_path.ok_or_else(|| {
-            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction(
-                "output path was not set during download".to_string(),
-            ))
+            OrchestratorError::DownloadFailed(rdlp_core::RdlpError::Extraction {
+                message: "output path was not set during download".to_string(),
+                url: None,
+            })
         })?;
         let mut final_info_owned = last_info_ref.unwrap_or_else(|| info.clone());
         if let Some(fmts) = merge_formats {
@@ -315,12 +317,15 @@ impl Orchestrator {
         if !subtitle_langs.is_empty() && downloaded_subs.is_empty() {
             if self.config.strict_subs {
                 return Err(OrchestratorError::DownloadFailed(
-                    rdlp_core::RdlpError::Extraction(format!(
-                        "Strict subtitle mode: no subtitles downloaded for '{}' \
-                         (expected [{}])",
-                        final_info.title,
-                        subtitle_langs.join(", ")
-                    )),
+                    rdlp_core::RdlpError::Extraction {
+                        message: format!(
+                            "Strict subtitle mode: no subtitles downloaded for '{}' \
+                             (expected [{}])",
+                            final_info.title,
+                            subtitle_langs.join(", ")
+                        ),
+                        url: None,
+                    },
                 ));
             }
             warn!(
@@ -344,11 +349,14 @@ impl Orchestrator {
                 .unwrap_or("");
             if ext.eq_ignore_ascii_case("ts") {
                 return Err(OrchestratorError::DownloadFailed(
-                    rdlp_core::RdlpError::Extraction(format!(
-                        "Post-processing failed for '{}': \
-                         HLS container still .ts (FFmpeg remux did not complete)",
-                        final_info.title,
-                    )),
+                    rdlp_core::RdlpError::Extraction {
+                        message: format!(
+                            "Post-processing failed for '{}': \
+                             HLS container still .ts (FFmpeg remux did not complete)",
+                            final_info.title,
+                        ),
+                        url: None,
+                    },
                 ));
             }
         }

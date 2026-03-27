@@ -167,7 +167,10 @@ impl Orchestrator {
                 .error_message
                 .unwrap_or_else(|| "Subtitle policy check failed".to_string());
             return Err(super::super::OrchestratorError::DownloadFailed(
-                rdlp_core::RdlpError::Extraction(msg),
+                rdlp_core::RdlpError::Extraction {
+                    message: msg,
+                    url: None,
+                },
             ));
         }
 
