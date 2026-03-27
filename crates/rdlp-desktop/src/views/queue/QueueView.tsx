@@ -1,15 +1,17 @@
 // QueueView: virtualized job list for the Queue view.
-// Reads from downloads query, filters by QueueNav selection.
+// Groups playlist jobs under collapsible headers. Standalone jobs render flat.
+// Uses flattened QueueItem[] array for TanStack Virtual (same pattern as FormatsTable).
 
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useState, useCallback } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Download } from "lucide-react";
 import { downloadsQueryOptions } from "@/api/downloads";
 import { queueFilterStore } from "@/stores/queueFilterStore";
+import { PlaylistGroupHeader } from "./PlaylistGroupHeader";
 import { JobCard } from "./JobCard";
-import type { DownloadJob } from "@/types";
+import type { DownloadJob, QueueItem } from "@/types";
 
 const STATUS_ORDER: Record<string, number> = {
     running: 0,
@@ -18,6 +20,12 @@ const STATUS_ORDER: Record<string, number> = {
     completed: 3,
     cancelled: 4,
 };
+
+/** Height constants for estimateSize callback. */
+const GROUP_HEADER_HEIGHT = 64;
+const COMPACT_JOB_HEIGHT = 72;
+const STANDALONE_JOB_HEIGHT = 90;
+const SHOW_MORE_HEIGHT = 32;
 
 function filterJobs(jobs: DownloadJob[], filter: string): DownloadJob[] {
     switch (filter) {
@@ -32,25 +40,129 @@ function filterJobs(jobs: DownloadJob[], filter: string): DownloadJob[] {
     }
 }
 
+/**
+ * Build a flat QueueItem array from jobs, grouping by playlistId.
+ *
+ * - Playlist groups: group-header, then job items (sorted by playlistIndex), then optional show-more
+ * - Standalone jobs: flat job items
+ * - Groups sorted: active-first, then by most recent started_at
+ * - Standalone jobs sorted by status priority, then by started_at
+ */
+function buildFlatItems(
+    jobs: DownloadJob[],
+    collapsedMap: Map<string, boolean>,
+): QueueItem[] {
+    // Separate playlist vs standalone
+    const playlistGroups = new Map<string, DownloadJob[]>();
+    const standaloneJobs: DownloadJob[] = [];
+
+    for (const job of jobs) {
+        if (job.playlist) {
+            const id = job.playlist.playlistId;
+            const group = playlistGroups.get(id);
+            if (group) {
+                group.push(job);
+            } else {
+                playlistGroups.set(id, [job]);
+            }
+        } else {
+            standaloneJobs.push(job);
+        }
+    }
+
+    // Sort groups: active-first (has running/pending), then by most recent started_at
+    const sortedGroups = [...playlistGroups.entries()].sort(([, aJobs], [, bJobs]) => {
+        const aHasActive = aJobs.some((j) => j.status === "running" || j.status === "pending");
+        const bHasActive = bJobs.some((j) => j.status === "running" || j.status === "pending");
+        if (aHasActive !== bHasActive) return aHasActive ? -1 : 1;
+
+        const aLatest = Math.max(...aJobs.map((j) => j.started_at ?? 0));
+        const bLatest = Math.max(...bJobs.map((j) => j.started_at ?? 0));
+        return bLatest - aLatest;
+    });
+
+    // Sort standalone by status priority, then by started_at
+    const sortedStandalone = [...standaloneJobs].sort((a, b) => {
+        const aOrder = STATUS_ORDER[a.status] ?? 5;
+        const bOrder = STATUS_ORDER[b.status] ?? 5;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (b.started_at ?? 0) - (a.started_at ?? 0);
+    });
+
+    const items: QueueItem[] = [];
+
+    // Emit playlist groups
+    for (const [playlistId, groupJobs] of sortedGroups) {
+        // Sort within group by playlistIndex
+        const sorted = [...groupJobs].sort(
+            (a, b) => (a.playlist?.playlistIndex ?? 0) - (b.playlist?.playlistIndex ?? 0),
+        );
+
+        const playlistTitle = sorted[0]?.playlist?.playlistTitle ?? "Playlist";
+        const allCompleted = sorted.every(
+            (j) => j.status === "completed" || j.status === "cancelled",
+        );
+        const collapsed = collapsedMap.get(playlistId) ?? allCompleted;
+
+        items.push({
+            type: "group-header",
+            playlistId,
+            playlistTitle,
+            jobs: sorted,
+            collapsed,
+        });
+
+        if (!collapsed) {
+            for (const job of sorted) {
+                items.push({ type: "job", job, inPlaylist: true });
+            }
+        }
+    }
+
+    // Emit standalone jobs
+    for (const job of sortedStandalone) {
+        items.push({ type: "job", job, inPlaylist: false });
+    }
+
+    return items;
+}
+
 export function QueueView() {
     const parentRef = useRef<HTMLDivElement>(null);
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
     const activeFilter = useStore(queueFilterStore, (s) => s.filter);
+    const [collapsedMap, setCollapsedMap] = useState<Map<string, boolean>>(new Map());
 
-    const sorted = useMemo(() => {
-        const filtered = filterJobs(jobs, activeFilter);
-        return [...filtered].sort((a, b) => {
-            const aOrder = STATUS_ORDER[a.status] ?? 5;
-            const bOrder = STATUS_ORDER[b.status] ?? 5;
-            if (aOrder !== bOrder) return aOrder - bOrder;
-            return (b.started_at ?? 0) - (a.started_at ?? 0);
+    const filtered = useMemo(() => filterJobs(jobs, activeFilter), [jobs, activeFilter]);
+
+    const flatItems = useMemo(
+        () => buildFlatItems(filtered, collapsedMap),
+        [filtered, collapsedMap],
+    );
+
+    const handleToggleCollapse = useCallback((playlistId: string) => {
+        setCollapsedMap((prev) => {
+            const next = new Map(prev);
+            next.set(playlistId, !prev.get(playlistId));
+            return next;
         });
-    }, [jobs, activeFilter]);
+    }, []);
 
     const virtualizer = useVirtualizer({
-        count: sorted.length,
+        count: flatItems.length,
         getScrollElement: () => parentRef.current,
-        estimateSize: () => 90,
+        estimateSize: (i) => {
+            const item = flatItems[i];
+            if (!item) return STANDALONE_JOB_HEIGHT;
+            switch (item.type) {
+                case "group-header":
+                    return GROUP_HEADER_HEIGHT;
+                case "job":
+                    return item.inPlaylist ? COMPACT_JOB_HEIGHT : STANDALONE_JOB_HEIGHT;
+                case "show-more":
+                    return SHOW_MORE_HEIGHT;
+            }
+        },
         overscan: 5,
     });
 
@@ -64,7 +176,7 @@ export function QueueView() {
         );
     }
 
-    if (sorted.length === 0) {
+    if (flatItems.length === 0) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[#444444]">No jobs match this filter</p>
@@ -79,18 +191,44 @@ export function QueueView() {
                 style={{ height: virtualizer.getTotalSize() + 24 }}
             >
                 {virtualizer.getVirtualItems().map((virtualItem) => {
-                    const job = sorted[virtualItem.index];
-                    if (!job) return null;
+                    const item = flatItems[virtualItem.index];
+                    if (!item) return null;
+
                     return (
                         <div
-                            key={job.id}
+                            key={
+                                item.type === "group-header"
+                                    ? `group-${item.playlistId}`
+                                    : item.type === "job"
+                                      ? item.job.id
+                                      : `more-${item.playlistId}`
+                            }
                             className="absolute left-3 right-3"
                             style={{
                                 top: virtualItem.start + 12,
                                 height: virtualItem.size,
                             }}
                         >
-                            <JobCard job={job} />
+                            {item.type === "group-header" && (
+                                <PlaylistGroupHeader
+                                    playlistId={item.playlistId}
+                                    playlistTitle={item.playlistTitle}
+                                    jobs={item.jobs}
+                                    collapsed={item.collapsed}
+                                    onToggleCollapse={handleToggleCollapse}
+                                />
+                            )}
+                            {item.type === "job" && (
+                                <JobCard job={item.job} compact={item.inPlaylist} />
+                            )}
+                            {item.type === "show-more" && (
+                                <button
+                                    onClick={() => handleToggleCollapse(item.playlistId)}
+                                    className="w-full text-center text-[11px] text-[#4a9eff] hover:text-[#3a8ef0] py-1 cursor-pointer transition-colors"
+                                >
+                                    Show {item.hiddenCount} more
+                                </button>
+                            )}
                         </div>
                     );
                 })}
