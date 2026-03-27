@@ -121,6 +121,7 @@ export function AnalyzeView() {
                 <EpisodeList
                     episodes={formats.playlist!.entries}
                     playlistUrl={analyzeUrl ?? ""}
+                    playlistTitle={formats.playlist!.title}
                 />
             ) : (
                 <>

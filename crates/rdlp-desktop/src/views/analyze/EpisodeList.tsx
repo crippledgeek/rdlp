@@ -11,14 +11,16 @@ import { Toolbar } from "@/components/ui/toolbar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StreamBadge } from "@/components/StreamBadge";
 import { Thumbnail } from "@/components/Thumbnail";
-import { setAnalyzeUrl } from "@/stores/uiStore";
+import { setAnalyzeUrl, setActiveView } from "@/stores/uiStore";
 import { uiStore } from "@/stores/uiStore";
-import type { PlaylistEntry } from "@/types";
+import { startDownload } from "@/api/downloads";
+import type { PlaylistEntry, PlaylistContext, DownloadOptions } from "@/types";
 import { cn } from "@/lib/utils";
 
 interface EpisodeListProps {
     episodes: PlaylistEntry[];
     playlistUrl: string;
+    playlistTitle: string;
 }
 
 function formatDuration(seconds: number): string {
@@ -34,7 +36,7 @@ function formatDuration(seconds: number): string {
 const ROW_HEIGHT = 48;
 const OVERSCAN = 10;
 
-export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
+export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeListProps) {
     const parentRef = useRef<HTMLDivElement>(null);
     const [selectedKeys, setSelectedKeys] = useState<Selection>(new Set<string>());
 
@@ -79,14 +81,58 @@ export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
     );
 
     const handleDownloadSelected = useCallback(() => {
-        // Gather selected episode URLs for batch download (wired in SP4)
-        const _selected =
+        const selected =
             selectedKeys === "all"
                 ? episodes
                 : episodes.filter((ep) => (selectedKeys as Set<string>).has(ep.url));
-        // TODO(SP4): invoke start_download for each selected episode with PlaylistContext
-        void _selected;
-    }, [selectedKeys, episodes]);
+
+        if (selected.length === 0) return;
+
+        // Generate a shared playlist batch ID
+        const playlistId = crypto.randomUUID();
+
+        // Default options for batch download (settings defaults apply on backend)
+        const defaultOptions: DownloadOptions = {
+            format: null,
+            outputDir: null,
+            subtitles: false,
+            subtitleLangs: [],
+            remux: null,
+            extractAudio: null,
+            embedThumbnail: true,
+            audioMultistreams: false,
+            recodeVideo: null,
+            normalizeAudio: null,
+            loudnorm: null,
+            loudnormPreset: null,
+            loudnormTargetI: null,
+            loudnormTargetTp: null,
+            loudnormTargetLra: null,
+            loudnormDynamic: null,
+            loudnormPrecompress: null,
+            normalizeBoost: null,
+            normalizeBoostDb: null,
+            embedSubtitles: null,
+            videoEncoder: null,
+            recodeAudio: null,
+            recodeContainer: null,
+            verbose: null,
+        };
+
+        // Fire start_download for each selected episode
+        for (const ep of selected) {
+            const ctx: PlaylistContext = {
+                playlistId,
+                playlistTitle,
+                playlistIndex: ep.index,
+                playlistCount: episodes.length,
+            };
+            void startDownload(ep.url, defaultOptions, ep.title, ctx);
+        }
+
+        // Switch to Queue view to show the batch
+        setActiveView("queue");
+    }, [selectedKeys, episodes, playlistTitle]);
 
     return (
         <div className="flex flex-col h-full overflow-hidden">
