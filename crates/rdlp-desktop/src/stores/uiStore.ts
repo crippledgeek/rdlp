@@ -56,6 +56,10 @@ export function setCommandPaletteOpen(open: boolean): void {
     uiStore.setState((prev) => ({ ...prev, commandPaletteOpen: open }));
 }
 
+export function setActiveView(view: AppView): void {
+    uiStore.setState((prev) => ({ ...prev, activeView: view }));
+}
+
 export function setAnalyzeUrl(url: string | null): void {
     uiStore.setState((prev) => ({
         ...prev,
