@@ -367,7 +367,9 @@ impl Downloader for HttpDownloader {
                 .append(true)
                 .open(path)
                 .await
-                .map_err(RdlpError::Io)?;
+                .map_err(|e| RdlpError::Io(
+                    std::io::Error::new(e.kind(), format!("failed to open partial file for resume '{}': {e}", path.display()))
+                ))?;
             let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
             let mut stream = response.bytes_stream();
@@ -384,9 +386,11 @@ impl Downloader for HttpDownloader {
                 })?
             {
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url_string.to_string()) })?;
+                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(url_string.to_string()) })?;
 
-                writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
+                writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
+                    std::io::Error::new(e.kind(), format!("failed to write to resumed file '{}': {e}", path.display()))
+                ))?;
                 downloaded += chunk.len() as u64;
 
                 if let Some(ref callback) = progress {
@@ -410,7 +414,9 @@ impl Downloader for HttpDownloader {
                 }
             }
 
-            writer.flush().await.map_err(RdlpError::Io)?;
+            writer.flush().await.map_err(|e| RdlpError::Io(
+                std::io::Error::new(e.kind(), format!("failed to flush resumed file '{}': {e}", path.display()))
+            ))?;
 
             let duration = start_time.elapsed();
             let stats = DownloadStats::new(downloaded, duration, 0);

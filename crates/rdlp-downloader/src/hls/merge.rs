@@ -343,7 +343,9 @@ pub(crate) async fn merge_segments(
             "Merging segments into final file"
         );
 
-        let final_file = File::create(output_path).await.map_err(RdlpError::Io)?;
+        let final_file = File::create(output_path).await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to create HLS output file '{}': {e}", output_path.display()))
+        ))?;
         let mut writer = BufWriter::with_capacity(buffer_size, final_file);
         let mut total_bytes = 0u64;
 
@@ -356,20 +358,28 @@ pub(crate) async fn merge_segments(
 
             if seg_init != current_init {
                 if let Some(init_path) = seg_init {
-                    let mut init_file = File::open(init_path).await.map_err(RdlpError::Io)?;
+                    let mut init_file = File::open(init_path).await.map_err(|e| RdlpError::Io(
+                        std::io::Error::new(e.kind(), format!("failed to open init segment file '{}': {e}", init_path.display()))
+                    ))?;
                     let bytes = tokio::io::copy(&mut init_file, &mut writer)
                         .await
-                        .map_err(RdlpError::Io)?;
+                        .map_err(|e| RdlpError::Io(
+                            std::io::Error::new(e.kind(), format!("failed to copy init segment '{}' to output: {e}", init_path.display()))
+                        ))?;
                     total_bytes += bytes;
                     debug!(bytes, segment = idx; "Wrote fMP4 init segment");
                 }
                 current_init = seg_init;
             }
 
-            let mut segment_file = File::open(segment_path).await.map_err(RdlpError::Io)?;
+            let mut segment_file = File::open(segment_path).await.map_err(|e| RdlpError::Io(
+                std::io::Error::new(e.kind(), format!("failed to open segment file '{}': {e}", segment_path.display()))
+            ))?;
             let bytes = tokio::io::copy(&mut segment_file, &mut writer)
                 .await
-                .map_err(RdlpError::Io)?;
+                .map_err(|e| RdlpError::Io(
+                    std::io::Error::new(e.kind(), format!("failed to copy segment '{}' to output: {e}", segment_path.display()))
+                ))?;
             total_bytes += bytes;
 
             if (idx + 1) % 100 == 0 || idx == segment_paths.len() - 1 {
@@ -382,7 +392,9 @@ pub(crate) async fn merge_segments(
             }
         }
 
-        writer.flush().await.map_err(RdlpError::Io)?;
+        writer.flush().await.map_err(|e| RdlpError::Io(
+            std::io::Error::new(e.kind(), format!("failed to flush HLS output file '{}': {e}", output_path.display()))
+        ))?;
         debug!(mb = total_bytes / (1024 * 1024); "Merge complete");
 
         Ok(total_bytes)
