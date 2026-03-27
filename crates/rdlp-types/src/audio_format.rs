@@ -42,6 +42,7 @@ pub enum AudioFormat {
 
 impl AudioFormat {
     /// File extension for this audio format.
+    #[inline]
     #[must_use]
     pub fn as_ext(&self) -> &'static str {
         match self {
@@ -63,6 +64,7 @@ impl AudioFormat {
     }
 
     /// Codec lookup name (matches AUDIO_CODECS keys in ffmpeg.rs).
+    #[inline]
     #[must_use]
     pub fn codec_name(&self) -> &'static str {
         match self {

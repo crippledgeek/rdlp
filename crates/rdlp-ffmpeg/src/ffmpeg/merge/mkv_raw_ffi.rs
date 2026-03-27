@@ -343,6 +343,12 @@ impl FFmpegRunner {
             // from buffering an entire stream while waiting for the other.
             // Errors are captured and propagated after cleanup.
             let merge_result: Result<()> = (|| {
+                // SAFETY: AVPacket is a plain C struct where zeroing all fields
+                // is equivalent to the deprecated av_init_packet() behaviour.
+                // pts/dts/pos are explicitly set to sentinel values immediately
+                // after. av_packet_unref() is called after each write to release
+                // any buffer references before the next av_read_frame() refills
+                // the packet.
                 let mut vpkt: ffi::AVPacket = std::mem::zeroed();
                 vpkt.pts = ffi::AV_NOPTS_VALUE;
                 vpkt.dts = ffi::AV_NOPTS_VALUE;

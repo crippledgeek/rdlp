@@ -38,6 +38,7 @@ impl DownloadProtocol {
     }
 
     /// Get the protocol as a string slice.
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
