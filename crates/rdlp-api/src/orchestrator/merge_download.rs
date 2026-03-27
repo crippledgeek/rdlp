@@ -1,11 +1,12 @@
-//! Parallel download coordination for merge (video + audio) downloads
+//! Sequential download coordination for merge (video + audio) downloads
 //!
-//! Downloads video-only and audio-only streams in parallel via `tokio::join!`,
-//! then passes both files to the postprocessor pipeline where `FFmpegMerger`
-//! handles the actual muxing.
+//! Downloads video-only and audio-only streams sequentially (video first,
+//! then audio) so progress updates don't interleave. Both files are then
+//! passed to the postprocessor pipeline where `MergeStage` handles muxing.
 
 use super::Orchestrator;
 use super::errors::*;
+use crate::events::Event;
 use log::{debug, info, warn};
 use rdlp_types::Format;
 use std::path::{Path, PathBuf};
@@ -22,11 +23,11 @@ pub(super) struct MergeDownloadOutcome {
 }
 
 impl Orchestrator {
-    /// Download video and audio streams in parallel for merge.
+    /// Download video and audio streams sequentially for merge.
     ///
-    /// Uses `tokio::join!` to download both streams concurrently via the
-    /// existing `download_with_cdn_fallback()` method. The actual FFmpeg
-    /// merge is handled downstream by the `FFmpegMerger` postprocessor.
+    /// Downloads video first (progress 0-100%), then audio (progress resets
+    /// 0-100%). Sequential download prevents progress bar jitter from two
+    /// streams emitting interleaved progress updates to the same job ID.
     ///
     /// # Arguments
     /// * `video` - Video-only format to download
@@ -51,33 +52,54 @@ impl Orchestrator {
             audio_format = audio.format_id.as_str(),
             video_path:? = video_path.display(),
             audio_path:? = audio_path.display();
-            "Starting parallel merge download"
+            "Starting sequential merge download (video then audio)"
         );
 
-        // Download both streams in parallel
-        let (video_result, audio_result) = tokio::join!(
-            self.download_with_cdn_fallback(video, &video_path, 0),
-            self.download_with_cdn_fallback(audio, &audio_path, 0),
-        );
-
-        // Handle results — clean up on failure
-        let video_outcome = match video_result {
+        // Download video first
+        let _ = self.event_tx.try_send(Event::PlaylistItemStarted {
+            id: self.download_id,
+            index: 1,
+            total: 2,
+            url: video.url.clone(),
+            title: "Video".to_string(),
+        });
+        let video_outcome = match self
+            .download_with_cdn_fallback(video, &video_path, 0)
+            .await
+        {
             Ok(Some(outcome)) => outcome,
             Ok(None) => {
                 self.cleanup_merge_file(&video_path).await;
-                self.cleanup_merge_file(&audio_path).await;
                 return Ok(None);
             }
             Err(e) => {
                 warn!("Video download failed: {e}");
                 self.cleanup_merge_file(&video_path).await;
-                self.cleanup_merge_file(&audio_path).await;
                 return Err(e);
             }
         };
+        let _ = self.event_tx.try_send(Event::UnitCompleted {
+            id: self.download_id,
+            index: 1,
+        });
 
-        match audio_result {
+        // Then download audio
+        let _ = self.event_tx.try_send(Event::PlaylistItemStarted {
+            id: self.download_id,
+            index: 2,
+            total: 2,
+            url: audio.url.clone(),
+            title: "Audio".to_string(),
+        });
+        match self
+            .download_with_cdn_fallback(audio, &audio_path, 0)
+            .await
+        {
             Ok(Some(audio_outcome)) => {
+                let _ = self.event_tx.try_send(Event::UnitCompleted {
+                    id: self.download_id,
+                    index: 2,
+                });
                 let is_hls = video_outcome.is_hls || audio_outcome.is_hls;
                 debug!(
                     video_hls = video_outcome.is_hls,

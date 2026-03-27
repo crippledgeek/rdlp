@@ -92,6 +92,26 @@ export interface FormatListResponse {
     subtitles: SubtitleInfo[];
     thumbnail_url: string | null;
     duration: number | null;
+    is_playlist: boolean;
+    playlist: PlaylistInfo | null;
+}
+
+/** A single episode entry in a playlist (camelCase — Rust uses #[serde(rename_all = "camelCase")]). */
+export interface PlaylistEntry {
+    index: number;
+    title: string;
+    url: string;
+    thumbnailUrl: string | null;
+    duration: number | null;
+    hasSub: boolean;
+    hasDub: boolean;
+}
+
+/** Playlist metadata returned when a URL resolves to multiple episodes (camelCase). */
+export interface PlaylistInfo {
+    title: string;
+    count: number;
+    entries: PlaylistEntry[];
 }
 
 // ========== Video Codec Types (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
@@ -267,6 +287,20 @@ export interface PostProcessProgressPayload {
     jobId: string;
     stage: string;
     progress: number; // 0.0–1.0
+}
+
+/** Unit-started payload emitted as "unit-started" (playlist episode or merge stream start). */
+export interface UnitStartedPayload {
+    jobId: string;
+    unitIndex: number;
+    unitTotal: number;
+    unitTitle: string;
+}
+
+/** Unit-completed payload emitted as "unit-completed" (playlist episode or merge stream done). */
+export interface UnitCompletedPayload {
+    jobId: string;
+    unitIndex: number;
 }
 
 // ========== Settings Types ==========

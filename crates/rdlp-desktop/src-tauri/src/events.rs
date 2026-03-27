@@ -95,6 +95,24 @@ pub struct PostProcessProgressPayload {
     pub(crate) progress: f64,
 }
 
+/// Payload for "unit-started" Tauri event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnitStartedPayload {
+    pub(crate) job_id: String,
+    pub(crate) unit_index: usize,
+    pub(crate) unit_total: usize,
+    pub(crate) unit_title: String,
+}
+
+/// Payload for "unit-completed" Tauri event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnitCompletedPayload {
+    pub(crate) job_id: String,
+    pub(crate) unit_index: usize,
+}
+
 /// Log message payload emitted as `"download-log"`.
 ///
 /// Used for informational events (metadata ready, post-processing
@@ -288,7 +306,42 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             }
         }
 
-        // All other events are not forwarded to the frontend.
+        Event::PlaylistDetected { total_items, .. } => {
+            let payload = DownloadLogPayload {
+                job_id: job_id.to_owned(),
+                level: LogLevel::Info,
+                message: format!("Playlist detected: {total_items} items"),
+            };
+            if let Err(e) = app.emit("download-log", &payload) {
+                debug!("Failed to emit download-log (playlist-detected) for job {job_id}: {e}");
+            }
+        }
+
+        Event::PlaylistItemStarted {
+            index, total, title, ..
+        } => {
+            let payload = UnitStartedPayload {
+                job_id: job_id.to_owned(),
+                unit_index: *index,
+                unit_total: *total,
+                unit_title: title.clone(),
+            };
+            if let Err(e) = app.emit("unit-started", &payload) {
+                debug!("Failed to emit unit-started for job {job_id}: {e}");
+            }
+        }
+
+        Event::UnitCompleted { index, .. } => {
+            let payload = UnitCompletedPayload {
+                job_id: job_id.to_owned(),
+                unit_index: *index,
+            };
+            if let Err(e) = app.emit("unit-completed", &payload) {
+                debug!("Failed to emit unit-completed for job {job_id}: {e}");
+            }
+        }
+
+        // Remaining unhandled events (SubtitlesFound, SubtitlesMissing, Cancelled, Started, Retrying from playlist)
         _ => {}
     }
 }

@@ -127,12 +127,22 @@ pub enum Event {
     PlaylistItemStarted {
         /// The download this event belongs to.
         id: DownloadId,
-        /// Zero-based index of the item within the playlist.
+        /// 1-based index of the item within the playlist.
         index: usize,
         /// Total number of items in the playlist.
         total: usize,
         /// URL of the playlist item.
         url: String,
+        /// Title of the playlist item (episode name).
+        title: String,
+    },
+
+    /// A download unit (episode or merge stream) has completed.
+    UnitCompleted {
+        /// The download this event belongs to.
+        id: DownloadId,
+        /// 1-based index of the completed unit.
+        index: usize,
     },
 
     /// A download attempt is being retried.
@@ -179,6 +189,7 @@ impl Event {
             | Self::Cancelled { id }
             | Self::PlaylistDetected { id, .. }
             | Self::PlaylistItemStarted { id, .. }
+            | Self::UnitCompleted { id, .. }
             | Self::Retrying { id, .. }
             | Self::Debug { id, .. } => *id,
         }
@@ -251,10 +262,12 @@ mod tests {
             },
             Event::PlaylistItemStarted {
                 id,
-                index: 0,
+                index: 1,
                 total: 10,
                 url: "https://example.com/1".into(),
+                title: "Episode 1".into(),
             },
+            Event::UnitCompleted { id, index: 1 },
             Event::Retrying {
                 id,
                 attempt: 2,

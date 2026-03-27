@@ -54,13 +54,56 @@ pub async fn get_formats(
         .await
         .map_err(AppError::from)?;
 
-    // 3. Take the first result (single video or first playlist entry)
-    let info = info_dicts
-        .into_iter()
-        .next()
-        .ok_or_else(|| AppError::ExtractionFailed {
-            message: "No metadata returned for URL".to_owned(),
-        })?;
+    // 3. Detect playlist vs single video
+    let is_playlist = info_dicts.len() > 1;
+
+    let (first_info, playlist) = if is_playlist {
+        // Build playlist metadata from all entries
+        let playlist_title = info_dicts
+            .first()
+            .and_then(|i| i.playlist_title.clone())
+            .unwrap_or_else(|| "Untitled Playlist".to_string());
+        let playlist_count = info_dicts.len();
+
+        let entries: Vec<PlaylistEntry> = info_dicts
+            .iter()
+            .enumerate()
+            .map(|(i, info)| PlaylistEntry {
+                index: info.playlist_index.unwrap_or(i + 1),
+                title: info.title.clone(),
+                url: info.webpage_url.clone(),
+                thumbnail_url: info.thumbnail.clone(),
+                duration: info.duration,
+                has_sub: true,  // TODO: detect from info if available
+                has_dub: false, // TODO: detect from info if available
+            })
+            .collect();
+
+        let playlist_info = PlaylistInfo {
+            title: playlist_title,
+            count: playlist_count,
+            entries,
+        };
+
+        let first = info_dicts
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::ExtractionFailed {
+                message: "No metadata returned for URL".to_owned(),
+            })?;
+
+        (first, Some(playlist_info))
+    } else {
+        let first = info_dicts
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::ExtractionFailed {
+                message: "No metadata returned for URL".to_owned(),
+            })?;
+        (first, None)
+    };
+
+    let info = first_info;
 
     // 4. Map formats
     let formats = info
@@ -107,6 +150,8 @@ pub async fn get_formats(
         subtitles,
         thumbnail_url: info.thumbnail,
         duration: info.duration,
+        is_playlist,
+        playlist,
     })
 }
 
@@ -298,6 +343,8 @@ mod tests {
             }],
             thumbnail_url: Some("https://example.com/thumb.jpg".to_owned()),
             duration: Some(180.5),
+            is_playlist: false,
+            playlist: None,
         };
 
         let json = serde_json::to_value(&resp).expect("serialization");
@@ -306,6 +353,8 @@ mod tests {
         assert_eq!(json["subtitles"].as_array().unwrap().len(), 1);
         assert_eq!(json["thumbnail_url"], "https://example.com/thumb.jpg");
         assert_eq!(json["duration"], 180.5);
+        assert_eq!(json["is_playlist"], false);
+        assert!(json["playlist"].is_null());
     }
 
     #[test]
@@ -316,6 +365,8 @@ mod tests {
             subtitles: vec![],
             thumbnail_url: None,
             duration: None,
+            is_playlist: false,
+            playlist: None,
         };
 
         let json = serde_json::to_value(&resp).expect("serialization");
@@ -324,6 +375,8 @@ mod tests {
         assert!(json["subtitles"].as_array().unwrap().is_empty());
         assert!(json["thumbnail_url"].is_null());
         assert!(json["duration"].is_null());
+        assert_eq!(json["is_playlist"], false);
+        assert!(json["playlist"].is_null());
     }
 
     fn make_format_data(
