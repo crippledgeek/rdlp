@@ -38,6 +38,7 @@ fn event_tag(event: &Event) -> &'static str {
         Event::Cancelled { .. } => "cancelled",
         Event::PlaylistDetected { .. } => "playlist_detected",
         Event::PlaylistItemStarted { .. } => "playlist_item_started",
+        Event::UnitCompleted { .. } => "unit_completed",
         Event::Retrying { .. } => "retrying",
         Event::Debug { .. } => "debug",
     }
