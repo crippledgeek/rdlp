@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
@@ -82,7 +83,11 @@ impl PipelineStage for AudioExtractStage {
         let input_file = msg.tracker.primary();
 
         // Check if input has audio.
-        let media_info = self.ffmpeg.probe(&input_file).await?;
+        let media_info = self
+            .ffmpeg
+            .probe(&input_file)
+            .await
+            .context("audio extract stage: failed to probe input file")?;
         if !media_info.has_audio {
             return Err(PostProcessError::NoAudioStream.into());
         }
@@ -131,7 +136,8 @@ impl PipelineStage for AudioExtractStage {
 
         self.ffmpeg
             .extract_audio(&input_file, &output_path, &opts, callback)
-            .await?;
+            .await
+            .context("audio extract stage failed")?;
 
         info!(
             "AudioExtractStage: audio extracted to {}",

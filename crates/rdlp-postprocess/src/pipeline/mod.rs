@@ -469,6 +469,28 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_context_preserved_in_error_chain() {
+        use anyhow::Context;
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let result: anyhow::Result<()> = Err(io_err).context("remux stage failed");
+        let err = result.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("remux stage failed"), "msg: {msg}");
+        assert!(msg.contains("file missing"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_downcast_through_context() {
+        use anyhow::Context;
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let result: anyhow::Result<()> = Err(io_err).context("thumbnail stage failed");
+        let err = result.unwrap_err();
+        let root = err.root_cause();
+        let io = root.downcast_ref::<std::io::Error>().expect("should downcast to io::Error");
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
     #[tokio::test]
     async fn test_pipeline_concurrent_semaphore() {
         use std::sync::Arc as StdArc;

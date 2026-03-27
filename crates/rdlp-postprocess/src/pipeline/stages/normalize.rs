@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
@@ -75,7 +76,11 @@ impl PipelineStage for NormalizeStage {
 
         let input_file = msg.tracker.primary();
 
-        let media_info = self.ffmpeg.probe(&input_file).await?;
+        let media_info = self
+            .ffmpeg
+            .probe(&input_file)
+            .await
+            .context("normalize stage: failed to probe input file")?;
         if !media_info.has_audio {
             return Err(PostProcessError::NoAudioStream.into());
         }
@@ -112,7 +117,8 @@ impl PipelineStage for NormalizeStage {
 
         self.ffmpeg
             .normalize_audio(&input_file, &output_path, &opts, callback)
-            .await?;
+            .await
+            .context("normalize stage failed")?;
 
         info!(
             "NormalizeStage: normalization complete: {}",
