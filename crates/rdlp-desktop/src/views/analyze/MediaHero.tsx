@@ -74,7 +74,7 @@ export function MediaHero({ data, url }: MediaHeroProps) {
                 <div className="flex items-center gap-2 flex-wrap mt-0.5">
                     {isPlaylist ? (
                         <>
-                            <span className="text-[11px] text-[#666666]">
+                            <span className="text-[11px] text-[#aaaaaa]">
                                 {data.playlist!.count} {data.playlist!.count === 1 ? "episode" : "episodes"}
                             </span>
                             <span className="text-[#444444]">·</span>

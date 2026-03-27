@@ -9,8 +9,7 @@ import { Download } from "lucide-react";
 import { GridList, GridListItem } from "@/components/ui/grid-list";
 import { Toolbar } from "@/components/ui/toolbar";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { StreamBadge } from "@/components/StreamBadge";
 import { Thumbnail } from "@/components/Thumbnail";
 import { setAnalyzeUrl } from "@/stores/uiStore";
 import { uiStore } from "@/stores/uiStore";
@@ -106,16 +105,13 @@ export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
                         </span>
                     </Checkbox>
 
-                    <span
-                        className="text-[11px] text-[#666666] tabular-nums"
-                        aria-live="polite"
-                    >
+                    <div className="flex-1" />
+
+                    <span className="text-[11px] text-[#666666] tabular-nums" aria-live="polite">
                         {selectedCount > 0
                             ? `${selectedCount} of ${episodes.length} selected`
                             : `${episodes.length} episodes`}
                     </span>
-
-                    <div className="flex-1" />
 
                     <button
                         onClick={handleDownloadSelected}
@@ -124,7 +120,7 @@ export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
                             "flex items-center gap-1.5 px-3 py-1 rounded-[6px] text-[12px] font-medium transition-colors cursor-pointer",
                             selectedCount > 0
                                 ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0]"
-                                : "bg-[#1a1a2e] text-[#444444] cursor-not-allowed",
+                                : "bg-[#1a1a2e] text-[#444444] cursor-not-allowed pointer-events-none",
                         )}
                     >
                         <Download className="w-3 h-3" />
@@ -132,8 +128,6 @@ export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
                     </button>
                 </Toolbar>
             </div>
-
-            <Separator />
 
             {/* Virtualized episode list */}
             <div ref={parentRef} className="flex-1 overflow-y-auto">
@@ -206,20 +200,10 @@ export function EpisodeList({ episodes, playlistUrl }: EpisodeListProps) {
                                 {/* SUB/DUB badges */}
                                 <div className="flex items-center gap-1 shrink-0">
                                     {ep.hasSub && (
-                                        <Badge
-                                            variant="outline"
-                                            className="text-[9px] px-1.5 py-0 h-4 uppercase tracking-wider"
-                                        >
-                                            SUB
-                                        </Badge>
+                                        <StreamBadge value="SUB" category="feature" />
                                     )}
                                     {ep.hasDub && (
-                                        <Badge
-                                            variant="outline"
-                                            className="text-[9px] px-1.5 py-0 h-4 uppercase tracking-wider"
-                                        >
-                                            DUB
-                                        </Badge>
+                                        <StreamBadge value="DUB" category="feature" />
                                     )}
                                 </div>
                             </GridListItem>
