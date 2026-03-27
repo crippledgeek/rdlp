@@ -129,7 +129,7 @@ impl HttpDownloader {
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let filename = path
             .file_name()
-            .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
+            .ok_or_else(|| RdlpError::Download { message: "Invalid output path: no filename".to_string(), url: Some(url.to_string()) })?
             .to_string_lossy()
             .into_owned();
 
@@ -215,7 +215,7 @@ impl HttpDownloader {
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let filename = path
             .file_name()
-            .ok_or_else(|| RdlpError::Download("Invalid output path: no filename".to_string()))?
+            .ok_or_else(|| RdlpError::Download { message: "Invalid output path: no filename".to_string(), url: Some(url.to_string()) })?
             .to_string_lossy()
             .into_owned();
 
@@ -364,7 +364,7 @@ impl HttpDownloader {
                         let _permit = sem
                             .acquire_owned()
                             .await
-                            .map_err(|_| RdlpError::Download("Semaphore closed".to_string()))?;
+                            .map_err(|_| RdlpError::Download { message: "Semaphore closed".to_string(), url: Some(url.to_string()) })?;
                         let start_time = Instant::now();
                         let abs_start = byte_offset + chunk.start;
                         // end is exclusive in ChunkRequest, but HTTP Range is inclusive
@@ -549,10 +549,8 @@ async fn merge_chunks_ordered(
         Ok(())
     })
     .await
-    .map_err(|_| {
-        RdlpError::Download(format!(
-            "Merge timed out after {}s",
-            merge_timeout.as_secs()
-        ))
+    .map_err(|_| RdlpError::Download {
+        message: format!("Merge timed out after {}s", merge_timeout.as_secs()),
+        url: None,
     })?
 }

@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
+use std::sync::Arc;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
@@ -59,7 +60,7 @@ impl Downloader for HttpDownloader {
                             .header("Range", "bytes=0-0")
                             .send()
                             .await
-                            .map_err(|e| RdlpError::Network(format!("Size check failed: {e}")))
+                            .map_err(|e| RdlpError::Network { message: format!("Size check failed: {e}"), url: Some(url.clone()) })
                     }
                 })
                 .await
@@ -115,11 +116,9 @@ impl Downloader for HttpDownloader {
             self.download_sequential(url, path, progress).await
         })
         .await
-        .map_err(|_| {
-            RdlpError::Download(format!(
-                "Download timed out after {}s",
-                timeout.as_secs()
-            ))
+        .map_err(|_| RdlpError::Download {
+            message: format!("Download timed out after {}s", timeout.as_secs()),
+            url: Some(url.to_string()),
         })?
     }
 
@@ -149,7 +148,7 @@ impl Downloader for HttpDownloader {
                     async move {
                         let response =
                             client.get(&url).headers(hdrs).send().await.map_err(|e| {
-                                RdlpError::Network(format!("GET request failed: {e}"))
+                                RdlpError::Network { message: format!("GET request failed: {e}"), url: Some(url.clone()) }
                             })?;
 
                         check_http_response(&response)?;
@@ -169,14 +168,12 @@ impl Downloader for HttpDownloader {
 
             while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
                 .await
-                .map_err(|_| {
-                RdlpError::Network(format!(
-                    "Read timed out (no data for {}s)",
-                    read_timeout.as_secs()
-                ))
-            })? {
+                .map_err(|_| RdlpError::Network {
+                    message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
+                    url: Some(url_string.clone()),
+                })? {
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network(format!("Failed to read chunk: {e}")))?;
+                    .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url_string.clone()) })?;
 
                 match buf_writer.write_all(&chunk).await {
                     Ok(()) => {}
@@ -235,8 +232,9 @@ impl Downloader for HttpDownloader {
             Ok(stats)
         })
         .await
-        .map_err(|_| {
-            RdlpError::Download(format!("Download timed out after {}s", timeout.as_secs()))
+        .map_err(|_| RdlpError::Download {
+            message: format!("Download timed out after {}s", timeout.as_secs()),
+            url: Some(url.to_string()),
         })?
     }
 
@@ -259,7 +257,7 @@ impl Downloader for HttpDownloader {
                     .headers(hdrs)
                     .send()
                     .await
-                    .map_err(|e| RdlpError::Network(format!("HEAD request failed: {e}")))
+                    .map_err(|e| RdlpError::Network { message: format!("HEAD request failed: {e}"), url: Some(url.clone()) })
             }
         })
         .await?;
@@ -278,29 +276,32 @@ impl Downloader for HttpDownloader {
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
             let client = self.client.clone();
-            let url_string = url.to_string();
+            let url_string: Arc<str> = Arc::from(url);
             let hdrs = self.headers();
 
             let response = with_retry(&self.config.retry_config, "HTTP GET (resume)", || {
                 let client = client.clone();
-                let url = url_string.clone();
+                let url = Arc::clone(&url_string);
                 let hdrs = hdrs.clone();
                 async move {
                     let response = client
-                        .get(&url)
+                        .get(url.as_ref())
                         .headers(hdrs)
                         .header("Range", format!("bytes={resume_from}-"))
                         .send()
                         .await
-                        .map_err(|e| RdlpError::Network(format!("Resume request failed: {e}")))?;
+                        .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(url.to_string()) })?;
 
                     if response.status().as_u16() != 206 {
-                        return Err(RdlpError::Download(format!(
-                            "Server does not support resume (expected HTTP 206, got {}). \
-                             Cannot continue download without overwriting existing data. \
-                             Please delete the partial file and restart the download.",
-                            response.status()
-                        )));
+                        return Err(RdlpError::Download {
+                            url: Some(url.to_string()),
+                            message: format!(
+                                "Server does not support resume (expected HTTP 206, got {}). \
+                                 Cannot continue download without overwriting existing data. \
+                                 Please delete the partial file and restart the download.",
+                                response.status()
+                            ),
+                        });
                     }
 
                     Ok(response)
@@ -377,15 +378,13 @@ impl Downloader for HttpDownloader {
 
             while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
                 .await
-                .map_err(|_| {
-                    RdlpError::Network(format!(
-                        "Read timed out (no data for {}s)",
-                        read_timeout.as_secs()
-                    ))
+                .map_err(|_| RdlpError::Network {
+                    message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
+                    url: Some(url_string.to_string()),
                 })?
             {
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network(format!("Failed to read chunk: {e}")))?;
+                    .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url_string.to_string()) })?;
 
                 writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
                 downloaded += chunk.len() as u64;
@@ -423,11 +422,9 @@ impl Downloader for HttpDownloader {
             Ok(stats)
         })
         .await
-        .map_err(|_| {
-            RdlpError::Download(format!(
-                "Download timed out after {}s",
-                timeout.as_secs()
-            ))
+        .map_err(|_| RdlpError::Download {
+            message: format!("Download timed out after {}s", timeout.as_secs()),
+            url: Some(url.to_string()),
         })?
     }
 }

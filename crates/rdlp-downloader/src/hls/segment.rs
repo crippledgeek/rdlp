@@ -70,11 +70,11 @@ pub(crate) async fn download_segment_with_retry(
                 .await
                 .map_err(|e| {
                     if e.is_timeout() {
-                        RdlpError::Network(format!("Segment {idx} timeout"))
+                        RdlpError::Network { message: format!("Segment {idx} timeout"), url: Some(url.to_string()) }
                     } else if e.is_connect() {
-                        RdlpError::Network(format!("Segment {idx} connection failed"))
+                        RdlpError::Network { message: format!("Segment {idx} connection failed"), url: Some(url.to_string()) }
                     } else {
-                        RdlpError::Network(format!("Segment {idx} request failed: {e}"))
+                        RdlpError::Network { message: format!("Segment {idx} request failed: {e}"), url: Some(url.to_string()) }
                     }
                 })?;
 
@@ -93,7 +93,7 @@ pub(crate) async fn download_segment_with_retry(
 
             while let Some(chunk_result) = stream.next().await {
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network(format!("Segment {idx} read error: {e}")))?;
+                    .map_err(|e| RdlpError::Network { message: format!("Segment {idx} read error: {e}"), url: Some(url.to_string()) })?;
 
                 writer.write_all(&chunk).await.map_err(RdlpError::Io)?;
                 downloaded += chunk.len() as u64;
@@ -159,7 +159,7 @@ pub(crate) async fn download_init_segment(
             let response = req
                 .send()
                 .await
-                .map_err(|e| RdlpError::Network(format!("Init segment request failed: {e}")))?;
+                .map_err(|e| RdlpError::Network { message: format!("Init segment request failed: {e}"), url: Some(url.to_string()) })?;
 
             if !response.status().is_success() {
                 return Err(RdlpError::Http {
@@ -171,7 +171,7 @@ pub(crate) async fn download_init_segment(
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| RdlpError::Network(format!("Init segment read error: {e}")))?;
+                .map_err(|e| RdlpError::Network { message: format!("Init segment read error: {e}"), url: Some(url.to_string()) })?;
 
             tokio::fs::write(&*dest, &bytes)
                 .await
