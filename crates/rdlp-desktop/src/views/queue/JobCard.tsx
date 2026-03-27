@@ -1,5 +1,6 @@
 // JobCard: single job in the queue list.
 // Shows thumbnail, title, status badge, progress bar, speed/ETA, action buttons.
+// Compact mode (72px) used within playlist groups: no URL, episode title prominent.
 
 import { useStore } from "@tanstack/react-store";
 import { X, RotateCcw, FolderOpen } from "lucide-react";
@@ -12,9 +13,11 @@ import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
     job: DownloadJob;
+    /** Compact mode for playlist group members: 72px height, no URL, left border accent. */
+    compact?: boolean;
 }
 
-export function JobCard({ job }: JobCardProps) {
+export function JobCard({ job, compact = false }: JobCardProps) {
     const selectedJobId = useStore(uiStore, (s) => s.selectedJobId);
     const isSelected = selectedJobId === job.id;
     const isRunning = job.status === "running";
@@ -41,22 +44,34 @@ export function JobCard({ job }: JobCardProps) {
         await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
     }
 
+    // Episode label for compact mode (e.g. "Ep 3 — Episode Title")
+    const compactTitle = compact && job.playlist
+        ? `Ep ${job.playlist.playlistIndex} — ${job.title ?? "Untitled"}`
+        : (job.title ?? job.url);
+
     return (
         <div
             onClick={() => setSelectedJob(job.id)}
             className={cn(
-                "flex gap-3 p-3 rounded-[6px] cursor-pointer transition-colors border",
+                "flex gap-3 rounded-[6px] cursor-pointer transition-colors border",
+                compact
+                    ? "p-2 border-l-2 border-l-[#4a9eff]"
+                    : "p-3",
                 isSelected
                     ? "bg-[#0f1a2e] border-[#2a3a5a]"
                     : "bg-[var(--surface-elevated)] border-[#1a1a2e] hover:border-[#2a2a3e]",
+                compact && !isSelected && "border-t-[#1a1a2e] border-r-[#1a1a2e] border-b-[#1a1a2e]",
             )}
         >
             {/* Main content */}
-            <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+            <div className="flex-1 min-w-0 flex flex-col gap-1">
                 {/* Title + status */}
                 <div className="flex items-start gap-2">
-                    <p className="flex-1 min-w-0 text-[13px] font-medium text-[#eeeeee] truncate leading-snug">
-                        {job.title ?? job.url}
+                    <p className={cn(
+                        "flex-1 min-w-0 font-medium text-[#eeeeee] truncate leading-snug",
+                        compact ? "text-[12px]" : "text-[13px]",
+                    )}>
+                        {compactTitle}
                     </p>
                     <StatusBadge status={job.status} className="shrink-0 mt-0.5" />
                 </div>
@@ -86,8 +101,8 @@ export function JobCard({ job }: JobCardProps) {
                     <p className="text-[11px] text-[#e85858] truncate">{job.error}</p>
                 )}
 
-                {/* Output path for completed */}
-                {isCompleted && job.output_path && (
+                {/* Output path for completed (hidden in compact mode) */}
+                {!compact && isCompleted && job.output_path && (
                     <p className="text-[10px] text-[#666666] truncate">{job.output_path}</p>
                 )}
             </div>
