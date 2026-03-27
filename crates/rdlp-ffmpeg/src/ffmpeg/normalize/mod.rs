@@ -68,7 +68,7 @@ impl FFmpegRunner {
                 let _ = std::fs::remove_file(temp);
             }
 
-            result
+            Ok(result?)
         })
         .await
     }
@@ -79,7 +79,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let analysis = Self::analyze_peak_sync(input, opts.target_peak_db)?;
 
         debug!(
@@ -115,7 +115,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         info!("Loudnorm pass 1: analyzing EBU R128 levels...");
         let measurements = Self::loudnorm_pass1_sync(input, opts)?;
 
@@ -182,7 +182,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
         let limit_linear = 10f64.powf(ceiling_db / 20.0);
         debug!(

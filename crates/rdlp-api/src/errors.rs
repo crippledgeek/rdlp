@@ -243,6 +243,9 @@ impl From<OrchestratorError> for RdlpApiError {
             OrchestratorError::InteractiveNotConfigured => Self::InvalidInput {
                 message: "Interactive selection not configured".into(),
             },
+            OrchestratorError::Other(e) => Self::Soft {
+                message: format!("{e:#}"),
+            },
         }
     }
 }
@@ -516,6 +519,33 @@ mod tests {
             }
             other => panic!("Expected NetworkError, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_anyhow_converts_to_orchestrator_other() {
+        let anyhow_err = anyhow::anyhow!("inner").context("outer");
+        let orch_err: OrchestratorError = anyhow_err.into();
+        assert!(matches!(orch_err, OrchestratorError::Other(_)));
+        assert!(orch_err.to_string().contains("outer"));
+    }
+
+    #[test]
+    fn test_orchestrator_other_converts_to_api_error() {
+        let anyhow_err = anyhow::anyhow!("root cause").context("operation failed");
+        let orch_err: OrchestratorError = anyhow_err.into();
+        let api_err: RdlpApiError = orch_err.into();
+        assert!(matches!(api_err, RdlpApiError::Soft { .. }));
+        let msg = api_err.to_string();
+        assert!(msg.contains("operation failed"), "msg: {msg}");
+        assert!(msg.contains("root cause"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_orchestrator_other_not_reextractable() {
+        use crate::orchestrator::errors::is_reextractable_error;
+        let anyhow_err = anyhow::anyhow!("something");
+        let orch_err: OrchestratorError = anyhow_err.into();
+        assert!(!is_reextractable_error(&orch_err));
     }
 
     #[test]

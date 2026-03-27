@@ -11,6 +11,7 @@ mod mkv_raw_ffi;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use rdlp_core::PostProcessCallback;
 
 use crate::error::{PostProcessError, Result};
@@ -39,8 +40,14 @@ impl FFmpegRunner {
         let thumbnail = thumbnail.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let container = container.to_string();
-        Self::spawn_blocking("embed_thumbnail", move || {
-            Self::embed_thumbnail_sync(&media, &thumbnail, &output, &container, callback.as_deref())
+        Self::spawn_blocking("embed_thumbnail", move || -> Result<()> {
+            Ok(Self::embed_thumbnail_sync(
+                &media,
+                &thumbnail,
+                &output,
+                &container,
+                callback.as_deref(),
+            )?)
         })
         .await
     }
@@ -58,7 +65,7 @@ impl FFmpegRunner {
         output: &Path,
         container: &str,
         callback: Option<&dyn PostProcessCallback>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // When a callback is provided, capture FFmpeg logs and forward them;
@@ -80,29 +87,23 @@ impl FFmpegRunner {
             let result = Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output);
             // Forward captured logs before returning
             Self::forward_captured_logs(&capture, callback);
-            return result;
+            return Ok(result?);
         }
 
         // Open media input
-        let mut ictx = ffmpeg_the_third::format::input(media).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open media input {}: {e}", media.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(media)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open media input for thumbnail embed {}", media.display()))?;
 
         // Open thumbnail input
-        let mut thumb_ictx = ffmpeg_the_third::format::input(thumbnail).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open thumbnail {}: {e}", thumbnail.display()),
-            }
-        })?;
+        let mut thumb_ictx = ffmpeg_the_third::format::input(thumbnail)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open thumbnail {}", thumbnail.display()))?;
 
         // Create output
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to create output for thumbnail embed {}", output.display()))?;
 
         let is_mp3 = container.eq_ignore_ascii_case("mp3");
 
@@ -135,9 +136,8 @@ impl FFmpegRunner {
                 .add_stream(ffmpeg_the_third::encoder::find(
                     ffmpeg_the_third::codec::Id::None,
                 ))
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to add output stream: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("failed to add output stream for thumbnail embed")?;
             ost.set_parameters(ist.parameters());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
@@ -158,9 +158,8 @@ impl FFmpegRunner {
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
             ))
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add thumbnail stream: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to add thumbnail stream")?;
         let thumb_ost_index = ost.index();
         ost.set_parameters(thumb_params);
         // SAFETY: ost is a valid output stream in a live output context.
@@ -191,9 +190,8 @@ impl FFmpegRunner {
 
         // Write header with options
         octx.write_header_with(dict)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for thumbnail embed")?;
 
         // For FLAC/OGG/Opus: write thumbnail packets BEFORE media packets.
         // These formats store picture metadata in the file header (METADATA_BLOCK_PICTURE
@@ -215,10 +213,9 @@ impl FFmpegRunner {
 
         // Copy media packets
         for result in ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read media packet: {e}"),
-                })?;
+            let (stream, mut packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read media packet during thumbnail embed")?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
@@ -234,11 +231,10 @@ impl FFmpegRunner {
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
             packet.set_stream(ost_idx);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write media packet: {e}"),
-                }
-            })?;
+            packet
+                .write_interleaved(&mut octx)
+                .map_err(PostProcessError::from)
+                .context("failed to write media packet during thumbnail embed")?;
         }
 
         // Copy thumbnail packet(s) for formats that don't need them in the header.
@@ -254,9 +250,8 @@ impl FFmpegRunner {
         }
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for thumbnail embed")?;
 
         // Forward captured FFmpeg logs to the callback
         Self::forward_captured_logs(&capture, callback);

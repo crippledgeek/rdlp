@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::PostProcessCallback;
 
@@ -33,8 +34,14 @@ impl FFmpegRunner {
         let output = output.as_ref().to_path_buf();
         let metadata = metadata.clone();
         let chapters = chapters.to_vec();
-        Self::spawn_blocking("embed_metadata", move || {
-            Self::embed_metadata_sync(&input, &output, &metadata, &chapters, callback.as_deref())
+        Self::spawn_blocking("embed_metadata", move || -> Result<()> {
+            Ok(Self::embed_metadata_sync(
+                &input,
+                &output,
+                &metadata,
+                &chapters,
+                callback.as_deref(),
+            )?)
         })
         .await
     }
@@ -50,7 +57,7 @@ impl FFmpegRunner {
         metadata: &HashMap<String, String>,
         chapters: &[ChapterEntry],
         callback: Option<&dyn PostProcessCallback>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         ensure_init()?;
 
         // When a callback is provided, capture FFmpeg logs and forward them;
@@ -66,17 +73,13 @@ impl FFmpegRunner {
             None
         };
 
-        let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open input {}: {e}", input.display()),
-            }
-        })?;
+        let mut ictx = ffmpeg_the_third::format::input(input)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open input for metadata embed {}", input.display()))?;
 
-        let mut octx = ffmpeg_the_third::format::output(output).map_err(|e| {
-            PostProcessError::FFmpegLibraryError {
-                message: format!("failed to create output {}: {e}", output.display()),
-            }
-        })?;
+        let mut octx = ffmpeg_the_third::format::output(output)
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to open output for metadata embed {}", output.display()))?;
 
         // Map all streams (stream copy)
         let stream_count = ictx.streams().count();
@@ -101,9 +104,8 @@ impl FFmpegRunner {
                 .add_stream(ffmpeg_the_third::encoder::find(
                     ffmpeg_the_third::codec::Id::None,
                 ))
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to add output stream: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("failed to add output stream for metadata embed")?;
             ost.set_parameters(ist.parameters());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
@@ -132,9 +134,8 @@ impl FFmpegRunner {
                 ch.end_ms,
                 &ch.title,
             )
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add chapter '{}': {e}", ch.title),
-            })?;
+            .map_err(PostProcessError::from)
+            .with_context(|| format!("failed to add chapter '{}'", ch.title))?;
         }
 
         // Build muxer options dictionary
@@ -151,16 +152,14 @@ impl FFmpegRunner {
 
         // Write header with options
         octx.write_header_with(dict)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output header: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output header for metadata embed")?;
 
         // Copy packets
         for result in ictx.packets() {
-            let (stream, mut packet) =
-                result.map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to read packet: {e}"),
-                })?;
+            let (stream, mut packet) = result
+                .map_err(PostProcessError::from)
+                .context("failed to read packet during metadata embed")?;
             let ist_index = stream.index();
             let ost_idx = stream_mapping[ist_index];
             if ost_idx < 0 {
@@ -176,17 +175,15 @@ impl FFmpegRunner {
             packet.rescale_ts(ist_time_bases[ist_index], ost_time_base);
             packet.set_position(-1);
             packet.set_stream(ost_idx);
-            packet.write_interleaved(&mut octx).map_err(|e| {
-                PostProcessError::FFmpegLibraryError {
-                    message: format!("failed to write packet: {e}"),
-                }
-            })?;
+            packet
+                .write_interleaved(&mut octx)
+                .map_err(PostProcessError::from)
+                .context("failed to write packet during metadata embed")?;
         }
 
         octx.write_trailer()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to write output trailer: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("failed to write output trailer for metadata embed")?;
 
         // Forward captured FFmpeg logs to the callback
         if let (Some(guard), Some(cb)) = (&capture, callback)

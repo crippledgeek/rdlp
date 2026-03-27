@@ -7,6 +7,7 @@
 use std::ffi::CStr;
 use std::path::Path;
 
+use anyhow::Context as _;
 use log::{debug, warn};
 
 use crate::error::{PostProcessError, Result};
@@ -35,14 +36,12 @@ pub(super) fn run_analysis_decode_loop(
         &mut ffmpeg_the_third::filter::Graph,
         &mut ffmpeg_the_third::frame::Audio,
     ) -> Result<()>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     ensure_init()?;
 
-    let mut ictx = ffmpeg_the_third::format::input(input).map_err(|e| {
-        PostProcessError::FFmpegLibraryError {
-            message: format!("failed to open input {}: {e}", input.display()),
-        }
-    })?;
+    let mut ictx = ffmpeg_the_third::format::input(input)
+        .map_err(PostProcessError::from)
+        .with_context(|| format!("failed to open input for analysis {}", input.display()))?;
 
     let ist_index = ictx
         .streams()
@@ -58,17 +57,14 @@ pub(super) fn run_analysis_decode_loop(
     let mut decoder_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(
         ist.parameters(),
     )
-    .map_err(|e| PostProcessError::FFmpegLibraryError {
-        message: format!("failed to create decoder context: {e}"),
-    })?;
+    .map_err(PostProcessError::from)
+    .context("failed to create decoder context for analysis")?;
     set_single_thread_codec(unsafe { decoder_ctx.as_mut_ptr() });
-    let mut decoder =
-        decoder_ctx
-            .decoder()
-            .audio()
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to open audio decoder: {e}"),
-            })?;
+    let mut decoder = decoder_ctx
+        .decoder()
+        .audio()
+        .map_err(PostProcessError::from)
+        .context("failed to open audio decoder for analysis")?;
 
     debug!(
         "[{label}] decoder: rate={}, fmt={}, ch_layout={}, time_base={}/{}",
@@ -94,9 +90,8 @@ pub(super) fn run_analysis_decode_loop(
     )?;
     graph
         .add(&abuffersink, "out", "")
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to add abuffersink filter: {e}"),
-        })?;
+        .map_err(PostProcessError::from)
+        .context("failed to add abuffersink filter for analysis")?;
 
     FFmpegRunner::parse_and_validate_filter_graph(&mut graph, "in", "out", filter_spec)?;
 
@@ -112,9 +107,9 @@ pub(super) fn run_analysis_decode_loop(
     let _log_suppress = LogSuppressGuard::new();
 
     for result in ictx.packets() {
-        let (stream, packet) = result.map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to read packet: {e}"),
-        })?;
+        let (stream, packet) = result
+            .map_err(PostProcessError::from)
+            .context("failed to read packet during analysis")?;
         if stream.index() != ist_index {
             continue;
         }
@@ -132,9 +127,8 @@ pub(super) fn run_analysis_decode_loop(
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
                 .source()
                 .add(&frame)
-                .map_err(|e| PostProcessError::FFmpegLibraryError {
-                    message: format!("filter source add frame failed: {e}"),
-                })?;
+                .map_err(PostProcessError::from)
+                .context("filter source add frame failed")?;
             frame_unref_audio(&mut frame);
 
             on_drain(&mut graph, &mut filtered)?;
@@ -155,9 +149,8 @@ pub(super) fn run_analysis_decode_loop(
             .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
             .source()
             .add(&frame)
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("filter source add frame (flush) failed: {e}"),
-            })?;
+            .map_err(PostProcessError::from)
+            .context("filter source add frame (flush) failed")?;
         frame_unref_audio(&mut frame);
 
         on_drain(&mut graph, &mut filtered)?;
@@ -169,9 +162,8 @@ pub(super) fn run_analysis_decode_loop(
         .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
         .source()
         .flush()
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("filter source flush failed: {e}"),
-        })?;
+        .map_err(PostProcessError::from)
+        .context("filter source flush failed")?;
     on_drain(&mut graph, &mut filtered)?;
 
     Ok(())
@@ -257,7 +249,7 @@ pub(super) fn read_frame_metadata(
 
 impl FFmpegRunner {
     /// Analyze peak and RMS levels using `astats` filter with frame metadata.
-    pub(super) fn analyze_peak_sync(input: &Path, target_peak_db: f64) -> Result<PeakAnalysis> {
+    pub(super) fn analyze_peak_sync(input: &Path, target_peak_db: f64) -> anyhow::Result<PeakAnalysis> {
         let mut peak_db = f64::NEG_INFINITY;
         let mut rms_db = f64::NEG_INFINITY;
 
@@ -276,7 +268,8 @@ impl FFmpegRunner {
         if peak_db == f64::NEG_INFINITY {
             return Err(PostProcessError::NormalizationFailed {
                 message: "could not determine peak level from astats metadata".into(),
-            });
+            }
+            .into());
         }
 
         let gain_db = target_peak_db - peak_db;
@@ -292,7 +285,7 @@ impl FFmpegRunner {
     pub(super) fn loudnorm_pass1_sync(
         input: &Path,
         opts: &NormalizeOptions,
-    ) -> Result<LoudnormMeasurements> {
+    ) -> anyhow::Result<LoudnormMeasurements> {
         let guard = begin_loudnorm_capture()?;
 
         // loudnorm only supports AV_SAMPLE_FMT_DBL; explicitly convert from
@@ -318,7 +311,7 @@ impl FFmpegRunner {
 
         debug!("Captured {} log lines from loudnorm pass 1", lines.len());
 
-        parse_loudnorm_json(&lines)
+        Ok(parse_loudnorm_json(&lines)?)
     }
 
     /// Post-normalization loudness verification.
@@ -326,7 +319,7 @@ impl FFmpegRunner {
     /// Runs loudnorm pass 1 on the **output** file and compares measured
     /// levels against targets. Warns on significant deviations but does
     /// not fail — the output is already written.
-    pub(super) fn verify_loudness_sync(output: &Path, opts: &NormalizeOptions) -> Result<()> {
+    pub(super) fn verify_loudness_sync(output: &Path, opts: &NormalizeOptions) -> anyhow::Result<()> {
         debug!("Loudness verification: analyzing output...");
         match Self::loudnorm_pass1_sync(output, opts) {
             Ok(measured) => {

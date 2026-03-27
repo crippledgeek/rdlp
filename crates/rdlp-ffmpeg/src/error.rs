@@ -143,6 +143,10 @@ pub enum PostProcessError {
     /// Salvage remux failed — input too corrupt to recover.
     #[error("Input corrupt and salvage failed: {message}")]
     SalvageFailed { message: String },
+
+    /// Catch-all for errors with context chains from internal operations.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 impl PostProcessError {
@@ -404,5 +408,48 @@ mod tests {
 
         let no_audio = PostProcessError::NoAudioStream;
         assert!(!no_audio.is_salvage_retryable());
+    }
+
+    #[test]
+    fn test_anyhow_converts_to_postprocess_other() {
+        let anyhow_err = anyhow::anyhow!("inner problem").context("outer context");
+        let pp_err: PostProcessError = anyhow_err.into();
+        assert!(matches!(pp_err, PostProcessError::Other(_)));
+        let msg = pp_err.to_string();
+        assert!(msg.contains("outer context"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_postprocess_other_not_mux_write() {
+        let err: PostProcessError = anyhow::anyhow!("something").into();
+        assert!(!err.is_mux_write_error());
+    }
+
+    #[test]
+    fn test_postprocess_other_not_salvage_retryable() {
+        let err: PostProcessError = anyhow::anyhow!("something").into();
+        assert!(!err.is_salvage_retryable());
+        assert!(!err.is_enomem());
+        assert!(!err.is_eio());
+        assert!(!err.is_stall());
+    }
+
+    #[test]
+    fn test_postprocess_other_converts_to_rdlp_error() {
+        let err: PostProcessError = anyhow::anyhow!("ctx problem").into();
+        let rdlp_err: RdlpError = err.into();
+        assert!(matches!(rdlp_err, RdlpError::PostProcess(_)));
+        assert!(rdlp_err.to_string().contains("ctx problem"));
+    }
+
+    #[test]
+    fn test_ffmpeg_error_preserved_through_context() {
+        let pp_err = PostProcessError::FFmpegLibraryError {
+            message: "codec not found".into(),
+        };
+        let anyhow_err = anyhow::Error::from(pp_err).context("failed to open input");
+        let msg = format!("{anyhow_err:#}");
+        assert!(msg.contains("failed to open input"), "msg: {msg}");
+        assert!(msg.contains("codec not found"), "msg: {msg}");
     }
 }

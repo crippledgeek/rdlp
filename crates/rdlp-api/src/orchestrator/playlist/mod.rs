@@ -11,6 +11,7 @@ mod resume;
 #[cfg(test)]
 mod tests;
 
+use anyhow::Context;
 use super::errors::is_reextractable_error;
 use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
 use super::{DownloadPlan, Orchestrator, OrchestratorError, Result, archive};
@@ -315,12 +316,13 @@ impl Orchestrator {
         if !playlist_dir.exists() {
             tokio::fs::create_dir_all(&playlist_dir)
                 .await
-                .map_err(|e| {
-                    OrchestratorError::IoError(format!(
-                        "Failed to create playlist folder '{}': {e}",
+                .with_context(|| {
+                    format!(
+                        "failed to create playlist folder '{}'",
                         playlist_dir.display()
-                    ))
-                })?;
+                    )
+                })
+                .map_err(OrchestratorError::Other)?;
             debug!(path:? = playlist_dir.display(); "Created folder");
         }
 
