@@ -133,6 +133,7 @@ impl FFmpegRunner {
             dict.set(k, v);
         }
 
+        dict.set("encoding_tool", &crate::ffmpeg::encoding_tag::encoding_tool_tag("metadata"));
         octx.set_metadata(dict);
 
         // Add chapters (time_base = 1/1000 for millisecond precision)

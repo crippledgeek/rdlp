@@ -398,6 +398,12 @@ impl FFmpegRunner {
                 }
             }
 
+            // Set encoding_tool metadata
+            let et_key = CString::new("encoding_tool").expect("static string");
+            let et_val = CString::new(crate::ffmpeg::encoding_tag::encoding_tool_tag("remux"))
+                .expect("no null bytes in version string");
+            ffi::av_dict_set(&mut (*ofmt_ctx).metadata, et_key.as_ptr(), et_val.as_ptr(), 0);
+
             // 6. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
             let key = CString::new("cluster_time_limit").expect("static string has no null bytes");

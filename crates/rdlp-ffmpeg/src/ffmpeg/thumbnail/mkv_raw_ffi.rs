@@ -284,6 +284,12 @@ impl FFmpegRunner {
                 });
             }
 
+            // Set encoding_tool metadata
+            let et_key = CString::new("encoding_tool").expect("static string");
+            let et_val = CString::new(crate::ffmpeg::encoding_tag::encoding_tool_tag("thumbnail"))
+                .expect("no null bytes in version string");
+            ffi::av_dict_set(&mut (*ofmt_ctx).metadata, et_key.as_ptr(), et_val.as_ptr(), 0);
+
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {
                 if !(*ofmt_ctx).pb.is_null() {
