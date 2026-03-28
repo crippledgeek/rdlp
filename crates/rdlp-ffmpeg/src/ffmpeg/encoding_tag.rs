@@ -39,9 +39,8 @@ pub(crate) fn set_encoding_tool_if_missing(
     octx: &mut ffmpeg_the_third::format::context::Output,
     components: &str,
 ) {
-    let meta = octx.metadata();
-    if meta.get("encoding_tool").is_none() {
-        drop(meta);
+    let has_tag = octx.metadata().get("encoding_tool").is_some();
+    if !has_tag {
         set_encoding_tool(octx, components);
     }
 }
