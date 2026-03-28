@@ -57,7 +57,9 @@ impl FFmpegRunner {
         } else {
             ffmpeg_the_third::format::input(input)
                 .map_err(PostProcessError::from)
-                .with_context(|| format!("failed to open input for audio encode {}", input.display()))?
+                .with_context(|| {
+                    format!("failed to open input for audio encode {}", input.display())
+                })?
         };
 
         // Read the format-level start_time and duration (in AV_TIME_BASE = µs) before
@@ -90,7 +92,12 @@ impl FFmpegRunner {
 
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to create output for audio encode {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output for audio encode {}",
+                    output.display()
+                )
+            })?;
 
         let enc_name = select_audio_encoder_for_container(final_output_ext);
         let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
@@ -108,10 +115,10 @@ impl FFmpegRunner {
         let audio_ost_index;
         let audio_enc_context;
         {
-            let ost =
-                octx.add_stream(enc_codec)
-                    .map_err(PostProcessError::from)
-                    .context("failed to add audio output stream for encode")?;
+            let ost = octx
+                .add_stream(enc_codec)
+                .map_err(PostProcessError::from)
+                .context("failed to add audio output stream for encode")?;
             audio_ost_index = ost.index();
             audio_enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -163,11 +170,10 @@ impl FFmpegRunner {
             debug!("[{label}] libfdk_aac: afterburner enabled");
         }
 
-        let mut audio_encoder =
-            audio_encoder
-                .open_as(enc_codec)
-                .map_err(PostProcessError::from)
-                .context("failed to open audio encoder")?;
+        let mut audio_encoder = audio_encoder
+            .open_as(enc_codec)
+            .map_err(PostProcessError::from)
+            .context("failed to open audio encoder")?;
 
         let enc_time_base = unsafe {
             let tb = (*audio_encoder.as_ptr()).time_base;
@@ -189,6 +195,25 @@ impl FFmpegRunner {
             (*ctx).avoid_negative_ts = ffmpeg_the_third::ffi::AVFMT_AVOID_NEG_TS_MAKE_NON_NEGATIVE;
             (*ctx).flags |= ffmpeg_the_third::ffi::AVFMT_FLAG_FLUSH_PACKETS;
             (*ctx).max_interleave_delta = 0;
+        }
+
+        // Set format-level encoding_tool metadata
+        {
+            let mut format_meta = octx.metadata().to_owned();
+            format_meta.set(
+                "encoding_tool",
+                &crate::ffmpeg::encoding_tag::encoding_tool_tag(enc_name),
+            );
+            octx.set_metadata(format_meta);
+        }
+
+        // Set per-stream encoder tag on audio output stream
+        {
+            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
+            stream_dict.set("encoder", enc_name);
+            octx.stream_mut(audio_ost_index)
+                .expect("audio output stream exists")
+                .set_metadata(stream_dict);
         }
 
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
