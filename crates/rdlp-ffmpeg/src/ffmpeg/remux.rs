@@ -30,7 +30,12 @@ impl FFmpegRunner {
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
         Self::spawn_blocking("remux", move || -> Result<()> {
-            Ok(Self::remux_sync(&input, &output, &opts, progress_fn.as_deref())?)
+            Ok(Self::remux_sync(
+                &input,
+                &output,
+                &opts,
+                progress_fn.as_deref(),
+            )?)
         })
         .await
     }
@@ -126,8 +131,13 @@ impl FFmpegRunner {
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 
-        // Copy format-level metadata
-        octx.set_metadata(ictx.metadata().to_owned());
+        // Copy format-level metadata and add encoding_tool tag
+        let mut format_meta = ictx.metadata().to_owned();
+        format_meta.set(
+            "encoding_tool",
+            &super::encoding_tag::encoding_tool_tag("remux"),
+        );
+        octx.set_metadata(format_meta);
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
