@@ -368,23 +368,13 @@ impl FFmpegRunner {
                         (false, false) => break,
                         (true, false) => {
                             bytes_written += (*vpkt).size as u64;
-                            rescale_and_write_raw(
-                                vpkt,
-                                in_video_stream,
-                                ofmt_ctx,
-                                video_out_idx,
-                            )?;
+                            rescale_and_write_raw(vpkt, in_video_stream, ofmt_ctx, video_out_idx)?;
                             ffi::av_packet_unref(vpkt);
                             have_video = read_next_raw(ifmt_video, video_stream_idx, vpkt);
                         }
                         (false, true) => {
                             bytes_written += (*apkt).size as u64;
-                            rescale_and_write_raw(
-                                apkt,
-                                in_audio_stream,
-                                ofmt_ctx,
-                                audio_out_idx,
-                            )?;
+                            rescale_and_write_raw(apkt, in_audio_stream, ofmt_ctx, audio_out_idx)?;
                             ffi::av_packet_unref(apkt);
                             have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);
                         }

@@ -54,11 +54,10 @@ pub(super) fn run_analysis_decode_loop(
     })?;
     let ist_time_base = ist.time_base();
 
-    let mut decoder_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(
-        ist.parameters(),
-    )
-    .map_err(PostProcessError::from)
-    .context("failed to create decoder context for analysis")?;
+    let mut decoder_ctx =
+        ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())
+            .map_err(PostProcessError::from)
+            .context("failed to create decoder context for analysis")?;
     set_single_thread_codec(unsafe { decoder_ctx.as_mut_ptr() });
     let mut decoder = decoder_ctx
         .decoder()
@@ -249,7 +248,10 @@ pub(super) fn read_frame_metadata(
 
 impl FFmpegRunner {
     /// Analyze peak and RMS levels using `astats` filter with frame metadata.
-    pub(super) fn analyze_peak_sync(input: &Path, target_peak_db: f64) -> anyhow::Result<PeakAnalysis> {
+    pub(super) fn analyze_peak_sync(
+        input: &Path,
+        target_peak_db: f64,
+    ) -> anyhow::Result<PeakAnalysis> {
         let mut peak_db = f64::NEG_INFINITY;
         let mut rms_db = f64::NEG_INFINITY;
 
@@ -319,7 +321,10 @@ impl FFmpegRunner {
     /// Runs loudnorm pass 1 on the **output** file and compares measured
     /// levels against targets. Warns on significant deviations but does
     /// not fail — the output is already written.
-    pub(super) fn verify_loudness_sync(output: &Path, opts: &NormalizeOptions) -> anyhow::Result<()> {
+    pub(super) fn verify_loudness_sync(
+        output: &Path,
+        opts: &NormalizeOptions,
+    ) -> anyhow::Result<()> {
         debug!("Loudness verification: analyzing output...");
         match Self::loudnorm_pass1_sync(output, opts) {
             Ok(measured) => {
