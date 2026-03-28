@@ -288,7 +288,7 @@ impl FFmpegRunner {
             }
 
             // Set encoding_tool metadata
-            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, "thumbnail");
+            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "thumbnail");
 
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {

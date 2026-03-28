@@ -18,6 +18,9 @@ pub(crate) fn encoding_tool_tag(components: &str) -> String {
 }
 
 /// Set the `encoding_tool` format-level tag on a high-level output context.
+///
+/// Unconditionally sets the tag. Use for stages that create content
+/// (recode, audio extract, normalize).
 pub(crate) fn set_encoding_tool(
     octx: &mut ffmpeg_the_third::format::context::Output,
     components: &str,
@@ -27,7 +30,25 @@ pub(crate) fn set_encoding_tool(
     octx.set_metadata(meta);
 }
 
+/// Set the `encoding_tool` format-level tag only if the output context
+/// doesn't already have one (inherited from input metadata copy).
+///
+/// Use for pass-through stages (remux, merge, metadata embed, thumbnail
+/// embed, salvage) that should preserve the primary stage's tag.
+pub(crate) fn set_encoding_tool_if_missing(
+    octx: &mut ffmpeg_the_third::format::context::Output,
+    components: &str,
+) {
+    let meta = octx.metadata();
+    if meta.get("encoding_tool").is_none() {
+        drop(meta);
+        set_encoding_tool(octx, components);
+    }
+}
+
 /// Set the `encoding_tool` format-level tag on a raw FFI output context.
+///
+/// Unconditionally sets the tag. Use for stages that create content.
 ///
 /// # Safety
 ///
@@ -45,6 +66,30 @@ pub(crate) unsafe fn set_encoding_tool_ffi(
             val.as_ptr(),
             0,
         );
+    }
+}
+
+/// Set the `encoding_tool` tag on a raw FFI output context only if not
+/// already present (inherited from input via `av_dict_copy`).
+///
+/// # Safety
+///
+/// `ofmt_ctx` must be a valid, non-null `AVFormatContext` pointer.
+pub(crate) unsafe fn set_encoding_tool_ffi_if_missing(
+    ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
+    components: &str,
+) {
+    let key = CString::new("encoding_tool").expect("static string");
+    unsafe {
+        let existing = ffmpeg_the_third::ffi::av_dict_get(
+            (*ofmt_ctx).metadata,
+            key.as_ptr(),
+            std::ptr::null(),
+            0,
+        );
+        if existing.is_null() {
+            set_encoding_tool_ffi(ofmt_ctx, components);
+        }
     }
 }
 

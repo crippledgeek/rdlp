@@ -134,7 +134,7 @@ impl FFmpegRunner {
 
         // Copy format-level metadata and add encoding_tool tag
         octx.set_metadata(ictx.metadata().to_owned());
-        super::encoding_tag::set_encoding_tool(&mut octx, "remux");
+        super::encoding_tag::set_encoding_tool_if_missing(&mut octx, "remux");
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
@@ -405,7 +405,7 @@ impl FFmpegRunner {
             // value, otherwise it falls back to LIBAVFORMAT_IDENT. Setting
             // encoding_tool before init ensures it survives the metadata
             // conversion pass.
-            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, "remux");
+            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "remux");
 
             // 7. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();

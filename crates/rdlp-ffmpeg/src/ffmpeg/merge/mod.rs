@@ -166,7 +166,7 @@ impl FFmpegRunner {
         }
 
         // Set format-level encoding_tool metadata
-        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "merge");
+        crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "merge");
 
         // Write header with options
         octx.write_header_with(dict)

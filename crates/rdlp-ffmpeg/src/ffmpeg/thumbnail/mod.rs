@@ -186,7 +186,7 @@ impl FFmpegRunner {
 
         // Copy format-level metadata from media input
         octx.set_metadata(ictx.metadata().to_owned());
-        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "thumbnail");
+        crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "thumbnail");
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
