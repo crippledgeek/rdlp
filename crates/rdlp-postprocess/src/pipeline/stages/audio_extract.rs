@@ -139,6 +139,17 @@ impl PipelineStage for AudioExtractStage {
             .await
             .context("audio extract stage failed")?;
 
+        // Capture the encoding_tool for downstream pass-through stages.
+        let encoder_display = if opts.copy {
+            "copy".to_string()
+        } else {
+            opts.encoder_name
+                .as_deref()
+                .unwrap_or(target_format)
+                .to_string()
+        };
+        msg.encoding_tool = Some(encoder_display);
+
         info!(
             "AudioExtractStage: audio extracted to {}",
             output_path.display()
@@ -179,6 +190,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 

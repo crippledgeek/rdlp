@@ -111,6 +111,7 @@ impl PipelineStage for MergeStage {
 
         let opts = RemuxOptions {
             faststart: matches!(output_format, "mp4" | "mov"),
+            encoding_tool_override: msg.encoding_tool.clone(),
             ..Default::default()
         };
 
@@ -165,6 +166,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 

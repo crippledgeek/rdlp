@@ -76,6 +76,7 @@ impl FFmpegRunner {
                 audio_input,
                 output,
                 progress_fn,
+                opts.encoding_tool_override.as_deref(),
             )?);
         }
 
@@ -166,7 +167,11 @@ impl FFmpegRunner {
         }
 
         // Set format-level encoding_tool metadata
-        crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "merge");
+        if let Some(ref override_tag) = opts.encoding_tool_override {
+            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, override_tag);
+        } else {
+            crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "merge");
+        }
 
         // Write header with options
         octx.write_header_with(dict)

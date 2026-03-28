@@ -26,6 +26,7 @@ impl FFmpegRunner {
         media: &std::path::Path,
         thumbnail: &std::path::Path,
         output: &std::path::Path,
+        encoding_tool_override: Option<&str>,
     ) -> Result<()> {
         debug!("MKV thumbnail embed as native Matroska attachment via raw FFI");
 
@@ -287,8 +288,15 @@ impl FFmpegRunner {
                 });
             }
 
-            // Set encoding_tool metadata
-            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "thumbnail");
+            // Copy format-level metadata from media input (preserves encoding_tool from prior stages)
+            ffi::av_dict_copy(&mut (*ofmt_ctx).metadata, (*media_ctx).metadata, 0);
+
+            // Set encoding_tool: use override if provided, otherwise fall back to "thumbnail"
+            if let Some(tag) = encoding_tool_override {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
+            } else {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "thumbnail");
+            }
 
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {

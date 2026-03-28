@@ -33,6 +33,7 @@ impl FFmpegRunner {
         audio_input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        encoding_tool_override: Option<&str>,
     ) -> Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
@@ -320,8 +321,15 @@ impl FFmpegRunner {
                 });
             }
 
-            // Set encoding_tool metadata
-            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "merge");
+            // Copy format-level metadata from video input (preserves encoding_tool from prior stages)
+            ffi::av_dict_copy(&mut (*ofmt_ctx).metadata, (*ifmt_video).metadata, 0);
+
+            // Set encoding_tool: use override if provided, otherwise fall back to "merge"
+            if let Some(tag) = encoding_tool_override {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
+            } else {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "merge");
+            }
 
             // 12. Write header
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());

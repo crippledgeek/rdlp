@@ -62,7 +62,12 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Self::remux_mkv_raw_ffi(input, output, progress_fn);
+            return Self::remux_mkv_raw_ffi(
+                input,
+                output,
+                progress_fn,
+                opts.encoding_tool_override.as_deref(),
+            );
         }
 
         let mut ictx = ffmpeg_the_third::format::input(input)
@@ -134,7 +139,11 @@ impl FFmpegRunner {
 
         // Copy format-level metadata and add encoding_tool tag
         octx.set_metadata(ictx.metadata().to_owned());
-        super::encoding_tag::set_encoding_tool_if_missing(&mut octx, "remux");
+        if let Some(ref override_tag) = opts.encoding_tool_override {
+            super::encoding_tag::set_encoding_tool(&mut octx, override_tag);
+        } else {
+            super::encoding_tag::set_encoding_tool_if_missing(&mut octx, "remux");
+        }
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
@@ -234,6 +243,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        encoding_tool_override: Option<&str>,
     ) -> anyhow::Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
@@ -398,14 +408,15 @@ impl FFmpegRunner {
                 }
             }
 
-            // 6. Set encoding_tool metadata BEFORE init_output.
-            // init_muxer (called by avformat_init_output) unconditionally sets
-            // "encoder" = LIBAVFORMAT_IDENT. The Matroska muxer's mkv_write_info
-            // checks "encoding_tool" for WritingApp — if present it uses our
-            // value, otherwise it falls back to LIBAVFORMAT_IDENT. Setting
-            // encoding_tool before init ensures it survives the metadata
-            // conversion pass.
-            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "remux");
+            // 6. Copy format-level metadata from input (preserves encoding_tool from prior stages)
+            ffi::av_dict_copy(&mut (*ofmt_ctx).metadata, (*ifmt_ctx).metadata, 0);
+
+            // Set encoding_tool: use override if provided, otherwise fall back to "remux"
+            if let Some(tag) = encoding_tool_override {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
+            } else {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "remux");
+            }
 
             // 7. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();

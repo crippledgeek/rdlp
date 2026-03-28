@@ -345,6 +345,19 @@ impl PipelineStage for RecodeStage {
             .await
             .context("recode stage failed")?;
 
+        // Capture the encoding_tool for downstream pass-through stages.
+        {
+            let audio_part = if let Some(ref ac) = opts.audio_codec {
+                ac.as_str()
+            } else if opts.audio_copy {
+                "copy"
+            } else {
+                "none"
+            };
+            let video_part = opts.video_codec.as_deref().unwrap_or("libx264");
+            msg.encoding_tool = Some(format!("{video_part} + {audio_part}"));
+        }
+
         if let Some(ref cb) = stage_callback {
             cb.on_log(&format!(
                 "Recode: complete → {}",
@@ -391,6 +404,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 

@@ -172,6 +172,7 @@ impl PipelineStage for MetadataStage {
                 &metadata,
                 &chapters,
                 log_callback,
+                msg.encoding_tool.clone(),
             )
             .await
         {
@@ -222,6 +223,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 
