@@ -131,12 +131,7 @@ impl FFmpegRunner {
         Self::clear_codec_tag(ost.parameters().as_ptr());
 
         // Set format-level encoding_tool metadata (copy, no re-encoding)
-        let mut format_meta = octx.metadata().to_owned();
-        format_meta.set(
-            "encoding_tool",
-            &crate::ffmpeg::encoding_tag::encoding_tool_tag("copy"),
-        );
-        octx.set_metadata(format_meta);
+        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "copy");
 
         octx.write_header()
             .map_err(PostProcessError::from)
@@ -351,23 +346,10 @@ impl FFmpegRunner {
 
         // Set format-level encoding_tool metadata
         let enc_display_name = enc_codec.name();
-        {
-            let mut format_meta = octx.metadata().to_owned();
-            format_meta.set(
-                "encoding_tool",
-                &crate::ffmpeg::encoding_tag::encoding_tool_tag(enc_display_name),
-            );
-            octx.set_metadata(format_meta);
-        }
+        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, enc_display_name);
 
         // Set per-stream encoder tag on audio output stream
-        {
-            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
-            stream_dict.set("encoder", enc_display_name);
-            octx.stream_mut(ost_index)
-                .expect("audio output stream exists")
-                .set_metadata(stream_dict);
-        }
+        crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, ost_index, enc_display_name);
 
         octx.write_header()
             .map_err(PostProcessError::from)

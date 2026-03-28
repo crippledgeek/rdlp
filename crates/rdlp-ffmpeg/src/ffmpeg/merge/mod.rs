@@ -166,12 +166,7 @@ impl FFmpegRunner {
         }
 
         // Set format-level encoding_tool metadata
-        let mut format_meta = octx.metadata().to_owned();
-        format_meta.set(
-            "encoding_tool",
-            &crate::ffmpeg::encoding_tag::encoding_tool_tag("merge"),
-        );
-        octx.set_metadata(format_meta);
+        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "merge");
 
         // Write header with options
         octx.write_header_with(dict)

@@ -132,12 +132,8 @@ impl FFmpegRunner {
         }
 
         // Copy format-level metadata and add encoding_tool tag
-        let mut format_meta = ictx.metadata().to_owned();
-        format_meta.set(
-            "encoding_tool",
-            &super::encoding_tag::encoding_tool_tag("remux"),
-        );
-        octx.set_metadata(format_meta);
+        octx.set_metadata(ictx.metadata().to_owned());
+        super::encoding_tag::set_encoding_tool(&mut octx, "remux");
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
@@ -398,19 +394,22 @@ impl FFmpegRunner {
                 }
             }
 
-            // Set encoding_tool metadata
-            let et_key = CString::new("encoding_tool").expect("static string");
-            let et_val = CString::new(crate::ffmpeg::encoding_tag::encoding_tool_tag("remux"))
-                .expect("no null bytes in version string");
-            ffi::av_dict_set(&mut (*ofmt_ctx).metadata, et_key.as_ptr(), et_val.as_ptr(), 0);
+            // 6. Set encoding_tool metadata BEFORE init_output.
+            // init_muxer (called by avformat_init_output) unconditionally sets
+            // "encoder" = LIBAVFORMAT_IDENT. The Matroska muxer's mkv_write_info
+            // checks "encoding_tool" for WritingApp — if present it uses our
+            // value, otherwise it falls back to LIBAVFORMAT_IDENT. Setting
+            // encoding_tool before init ensures it survives the metadata
+            // conversion pass.
+            crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, "remux");
 
-            // 6. Build options dictionary with cluster_time_limit
+            // 7. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
             let key = CString::new("cluster_time_limit").expect("static string has no null bytes");
             let value = CString::new("500").expect("static string has no null bytes");
             ffi::av_dict_set(&mut opts, key.as_ptr(), value.as_ptr(), 0);
 
-            // 7. Initialize muxer with options
+            // 8. Initialize muxer with options
             let ret = ffi::avformat_init_output(ofmt_ctx, &mut opts);
 
             // Check for unconsumed options
@@ -438,7 +437,7 @@ impl FFmpegRunner {
                 .into());
             }
 
-            // 8. Write header
+            // 9. Write header
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {
                 if !(*ofmt_ctx).pb.is_null() {

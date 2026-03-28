@@ -228,11 +228,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
     muxer_opts.set("cluster_time_limit", "500");
 
-    {
-        let mut format_meta = octx.metadata().to_owned();
-        format_meta.set("encoding_tool", &crate::ffmpeg::encoding_tag::encoding_tool_tag("salvage"));
-        octx.set_metadata(format_meta);
-    }
+    crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "salvage");
 
     octx.write_header_with(muxer_opts)
         .map_err(PostProcessError::from)
