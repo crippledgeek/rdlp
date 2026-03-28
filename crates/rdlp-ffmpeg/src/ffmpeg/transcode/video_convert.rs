@@ -113,7 +113,12 @@ impl FFmpegRunner {
         // Open input
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open input for video transcode {}", input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open input for video transcode {}",
+                    input.display()
+                )
+            })?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
@@ -193,7 +198,12 @@ impl FFmpegRunner {
         // Open output
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to create output for video transcode {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output for video transcode {}",
+                    output.display()
+                )
+            })?;
 
         // Find video encoder
         let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
@@ -413,7 +423,9 @@ impl FFmpegRunner {
                 let audio_encoder = audio_encoder
                     .open_as(audio_enc_codec)
                     .map_err(PostProcessError::from)
-                    .with_context(|| format!("failed to open audio encoder '{enc_name}' for video transcode"))?;
+                    .with_context(|| {
+                        format!("failed to open audio encoder '{enc_name}' for video transcode")
+                    })?;
 
                 // Copy encoder parameters back to output stream
                 unsafe {
@@ -455,6 +467,44 @@ impl FFmpegRunner {
         if is_mkv {
             dict.set("cluster_time_limit", "500");
             debug!("MKV detected, setting cluster_time_limit=500ms via dictionary");
+        }
+
+        // Set format-level encoding_tool metadata
+        {
+            let audio_component = if let Some(enc_name) = audio_encode_codec {
+                enc_name
+            } else if opts.audio_copy {
+                "copy"
+            } else {
+                "none"
+            };
+            let tool_components = format!("{video_codec_name} + {audio_component}");
+            let mut format_meta = octx.metadata().to_owned();
+            format_meta.set(
+                "encoding_tool",
+                &crate::ffmpeg::encoding_tag::encoding_tool_tag(&tool_components),
+            );
+            octx.set_metadata(format_meta);
+        }
+
+        // Set per-stream encoder tag on video output stream
+        {
+            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
+            stream_dict.set("encoder", video_codec_name);
+            octx.stream_mut(video_ost_index)
+                .expect("video output stream exists")
+                .set_metadata(stream_dict);
+        }
+
+        // Set per-stream encoder tag on audio output stream (only if re-encoding)
+        if let Some((_, _, _, audio_enc_ost_idx, _)) = audio_transcode_state.as_ref()
+            && let Some(enc_name) = audio_encode_codec
+        {
+            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
+            stream_dict.set("encoder", enc_name);
+            octx.stream_mut(*audio_enc_ost_idx)
+                .expect("audio output stream exists")
+                .set_metadata(stream_dict);
         }
 
         // Write header with options
