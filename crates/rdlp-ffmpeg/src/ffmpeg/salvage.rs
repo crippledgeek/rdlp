@@ -193,16 +193,16 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     // Open corrupt input — FFmpeg will log warnings but continue reading
     let mut ictx = ffmpeg_the_third::format::input(input)
         .map_err(PostProcessError::from)
-        .with_context(|| format!("failed to open corrupt input for salvage {}", input.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to open corrupt input for salvage {}",
+                input.display()
+            )
+        })?;
 
     let mut octx = ffmpeg_the_third::format::output(&salvage_path)
         .map_err(PostProcessError::from)
-        .with_context(|| {
-            format!(
-                "failed to create salvage output {}",
-                salvage_path.display()
-            )
-        })?;
+        .with_context(|| format!("failed to create salvage output {}", salvage_path.display()))?;
 
     // Map all input streams to output (stream copy, no re-encoding)
     let stream_count = ictx.streams().count();

@@ -82,7 +82,10 @@ impl FFmpegRunner {
             let mut best: Option<u32> = None;
             let mut best_dist = u32::MAX;
             loop {
-                debug_assert!(i < 1000, "FFmpeg rate array iteration exceeded safety limit");
+                debug_assert!(
+                    i < 1000,
+                    "FFmpeg rate array iteration exceeded safety limit"
+                );
                 let rate = *rates.offset(i);
                 if rate == 0 {
                     break;

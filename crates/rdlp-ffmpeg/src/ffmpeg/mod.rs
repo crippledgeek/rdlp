@@ -29,6 +29,7 @@
 
 mod audio_codecs;
 pub mod audio_encoder_registry;
+mod encoding_tag;
 mod ffi_helpers;
 pub mod log_capture;
 mod merge;

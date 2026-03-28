@@ -80,13 +80,23 @@ impl FFmpegRunner {
 
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open input for audio copy extract {}", input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open input for audio copy extract {}",
+                    input.display()
+                )
+            })?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to create output for audio copy extract {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output for audio copy extract {}",
+                    output.display()
+                )
+            })?;
 
         // Find best audio stream
         let ist_index = ictx
@@ -119,6 +129,14 @@ impl FFmpegRunner {
                 .parameters(),
         );
         Self::clear_codec_tag(ost.parameters().as_ptr());
+
+        // Set format-level encoding_tool metadata (copy, no re-encoding)
+        let mut format_meta = octx.metadata().to_owned();
+        format_meta.set(
+            "encoding_tool",
+            &crate::ffmpeg::encoding_tag::encoding_tool_tag("copy"),
+        );
+        octx.set_metadata(format_meta);
 
         octx.write_header()
             .map_err(PostProcessError::from)
@@ -190,7 +208,12 @@ impl FFmpegRunner {
         // Open input and find audio stream
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open input for audio transcode {}", input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open input for audio transcode {}",
+                    input.display()
+                )
+            })?;
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
@@ -218,7 +241,12 @@ impl FFmpegRunner {
         // Open output
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to create output for audio transcode {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output for audio transcode {}",
+                    output.display()
+                )
+            })?;
 
         // Find encoder codec
         let enc_codec = if let Some(ref name) = opts.encoder_name {
@@ -247,10 +275,10 @@ impl FFmpegRunner {
         let ost_index;
         let enc_context;
         {
-            let ost =
-                octx.add_stream(enc_codec)
-                    .map_err(PostProcessError::from)
-                    .context("failed to add output stream for audio transcode")?;
+            let ost = octx
+                .add_stream(enc_codec)
+                .map_err(PostProcessError::from)
+                .context("failed to add output stream for audio transcode")?;
             ost_index = ost.index();
             enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -297,11 +325,10 @@ impl FFmpegRunner {
         }
 
         // Open encoder
-        let mut audio_encoder =
-            audio_encoder
-                .open_as(enc_codec)
-                .map_err(PostProcessError::from)
-                .context("failed to open audio encoder for transcode")?;
+        let mut audio_encoder = audio_encoder
+            .open_as(enc_codec)
+            .map_err(PostProcessError::from)
+            .context("failed to open audio encoder for transcode")?;
 
         // Read actual encoder time_base via FFI (may differ from configured after open)
         // SAFETY: audio_encoder is a valid opened encoder context.
@@ -321,6 +348,26 @@ impl FFmpegRunner {
         Self::copy_encoder_params_to_stream(&mut octx, ost_index, unsafe {
             audio_encoder.as_ptr()
         });
+
+        // Set format-level encoding_tool metadata
+        let enc_display_name = enc_codec.name();
+        {
+            let mut format_meta = octx.metadata().to_owned();
+            format_meta.set(
+                "encoding_tool",
+                &crate::ffmpeg::encoding_tag::encoding_tool_tag(enc_display_name),
+            );
+            octx.set_metadata(format_meta);
+        }
+
+        // Set per-stream encoder tag on audio output stream
+        {
+            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
+            stream_dict.set("encoder", enc_display_name);
+            octx.stream_mut(ost_index)
+                .expect("audio output stream exists")
+                .set_metadata(stream_dict);
+        }
 
         octx.write_header()
             .map_err(PostProcessError::from)

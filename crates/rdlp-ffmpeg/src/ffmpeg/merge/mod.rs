@@ -71,16 +71,31 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Ok(Self::merge_mkv_raw_ffi(video_input, audio_input, output, progress_fn)?);
+            return Ok(Self::merge_mkv_raw_ffi(
+                video_input,
+                audio_input,
+                output,
+                progress_fn,
+            )?);
         }
 
         let mut ictx_video = ffmpeg_the_third::format::input(video_input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open video input for merge {}", video_input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open video input for merge {}",
+                    video_input.display()
+                )
+            })?;
 
         let mut ictx_audio = ffmpeg_the_third::format::input(audio_input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open audio input for merge {}", audio_input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open audio input for merge {}",
+                    audio_input.display()
+                )
+            })?;
 
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
@@ -149,6 +164,14 @@ impl FFmpegRunner {
         if opts.faststart {
             dict.set("movflags", "+faststart");
         }
+
+        // Set format-level encoding_tool metadata
+        let mut format_meta = octx.metadata().to_owned();
+        format_meta.set(
+            "encoding_tool",
+            &crate::ffmpeg::encoding_tag::encoding_tool_tag("merge"),
+        );
+        octx.set_metadata(format_meta);
 
         // Write header with options
         octx.write_header_with(dict)

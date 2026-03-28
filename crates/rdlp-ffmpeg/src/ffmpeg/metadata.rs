@@ -75,11 +75,21 @@ impl FFmpegRunner {
 
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open input for metadata embed {}", input.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open input for metadata embed {}",
+                    input.display()
+                )
+            })?;
 
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open output for metadata embed {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open output for metadata embed {}",
+                    output.display()
+                )
+            })?;
 
         // Map all streams (stream copy)
         let stream_count = ictx.streams().count();

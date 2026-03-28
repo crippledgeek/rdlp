@@ -93,7 +93,12 @@ impl FFmpegRunner {
         // Open media input
         let mut ictx = ffmpeg_the_third::format::input(media)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to open media input for thumbnail embed {}", media.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to open media input for thumbnail embed {}",
+                    media.display()
+                )
+            })?;
 
         // Open thumbnail input
         let mut thumb_ictx = ffmpeg_the_third::format::input(thumbnail)
@@ -103,7 +108,12 @@ impl FFmpegRunner {
         // Create output
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
-            .with_context(|| format!("failed to create output for thumbnail embed {}", output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output for thumbnail embed {}",
+                    output.display()
+                )
+            })?;
 
         let is_mp3 = container.eq_ignore_ascii_case("mp3");
 
