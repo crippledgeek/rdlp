@@ -185,6 +185,9 @@ impl FFmpegRunner {
             }
             (*(*out_video_stream).codecpar).codec_tag = 0;
 
+            // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+            ffi::av_dict_copy(&mut (*out_video_stream).metadata, (*in_video_stream).metadata, 0);
+
             // CRITICAL: Copy stream timing properties for Matroska
             (*out_video_stream).time_base = (*in_video_stream).time_base;
             (*out_video_stream).avg_frame_rate = (*in_video_stream).avg_frame_rate;
@@ -235,6 +238,9 @@ impl FFmpegRunner {
                 });
             }
             (*(*out_audio_stream).codecpar).codec_tag = 0;
+
+            // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+            ffi::av_dict_copy(&mut (*out_audio_stream).metadata, (*in_audio_stream).metadata, 0);
 
             // Copy audio stream timing properties
             (*out_audio_stream).time_base = (*in_audio_stream).time_base;

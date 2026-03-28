@@ -320,15 +320,13 @@ impl FFmpegRunner {
                         ))
                         .map_err(PostProcessError::from)
                         .context("failed to add audio output stream for video transcode")?;
-                    ost.set_parameters(
-                        ictx.stream(audio_idx)
-                            .ok_or_else(|| {
-                                PostProcessError::ffmpeg_failed(format!(
-                                    "audio input stream {audio_idx} not found"
-                                ))
-                            })?
-                            .parameters(),
-                    );
+                    let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
+                        PostProcessError::ffmpeg_failed(format!(
+                            "audio input stream {audio_idx} not found"
+                        ))
+                    })?;
+                    ost.set_parameters(audio_ist.parameters());
+                    ost.set_metadata(audio_ist.metadata().to_owned());
                     audio_ost_idx = ost.index();
                     Self::clear_codec_tag(ost.parameters().as_ptr());
                 }

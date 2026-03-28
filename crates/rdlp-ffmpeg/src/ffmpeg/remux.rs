@@ -128,6 +128,7 @@ impl FFmpegRunner {
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for remux")?;
             ost.set_parameters(ist.parameters());
+            ost.set_metadata(ist.metadata().to_owned());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 
@@ -337,6 +338,9 @@ impl FFmpegRunner {
 
                 // Reset codec tag for container compatibility
                 (*(*out_stream).codecpar).codec_tag = 0;
+
+                // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+                ffi::av_dict_copy(&mut (*out_stream).metadata, (*in_stream).metadata, 0);
 
                 // ============================================================
                 // CRITICAL: Copy stream properties that CLI copies but we missed

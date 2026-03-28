@@ -149,6 +149,7 @@ impl FFmpegRunner {
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for thumbnail embed")?;
             ost.set_parameters(ist.parameters());
+            ost.set_metadata(ist.metadata().to_owned());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 

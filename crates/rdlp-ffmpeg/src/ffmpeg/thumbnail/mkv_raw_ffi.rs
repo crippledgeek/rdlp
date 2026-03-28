@@ -154,6 +154,9 @@ impl FFmpegRunner {
                 }
                 (*(*out_stream).codecpar).codec_tag = 0;
 
+                // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+                ffi::av_dict_copy(&mut (*out_stream).metadata, (*in_stream).metadata, 0);
+
                 // Copy stream properties (critical for VLC)
                 (*out_stream).time_base = (*in_stream).time_base;
                 (*out_stream).avg_frame_rate = (*in_stream).avg_frame_rate;
