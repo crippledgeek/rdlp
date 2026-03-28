@@ -10,6 +10,12 @@ pub struct RemuxOptions {
     pub faststart: bool,
     /// Force output format (e.g., "mp4", "mkv").
     pub output_format: Option<String>,
+    /// Override the `encoding_tool` metadata tag written by this operation.
+    ///
+    /// When `Some`, this value is used instead of the default stage name
+    /// (e.g., "remux", "merge", "thumbnail"). Pass `msg.encoding_tool` from
+    /// the pipeline to propagate the tag set by a prior content-creating stage.
+    pub encoding_tool_override: Option<String>,
 }
 
 /// Options for audio extraction and transcoding.

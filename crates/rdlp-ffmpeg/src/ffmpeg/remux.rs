@@ -62,7 +62,12 @@ impl FFmpegRunner {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
         if is_mkv {
-            return Self::remux_mkv_raw_ffi(input, output, progress_fn);
+            return Self::remux_mkv_raw_ffi(
+                input,
+                output,
+                progress_fn,
+                opts.encoding_tool_override.as_deref(),
+            );
         }
 
         let mut ictx = ffmpeg_the_third::format::input(input)
@@ -128,16 +133,17 @@ impl FFmpegRunner {
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for remux")?;
             ost.set_parameters(ist.parameters());
+            ost.set_metadata(ist.metadata().to_owned());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 
         // Copy format-level metadata and add encoding_tool tag
-        let mut format_meta = ictx.metadata().to_owned();
-        format_meta.set(
-            "encoding_tool",
-            &super::encoding_tag::encoding_tool_tag("remux"),
-        );
-        octx.set_metadata(format_meta);
+        octx.set_metadata(ictx.metadata().to_owned());
+        if let Some(ref override_tag) = opts.encoding_tool_override {
+            super::encoding_tag::set_encoding_tool(&mut octx, override_tag);
+        } else {
+            super::encoding_tag::set_encoding_tool_if_missing(&mut octx, "remux");
+        }
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
@@ -237,6 +243,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        encoding_tool_override: Option<&str>,
     ) -> anyhow::Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
@@ -342,6 +349,9 @@ impl FFmpegRunner {
                 // Reset codec tag for container compatibility
                 (*(*out_stream).codecpar).codec_tag = 0;
 
+                // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+                ffi::av_dict_copy(&mut (*out_stream).metadata, (*in_stream).metadata, 0);
+
                 // ============================================================
                 // CRITICAL: Copy stream properties that CLI copies but we missed
                 // ============================================================
@@ -398,19 +408,23 @@ impl FFmpegRunner {
                 }
             }
 
-            // Set encoding_tool metadata
-            let et_key = CString::new("encoding_tool").expect("static string");
-            let et_val = CString::new(crate::ffmpeg::encoding_tag::encoding_tool_tag("remux"))
-                .expect("no null bytes in version string");
-            ffi::av_dict_set(&mut (*ofmt_ctx).metadata, et_key.as_ptr(), et_val.as_ptr(), 0);
+            // 6. Copy format-level metadata from input (preserves encoding_tool from prior stages)
+            ffi::av_dict_copy(&mut (*ofmt_ctx).metadata, (*ifmt_ctx).metadata, 0);
 
-            // 6. Build options dictionary with cluster_time_limit
+            // Set encoding_tool: use override if provided, otherwise fall back to "remux"
+            if let Some(tag) = encoding_tool_override {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
+            } else {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "remux");
+            }
+
+            // 7. Build options dictionary with cluster_time_limit
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
             let key = CString::new("cluster_time_limit").expect("static string has no null bytes");
             let value = CString::new("500").expect("static string has no null bytes");
             ffi::av_dict_set(&mut opts, key.as_ptr(), value.as_ptr(), 0);
 
-            // 7. Initialize muxer with options
+            // 8. Initialize muxer with options
             let ret = ffi::avformat_init_output(ofmt_ctx, &mut opts);
 
             // Check for unconsumed options
@@ -438,7 +452,7 @@ impl FFmpegRunner {
                 .into());
             }
 
-            // 8. Write header
+            // 9. Write header
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());
             if ret < 0 {
                 if !(*ofmt_ctx).pb.is_null() {

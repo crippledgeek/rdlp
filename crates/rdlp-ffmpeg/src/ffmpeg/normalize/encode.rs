@@ -198,23 +198,10 @@ impl FFmpegRunner {
         }
 
         // Set format-level encoding_tool metadata
-        {
-            let mut format_meta = octx.metadata().to_owned();
-            format_meta.set(
-                "encoding_tool",
-                &crate::ffmpeg::encoding_tag::encoding_tool_tag(enc_name),
-            );
-            octx.set_metadata(format_meta);
-        }
+        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, enc_name);
 
         // Set per-stream encoder tag on audio output stream
-        {
-            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
-            stream_dict.set("encoder", enc_name);
-            octx.stream_mut(audio_ost_index)
-                .expect("audio output stream exists")
-                .set_metadata(stream_dict);
-        }
+        crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, audio_ost_index, enc_name);
 
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
         muxer_opts.set("cluster_time_limit", "500");

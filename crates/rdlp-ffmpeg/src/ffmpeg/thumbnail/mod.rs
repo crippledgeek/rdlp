@@ -35,6 +35,7 @@ impl FFmpegRunner {
         output: impl AsRef<Path>,
         container: &str,
         callback: Option<Arc<dyn PostProcessCallback>>,
+        encoding_tool_override: Option<String>,
     ) -> Result<()> {
         let media = media.as_ref().to_path_buf();
         let thumbnail = thumbnail.as_ref().to_path_buf();
@@ -47,6 +48,7 @@ impl FFmpegRunner {
                 &output,
                 &container,
                 callback.as_deref(),
+                encoding_tool_override.as_deref(),
             )?)
         })
         .await
@@ -65,6 +67,7 @@ impl FFmpegRunner {
         output: &Path,
         container: &str,
         callback: Option<&dyn PostProcessCallback>,
+        encoding_tool_override: Option<&str>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
 
@@ -84,7 +87,8 @@ impl FFmpegRunner {
         // MKV: use raw FFI with proper stream property copying for VLC compatibility
         let is_mkv = container.eq_ignore_ascii_case("mkv") || container.eq_ignore_ascii_case("mka");
         if is_mkv {
-            let result = Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output);
+            let result =
+                Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output, encoding_tool_override);
             // Forward captured logs before returning
             Self::forward_captured_logs(&capture, callback);
             return Ok(result?);
@@ -149,6 +153,7 @@ impl FFmpegRunner {
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for thumbnail embed")?;
             ost.set_parameters(ist.parameters());
+            ost.set_metadata(ist.metadata().to_owned());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 
@@ -185,10 +190,10 @@ impl FFmpegRunner {
 
         // Copy format-level metadata from media input
         octx.set_metadata(ictx.metadata().to_owned());
-        {
-            let mut format_meta = octx.metadata().to_owned();
-            format_meta.set("encoding_tool", &crate::ffmpeg::encoding_tag::encoding_tool_tag("thumbnail"));
-            octx.set_metadata(format_meta);
+        if let Some(tag) = encoding_tool_override {
+            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, tag);
+        } else {
+            crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "thumbnail");
         }
 
         // Build muxer options dictionary

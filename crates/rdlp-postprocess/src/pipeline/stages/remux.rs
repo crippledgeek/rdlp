@@ -101,6 +101,7 @@ impl PipelineStage for RemuxStage {
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "mp4".to_string()),
             ),
+            encoding_tool_override: msg.encoding_tool.clone(),
         };
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
@@ -157,6 +158,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 
@@ -234,6 +236,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         };
         assert!(RemuxStage::target_ext(&msg, "mp4").is_none());
     }
@@ -256,6 +259,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         };
         assert_eq!(RemuxStage::target_ext(&msg, "ts"), Some("mp4"));
     }

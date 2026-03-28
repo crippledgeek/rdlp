@@ -154,6 +154,7 @@ impl PipelineStage for ThumbnailStage {
 
             let opts = RemuxOptions {
                 faststart: true,
+                encoding_tool_override: msg.encoding_tool.clone(),
                 ..Default::default()
             };
             match self
@@ -230,6 +231,7 @@ impl PipelineStage for ThumbnailStage {
                 &temp_output,
                 &extension,
                 log_callback,
+                msg.encoding_tool.clone(),
             )
             .await
         {
@@ -293,6 +295,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 

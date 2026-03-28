@@ -29,6 +29,7 @@ impl FFmpegRunner {
         metadata: &HashMap<String, String>,
         chapters: &[ChapterEntry],
         callback: Option<Arc<dyn PostProcessCallback>>,
+        encoding_tool_override: Option<String>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -41,6 +42,7 @@ impl FFmpegRunner {
                 &metadata,
                 &chapters,
                 callback.as_deref(),
+                encoding_tool_override.as_deref(),
             )?)
         })
         .await
@@ -57,6 +59,7 @@ impl FFmpegRunner {
         metadata: &HashMap<String, String>,
         chapters: &[ChapterEntry],
         callback: Option<&dyn PostProcessCallback>,
+        encoding_tool_override: Option<&str>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
 
@@ -117,6 +120,7 @@ impl FFmpegRunner {
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for metadata embed")?;
             ost.set_parameters(ist.parameters());
+            ost.set_metadata(ist.metadata().to_owned());
             Self::clear_codec_tag(ost.parameters().as_ptr());
         }
 
@@ -133,8 +137,12 @@ impl FFmpegRunner {
             dict.set(k, v);
         }
 
-        dict.set("encoding_tool", &crate::ffmpeg::encoding_tag::encoding_tool_tag("metadata"));
         octx.set_metadata(dict);
+        if let Some(tag) = encoding_tool_override {
+            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, tag);
+        } else {
+            crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "metadata");
+        }
 
         // Add chapters (time_base = 1/1000 for millisecond precision)
         for ch in chapters {

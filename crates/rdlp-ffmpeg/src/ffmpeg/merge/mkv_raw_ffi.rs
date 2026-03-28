@@ -33,6 +33,7 @@ impl FFmpegRunner {
         audio_input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        encoding_tool_override: Option<&str>,
     ) -> Result<()> {
         use ffmpeg_the_third::ffi;
         use std::ffi::CString;
@@ -185,6 +186,9 @@ impl FFmpegRunner {
             }
             (*(*out_video_stream).codecpar).codec_tag = 0;
 
+            // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+            ffi::av_dict_copy(&mut (*out_video_stream).metadata, (*in_video_stream).metadata, 0);
+
             // CRITICAL: Copy stream timing properties for Matroska
             (*out_video_stream).time_base = (*in_video_stream).time_base;
             (*out_video_stream).avg_frame_rate = (*in_video_stream).avg_frame_rate;
@@ -235,6 +239,9 @@ impl FFmpegRunner {
                 });
             }
             (*(*out_audio_stream).codecpar).codec_tag = 0;
+
+            // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
+            ffi::av_dict_copy(&mut (*out_audio_stream).metadata, (*in_audio_stream).metadata, 0);
 
             // Copy audio stream timing properties
             (*out_audio_stream).time_base = (*in_audio_stream).time_base;
@@ -314,11 +321,15 @@ impl FFmpegRunner {
                 });
             }
 
-            // Set encoding_tool metadata
-            let et_key = CString::new("encoding_tool").expect("static string");
-            let et_val = CString::new(crate::ffmpeg::encoding_tag::encoding_tool_tag("merge"))
-                .expect("no null bytes in version string");
-            ffi::av_dict_set(&mut (*ofmt_ctx).metadata, et_key.as_ptr(), et_val.as_ptr(), 0);
+            // Copy format-level metadata from video input (preserves encoding_tool from prior stages)
+            ffi::av_dict_copy(&mut (*ofmt_ctx).metadata, (*ifmt_video).metadata, 0);
+
+            // Set encoding_tool: use override if provided, otherwise fall back to "merge"
+            if let Some(tag) = encoding_tool_override {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
+            } else {
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "merge");
+            }
 
             // 12. Write header
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());

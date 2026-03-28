@@ -120,6 +120,9 @@ impl PipelineStage for NormalizeStage {
             .await
             .context("normalize stage failed")?;
 
+        // Capture the encoding_tool for downstream pass-through stages.
+        msg.encoding_tool = Some(format!("normalize ({})", mode_name));
+
         info!(
             "NormalizeStage: normalization complete: {}",
             output_path.display()
@@ -160,6 +163,7 @@ mod tests {
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         }
     }
 

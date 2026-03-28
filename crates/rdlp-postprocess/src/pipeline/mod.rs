@@ -61,6 +61,12 @@ pub struct PipelineMessage {
     pub error_tx: Option<oneshot::Sender<PipelineError>>,
     /// Non-fatal warnings accumulated by stages during processing.
     pub warnings: Vec<String>,
+    /// Encoding tool tag set by the primary content-creating stage (recode,
+    /// audio extract, normalize). Pass-through stages (remux, metadata,
+    /// thumbnail) propagate this to the output file's `encoding_tool`
+    /// metadata instead of stamping their own name. `None` means no
+    /// prior stage set it — pass-through stages use their own name.
+    pub encoding_tool: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +159,7 @@ impl Pipeline {
             callback_factory,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
+            encoding_tool: None,
         };
 
         // Build channel chain: one mpsc(1) between consecutive stages.

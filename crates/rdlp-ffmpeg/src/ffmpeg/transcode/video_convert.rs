@@ -320,15 +320,13 @@ impl FFmpegRunner {
                         ))
                         .map_err(PostProcessError::from)
                         .context("failed to add audio output stream for video transcode")?;
-                    ost.set_parameters(
-                        ictx.stream(audio_idx)
-                            .ok_or_else(|| {
-                                PostProcessError::ffmpeg_failed(format!(
-                                    "audio input stream {audio_idx} not found"
-                                ))
-                            })?
-                            .parameters(),
-                    );
+                    let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
+                        PostProcessError::ffmpeg_failed(format!(
+                            "audio input stream {audio_idx} not found"
+                        ))
+                    })?;
+                    ost.set_parameters(audio_ist.parameters());
+                    ost.set_metadata(audio_ist.metadata().to_owned());
                     audio_ost_idx = ost.index();
                     Self::clear_codec_tag(ost.parameters().as_ptr());
                 }
@@ -479,32 +477,17 @@ impl FFmpegRunner {
                 "none"
             };
             let tool_components = format!("{video_codec_name} + {audio_component}");
-            let mut format_meta = octx.metadata().to_owned();
-            format_meta.set(
-                "encoding_tool",
-                &crate::ffmpeg::encoding_tag::encoding_tool_tag(&tool_components),
-            );
-            octx.set_metadata(format_meta);
+            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, &tool_components);
         }
 
         // Set per-stream encoder tag on video output stream
-        {
-            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
-            stream_dict.set("encoder", video_codec_name);
-            octx.stream_mut(video_ost_index)
-                .expect("video output stream exists")
-                .set_metadata(stream_dict);
-        }
+        crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, video_ost_index, video_codec_name);
 
         // Set per-stream encoder tag on audio output stream (only if re-encoding)
         if let Some((_, _, _, audio_enc_ost_idx, _)) = audio_transcode_state.as_ref()
             && let Some(enc_name) = audio_encode_codec
         {
-            let mut stream_dict = ffmpeg_the_third::Dictionary::new();
-            stream_dict.set("encoder", enc_name);
-            octx.stream_mut(*audio_enc_ost_idx)
-                .expect("audio output stream exists")
-                .set_metadata(stream_dict);
+            crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, *audio_enc_ost_idx, enc_name);
         }
 
         // Write header with options
