@@ -166,7 +166,7 @@ mod tests {
         r#"<div id="list_videos_videos_list_search_result" class="box">
 <h1 class="title">Videos for: amateur, Page 1</h1>
 <div class="item thumb-item">
-    <a class="link js-open-popup" href="https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/" title="Blonde Amateur GF - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg">
+    <a class="link js-open-popup" href="https://www.xtits.com/videos/50088/blonde-amateur-gf-amateur/" title="Blonde Amateur GF - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg" vthumb="https://www.xtits.com/get_file/5/abc/50088vthumbs.mp4/">
         <div class="img-holder">
             <img class="thumb img" src="https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg" alt="Blonde Amateur GF - Amateur">
             <span class="label hd"><i class="icon-hd"></i></span>
@@ -178,7 +178,7 @@ mod tests {
     </a>
 </div>
 <div class="item thumb-item">
-    <a class="link js-open-popup" href="https://www.xtits.com/videos/180969/chubby-amateur-fucked-amateur/" title="Chubby Amateur Fucked - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/180000/180969/402x225/10.jpg">
+    <a class="link js-open-popup" href="https://www.xtits.com/videos/180969/chubby-amateur-fucked-amateur/" title="Chubby Amateur Fucked - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/180000/180969/402x225/10.jpg" vthumb="https://www.xtits.com/get_file/6/def/180969vthumbs.mp4/">
         <div class="img-holder">
             <img class="thumb img" src="https://i.xtits.com/contents/videos_screenshots/180000/180969/402x225/10.jpg" alt="Chubby Amateur Fucked - Amateur">
             <span class="label time"><i class="icon-hd"></i>26:47</span>
@@ -189,7 +189,7 @@ mod tests {
     </a>
 </div>
 <div class="item thumb-item">
-    <a class="link js-open-popup" href="https://www.xtits.com/videos/172127/amateur-bbw-2k-amateur/" title="Amateur BBW(2K) - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/172000/172127/402x225/20.jpg">
+    <a class="link js-open-popup" href="https://www.xtits.com/videos/172127/amateur-bbw-2k-amateur/" title="Amateur BBW(2K) - Amateur" thumb="https://i.xtits.com/contents/videos_screenshots/172000/172127/402x225/20.jpg" vthumb="https://www.xtits.com/get_file/5/ghi/172127vthumbs.mp4/">
         <div class="img-holder">
             <img class="thumb img" src="https://i.xtits.com/contents/videos_screenshots/172000/172127/402x225/20.jpg" alt="Amateur BBW(2K) - Amateur">
             <span class="label time"><i class="icon-hd"></i>19:04</span>
@@ -213,7 +213,7 @@ mod tests {
         r#"<div id="list_videos_videos_list_search_result" class="box">
 <h1 class="title">Videos for: amateur, Page 3</h1>
 <div class="item thumb-item">
-    <a class="link js-open-popup" href="https://www.xtits.com/videos/99999/last-video/" title="Last Video" thumb="https://i.xtits.com/thumb.jpg">
+    <a class="link js-open-popup" href="https://www.xtits.com/videos/99999/last-video/" title="Last Video" thumb="https://i.xtits.com/thumb.jpg" vthumb="https://www.xtits.com/get_file/5/xyz/99999vthumbs.mp4/">
         <div class="img-holder">
             <span class="label time"><i class="icon-hd"></i>5:00</span>
         </div>
