@@ -217,6 +217,10 @@ pub(crate) struct Args {
     #[arg(long, allow_hyphen_values = true)]
     pub normalize_boost_db: Option<f64>,
 
+    /// Fixup policy: never, warn, detect_or_warn (default: detect_or_warn)
+    #[arg(long, default_value = "detect_or_warn")]
+    pub fixup: String,
+
     /// Keep original video file after post-processing
     #[arg(long)]
     pub keep_video: bool,

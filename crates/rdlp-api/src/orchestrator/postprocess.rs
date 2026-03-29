@@ -96,6 +96,7 @@ impl Orchestrator {
             video_encoder: self.config.video_encoder.clone(),
             recode_audio: self.config.recode_audio.clone(),
             recode_container: self.config.recode_container,
+            fixup: self.config.fixup,
         }
     }
 

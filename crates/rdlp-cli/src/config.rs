@@ -6,7 +6,8 @@
 
 use anyhow::{Context, Result};
 use rdlp_api::{
-    AudioFormat, BrowserType, Config, ContainerFormat, RecodeAudioMode, SubtitleFormat, config_io,
+    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode, SubtitleFormat,
+    config_io,
 };
 
 use crate::args::Args;
@@ -247,6 +248,15 @@ pub(crate) fn merge_config(
     }
     if args.loudnorm_precompress {
         config.loudnorm_precompress = true;
+    }
+
+    // Fixup policy
+    if args.fixup != "detect_or_warn" {
+        config.fixup = args
+            .fixup
+            .parse::<FixupPolicy>()
+            .map_err(|e| anyhow::anyhow!(e))
+            .with_context(|| format!("invalid fixup policy '{}'", args.fixup))?;
     }
 
     if args.keep_video {
