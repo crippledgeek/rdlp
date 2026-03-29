@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::audio_format::AudioFormat;
 use crate::browser_type::BrowserType;
 use crate::container::ContainerFormat;
+use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::subtitle_format::SubtitleFormat;
 
@@ -222,6 +223,10 @@ pub struct Config {
     /// Gain in dB for limiter-boost fallback (default 12.0 when None)
     pub normalize_boost_db: Option<f64>,
 
+    /// Fixup policy for detecting and repairing container/codec issues.
+    #[serde(default)]
+    pub fixup: FixupPolicy,
+
     /// FFmpeg location (if not in PATH)
     pub ffmpeg_location: Option<PathBuf>,
 
@@ -393,6 +398,7 @@ impl Default for Config {
             loudnorm_precompress: false,
             normalize_boost: false,
             normalize_boost_db: None,
+            fixup: FixupPolicy::default(),
             ffmpeg_location: None,
             ffmpeg_args: Vec::new(),
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rdlp_types::{AudioFormat, ContainerFormat, RecodeAudioMode};
+use rdlp_types::{AudioFormat, ContainerFormat, FixupPolicy, RecodeAudioMode};
 
 /// Callback for reporting post-processing progress.
 ///
@@ -138,4 +138,7 @@ pub struct PostProcessConfig {
     /// Output container override for video recode.
     /// When `None`, the container is derived from the video codec.
     pub recode_container: Option<ContainerFormat>,
+
+    /// Fixup policy for detecting and repairing container/codec issues.
+    pub fixup: FixupPolicy,
 }
