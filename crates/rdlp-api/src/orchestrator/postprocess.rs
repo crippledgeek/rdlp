@@ -110,6 +110,7 @@ impl Orchestrator {
             || self.config.recode_container.is_some()
             || self.config.remux_container.is_some()
             || self.config.normalize_audio
+            || self.config.fixup != rdlp_types::FixupPolicy::Never
     }
 
     /// Run post-processing pipeline on downloaded file(s)
