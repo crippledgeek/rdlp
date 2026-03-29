@@ -1,7 +1,8 @@
 // GeneralSection: default search provider and format defaults.
 
-import { Film, Search } from "lucide-react";
+import { Bug, Film, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectItem } from "@/components/ui/select";
@@ -145,6 +146,21 @@ export function GeneralSection({ draft, onChange }: Props) {
                         />
                     </div>
                 </div>
+            </section>
+
+            {/* Advanced */}
+            <section id="settings-advanced" aria-labelledby="settings-advanced-heading" className="settings-panel">
+                <h3 id="settings-advanced-heading" className="settings-panel-title">
+                    <Bug className="size-3.5" />
+                    Advanced
+                </h3>
+                <Checkbox
+                    isSelected={draft.verbose}
+                    onChange={(checked) => onChange({ verbose: checked })}
+                    className="flex items-center gap-2 text-sm font-medium text-muted-foreground cursor-pointer"
+                >
+                    Verbose logging
+                </Checkbox>
             </section>
         </>
     );
