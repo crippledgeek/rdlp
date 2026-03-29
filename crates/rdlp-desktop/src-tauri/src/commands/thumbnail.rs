@@ -33,16 +33,19 @@ fn derive_referer(url: &str) -> Option<String> {
         };
     }
 
-    // Strip CDN subdomains: keep last 2 segments
-    // e.g. fastporndelivery.hqporner.com → hqporner.com
+    // Strip CDN subdomains: keep last 2 segments, prepend www.
+    // e.g. fastporndelivery.hqporner.com → www.hqporner.com
+    //      i.xtits.com                   → www.xtits.com
+    // The www. prefix is required by some CDNs (e.g. xtits) that
+    // reject the bare registrable domain as Referer.
     let parts: Vec<&str> = host.split('.').collect();
-    let site_host = if parts.len() > 2 {
+    let registrable = if parts.len() > 2 {
         parts[parts.len() - 2..].join(".")
     } else {
         host.to_string()
     };
 
-    Some(format!("{scheme}://{site_host}"))
+    Some(format!("{scheme}://www.{registrable}"))
 }
 
 /// Fetch a thumbnail image from `url` with a derived `Referer` header
@@ -126,21 +129,28 @@ mod tests {
 
     #[test]
     fn test_derive_referer_standard_url() {
-        // CDN subdomain stripped to registrable domain
+        // CDN subdomain stripped to registrable domain with www prefix
         let referer = derive_referer("https://di.phncdn.com/videos/abc/thumb.jpg");
-        assert_eq!(referer.as_deref(), Some("https://phncdn.com"));
+        assert_eq!(referer.as_deref(), Some("https://www.phncdn.com"));
     }
 
     #[test]
     fn test_derive_referer_cdn_subdomain() {
         let referer = derive_referer("https://fastporndelivery.hqporner.com/imgs/123/thumb.jpg");
-        assert_eq!(referer.as_deref(), Some("https://hqporner.com"));
+        assert_eq!(referer.as_deref(), Some("https://www.hqporner.com"));
+    }
+
+    #[test]
+    fn test_derive_referer_xtits_cdn() {
+        // i.xtits.com CDN requires www.xtits.com Referer (bare xtits.com → 403)
+        let referer = derive_referer("https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg");
+        assert_eq!(referer.as_deref(), Some("https://www.xtits.com"));
     }
 
     #[test]
     fn test_derive_referer_no_subdomain() {
         let referer = derive_referer("https://example.com/image.jpg");
-        assert_eq!(referer.as_deref(), Some("https://example.com"));
+        assert_eq!(referer.as_deref(), Some("https://www.example.com"));
     }
 
     #[test]

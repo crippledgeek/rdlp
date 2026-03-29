@@ -16,7 +16,7 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 /// Captures: (1) video URL, (2) title, (3) thumbnail URL.
 pub(crate) static ITEM_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"<a\s+[^>]*class="[^"]*js-open-popup[^"]*"\s+href="([^"]+)"\s+title="([^"]+)"[^>]*thumb="([^"]*)"#,
+        r#"<a\s+[^>]*class="[^"]*js-open-popup[^"]*"\s+href="([^"]+)"\s+title="([^"]+)"[^>]*\sthumb="([^"]*)"#,
     )
     .expect("Valid item pattern")
 });
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_item_pattern_matches() {
-        let html = r#"<a class="link js-open-popup" href="https://www.xtits.com/videos/50088/test/" title="Test Video" thumb="https://i.xtits.com/thumb.jpg">"#;
+        let html = r#"<a class="link js-open-popup" href="https://www.xtits.com/videos/50088/test/" title="Test Video" thumb="https://i.xtits.com/thumb.jpg" vthumb="https://www.xtits.com/get_file/5/abc/50088vthumbs.mp4/">"#;
         let cap = ITEM_PATTERN.captures(html).unwrap();
         assert_eq!(&cap[1], "https://www.xtits.com/videos/50088/test/");
         assert_eq!(&cap[2], "Test Video");

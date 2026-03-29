@@ -140,6 +140,10 @@ impl FFmpegRunner {
             if out_node.sink().frame(&mut filtered).is_err() {
                 break;
             }
+            // Clear source frame type hints — let the encoder decide GOP structure.
+            // Without this, x265 warns "specified frame type is not compatible
+            // with max B-frames" on every frame whose source pict_type conflicts.
+            filtered.set_kind(ffmpeg_the_third::util::picture::Type::None);
             encoder.send_frame(&filtered)?;
             frame_unref_video(&mut filtered);
             Self::drain_video_encoder_packets(encoder, octx, ost_index, enc_time_base)?;

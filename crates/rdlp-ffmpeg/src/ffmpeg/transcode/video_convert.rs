@@ -345,6 +345,7 @@ impl FFmpegRunner {
             ffmpeg_the_third::Rational,      // encoder time_base
             usize,                           // audio_ost_index for transcode
             ffmpeg_the_third::filter::Graph, // audio format conversion filter
+            i32,                             // input sample rate (for monotonic PTS)
         )> = if let Some(enc_name) = audio_encode_codec {
             if let Some(audio_idx) = audio_ist_index {
                 // Open audio decoder
@@ -395,8 +396,9 @@ impl FFmpegRunner {
                 let mut audio_encoder = audio_enc_context.encoder().audio()?;
 
                 // Pick sample rate compatible with encoder (prefer decoder rate)
+                let audio_input_sample_rate = audio_decoder.rate();
                 let target_rate =
-                    Self::pick_audio_sample_rate(&audio_enc_codec, audio_decoder.rate());
+                    Self::pick_audio_sample_rate(&audio_enc_codec, audio_input_sample_rate);
                 let enc_time_base = ffmpeg_the_third::Rational(1, target_rate as i32);
                 audio_encoder.set_rate(target_rate as i32);
                 audio_encoder.set_time_base(enc_time_base);
@@ -447,6 +449,7 @@ impl FFmpegRunner {
                     enc_time_base,
                     audio_enc_ost_idx,
                     audio_filter,
+                    audio_input_sample_rate as i32,
                 ))
             } else {
                 None
@@ -484,7 +487,7 @@ impl FFmpegRunner {
         crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, video_ost_index, video_codec_name);
 
         // Set per-stream encoder tag on audio output stream (only if re-encoding)
-        if let Some((_, _, _, audio_enc_ost_idx, _)) = audio_transcode_state.as_ref()
+        if let Some((_, _, _, audio_enc_ost_idx, _, _)) = audio_transcode_state.as_ref()
             && let Some(enc_name) = audio_encode_codec
         {
             crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, *audio_enc_ost_idx, enc_name);
@@ -509,12 +512,17 @@ impl FFmpegRunner {
             audio_transcode_enc_tb,
             audio_transcode_ost_idx,
             mut audio_transcode_filter,
+            audio_transcode_input_rate,
         ) = match audio_transcode_state {
-            Some((dec, enc, enc_tb, idx, filter)) => {
-                (Some(dec), Some(enc), Some(enc_tb), Some(idx), Some(filter))
+            Some((dec, enc, enc_tb, idx, filter, rate)) => {
+                (Some(dec), Some(enc), Some(enc_tb), Some(idx), Some(filter), Some(rate))
             }
-            None => (None, None, None, None, None),
+            None => (None, None, None, None, None, None),
         };
+
+        // Monotonic audio PTS counter (in sample units, i.e. 1/sample_rate).
+        // Overrides source PTS to handle timestamp discontinuities.
+        let mut audio_sample_counter: i64 = 0;
 
         // Process packets: video -> decode/filter/encode, audio -> copy or transcode
         for result in ictx.packets() {
@@ -575,13 +583,16 @@ impl FFmpegRunner {
                     Some(enc_tb),
                     Some(audio_ost_idx),
                     Some(ref mut audio_filter),
+                    Some(input_rate),
                 ) = (
                     audio_transcode_decoder.as_mut(),
                     audio_transcode_encoder.as_mut(),
                     audio_transcode_enc_tb,
                     audio_transcode_ost_idx,
                     audio_transcode_filter.as_mut(),
+                    audio_transcode_input_rate,
                 ) {
+                    let input_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
                     // Audio transcode path: decode → filter (format convert + frame size) → encode → write
                     audio_dec.send_packet(&packet)?;
                     Self::drain_audio_transcode_filtered(
@@ -591,6 +602,9 @@ impl FFmpegRunner {
                         &mut octx,
                         enc_tb,
                         audio_ost_idx,
+                        &mut audio_sample_counter,
+                        input_rate,
+                        input_tb,
                     )?;
                 }
             }
@@ -641,13 +655,16 @@ impl FFmpegRunner {
             Some(enc_tb),
             Some(audio_ost_idx),
             Some(ref mut audio_filter),
+            Some(input_rate),
         ) = (
             audio_transcode_decoder.as_mut(),
             audio_transcode_encoder.as_mut(),
             audio_transcode_enc_tb,
             audio_transcode_ost_idx,
             audio_transcode_filter.as_mut(),
+            audio_transcode_input_rate,
         ) {
+            let input_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
             // Flush decoder
             audio_dec.send_eof()?;
             Self::drain_audio_transcode_filtered(
@@ -657,6 +674,9 @@ impl FFmpegRunner {
                 &mut octx,
                 enc_tb,
                 audio_ost_idx,
+                &mut audio_sample_counter,
+                input_rate,
+                input_tb,
             )?;
             // Flush filter graph
             audio_filter
@@ -774,6 +794,15 @@ impl FFmpegRunner {
     }
 
     /// Decode audio frames → push through filter → encode → write.
+    ///
+    /// `sample_counter` tracks cumulative decoded samples to generate monotonic
+    /// PTS, overriding source timestamps that may contain discontinuities
+    /// (common in streaming site downloads). Without this, a source timestamp
+    /// jump produces a burst of near-identical DTS values in the output,
+    /// causing audible desync.
+    ///
+    /// The counter is in sample units (1/sample_rate) and rescaled to the
+    /// filter graph's input time_base via `Rescale::rescale`.
     fn drain_audio_transcode_filtered(
         decoder: &mut ffmpeg_the_third::decoder::Audio,
         filter: &mut ffmpeg_the_third::filter::Graph,
@@ -781,9 +810,23 @@ impl FFmpegRunner {
         octx: &mut ffmpeg_the_third::format::context::Output,
         enc_time_base: ffmpeg_the_third::Rational,
         ost_index: usize,
+        sample_counter: &mut i64,
+        sample_rate: i32,
+        input_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
+        use ffmpeg_the_third::Rescale as _;
+
+        let sample_tb = ffmpeg_the_third::Rational(1, sample_rate);
         let mut frame = ffmpeg_the_third::frame::Audio::empty();
         while decoder.receive_frame(&mut frame).is_ok() {
+            // Override source PTS with monotonic counter to handle
+            // timestamp discontinuities in the source stream.
+            // Convert from sample units (1/sample_rate) to the filter
+            // graph's input time_base.
+            let pts = sample_counter.rescale(sample_tb, input_time_base);
+            frame.set_pts(Some(pts));
+            *sample_counter += frame.samples() as i64;
+
             // Push decoded frame into filter graph
             filter
                 .get("in")
