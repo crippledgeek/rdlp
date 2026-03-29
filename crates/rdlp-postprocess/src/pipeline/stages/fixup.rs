@@ -48,6 +48,9 @@ impl PipelineStage for FixupStage {
             return Ok(msg);
         }
 
+        // Announce stage to UI via callback factory.
+        let _stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
+
         let input_file = msg.tracker.primary();
         info!("FixupStage: probing {}", input_file.display());
 
