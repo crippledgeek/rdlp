@@ -43,10 +43,8 @@ fn test_output_none_preserves_template() {
 
 #[test]
 fn test_output_stdout_disables_incompatible_defaults() {
-    let mut config = Config {
-        embed_thumbnail: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    // embed_thumbnail defaults to true in PostProcess
     let opts = OutputOptions {
         stdout: Some(true),
         ..OutputOptions::default()
@@ -55,7 +53,7 @@ fn test_output_stdout_disables_incompatible_defaults() {
     assert!(config.output_to_stdout);
     assert!(config.quiet);
     assert!(!config.progress);
-    assert!(!config.embed_thumbnail);
+    assert!(!config.postprocess.embed_thumbnail);
 }
 
 #[test]
@@ -128,27 +126,23 @@ fn test_format_audio_multistreams_some_overrides() {
 
 #[test]
 fn test_subtitle_none_preserves_write_subs() {
-    let mut config = Config {
-        write_subtitles: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.write_subtitles = true;
     let opts = SubtitleOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.write_subtitles);
+    assert!(config.postprocess.write_subtitles);
 }
 
 #[test]
 fn test_subtitle_some_overrides_write_subs() {
-    let mut config = Config {
-        write_subtitles: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.write_subtitles = false;
     let opts = SubtitleOptions {
         write_subs: Some(true),
         ..SubtitleOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.write_subtitles);
+    assert!(config.postprocess.write_subtitles);
 }
 
 #[test]
@@ -234,27 +228,23 @@ fn test_subtitle_some_overrides_sub_format() {
 
 #[test]
 fn test_subtitle_none_preserves_embed_subs() {
-    let mut config = Config {
-        embed_subtitles: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_subtitles = true;
     let opts = SubtitleOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.embed_subtitles);
+    assert!(config.postprocess.embed_subtitles);
 }
 
 #[test]
 fn test_subtitle_some_overrides_embed_subs() {
-    let mut config = Config {
-        embed_subtitles: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_subtitles = false;
     let opts = SubtitleOptions {
         embed_subs: Some(true),
         ..SubtitleOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.embed_subtitles);
+    assert!(config.postprocess.embed_subtitles);
 }
 
 #[test]

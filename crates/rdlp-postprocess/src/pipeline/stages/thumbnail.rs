@@ -316,10 +316,11 @@ mod tests {
     fn should_not_run_by_default() {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = ThumbnailStage::new(ffmpeg);
-        let msg = make_msg(
-            vec![PathBuf::from("/tmp/video.mp4")],
-            PostProcess::default(),
-        );
+        let config = PostProcess {
+            embed_thumbnail: false,
+            ..PostProcess::default()
+        };
+        let msg = make_msg(vec![PathBuf::from("/tmp/video.mp4")], config);
         assert!(!stage.should_run(&msg));
     }
 
