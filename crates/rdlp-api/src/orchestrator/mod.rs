@@ -187,7 +187,7 @@ impl Orchestrator {
     /// Returns `None` if FFmpeg is not available (graceful degradation).
     fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
         let ffmpeg =
-            match rdlp_ffmpeg::FFmpegRunner::with_location(config.ffmpeg_location.as_deref()) {
+            match rdlp_ffmpeg::FFmpegRunner::with_location(config.postprocess.ffmpeg_location.as_deref()) {
                 Ok(f) => {
                     debug!("FFmpeg initialized successfully");
                     rdlp_ffmpeg::set_verbose(config.verbose);

@@ -32,7 +32,7 @@ impl Orchestrator {
         }
 
         // Config-based path: delegate to the structured pipeline
-        if !self.config.write_subtitles && !self.config.embed_subtitles {
+        if !self.config.postprocess.write_subtitles && !self.config.postprocess.embed_subtitles {
             return Ok(Vec::new());
         }
 

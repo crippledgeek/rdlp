@@ -6,7 +6,7 @@ use super::{Orchestrator, Result};
 use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, warn};
-use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory, PostProcessConfig};
+use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -64,53 +64,17 @@ fn make_callback_factory(
 }
 
 impl Orchestrator {
-    /// Convert Config to PostProcessConfig
-    pub(super) fn to_postprocess_config(&self) -> PostProcessConfig {
-        PostProcessConfig {
-            extract_audio: self.config.extract_audio,
-            audio_format: self.config.audio_format,
-            audio_quality: self.config.audio_quality.clone(),
-            recode_video: self.config.recode_video,
-            remux_container: self.config.remux_container,
-            merge_output_format: self.config.merge_output_format,
-            embed_thumbnail: self.config.embed_thumbnail,
-            write_thumbnail: self.config.write_thumbnail,
-            embed_metadata: self.config.embed_metadata,
-            embed_subtitles: self.config.embed_subtitles,
-            write_subtitles: self.config.write_subtitles,
-            keep_video: self.config.keep_video,
-            ffmpeg_location: self.config.ffmpeg_location.clone(),
-            ffmpeg_args: self.config.ffmpeg_args.clone(),
-            normalize_audio: self.config.normalize_audio,
-            loudnorm: self.config.loudnorm,
-            audio_gain_target: self.config.audio_gain_target,
-            loudnorm_preset: self.config.loudnorm_preset.clone(),
-            loudnorm_target_i: self.config.loudnorm_target_i,
-            loudnorm_target_tp: self.config.loudnorm_target_tp,
-            loudnorm_target_lra: self.config.loudnorm_target_lra,
-            loudnorm_dynamic: self.config.loudnorm_dynamic,
-            loudnorm_precompress: self.config.loudnorm_precompress,
-            normalize_boost: self.config.normalize_boost,
-            normalize_boost_db: self.config.normalize_boost_db,
-            verbose: self.config.verbose,
-            video_encoder: self.config.video_encoder.clone(),
-            recode_audio: self.config.recode_audio.clone(),
-            recode_container: self.config.recode_container,
-            fixup: self.config.fixup,
-        }
-    }
-
     /// Check if post-processing is needed based on configuration
     pub(super) fn needs_postprocessing(&self) -> bool {
-        self.config.extract_audio
-            || self.config.embed_metadata
-            || self.config.embed_thumbnail
-            || self.config.embed_subtitles
-            || self.config.recode_video.is_some()
-            || self.config.recode_container.is_some()
-            || self.config.remux_container.is_some()
-            || self.config.normalize_audio
-            || self.config.fixup != rdlp_types::FixupPolicy::Never
+        self.config.postprocess.extract_audio
+            || self.config.postprocess.embed_metadata
+            || self.config.postprocess.embed_thumbnail
+            || self.config.postprocess.embed_subtitles
+            || self.config.postprocess.recode_video.is_some()
+            || self.config.postprocess.recode_container.is_some()
+            || self.config.postprocess.remux_container.is_some()
+            || self.config.postprocess.normalize_audio
+            || self.config.postprocess.fixup != rdlp_types::FixupPolicy::Never
     }
 
     /// Run post-processing pipeline on downloaded file(s)
@@ -155,7 +119,7 @@ impl Orchestrator {
             return Ok(files);
         }
 
-        let pp_config = self.to_postprocess_config();
+        let pp_config = self.config.postprocess.clone();
 
         debug!("Running post-processing pipeline...");
 

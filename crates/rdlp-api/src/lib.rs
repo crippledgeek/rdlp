@@ -43,8 +43,8 @@ pub use rdlp_core::{DownloadProgress, config_io};
 pub use rdlp_postprocess::TempRegistry;
 pub use rdlp_types::{
     AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, Format, InfoDict,
-    RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse,
-    SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
+    PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
+    SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
 };
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

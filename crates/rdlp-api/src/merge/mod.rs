@@ -38,7 +38,7 @@ impl MergeOverrides for OutputOptions {
                 // defaults so Config::validate() won't reject the combination.
                 config.quiet = true;
                 config.progress = false;
-                config.embed_thumbnail = false;
+                config.postprocess.embed_thumbnail = false;
             }
         }
     }
@@ -58,7 +58,7 @@ impl MergeOverrides for FormatOptions {
 impl MergeOverrides for SubtitleOptions {
     fn merge_into(&self, config: &mut Config) {
         if let Some(v) = self.write_subs {
-            config.write_subtitles = v;
+            config.postprocess.write_subtitles = v;
         }
         if let Some(v) = self.write_auto_subs {
             config.write_auto_subtitles = v;
@@ -70,7 +70,7 @@ impl MergeOverrides for SubtitleOptions {
             config.subtitle_format = Some(v);
         }
         if let Some(v) = self.embed_subs {
-            config.embed_subtitles = v;
+            config.postprocess.embed_subtitles = v;
         }
         if let Some(v) = self.strict_subs {
             config.strict_subs = v;
@@ -81,66 +81,66 @@ impl MergeOverrides for SubtitleOptions {
 impl MergeOverrides for PostProcessOptions {
     fn merge_into(&self, config: &mut Config) {
         if let Some(v) = self.remux {
-            config.remux_container = Some(v);
+            config.postprocess.remux_container = Some(v);
         }
         if let Some(v) = self.extract_audio {
-            config.extract_audio = true;
-            config.audio_format = Some(v);
+            config.postprocess.extract_audio = true;
+            config.postprocess.audio_format = Some(v);
         }
         if let Some(v) = self.embed_metadata {
-            config.embed_metadata = v;
+            config.postprocess.embed_metadata = v;
         }
         if let Some(v) = self.embed_thumbnail {
-            config.embed_thumbnail = v;
+            config.postprocess.embed_thumbnail = v;
         }
         if let Some(true) = self.no_thumbnail {
-            config.embed_thumbnail = false;
-            config.write_thumbnail = false;
+            config.postprocess.embed_thumbnail = false;
+            config.postprocess.write_thumbnail = false;
         }
         if let Some(v) = self.write_thumbnail {
-            config.write_thumbnail = v;
+            config.postprocess.write_thumbnail = v;
         }
         if let Some(v) = self.normalize_audio {
-            config.normalize_audio = v;
+            config.postprocess.normalize_audio = v;
         }
         if let Some(v) = self.loudnorm {
-            config.loudnorm = v;
+            config.postprocess.loudnorm = v;
         }
         if let Some(ref v) = self.loudnorm_preset {
-            config.loudnorm_preset = Some(v.clone());
+            config.postprocess.loudnorm_preset = Some(v.clone());
         }
         if let Some(v) = self.loudnorm_target_i {
-            config.loudnorm_target_i = Some(v);
+            config.postprocess.loudnorm_target_i = Some(v);
         }
         if let Some(v) = self.loudnorm_target_tp {
-            config.loudnorm_target_tp = Some(v);
+            config.postprocess.loudnorm_target_tp = Some(v);
         }
         if let Some(v) = self.loudnorm_target_lra {
-            config.loudnorm_target_lra = Some(v);
+            config.postprocess.loudnorm_target_lra = Some(v);
         }
         if let Some(v) = self.loudnorm_dynamic {
-            config.loudnorm_dynamic = v;
+            config.postprocess.loudnorm_dynamic = v;
         }
         if let Some(v) = self.loudnorm_precompress {
-            config.loudnorm_precompress = v;
+            config.postprocess.loudnorm_precompress = v;
         }
         if let Some(v) = self.normalize_boost {
-            config.normalize_boost = v;
+            config.postprocess.normalize_boost = v;
         }
         if let Some(v) = self.normalize_boost_db {
-            config.normalize_boost_db = Some(v);
+            config.postprocess.normalize_boost_db = Some(v);
         }
         if let Some(v) = self.recode_video {
-            config.recode_video = Some(v);
+            config.postprocess.recode_video = Some(v);
         }
         if let Some(ref v) = self.video_encoder {
-            config.video_encoder = Some(v.clone());
+            config.postprocess.video_encoder = Some(v.clone());
         }
         if let Some(v) = self.recode_container {
-            config.recode_container = Some(v);
+            config.postprocess.recode_container = Some(v);
         }
         if let Some(ref v) = self.recode_audio {
-            config.recode_audio = v.clone();
+            config.postprocess.recode_audio = v.clone();
         }
     }
 }
