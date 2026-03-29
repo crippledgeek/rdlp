@@ -100,7 +100,6 @@ pub(crate) fn merge_config(
     }
     if args.verbose {
         config.verbose = true;
-        config.postprocess.verbose = true;
     }
     if args.simulate {
         config.simulate = true;

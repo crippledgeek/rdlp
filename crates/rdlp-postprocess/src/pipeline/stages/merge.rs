@@ -163,6 +163,7 @@ mod tests {
             config: Arc::new(PostProcess::default()),
             original_stem: "test".to_string(),
             is_hls: false,
+            verbose: false,
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),

@@ -291,7 +291,7 @@ impl PipelineStage for RecodeStage {
             }
         };
 
-        opts.verbose = msg.config.verbose;
+        opts.verbose = msg.verbose;
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
         // Bridge FFmpeg logs to the callback for real-time encoder output
@@ -401,6 +401,7 @@ mod tests {
             config: Arc::new(config),
             original_stem: "test".to_string(),
             is_hls: false,
+            verbose: false,
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),

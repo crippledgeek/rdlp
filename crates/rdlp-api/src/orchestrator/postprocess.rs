@@ -143,6 +143,7 @@ impl Orchestrator {
                 Arc::new(pp_config),
                 original_stem,
                 is_hls,
+                self.config.verbose,
                 callback_factory,
             )
             .await

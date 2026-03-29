@@ -56,6 +56,8 @@ pub struct PipelineMessage {
     pub original_stem: String,
     /// Whether the source was HLS (triggers auto-remux in `RemuxStage`).
     pub is_hls: bool,
+    /// Enable verbose FFmpeg logging in stages.
+    pub verbose: bool,
     /// Factory for creating per-stage progress callbacks.
     pub callback_factory: Option<PostProcessCallbackFactory>,
     /// Error channel — the first fatal stage sends here; subsequent stages see `None`.
@@ -132,6 +134,7 @@ impl Pipeline {
     /// Run the full pipeline for a single video.
     ///
     /// Returns the final `current_files` from the tracker on success.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         info: InfoDict,
@@ -139,6 +142,7 @@ impl Pipeline {
         config: Arc<PostProcess>,
         original_stem: String,
         is_hls: bool,
+        verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
     ) -> anyhow::Result<Vec<std::path::PathBuf>> {
         let _permit = self
@@ -157,6 +161,7 @@ impl Pipeline {
             config,
             original_stem,
             is_hls,
+            verbose,
             callback_factory,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
@@ -194,6 +199,7 @@ impl Pipeline {
         self: Arc<Self>,
         inputs: Vec<BatchInput>,
         config: Arc<PostProcess>,
+        verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
     ) -> Vec<anyhow::Result<Vec<std::path::PathBuf>>> {
         let mut handles = Vec::with_capacity(inputs.len());
@@ -209,6 +215,7 @@ impl Pipeline {
                         config,
                         input.original_stem,
                         input.is_hls,
+                        verbose,
                         factory,
                     )
                     .await
@@ -427,6 +434,7 @@ mod tests {
         Arc<PostProcess>,
         String,
         bool,
+        bool,
         Option<PostProcessCallbackFactory>,
     ) {
         (
@@ -435,6 +443,7 @@ mod tests {
             Arc::new(PostProcess::default()),
             "video".to_string(),
             false,
+            false,
             None,
         )
     }
@@ -442,8 +451,8 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_passthrough() {
         let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
     }
@@ -451,16 +460,16 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_skip_stage() {
         let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_pipeline_fatal_error_cascades() {
         let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("test error"), "unexpected error: {err}");
@@ -472,8 +481,8 @@ mod tests {
             Arc::new(NonFatalFailStage),
             Arc::new(PassthroughStage),
         ]);
-        let (info, files, config, stem, hls, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
         assert!(result.is_ok());
     }
 
@@ -533,9 +542,9 @@ mod tests {
         for _ in 0..6 {
             let p = StdArc::clone(&pipeline);
             handles.push(tokio::spawn(async move {
-                let (info, files, config, stem, hls, cb) =
+                let (info, files, config, stem, hls, verbose, cb) =
                     run_args(vec![PathBuf::from("/tmp/v.mp4")]);
-                p.run(info, files, config, stem, hls, cb).await
+                p.run(info, files, config, stem, hls, verbose, cb).await
             }));
         }
         for h in handles {

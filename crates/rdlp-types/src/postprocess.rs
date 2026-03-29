@@ -66,8 +66,6 @@ pub struct PostProcess {
     pub normalize_boost: bool,
     /// Gain applied by the limiter-boost stage (dB).
     pub normalize_boost_db: Option<f64>,
-    /// Enable verbose FFmpeg output.
-    pub verbose: bool,
     /// FFmpeg encoder name for the video stream (e.g. `"libx265"`).
     pub video_encoder: Option<String>,
     /// How to handle audio during video recode.
@@ -106,7 +104,6 @@ impl Default for PostProcess {
             loudnorm_precompress: false,
             normalize_boost: false,
             normalize_boost_db: None,
-            verbose: false,
             video_encoder: None,
             recode_audio: RecodeAudioMode::default(),
             recode_container: None,

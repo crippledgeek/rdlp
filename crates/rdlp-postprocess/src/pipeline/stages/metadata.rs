@@ -158,7 +158,7 @@ impl PipelineStage for MetadataStage {
                 },
             ))
         });
-        let log_callback = if msg.config.verbose {
+        let log_callback = if msg.verbose {
             stage_callback
         } else {
             None
@@ -220,6 +220,7 @@ mod tests {
             config: Arc::new(config),
             original_stem: "test".to_string(),
             is_hls: false,
+            verbose: false,
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
