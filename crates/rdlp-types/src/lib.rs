@@ -27,6 +27,7 @@ pub mod audio_format;
 pub mod browser_type;
 pub mod config;
 pub mod container;
+pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
 pub mod parse_error;
@@ -43,6 +44,7 @@ pub use audio_format::AudioFormat;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
+pub use fixup_policy::FixupPolicy;
 pub use format::{
     Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
 };
