@@ -29,8 +29,8 @@ impl NormalizeStage {
         Self { ffmpeg }
     }
 
-    /// Build normalization options from `PostProcessConfig`.
-    pub(crate) fn build_options(config: &rdlp_core::PostProcessConfig) -> NormalizeOptions {
+    /// Build normalization options from `PostProcess`.
+    pub(crate) fn build_options(config: &rdlp_types::PostProcess) -> NormalizeOptions {
         let mode = if config.loudnorm {
             AudioNormMode::Loudnorm
         } else {
@@ -141,12 +141,12 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::PostProcessConfig;
+    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
-    fn make_msg(files: Vec<PathBuf>, config: PostProcessConfig) -> PipelineMessage {
+    fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         PipelineMessage {
@@ -172,9 +172,9 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = NormalizeStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let msg = make_msg(vec![PathBuf::from("/tmp/video.mp4")], config);
         assert!(stage.should_run(&msg));
@@ -186,7 +186,7 @@ mod tests {
         let stage = NormalizeStage::new(ffmpeg);
         let msg = make_msg(
             vec![PathBuf::from("/tmp/video.mp4")],
-            PostProcessConfig::default(),
+            PostProcess::default(),
         );
         assert!(!stage.should_run(&msg));
     }
@@ -200,9 +200,9 @@ mod tests {
 
     #[test]
     fn build_options_peak_defaults() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert_eq!(opts.mode, AudioNormMode::Peak);
@@ -211,10 +211,10 @@ mod tests {
 
     #[test]
     fn build_options_loudnorm_streaming_preset() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
             loudnorm: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert_eq!(opts.mode, AudioNormMode::Loudnorm);
@@ -226,11 +226,11 @@ mod tests {
 
     #[test]
     fn build_options_loudnorm_broadcast_preset() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
             loudnorm: true,
             loudnorm_preset: Some("broadcast".to_string()),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert!((opts.target_i - (-23.0)).abs() < f64::EPSILON);
@@ -240,13 +240,13 @@ mod tests {
 
     #[test]
     fn build_options_individual_overrides() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
             loudnorm: true,
             loudnorm_preset: Some("broadcast".to_string()),
             loudnorm_target_i: Some(-16.0),
             loudnorm_target_tp: Some(-1.5),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert!((opts.target_i - (-16.0)).abs() < f64::EPSILON);
@@ -256,11 +256,11 @@ mod tests {
 
     #[test]
     fn build_options_boost_enabled() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
             normalize_boost: true,
             normalize_boost_db: Some(8.0),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert!(opts.boost_enabled);
@@ -269,11 +269,11 @@ mod tests {
 
     #[test]
     fn build_options_boost_default_gain() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             normalize_audio: true,
             normalize_boost: true,
             normalize_boost_db: None,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
         assert!(opts.boost_enabled);

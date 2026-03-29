@@ -382,12 +382,12 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::PostProcessConfig;
+    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
-    fn make_msg(files: Vec<PathBuf>, config: PostProcessConfig) -> PipelineMessage {
+    fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         PipelineMessage {
@@ -413,9 +413,9 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = RecodeStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             recode_video: Some(ContainerFormat::Mkv),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let msg = make_msg(vec![PathBuf::from("/tmp/video.mp4")], config);
         assert!(stage.should_run(&msg));
@@ -427,7 +427,7 @@ mod tests {
         let stage = RecodeStage::new(ffmpeg);
         let msg = make_msg(
             vec![PathBuf::from("/tmp/video.mp4")],
-            PostProcessConfig::default(),
+            PostProcess::default(),
         );
         assert!(!stage.should_run(&msg));
     }

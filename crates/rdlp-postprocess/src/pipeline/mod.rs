@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
-use rdlp_core::{PostProcessCallbackFactory, PostProcessConfig};
+use rdlp_core::PostProcessCallbackFactory;
+use rdlp_types::PostProcess;
 use rdlp_types::InfoDict;
 
 pub use registry::TempRegistry;
@@ -50,7 +51,7 @@ pub struct PipelineMessage {
     /// File lifecycle state.
     pub tracker: FileTracker,
     /// Post-processing configuration.
-    pub config: Arc<PostProcessConfig>,
+    pub config: Arc<PostProcess>,
     /// Original file stem for thumbnail / subtitle discovery after UUID renames.
     pub original_stem: String,
     /// Whether the source was HLS (triggers auto-remux in `RemuxStage`).
@@ -135,7 +136,7 @@ impl Pipeline {
         &self,
         info: InfoDict,
         files: Vec<std::path::PathBuf>,
-        config: Arc<PostProcessConfig>,
+        config: Arc<PostProcess>,
         original_stem: String,
         is_hls: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
@@ -192,7 +193,7 @@ impl Pipeline {
     pub async fn run_batch(
         self: Arc<Self>,
         inputs: Vec<BatchInput>,
-        config: Arc<PostProcessConfig>,
+        config: Arc<PostProcess>,
         callback_factory: Option<PostProcessCallbackFactory>,
     ) -> Vec<anyhow::Result<Vec<std::path::PathBuf>>> {
         let mut handles = Vec::with_capacity(inputs.len());
@@ -423,7 +424,7 @@ mod tests {
     ) -> (
         InfoDict,
         Vec<PathBuf>,
-        Arc<PostProcessConfig>,
+        Arc<PostProcess>,
         String,
         bool,
         Option<PostProcessCallbackFactory>,
@@ -431,7 +432,7 @@ mod tests {
         (
             make_info(),
             files,
-            Arc::new(PostProcessConfig::default()),
+            Arc::new(PostProcess::default()),
             "video".to_string(),
             false,
             None,

@@ -132,14 +132,14 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::PostProcessConfig;
+    use rdlp_types::PostProcess;
     use rdlp_types::{ContainerFormat, InfoDict};
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
     fn make_msg_with_config(
         files: Vec<PathBuf>,
-        config: PostProcessConfig,
+        config: PostProcess,
         is_hls: bool,
     ) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
@@ -167,9 +167,9 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = RemuxStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             remux_container: Some(ContainerFormat::Mp4),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let msg = make_msg_with_config(vec![PathBuf::from("/tmp/video.ts")], config, false);
         assert!(stage.should_run(&msg));
@@ -182,7 +182,7 @@ mod tests {
 
         let msg = make_msg_with_config(
             vec![PathBuf::from("/tmp/video.ts")],
-            PostProcessConfig::default(),
+            PostProcess::default(),
             true,
         );
         assert!(stage.should_run(&msg));
@@ -195,7 +195,7 @@ mod tests {
 
         let msg = make_msg_with_config(
             vec![PathBuf::from("/tmp/video.mp4")],
-            PostProcessConfig::default(),
+            PostProcess::default(),
             false,
         );
         assert!(!stage.should_run(&msg));
@@ -206,10 +206,10 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = RemuxStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             remux_container: Some(ContainerFormat::Mkv),
             extract_audio: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let msg = make_msg_with_config(vec![PathBuf::from("/tmp/video.ts")], config, false);
         assert!(!stage.should_run(&msg));
@@ -227,9 +227,9 @@ mod tests {
                 "https://x.com".to_string(),
             ),
             tracker: FileTracker::new(vec![PathBuf::from("/tmp/v.mp4")], reg),
-            config: Arc::new(PostProcessConfig {
+            config: Arc::new(PostProcess {
                 remux_container: Some(ContainerFormat::Mp4),
-                ..PostProcessConfig::default()
+                ..PostProcess::default()
             }),
             original_stem: "v".into(),
             is_hls: false,
@@ -253,7 +253,7 @@ mod tests {
                 "https://x.com".to_string(),
             ),
             tracker: FileTracker::new(vec![PathBuf::from("/tmp/v.ts")], reg),
-            config: Arc::new(PostProcessConfig::default()),
+            config: Arc::new(PostProcess::default()),
             original_stem: "v".into(),
             is_hls: true,
             callback_factory: None,

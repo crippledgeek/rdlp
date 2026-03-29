@@ -20,7 +20,7 @@
 //! use rdlp_postprocess::pipeline::PipelineStage;
 //! use rdlp_postprocess::{MergeStage, RemuxStage, MetadataStage, ThumbnailStage};
 //! use rdlp_postprocess::FFmpegRunner;
-//! use rdlp_core::PostProcessConfig;
+//! use rdlp_postprocess::PostProcess;
 //! use rdlp_types::InfoDict;
 //! use std::path::PathBuf;
 //! use std::sync::Arc;
@@ -45,7 +45,7 @@
 //!     "https://example.com/video".to_string(),
 //! );
 //!
-//! let config = Arc::new(PostProcessConfig::default());
+//! let config = Arc::new(PostProcess::default());
 //! let files = vec![PathBuf::from("video.mp4")];
 //!
 //! let output = pipeline.run(info, files, config, "video".to_string(), false, None).await?;
@@ -90,4 +90,4 @@ pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 pub use rdlp_ffmpeg::FFmpegRunner;
 
 // Re-export core types for convenience
-pub use rdlp_core::PostProcessConfig;
+pub use rdlp_types::PostProcess;
