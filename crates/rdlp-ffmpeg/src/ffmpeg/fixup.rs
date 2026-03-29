@@ -102,8 +102,9 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
     for stream in &info.streams {
         // Stretched SAR: only flag clearly wrong values
         // Conservative: 0:x, x:0, or extreme ratios (>10:1)
-        if stream.codec_type == "video" {
-            if let (Some(num), Some(den)) = (stream.sar_num, stream.sar_den) {
+        if stream.codec_type == "video"
+            && let (Some(num), Some(den)) = (stream.sar_num, stream.sar_den)
+        {
                 let is_broken = num == 0
                     || den == 0
                     || (num > 0
@@ -118,7 +119,6 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
                         sar_den: den,
                     });
                 }
-            }
         }
 
         // Zero-duration stream (video or audio)
@@ -137,17 +137,16 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
     }
 
     // Truncated file: actual < 90% of expected
-    if let Some(expected) = expected_duration {
-        if expected > 0.0 {
-            if let Some(actual) = info.duration {
-                if actual > 0.0 && actual < expected * 0.9 {
-                    issues.push(FixupIssue::TruncatedFile {
-                        expected_secs: expected,
-                        actual_secs: actual,
-                    });
-                }
-            }
-        }
+    if let Some(expected) = expected_duration
+        && expected > 0.0
+        && let Some(actual) = info.duration
+        && actual > 0.0
+        && actual < expected * 0.9
+    {
+        issues.push(FixupIssue::TruncatedFile {
+            expected_secs: expected,
+            actual_secs: actual,
+        });
     }
 
     issues
