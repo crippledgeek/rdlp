@@ -13,7 +13,7 @@ use crate::recode_audio_mode::RecodeAudioMode;
 ///
 /// This struct is the canonical post-processing config type. It is placed in
 /// `rdlp-types` so all crates can reference it without depending on `rdlp-core`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PostProcess {
     /// Extract audio only (discard video stream).
