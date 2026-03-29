@@ -2,7 +2,7 @@
 //!
 //! Channel-based post-processing pipeline for rdlp.
 //!
-//! This crate provides an 8-stage pipeline for FFmpeg-based media transformations:
+//! This crate provides a 9-stage pipeline for FFmpeg-based media transformations:
 //! - **MergeStage**: Combine separate video and audio streams
 //! - **AudioExtractStage**: Extract and convert audio to various formats
 //! - **NormalizeStage**: Peak / EBU R128 loudnorm audio normalization
@@ -11,6 +11,7 @@
 //! - **SubtitleStage**: Embed subtitle files into video containers
 //! - **MetadataStage**: Embed title, artist, chapters, etc.
 //! - **ThumbnailStage**: Embed cover art (FFmpeg + MP4 covr atom)
+//! - **FixupStage**: Detect and repair container/codec issues
 //!
 //! ## Quick Start
 //!
@@ -80,8 +81,8 @@ pub mod pipeline;
 
 // Re-export pipeline types for use by rdlp-api
 pub use pipeline::stages::{
-    AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage, RemuxStage,
-    SubtitleStage, ThumbnailStage,
+    AudioExtractStage, FixupStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage,
+    RemuxStage, SubtitleStage, ThumbnailStage,
 };
 pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 
