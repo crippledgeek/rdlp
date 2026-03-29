@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::container::ContainerFormat;
+use crate::postprocess::PostProcess;
 
 #[test]
 fn test_default_config() {
@@ -58,22 +59,18 @@ fn test_default_output_to_stdout_is_false() {
 
 #[test]
 fn test_stdout_valid_when_no_postprocessing() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
     assert!(config.validate().is_ok());
 }
 
 #[test]
 fn test_stdout_rejects_extract_audio() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        extract_audio: true,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
+    config.postprocess.extract_audio = true;
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -85,12 +82,10 @@ fn test_stdout_rejects_extract_audio() {
 
 #[test]
 fn test_stdout_rejects_remux() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        remux_container: Some(ContainerFormat::Mp4),
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
+    config.postprocess.remux_container = Some(ContainerFormat::Mp4);
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -102,12 +97,10 @@ fn test_stdout_rejects_remux() {
 
 #[test]
 fn test_stdout_rejects_embed_thumbnail() {
-    let config = Config {
-        output_to_stdout: true,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
     // embed_thumbnail defaults to true, which should fail
-    assert!(config.embed_thumbnail);
+    assert!(config.postprocess.embed_thumbnail);
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -119,12 +112,10 @@ fn test_stdout_rejects_embed_thumbnail() {
 
 #[test]
 fn test_stdout_rejects_embed_metadata() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        embed_metadata: true,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
+    config.postprocess.embed_metadata = true;
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -136,12 +127,10 @@ fn test_stdout_rejects_embed_metadata() {
 
 #[test]
 fn test_stdout_rejects_normalize_audio() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        normalize_audio: true,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
+    config.postprocess.normalize_audio = true;
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -153,12 +142,10 @@ fn test_stdout_rejects_normalize_audio() {
 
 #[test]
 fn test_stdout_rejects_normalize_boost() {
-    let config = Config {
-        output_to_stdout: true,
-        embed_thumbnail: false,
-        normalize_boost: true,
-        ..Default::default()
-    };
+    let mut config = Config::default();
+    config.output_to_stdout = true;
+    config.postprocess.embed_thumbnail = false;
+    config.postprocess.normalize_boost = true;
     let err = config.validate().unwrap_err();
     assert_eq!(
         err,
@@ -177,4 +164,12 @@ fn test_stdout_incompatible_error_display() {
         err.to_string(),
         "--remux is not compatible with -o - (stdout output)"
     );
+}
+
+#[test]
+fn test_postprocess_embedded_in_config() {
+    let config = Config::default();
+    assert!(config.postprocess.embed_thumbnail);
+    assert!(!config.postprocess.extract_audio);
+    assert_eq!(config.postprocess.fixup, crate::fixup_policy::FixupPolicy::DetectOrWarn);
 }

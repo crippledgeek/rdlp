@@ -43,7 +43,7 @@ impl ResolvedContainer {
     /// 4. Fallback to MP4 with warning
     pub fn resolve(config: &rdlp_types::Config, output_path: Option<&Path>) -> Self {
         // Priority 1: explicit remux target
-        if let Some(c) = config.remux_container {
+        if let Some(c) = config.postprocess.remux_container {
             return Self {
                 format: c,
                 source: ContainerSource::RemuxConfig,
@@ -51,7 +51,7 @@ impl ResolvedContainer {
         }
 
         // Priority 2: explicit merge output format
-        if let Some(c) = config.merge_output_format {
+        if let Some(c) = config.postprocess.merge_output_format {
             return Self {
                 format: c,
                 source: ContainerSource::MergeConfig,
@@ -118,8 +118,11 @@ mod tests {
 
     fn base_config() -> rdlp_types::Config {
         rdlp_types::Config {
-            remux_container: None,
-            merge_output_format: None,
+            postprocess: rdlp_types::PostProcess {
+                remux_container: None,
+                merge_output_format: None,
+                ..rdlp_types::PostProcess::default()
+            },
             ..rdlp_types::Config::default()
         }
     }
@@ -127,8 +130,8 @@ mod tests {
     #[test]
     fn test_resolve_remux_wins_over_all() {
         let mut config = base_config();
-        config.remux_container = Some(ContainerFormat::Mkv);
-        config.merge_output_format = Some(ContainerFormat::Mp4);
+        config.postprocess.remux_container = Some(ContainerFormat::Mkv);
+        config.postprocess.merge_output_format = Some(ContainerFormat::Mp4);
         let path = PathBuf::from("/tmp/video.webm");
         let r = ResolvedContainer::resolve(&config, Some(&path));
         assert_eq!(r.format, ContainerFormat::Mkv);
@@ -138,7 +141,7 @@ mod tests {
     #[test]
     fn test_resolve_merge_wins_over_extension() {
         let mut config = base_config();
-        config.merge_output_format = Some(ContainerFormat::Mkv);
+        config.postprocess.merge_output_format = Some(ContainerFormat::Mkv);
         let path = PathBuf::from("/tmp/video.mp4");
         let r = ResolvedContainer::resolve(&config, Some(&path));
         assert_eq!(r.format, ContainerFormat::Mkv);
@@ -174,7 +177,7 @@ mod tests {
     #[test]
     fn test_resolve_no_path_uses_config() {
         let mut config = base_config();
-        config.merge_output_format = Some(ContainerFormat::Mkv);
+        config.postprocess.merge_output_format = Some(ContainerFormat::Mkv);
         let r = ResolvedContainer::resolve(&config, None);
         assert_eq!(r.format, ContainerFormat::Mkv);
         assert_eq!(r.source, ContainerSource::MergeConfig);
@@ -275,7 +278,7 @@ mod tests {
     #[test]
     fn test_output_stub_uses_resolver() {
         let mut config = base_config();
-        config.remux_container = Some(ContainerFormat::Mkv);
+        config.postprocess.remux_container = Some(ContainerFormat::Mkv);
         let stub = output_stub(&config, std::path::Path::new("/tmp"), "My Video");
         assert_eq!(stub, PathBuf::from("/tmp/My Video.mkv"));
     }

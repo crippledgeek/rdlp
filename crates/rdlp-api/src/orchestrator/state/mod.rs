@@ -439,7 +439,7 @@ impl DownloadPhase {
                 };
 
                 // Download thumbnail for embedding or standalone use
-                if orchestrator.config.embed_thumbnail || orchestrator.config.write_thumbnail {
+                if orchestrator.config.postprocess.embed_thumbnail || orchestrator.config.postprocess.write_thumbnail {
                     orchestrator.download_thumbnail(&info, &output_path).await;
                 }
 

@@ -49,6 +49,6 @@ pub use retry::{ExponentialBuilder, RetryConfig, Retryable, is_retryable_error};
 // Re-export traits
 pub use traits::{
     CookieJar, DownloadProgress, DownloadStats, Downloader, ExtractionContext, InfoExtractor,
-    JsEngine, PostProcessCallback, PostProcessCallbackFactory, PostProcessConfig, ProgressCallback,
+    JsEngine, PostProcessCallback, PostProcessCallbackFactory, ProgressCallback,
     SearchExtractor,
 };

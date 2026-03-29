@@ -89,9 +89,9 @@ fn test_merge_config_write_subtitles() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.write_subtitles);
+    assert!(config.postprocess.write_subtitles);
     assert!(!config.write_auto_subtitles);
-    assert!(!config.embed_subtitles);
+    assert!(!config.postprocess.embed_subtitles);
 }
 
 #[test]
@@ -192,9 +192,9 @@ fn test_merge_config_embed_implies_write() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.embed_subtitles);
+    assert!(config.postprocess.embed_subtitles);
     assert!(
-        config.write_subtitles,
+        config.postprocess.write_subtitles,
         "--embed-subtitles should imply --write-subtitles"
     );
 }
@@ -208,8 +208,8 @@ fn test_merge_config_embed_with_write_already_set() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.embed_subtitles);
-    assert!(config.write_subtitles);
+    assert!(config.postprocess.embed_subtitles);
+    assert!(config.postprocess.write_subtitles);
 }
 
 #[test]
@@ -219,9 +219,9 @@ fn test_merge_config_subtitle_defaults_are_off() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(!config.write_subtitles);
+    assert!(!config.postprocess.write_subtitles);
     assert!(!config.write_auto_subtitles);
-    assert!(!config.embed_subtitles);
+    assert!(!config.postprocess.embed_subtitles);
     assert!(config.subtitle_langs.is_empty());
     assert!(config.subtitle_format.is_none());
 }
@@ -238,9 +238,9 @@ fn test_merge_config_subtitle_combined_options() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.write_subtitles);
+    assert!(config.postprocess.write_subtitles);
     assert!(config.write_auto_subtitles);
-    assert!(config.embed_subtitles);
+    assert!(config.postprocess.embed_subtitles);
     assert_eq!(
         config.subtitle_langs,
         vec!["en".to_string(), "es".to_string()]
@@ -257,7 +257,7 @@ fn test_merge_config_list_subs() {
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
     assert!(
-        config.write_subtitles,
+        config.postprocess.write_subtitles,
         "--list-subs should imply --write-subtitles"
     );
     assert!(config.list_subs, "--list-subs should set list_subs");
@@ -272,7 +272,7 @@ fn test_merge_config_list_subs_only() {
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
     assert!(
-        config.write_subtitles,
+        config.postprocess.write_subtitles,
         "--list-subs-only should imply --write-subtitles"
     );
     assert!(config.list_subs, "--list-subs-only should set list_subs");
@@ -310,9 +310,9 @@ fn test_merge_config_extract_audio() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.extract_audio);
+    assert!(config.postprocess.extract_audio);
     // extract_audio without format defaults to mp3
-    assert_eq!(config.audio_format, Some(AudioFormat::Mp3));
+    assert_eq!(config.postprocess.audio_format, Some(AudioFormat::Mp3));
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn test_merge_config_audio_format_direct() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert_eq!(config.audio_format, Some(AudioFormat::Flac));
+    assert_eq!(config.postprocess.audio_format, Some(AudioFormat::Flac));
 }
 
 #[test]
@@ -334,10 +334,10 @@ fn test_merge_config_normalize_boost_implies_loudnorm() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert!(config.normalize_boost);
-    assert!(config.loudnorm, "normalize_boost should imply loudnorm");
+    assert!(config.postprocess.normalize_boost);
+    assert!(config.postprocess.loudnorm, "normalize_boost should imply loudnorm");
     assert!(
-        config.normalize_audio,
+        config.postprocess.normalize_audio,
         "normalize_boost should imply normalize_audio"
     );
 }
@@ -408,7 +408,7 @@ fn test_merge_config_stdout_sets_flags() {
     assert!(config.output_to_stdout);
     assert!(config.quiet);
     assert!(!config.progress);
-    assert!(!config.embed_thumbnail);
+    assert!(!config.postprocess.embed_thumbnail);
 }
 
 #[test]

@@ -38,8 +38,8 @@ use rdlp_extractor::{ExtractorRegistry, ExtractorRegistryTrait};
 use rdlp_http::HttpClientFactory;
 use rdlp_jsinterp::BoaJsEngine;
 use rdlp_postprocess::{
-    AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, Pipeline, RecodeStage,
-    RemuxStage, SubtitleStage, TempRegistry, ThumbnailStage,
+    AudioExtractStage, FixupStage, MergeStage, MetadataStage, NormalizeStage, Pipeline,
+    RecodeStage, RemuxStage, SubtitleStage, TempRegistry, ThumbnailStage,
 };
 use rdlp_types::{Config, Format};
 use std::collections::HashSet;
@@ -187,7 +187,7 @@ impl Orchestrator {
     /// Returns `None` if FFmpeg is not available (graceful degradation).
     fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
         let ffmpeg =
-            match rdlp_ffmpeg::FFmpegRunner::with_location(config.ffmpeg_location.as_deref()) {
+            match rdlp_ffmpeg::FFmpegRunner::with_location(config.postprocess.ffmpeg_location.as_deref()) {
                 Ok(f) => {
                     debug!("FFmpeg initialized successfully");
                     rdlp_ffmpeg::set_verbose(config.verbose);
@@ -199,7 +199,7 @@ impl Orchestrator {
                 }
             };
 
-        // Stage order: 0→Merge 1→AudioExtract 2→Normalize 3→Remux 4→Recode 5→Subtitle 6→Metadata 7→Thumbnail
+        // Stage order: 0→Merge 1→AudioExtract 2→Normalize 3→Remux 4→Recode 5→Subtitle 6→Metadata 7→Thumbnail 8→Fixup
         let stages: Vec<Arc<dyn rdlp_postprocess::pipeline::PipelineStage>> = vec![
             Arc::new(MergeStage::new(Arc::clone(&ffmpeg))),
             Arc::new(AudioExtractStage::new(Arc::clone(&ffmpeg))),
@@ -208,7 +208,8 @@ impl Orchestrator {
             Arc::new(RecodeStage::new(Arc::clone(&ffmpeg))),
             Arc::new(SubtitleStage::new(Arc::clone(&ffmpeg))),
             Arc::new(MetadataStage::new(Arc::clone(&ffmpeg))),
-            Arc::new(ThumbnailStage::new(ffmpeg)),
+            Arc::new(ThumbnailStage::new(Arc::clone(&ffmpeg))),
+            Arc::new(FixupStage::new(ffmpeg)),
         ];
 
         Some(Arc::new(Pipeline::new(stages, temp_registry, 2)))

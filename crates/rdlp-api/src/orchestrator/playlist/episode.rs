@@ -300,7 +300,7 @@ impl Orchestrator {
         let final_info = &final_info_owned;
 
         // Download thumbnail if needed (before post-processing so embed can find it)
-        if self.config.embed_thumbnail || self.config.write_thumbnail {
+        if self.config.postprocess.embed_thumbnail || self.config.postprocess.write_thumbnail {
             self.download_thumbnail(final_info, &output_path).await;
         }
 

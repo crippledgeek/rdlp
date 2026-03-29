@@ -7,441 +7,373 @@ use std::path::PathBuf;
 
 #[test]
 fn test_postprocess_none_preserves_remux() {
-    let mut config = Config {
-        remux_container: Some(rdlp_types::ContainerFormat::Mkv),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.remux_container = Some(rdlp_types::ContainerFormat::Mkv);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
     assert_eq!(
-        config.remux_container,
+        config.postprocess.remux_container,
         Some(rdlp_types::ContainerFormat::Mkv)
     );
 }
 
 #[test]
 fn test_postprocess_some_overrides_remux() {
-    let mut config = Config {
-        remux_container: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.remux_container = None;
     let opts = PostProcessOptions {
         remux: Some(rdlp_types::ContainerFormat::Mp4),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
     assert_eq!(
-        config.remux_container,
+        config.postprocess.remux_container,
         Some(rdlp_types::ContainerFormat::Mp4)
     );
 }
 
 #[test]
 fn test_postprocess_none_preserves_extract_audio() {
-    let mut config = Config {
-        extract_audio: true,
-        audio_format: Some(rdlp_types::AudioFormat::Mp3),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.extract_audio = true;
+    config.postprocess.audio_format = Some(rdlp_types::AudioFormat::Mp3);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.extract_audio);
-    assert_eq!(config.audio_format, Some(rdlp_types::AudioFormat::Mp3));
+    assert!(config.postprocess.extract_audio);
+    assert_eq!(config.postprocess.audio_format, Some(rdlp_types::AudioFormat::Mp3));
 }
 
 #[test]
 fn test_postprocess_some_overrides_extract_audio() {
-    let mut config = Config {
-        extract_audio: false,
-        audio_format: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.extract_audio = false;
+    config.postprocess.audio_format = None;
     let opts = PostProcessOptions {
         extract_audio: Some(rdlp_types::AudioFormat::Aac),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.extract_audio);
-    assert_eq!(config.audio_format, Some(rdlp_types::AudioFormat::Aac));
+    assert!(config.postprocess.extract_audio);
+    assert_eq!(config.postprocess.audio_format, Some(rdlp_types::AudioFormat::Aac));
 }
 
 #[test]
 fn test_postprocess_none_preserves_embed_metadata() {
-    let mut config = Config {
-        embed_metadata: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_metadata = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.embed_metadata);
+    assert!(config.postprocess.embed_metadata);
 }
 
 #[test]
 fn test_postprocess_some_overrides_embed_metadata() {
-    let mut config = Config {
-        embed_metadata: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_metadata = false;
     let opts = PostProcessOptions {
         embed_metadata: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.embed_metadata);
+    assert!(config.postprocess.embed_metadata);
 }
 
 #[test]
 fn test_postprocess_none_preserves_embed_thumbnail() {
-    let mut config = Config {
-        embed_thumbnail: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_thumbnail = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.embed_thumbnail);
+    assert!(config.postprocess.embed_thumbnail);
 }
 
 #[test]
 fn test_postprocess_some_overrides_embed_thumbnail() {
-    let mut config = Config {
-        embed_thumbnail: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_thumbnail = false;
     let opts = PostProcessOptions {
         embed_thumbnail: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.embed_thumbnail);
+    assert!(config.postprocess.embed_thumbnail);
 }
 
 #[test]
 fn test_postprocess_none_preserves_no_thumbnail() {
-    let mut config = Config {
-        embed_thumbnail: true,
-        write_thumbnail: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_thumbnail = true;
+    config.postprocess.write_thumbnail = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.embed_thumbnail);
-    assert!(config.write_thumbnail);
+    assert!(config.postprocess.embed_thumbnail);
+    assert!(config.postprocess.write_thumbnail);
 }
 
 #[test]
 fn test_postprocess_some_overrides_no_thumbnail() {
-    let mut config = Config {
-        embed_thumbnail: true,
-        write_thumbnail: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.embed_thumbnail = true;
+    config.postprocess.write_thumbnail = true;
     let opts = PostProcessOptions {
         no_thumbnail: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(!config.embed_thumbnail);
-    assert!(!config.write_thumbnail);
+    assert!(!config.postprocess.embed_thumbnail);
+    assert!(!config.postprocess.write_thumbnail);
 }
 
 #[test]
 fn test_postprocess_none_preserves_write_thumbnail() {
-    let mut config = Config {
-        write_thumbnail: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.write_thumbnail = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.write_thumbnail);
+    assert!(config.postprocess.write_thumbnail);
 }
 
 #[test]
 fn test_postprocess_some_overrides_write_thumbnail() {
-    let mut config = Config {
-        write_thumbnail: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.write_thumbnail = false;
     let opts = PostProcessOptions {
         write_thumbnail: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.write_thumbnail);
+    assert!(config.postprocess.write_thumbnail);
 }
 
 #[test]
 fn test_postprocess_none_preserves_normalize_audio() {
-    let mut config = Config {
-        normalize_audio: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_audio = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.normalize_audio);
+    assert!(config.postprocess.normalize_audio);
 }
 
 #[test]
 fn test_postprocess_some_overrides_normalize_audio() {
-    let mut config = Config {
-        normalize_audio: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_audio = false;
     let opts = PostProcessOptions {
         normalize_audio: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.normalize_audio);
+    assert!(config.postprocess.normalize_audio);
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm() {
-    let mut config = Config {
-        loudnorm: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.loudnorm);
+    assert!(config.postprocess.loudnorm);
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm() {
-    let mut config = Config {
-        loudnorm: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm = false;
     let opts = PostProcessOptions {
         loudnorm: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.loudnorm);
+    assert!(config.postprocess.loudnorm);
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_preset() {
-    let mut config = Config {
-        loudnorm_preset: Some("broadcast".into()),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_preset = Some("broadcast".into());
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_preset.as_deref(), Some("broadcast"));
+    assert_eq!(config.postprocess.loudnorm_preset.as_deref(), Some("broadcast"));
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_preset() {
-    let mut config = Config {
-        loudnorm_preset: Some("broadcast".into()),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_preset = Some("broadcast".into());
     let opts = PostProcessOptions {
         loudnorm_preset: Some("streaming".into()),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_preset.as_deref(), Some("streaming"));
+    assert_eq!(config.postprocess.loudnorm_preset.as_deref(), Some("streaming"));
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_target_i() {
-    let mut config = Config {
-        loudnorm_target_i: Some(-16.0),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_i = Some(-16.0);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_i, Some(-16.0));
+    assert_eq!(config.postprocess.loudnorm_target_i, Some(-16.0));
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_target_i() {
-    let mut config = Config {
-        loudnorm_target_i: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_i = None;
     let opts = PostProcessOptions {
         loudnorm_target_i: Some(-23.0),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_i, Some(-23.0));
+    assert_eq!(config.postprocess.loudnorm_target_i, Some(-23.0));
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_target_tp() {
-    let mut config = Config {
-        loudnorm_target_tp: Some(-1.0),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_tp = Some(-1.0);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_tp, Some(-1.0));
+    assert_eq!(config.postprocess.loudnorm_target_tp, Some(-1.0));
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_target_tp() {
-    let mut config = Config {
-        loudnorm_target_tp: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_tp = None;
     let opts = PostProcessOptions {
         loudnorm_target_tp: Some(-2.0),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_tp, Some(-2.0));
+    assert_eq!(config.postprocess.loudnorm_target_tp, Some(-2.0));
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_target_lra() {
-    let mut config = Config {
-        loudnorm_target_lra: Some(7.0),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_lra = Some(7.0);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_lra, Some(7.0));
+    assert_eq!(config.postprocess.loudnorm_target_lra, Some(7.0));
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_target_lra() {
-    let mut config = Config {
-        loudnorm_target_lra: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_target_lra = None;
     let opts = PostProcessOptions {
         loudnorm_target_lra: Some(11.0),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.loudnorm_target_lra, Some(11.0));
+    assert_eq!(config.postprocess.loudnorm_target_lra, Some(11.0));
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_dynamic() {
-    let mut config = Config {
-        loudnorm_dynamic: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_dynamic = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.loudnorm_dynamic);
+    assert!(config.postprocess.loudnorm_dynamic);
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_dynamic() {
-    let mut config = Config {
-        loudnorm_dynamic: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_dynamic = false;
     let opts = PostProcessOptions {
         loudnorm_dynamic: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.loudnorm_dynamic);
+    assert!(config.postprocess.loudnorm_dynamic);
 }
 
 #[test]
 fn test_postprocess_none_preserves_loudnorm_precompress() {
-    let mut config = Config {
-        loudnorm_precompress: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_precompress = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.loudnorm_precompress);
+    assert!(config.postprocess.loudnorm_precompress);
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_precompress() {
-    let mut config = Config {
-        loudnorm_precompress: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.loudnorm_precompress = false;
     let opts = PostProcessOptions {
         loudnorm_precompress: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.loudnorm_precompress);
+    assert!(config.postprocess.loudnorm_precompress);
 }
 
 #[test]
 fn test_postprocess_none_preserves_normalize_boost() {
-    let mut config = Config {
-        normalize_boost: true,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_boost = true;
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert!(config.normalize_boost);
+    assert!(config.postprocess.normalize_boost);
 }
 
 #[test]
 fn test_postprocess_some_overrides_normalize_boost() {
-    let mut config = Config {
-        normalize_boost: false,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_boost = false;
     let opts = PostProcessOptions {
         normalize_boost: Some(true),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert!(config.normalize_boost);
+    assert!(config.postprocess.normalize_boost);
 }
 
 #[test]
 fn test_postprocess_none_preserves_normalize_boost_db() {
-    let mut config = Config {
-        normalize_boost_db: Some(8.0),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_boost_db = Some(8.0);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.normalize_boost_db, Some(8.0));
+    assert_eq!(config.postprocess.normalize_boost_db, Some(8.0));
 }
 
 #[test]
 fn test_postprocess_some_overrides_normalize_boost_db() {
-    let mut config = Config {
-        normalize_boost_db: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.normalize_boost_db = None;
     let opts = PostProcessOptions {
         normalize_boost_db: Some(12.0),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.normalize_boost_db, Some(12.0));
+    assert_eq!(config.postprocess.normalize_boost_db, Some(12.0));
 }
 
 #[test]
 fn test_postprocess_none_preserves_recode_video() {
-    let mut config = Config {
-        recode_video: Some(rdlp_types::ContainerFormat::Mkv),
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.recode_video = Some(rdlp_types::ContainerFormat::Mkv);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.recode_video, Some(rdlp_types::ContainerFormat::Mkv));
+    assert_eq!(config.postprocess.recode_video, Some(rdlp_types::ContainerFormat::Mkv));
 }
 
 #[test]
 fn test_postprocess_some_overrides_recode_video() {
-    let mut config = Config {
-        recode_video: None,
-        ..Config::default()
-    };
+    let mut config = Config::default();
+    config.postprocess.recode_video = None;
     let opts = PostProcessOptions {
         recode_video: Some(rdlp_types::ContainerFormat::Mp4),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.recode_video, Some(rdlp_types::ContainerFormat::Mp4));
+    assert_eq!(config.postprocess.recode_video, Some(rdlp_types::ContainerFormat::Mp4));
 }
 
 // --- NetworkOptions ---

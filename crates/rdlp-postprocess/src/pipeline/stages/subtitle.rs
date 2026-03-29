@@ -210,12 +210,12 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::PostProcessConfig;
+    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 
-    fn make_msg(files: Vec<PathBuf>, config: PostProcessConfig) -> PipelineMessage {
+    fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         PipelineMessage {
@@ -229,6 +229,7 @@ mod tests {
             config: Arc::new(config),
             original_stem: "test".to_string(),
             is_hls: false,
+            verbose: false,
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
@@ -241,9 +242,9 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = SubtitleStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             embed_subtitles: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let msg = make_msg(vec![PathBuf::from("/tmp/video.mp4")], config);
         assert!(stage.should_run(&msg));
@@ -255,7 +256,7 @@ mod tests {
         let stage = SubtitleStage::new(ffmpeg);
         let msg = make_msg(
             vec![PathBuf::from("/tmp/video.mp4")],
-            PostProcessConfig::default(),
+            PostProcess::default(),
         );
         assert!(!stage.should_run(&msg));
     }
@@ -311,9 +312,9 @@ mod tests {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
         let stage = SubtitleStage::new(ffmpeg);
 
-        let config = PostProcessConfig {
+        let config = PostProcess {
             embed_subtitles: true,
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         let mut msg = make_msg(vec![PathBuf::from("/tmp/video.mp4")], config);
         msg.original_stem = "video".to_string();

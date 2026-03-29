@@ -30,7 +30,7 @@ impl MergeStage {
 
     /// Determine the output format from config and input extensions.
     fn determine_output_format(
-        config: &rdlp_core::PostProcessConfig,
+        config: &rdlp_types::PostProcess,
         video_ext: Option<&str>,
         audio_ext: Option<&str>,
     ) -> &'static str {
@@ -144,7 +144,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_core::PostProcessConfig;
+    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
@@ -160,9 +160,10 @@ mod tests {
                 "https://example.com".to_string(),
             ),
             tracker: FileTracker::new(files, reg),
-            config: Arc::new(PostProcessConfig::default()),
+            config: Arc::new(PostProcess::default()),
             original_stem: "test".to_string(),
             is_hls: false,
+            verbose: false,
             callback_factory: None,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
@@ -195,9 +196,9 @@ mod tests {
 
     #[test]
     fn determine_output_format_explicit_config() {
-        let config = PostProcessConfig {
+        let config = PostProcess {
             merge_output_format: Some(rdlp_types::ContainerFormat::Mkv),
-            ..PostProcessConfig::default()
+            ..PostProcess::default()
         };
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a")),
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn determine_output_format_webm_defaults_to_mkv() {
-        let config = PostProcessConfig::default();
+        let config = PostProcess::default();
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("webm"), Some("opus")),
             "mkv"
@@ -216,7 +217,7 @@ mod tests {
 
     #[test]
     fn determine_output_format_default_mp4() {
-        let config = PostProcessConfig::default();
+        let config = PostProcess::default();
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a")),
             "mp4"

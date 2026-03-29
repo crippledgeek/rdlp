@@ -95,12 +95,10 @@ fn test_build_config_preserves_base_when_no_override() {
 fn test_build_config_preserves_remux_from_base_config() {
     use rdlp_types::ContainerFormat;
 
-    let base_config = Config {
-        remux_container: Some(ContainerFormat::Mkv),
-        embed_metadata: true,
-        normalize_audio: true,
-        ..Config::default()
-    };
+    let mut base_config = Config::default();
+    base_config.postprocess.remux_container = Some(ContainerFormat::Mkv);
+    base_config.postprocess.embed_metadata = true;
+    base_config.postprocess.normalize_audio = true;
 
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     // Default request has all None — should NOT overwrite config values
@@ -108,16 +106,16 @@ fn test_build_config_preserves_remux_from_base_config() {
     let config = client.build_config(&request);
 
     assert_eq!(
-        config.remux_container,
+        config.postprocess.remux_container,
         Some(ContainerFormat::Mkv),
         "remux_container must be preserved from base config"
     );
     assert!(
-        config.embed_metadata,
+        config.postprocess.embed_metadata,
         "embed_metadata must be preserved from base config"
     );
     assert!(
-        config.normalize_audio,
+        config.postprocess.normalize_audio,
         "normalize_audio must be preserved from base config"
     );
 }

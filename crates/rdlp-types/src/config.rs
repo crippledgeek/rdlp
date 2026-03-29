@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::audio_format::AudioFormat;
 use crate::browser_type::BrowserType;
-use crate::container::ContainerFormat;
-use crate::recode_audio_mode::RecodeAudioMode;
+use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
 
 /// Errors from configuration validation.
@@ -98,9 +96,6 @@ pub struct Config {
     /// `Some(...)` means the user (or config file) explicitly set this.
     pub format: Option<String>,
 
-    /// Merge output format when combining video+audio
-    pub merge_output_format: Option<ContainerFormat>,
-
     /// Require strict video-only + audio-only streams for merge selection.
     /// When true, default selector changes from `bv*+ba/b` to `bv+ba/b`.
     pub audio_multistreams: bool,
@@ -147,91 +142,11 @@ pub struct Config {
     pub http_headers: Vec<(String, String)>,
 
     // === Post-processing ===
-    /// Extract audio only
-    pub extract_audio: bool,
-
-    /// Audio format to convert to
-    pub audio_format: Option<AudioFormat>,
-
-    /// Audio quality (VBR level or bitrate, e.g., "192K")
-    pub audio_quality: Option<String>,
-
-    /// Video format to recode to
-    pub recode_video: Option<ContainerFormat>,
-
-    /// Explicit video encoder override (e.g., "libsvtav1").
-    /// When None, the best available encoder for the codec is auto-selected.
+    /// Post-processing configuration (remux, recode, audio, metadata, etc.).
     #[serde(default)]
-    pub video_encoder: Option<String>,
-
-    /// How to handle audio during video recode.
-    /// Default is Copy (stream copy audio unchanged).
-    #[serde(default)]
-    pub recode_audio: RecodeAudioMode,
-
-    /// Output container override for video recode.
-    /// When None, the container is derived from the video codec.
-    #[serde(default)]
-    pub recode_container: Option<ContainerFormat>,
-
-    /// Remux to container format for better seeking
-    pub remux_container: Option<ContainerFormat>,
-
-    /// Embed thumbnail in video file
-    pub embed_thumbnail: bool,
-
-    /// Embed metadata in file
-    pub embed_metadata: bool,
-
-    /// Embed subtitles in video file
-    pub embed_subtitles: bool,
-
-    /// Keep original files after post-processing
-    pub keep_video: bool,
-
-    /// Normalize audio levels (peak mode unless loudnorm is set)
-    pub normalize_audio: bool,
-
-    /// Use EBU R128 loudnorm normalization (implies normalize_audio)
-    pub loudnorm: bool,
-
-    /// Target peak level in dBFS for peak normalization (default -1.0)
-    pub audio_gain_target: Option<f64>,
-
-    /// Loudnorm preset name (broadcast, streaming, loud)
-    pub loudnorm_preset: Option<String>,
-
-    /// Target integrated loudness in LUFS for loudnorm
-    pub loudnorm_target_i: Option<f64>,
-
-    /// Target true peak in dBTP for loudnorm
-    pub loudnorm_target_tp: Option<f64>,
-
-    /// Target loudness range in LU for loudnorm
-    pub loudnorm_target_lra: Option<f64>,
-
-    /// Force dynamic (per-frame compression) mode in loudnorm pass 2
-    pub loudnorm_dynamic: bool,
-
-    /// Prepend a mild acompressor before loudnorm in pass 2
-    pub loudnorm_precompress: bool,
-
-    /// Enable limiter-boost fallback for over-compressed content
-    pub normalize_boost: bool,
-
-    /// Gain in dB for limiter-boost fallback (default 12.0 when None)
-    pub normalize_boost_db: Option<f64>,
-
-    /// FFmpeg location (if not in PATH)
-    pub ffmpeg_location: Option<PathBuf>,
-
-    /// Additional FFmpeg arguments
-    pub ffmpeg_args: Vec<String>,
+    pub postprocess: PostProcess,
 
     // === Subtitles ===
-    /// Write subtitle files
-    pub write_subtitles: bool,
-
     /// Write automatic captions
     pub write_auto_subtitles: bool,
 
@@ -252,10 +167,6 @@ pub struct Config {
 
     /// Re-attempt subtitle downloads for completed videos missing subtitle files
     pub retry_subs: bool,
-
-    // === Thumbnail ===
-    /// Write thumbnail image to disk
-    pub write_thumbnail: bool,
 
     // === Verbosity ===
     /// Quiet mode (minimal output)
@@ -347,7 +258,6 @@ impl Default for Config {
 
             // Format selection
             format: None,
-            merge_output_format: None,
             audio_multistreams: false,
 
             // Download options
@@ -370,34 +280,9 @@ impl Default for Config {
             http_headers: Vec::new(),
 
             // Post-processing
-            extract_audio: false,
-            audio_format: None,
-            audio_quality: None,
-            recode_video: None,
-            video_encoder: None,
-            recode_audio: RecodeAudioMode::Copy,
-            recode_container: None,
-            remux_container: None,
-            embed_thumbnail: true,
-            embed_metadata: false,
-            embed_subtitles: false,
-            keep_video: false,
-            normalize_audio: false,
-            loudnorm: false,
-            audio_gain_target: None,
-            loudnorm_preset: None,
-            loudnorm_target_i: None,
-            loudnorm_target_tp: None,
-            loudnorm_target_lra: None,
-            loudnorm_dynamic: false,
-            loudnorm_precompress: false,
-            normalize_boost: false,
-            normalize_boost_db: None,
-            ffmpeg_location: None,
-            ffmpeg_args: Vec::new(),
+            postprocess: PostProcess::default(),
 
             // Subtitles
-            write_subtitles: false,
             write_auto_subtitles: false,
             subtitle_langs: Vec::new(),
             subtitle_format: None,
@@ -405,9 +290,6 @@ impl Default for Config {
             strict_subs: false,
             verify_sub_urls: false,
             retry_subs: false,
-
-            // Thumbnail
-            write_thumbnail: false,
 
             // Verbosity
             quiet: false,
@@ -471,18 +353,19 @@ impl Config {
 
         // Stdout mode rejects post-processing options that require file I/O
         if self.output_to_stdout {
+            let pp = &self.postprocess;
             let incompatible: &[(&str, bool)] = &[
-                ("extract-audio", self.extract_audio),
-                ("remux", self.remux_container.is_some()),
-                ("recode-video", self.recode_video.is_some()),
-                ("embed-metadata", self.embed_metadata),
-                ("embed-thumbnail", self.embed_thumbnail),
-                ("embed-subtitles", self.embed_subtitles),
-                ("normalize-audio", self.normalize_audio),
-                ("loudnorm", self.loudnorm),
-                ("write-subtitles", self.write_subtitles),
-                ("write-thumbnail", self.write_thumbnail),
-                ("normalize-boost", self.normalize_boost),
+                ("extract-audio", pp.extract_audio),
+                ("remux", pp.remux_container.is_some()),
+                ("recode-video", pp.recode_video.is_some()),
+                ("embed-metadata", pp.embed_metadata),
+                ("embed-thumbnail", pp.embed_thumbnail),
+                ("embed-subtitles", pp.embed_subtitles),
+                ("normalize-audio", pp.normalize_audio),
+                ("loudnorm", pp.loudnorm),
+                ("write-subtitles", pp.write_subtitles),
+                ("write-thumbnail", pp.write_thumbnail),
+                ("normalize-boost", pp.normalize_boost),
             ];
             for &(option, active) in incompatible {
                 if active {

@@ -2,7 +2,7 @@
 //!
 //! Channel-based post-processing pipeline for rdlp.
 //!
-//! This crate provides an 8-stage pipeline for FFmpeg-based media transformations:
+//! This crate provides a 9-stage pipeline for FFmpeg-based media transformations:
 //! - **MergeStage**: Combine separate video and audio streams
 //! - **AudioExtractStage**: Extract and convert audio to various formats
 //! - **NormalizeStage**: Peak / EBU R128 loudnorm audio normalization
@@ -11,6 +11,7 @@
 //! - **SubtitleStage**: Embed subtitle files into video containers
 //! - **MetadataStage**: Embed title, artist, chapters, etc.
 //! - **ThumbnailStage**: Embed cover art (FFmpeg + MP4 covr atom)
+//! - **FixupStage**: Detect and repair container/codec issues
 //!
 //! ## Quick Start
 //!
@@ -19,7 +20,7 @@
 //! use rdlp_postprocess::pipeline::PipelineStage;
 //! use rdlp_postprocess::{MergeStage, RemuxStage, MetadataStage, ThumbnailStage};
 //! use rdlp_postprocess::FFmpegRunner;
-//! use rdlp_core::PostProcessConfig;
+//! use rdlp_postprocess::PostProcess;
 //! use rdlp_types::InfoDict;
 //! use std::path::PathBuf;
 //! use std::sync::Arc;
@@ -44,7 +45,7 @@
 //!     "https://example.com/video".to_string(),
 //! );
 //!
-//! let config = Arc::new(PostProcessConfig::default());
+//! let config = Arc::new(PostProcess::default());
 //! let files = vec![PathBuf::from("video.mp4")];
 //!
 //! let output = pipeline.run(info, files, config, "video".to_string(), false, None).await?;
@@ -80,8 +81,8 @@ pub mod pipeline;
 
 // Re-export pipeline types for use by rdlp-api
 pub use pipeline::stages::{
-    AudioExtractStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage, RemuxStage,
-    SubtitleStage, ThumbnailStage,
+    AudioExtractStage, FixupStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage,
+    RemuxStage, SubtitleStage, ThumbnailStage,
 };
 pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 
@@ -89,4 +90,4 @@ pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 pub use rdlp_ffmpeg::FFmpegRunner;
 
 // Re-export core types for convenience
-pub use rdlp_core::PostProcessConfig;
+pub use rdlp_types::PostProcess;

@@ -15,7 +15,6 @@ const toggleItems: { label: string; field: keyof AppSettings }[] = [
     { label: "Save thumbnail to disk", field: "write_thumbnail" },
     { label: "Embed metadata", field: "embed_metadata" },
     { label: "Embed subtitles", field: "embed_subtitles" },
-    { label: "Verbose logging", field: "verbose" },
 ];
 
 export function PostProcessSection({ draft, onChange }: Props) {

@@ -42,9 +42,9 @@ pub use orchestrator::InteractiveCallback;
 pub use rdlp_core::{DownloadProgress, config_io};
 pub use rdlp_postprocess::TempRegistry;
 pub use rdlp_types::{
-    AudioFormat, BrowserType, Config, ContainerFormat, Format, InfoDict, RecodeAudioMode,
-    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
-    SearchResultPreview, SearchSiteInfo, SubtitleFormat,
+    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, Format, InfoDict,
+    PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
+    SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
 };
 pub use request::DownloadRequest;
 pub use result::DownloadResult;
