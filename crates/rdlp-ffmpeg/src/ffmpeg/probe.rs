@@ -64,6 +64,14 @@ pub struct StreamInfo {
     pub codec_name: Option<String>,
     /// Stream-specific metadata
     pub metadata: HashMap<String, String>,
+    /// Stream duration in seconds
+    pub duration: Option<f64>,
+    /// Sample aspect ratio numerator (video only)
+    pub sar_num: Option<i32>,
+    /// Sample aspect ratio denominator (video only)
+    pub sar_den: Option<i32>,
+    /// Number of frames (video only; 0 means unknown)
+    pub nb_frames: Option<i64>,
 }
 
 impl FFmpegRunner {
@@ -141,6 +149,10 @@ impl FFmpegRunner {
                 codec_type: codec_type_str.to_string(),
                 codec_name: Some(codec_name),
                 metadata: HashMap::new(),
+                duration: None,
+                sar_num: None,
+                sar_den: None,
+                nb_frames: None,
             };
 
             // Stream-level metadata
@@ -148,6 +160,15 @@ impl FFmpegRunner {
                 stream_info
                     .metadata
                     .insert(key.to_lowercase(), value.to_string());
+            }
+
+            // Per-stream duration
+            let stream_duration_ts = stream.duration();
+            if stream_duration_ts > 0 {
+                let tb = stream.time_base();
+                let dur = stream_duration_ts as f64 * tb.numerator() as f64
+                    / tb.denominator() as f64;
+                stream_info.duration = Some(dur);
             }
 
             match medium {
@@ -179,6 +200,26 @@ impl FFmpegRunner {
                         && let Ok(bps) = br_str.parse::<u64>()
                     {
                         info.video_bitrate = Some((bps / 1000) as u32);
+                    }
+
+                    // SAR (sample aspect ratio) via raw FFI
+                    unsafe {
+                        let st_ptr = stream.as_ptr();
+                        let codecpar = (*st_ptr).codecpar;
+                        let sar = (*codecpar).sample_aspect_ratio;
+                        if sar.num != 0 && sar.den != 0 {
+                            stream_info.sar_num = Some(sar.num);
+                            stream_info.sar_den = Some(sar.den);
+                        }
+                    }
+
+                    // Number of frames via raw FFI
+                    unsafe {
+                        let st_ptr = stream.as_ptr();
+                        let nb = (*st_ptr).nb_frames;
+                        if nb > 0 {
+                            stream_info.nb_frames = Some(nb);
+                        }
                     }
                 }
                 ffmpeg_the_third::media::Type::Audio => {
@@ -233,5 +274,19 @@ impl MediaInfo {
     #[must_use]
     pub fn audio_stream(&self) -> Option<&StreamInfo> {
         self.streams.iter().find(|s| s.codec_type == "audio")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_info_default_has_none_fields() {
+        let si = StreamInfo::default();
+        assert_eq!(si.duration, None);
+        assert_eq!(si.sar_num, None);
+        assert_eq!(si.sar_den, None);
+        assert_eq!(si.nb_frames, None);
     }
 }
