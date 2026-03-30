@@ -185,9 +185,11 @@ impl FFmpegRunner {
                 &temp_audio,
                 output,
                 &super::super::RemuxOptions::default(),
-                None,
+                progress_fn,
             );
-            let _ = std::fs::remove_file(&temp_audio);
+            if let Err(e) = std::fs::remove_file(&temp_audio) {
+                log::warn!("Failed to remove temp audio file {}: {e}", temp_audio.display());
+            }
             merge_result
         } else if salvage {
             with_mux_retry(input, output, |effective_input, resilient| {
