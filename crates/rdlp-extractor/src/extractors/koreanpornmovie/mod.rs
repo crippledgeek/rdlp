@@ -182,6 +182,14 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             ));
         }
 
+        // === Phase 3: Probe filesize via HEAD request (async) ===
+        let mut formats = formats;
+        for format in &mut formats {
+            if let Some(size) = probe_filesize(&format.url, ctx).await {
+                format.filesize = Some(size);
+            }
+        }
+
         info.formats = formats;
         Ok(info)
     }
@@ -507,6 +515,29 @@ fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Probe a video URL via HEAD request to get Content-Length (filesize).
+///
+/// Returns `None` on any error (timeout, 403, etc.) — non-fatal.
+async fn probe_filesize(url: &str, ctx: &ExtractionContext) -> Option<u64> {
+    let response = ctx
+        .http_client
+        .head(url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
 }
 
 /// Extract `content` attribute from a meta[itemprop] element.
