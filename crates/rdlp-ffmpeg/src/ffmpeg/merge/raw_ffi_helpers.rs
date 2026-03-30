@@ -41,9 +41,14 @@ pub(super) unsafe fn read_next_raw(
 }
 
 /// Rescale PTS/DTS/duration from input timebase to output timebase, set the
-/// output stream index, and write via `av_interleaved_write_frame`.
+/// output stream index, and write via `av_write_frame` (direct, non-buffered).
 ///
-/// Returns `Err` on write failure instead of silently breaking.
+/// Uses direct write instead of `av_interleaved_write_frame` because the
+/// caller (merge loop) already guarantees globally DTS-ordered packets.
+/// The interleaved variant buffers packets internally, causing unbounded
+/// memory growth (ENOMEM) on large files when merging separate input files.
+///
+/// Returns `Err` on write failure.
 ///
 /// # Safety
 ///
@@ -86,10 +91,10 @@ pub(super) unsafe fn rescale_and_write_raw(
         }
         (*pkt).pos = -1;
 
-        let ret = ffmpeg_the_third::ffi::av_interleaved_write_frame(ofmt_ctx, pkt);
+        let ret = ffmpeg_the_third::ffi::av_write_frame(ofmt_ctx, pkt);
         if ret < 0 {
             return Err(PostProcessError::FFmpegLibraryError {
-                message: format!("av_interleaved_write_frame failed: error code {ret}"),
+                message: format!("av_write_frame failed: error code {ret}"),
             });
         }
         Ok(())
