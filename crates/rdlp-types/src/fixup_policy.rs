@@ -1,53 +1,27 @@
 //! Policy for automatic fixup of downloaded files.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
-
-use crate::parse_error::ParseEnumError;
+use strum_macros::{Display, EnumString};
 
 /// Controls how rdlp handles fixable issues in downloaded files.
 ///
 /// Maps to yt-dlp's `--fixup` option.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, Display, EnumString,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(ascii_case_insensitive)]
 pub enum FixupPolicy {
     /// Never attempt to fix issues.
+    #[strum(serialize = "never")]
     Never,
     /// Warn about fixable issues but do not fix them.
+    #[strum(serialize = "warn")]
     Warn,
     /// Fix issues if detected, or warn if the fix is not possible (default).
     #[default]
+    #[strum(serialize = "detect_or_warn", serialize = "detect")]
     DetectOrWarn,
-}
-
-impl fmt::Display for FixupPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Never => "never",
-            Self::Warn => "warn",
-            Self::DetectOrWarn => "detect_or_warn",
-        })
-    }
-}
-
-impl FromStr for FixupPolicy {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("never") {
-            Ok(Self::Never)
-        } else if s.eq_ignore_ascii_case("warn") {
-            Ok(Self::Warn)
-        } else if s.eq_ignore_ascii_case("detect_or_warn") || s.eq_ignore_ascii_case("detect") {
-            Ok(Self::DetectOrWarn)
-        } else {
-            Err(ParseEnumError {
-                type_name: "FixupPolicy",
-                input: s.to_string(),
-            })
-        }
-    }
 }
 
 #[cfg(test)]
@@ -61,7 +35,11 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for policy in [FixupPolicy::Never, FixupPolicy::Warn, FixupPolicy::DetectOrWarn] {
+        for policy in [
+            FixupPolicy::Never,
+            FixupPolicy::Warn,
+            FixupPolicy::DetectOrWarn,
+        ] {
             let s = policy.to_string();
             let parsed: FixupPolicy = s.parse().unwrap();
             assert_eq!(policy, parsed, "roundtrip failed for {s}");
@@ -90,9 +68,7 @@ mod tests {
 
     #[test]
     fn from_str_invalid() {
-        let err = "invalid".parse::<FixupPolicy>().unwrap_err();
-        assert_eq!(err.type_name, "FixupPolicy");
-        assert_eq!(err.input, "invalid");
+        assert!("invalid".parse::<FixupPolicy>().is_err());
     }
 
     #[test]

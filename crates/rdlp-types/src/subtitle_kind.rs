@@ -1,27 +1,38 @@
 //! Subtitle track kind classification
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
-
-use crate::parse_error::ParseEnumError;
+use strum_macros::{Display, EnumString};
 
 /// Classification of subtitle track purpose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default, Display, EnumString,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(ascii_case_insensitive)]
 pub enum SubtitleKind {
     /// Standard dialogue subtitles
     #[default]
+    #[strum(serialize = "normal")]
     Normal,
     /// Forced/burn-in subtitles (foreign language parts only)
+    #[strum(serialize = "forced")]
     Forced,
     /// Subtitles for deaf/hard-of-hearing (includes sound effects)
+    #[strum(
+        serialize = "hearing_impaired",
+        serialize = "hearingimpaired",
+        serialize = "hi",
+        serialize = "sdh"
+    )]
     HearingImpaired,
     /// Director/cast commentary track
+    #[strum(serialize = "commentary")]
     Commentary,
     /// Lyrics (music content)
+    #[strum(serialize = "lyrics")]
     Lyrics,
     /// Karaoke-style timed lyrics
+    #[strum(serialize = "karaoke")]
     Karaoke,
 }
 
@@ -48,41 +59,6 @@ impl SubtitleKind {
             Self::Commentary => "commentary",
             Self::Lyrics => "lyrics",
             Self::Karaoke => "karaoke",
-        }
-    }
-}
-
-impl fmt::Display for SubtitleKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for SubtitleKind {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("normal") {
-            Ok(Self::Normal)
-        } else if s.eq_ignore_ascii_case("forced") {
-            Ok(Self::Forced)
-        } else if s.eq_ignore_ascii_case("hearing_impaired")
-            || s.eq_ignore_ascii_case("hearingimpaired")
-            || s.eq_ignore_ascii_case("hi")
-            || s.eq_ignore_ascii_case("sdh")
-        {
-            Ok(Self::HearingImpaired)
-        } else if s.eq_ignore_ascii_case("commentary") {
-            Ok(Self::Commentary)
-        } else if s.eq_ignore_ascii_case("lyrics") {
-            Ok(Self::Lyrics)
-        } else if s.eq_ignore_ascii_case("karaoke") {
-            Ok(Self::Karaoke)
-        } else {
-            Err(ParseEnumError {
-                type_name: "SubtitleKind",
-                input: s.to_string(),
-            })
         }
     }
 }

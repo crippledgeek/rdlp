@@ -171,5 +171,8 @@ fn test_postprocess_embedded_in_config() {
     let config = Config::default();
     assert!(config.postprocess.embed_thumbnail);
     assert!(!config.postprocess.extract_audio);
-    assert_eq!(config.postprocess.fixup, crate::fixup_policy::FixupPolicy::DetectOrWarn);
+    assert_eq!(
+        config.postprocess.fixup,
+        crate::fixup_policy::FixupPolicy::DetectOrWarn
+    );
 }

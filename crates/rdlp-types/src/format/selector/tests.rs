@@ -2092,78 +2092,234 @@ mod ytdlp_upstream_compat {
     }
 
     // === test_format_selection ===
-    #[test] fn ytdlp_fallback_20_47() { assert_parses("20/47"); }
-    #[test] fn ytdlp_fallback_chain() { assert_parses("20/71/worst"); }
-    #[test] fn ytdlp_ext_fallback() { assert_parses("webm/mp4"); }
-    #[test] fn ytdlp_multi_ext_fallback() { assert_parses("3gp/40/mp4"); }
-    #[test] fn ytdlp_format_id_dashes() { assert_parses("example-with-dashes"); }
-    #[test] fn ytdlp_invalid_id_fallback() { assert_parses("7_a/worst"); }
+    #[test]
+    fn ytdlp_fallback_20_47() {
+        assert_parses("20/47");
+    }
+    #[test]
+    fn ytdlp_fallback_chain() {
+        assert_parses("20/71/worst");
+    }
+    #[test]
+    fn ytdlp_ext_fallback() {
+        assert_parses("webm/mp4");
+    }
+    #[test]
+    fn ytdlp_multi_ext_fallback() {
+        assert_parses("3gp/40/mp4");
+    }
+    #[test]
+    fn ytdlp_format_id_dashes() {
+        assert_parses("example-with-dashes");
+    }
+    #[test]
+    fn ytdlp_invalid_id_fallback() {
+        assert_parses("7_a/worst");
+    }
 
     // === test_format_selection_audio ===
-    #[test] fn ytdlp_audio_fallback_chain() { assert_parses("bestaudio/worstaudio/best"); }
+    #[test]
+    fn ytdlp_audio_fallback_chain() {
+        assert_parses("bestaudio/worstaudio/best");
+    }
 
     // === test_format_selection_video ===
-    #[test] fn ytdlp_starts_ends_filter() { assert_parses("bestvideo[format_id^=dash][format_id$=low]"); }
-    #[test] fn ytdlp_dotted_vcodec() { assert_parses("bestvideo[vcodec=avc1.123456]"); }
+    #[test]
+    fn ytdlp_starts_ends_filter() {
+        assert_parses("bestvideo[format_id^=dash][format_id$=low]");
+    }
+    #[test]
+    fn ytdlp_dotted_vcodec() {
+        assert_parses("bestvideo[vcodec=avc1.123456]");
+    }
 
     // === test_format_selection_string_ops ===
-    #[test] fn ytdlp_implicit_eq() { assert_parses("[format_id=abc-cba]"); }
-    #[test] fn ytdlp_implicit_neq() { assert_parses("[format_id!=abc-cba]"); }
-    #[test] fn ytdlp_starts_with() { assert_parses("[format_id^=abc]"); }
-    #[test] fn ytdlp_not_starts_with() { assert_parses("[format_id!^=abc]"); }
-    #[test] fn ytdlp_ends_with() { assert_parses("[format_id$=cba]"); }
-    #[test] fn ytdlp_not_ends_with() { assert_parses("[format_id!$=cba]"); }
-    #[test] fn ytdlp_contains() { assert_parses("[format_id*=bc-cb]"); }
-    #[test] fn ytdlp_not_contains() { assert_parses("[format_id!*=bc-cb]"); }
-    #[test] fn ytdlp_not_contains_dash() { assert_parses("[format_id!*=-]"); }
+    #[test]
+    fn ytdlp_implicit_eq() {
+        assert_parses("[format_id=abc-cba]");
+    }
+    #[test]
+    fn ytdlp_implicit_neq() {
+        assert_parses("[format_id!=abc-cba]");
+    }
+    #[test]
+    fn ytdlp_starts_with() {
+        assert_parses("[format_id^=abc]");
+    }
+    #[test]
+    fn ytdlp_not_starts_with() {
+        assert_parses("[format_id!^=abc]");
+    }
+    #[test]
+    fn ytdlp_ends_with() {
+        assert_parses("[format_id$=cba]");
+    }
+    #[test]
+    fn ytdlp_not_ends_with() {
+        assert_parses("[format_id!$=cba]");
+    }
+    #[test]
+    fn ytdlp_contains() {
+        assert_parses("[format_id*=bc-cb]");
+    }
+    #[test]
+    fn ytdlp_not_contains() {
+        assert_parses("[format_id!*=bc-cb]");
+    }
+    #[test]
+    fn ytdlp_not_contains_dash() {
+        assert_parses("[format_id!*=-]");
+    }
 
     // === test_format_filtering ===
-    #[test] fn ytdlp_filesize_lt() { assert_parses("best[filesize<3000]"); }
-    #[test] fn ytdlp_filesize_lte() { assert_parses("best[filesize<=3000]"); }
-    #[test] fn ytdlp_non_fatal_spaces() { assert_parses("best[filesize <= ? 3000]"); }
-    #[test] fn ytdlp_spaces_multi_filter() { assert_parses("best [filesize = 1000] [width>450]"); }
-    #[test] fn ytdlp_gt_non_fatal() { assert_parses("[filesize>?1]"); }
-    #[test] fn ytdlp_si_megabytes() { assert_parses("[filesize<1M]"); }
-    #[test] fn ytdlp_binary_mebibytes() { assert_parses("[filesize<1MiB]"); }
-    #[test] fn ytdlp_all_with_range() { assert_parses("all[width>=400][width<=600]"); }
-    #[test] fn ytdlp_float_field() { assert_parses("best[aspect_ratio=1]"); }
-    #[test] fn ytdlp_float_comparison() { assert_parses("all[aspect_ratio > 1.00]"); }
-    #[test] fn ytdlp_float_exact() { assert_parses("best[aspect_ratio=1.5]"); }
-    #[test] fn ytdlp_float_neq() { assert_parses("all[aspect_ratio!=1]"); }
+    #[test]
+    fn ytdlp_filesize_lt() {
+        assert_parses("best[filesize<3000]");
+    }
+    #[test]
+    fn ytdlp_filesize_lte() {
+        assert_parses("best[filesize<=3000]");
+    }
+    #[test]
+    fn ytdlp_non_fatal_spaces() {
+        assert_parses("best[filesize <= ? 3000]");
+    }
+    #[test]
+    fn ytdlp_spaces_multi_filter() {
+        assert_parses("best [filesize = 1000] [width>450]");
+    }
+    #[test]
+    fn ytdlp_gt_non_fatal() {
+        assert_parses("[filesize>?1]");
+    }
+    #[test]
+    fn ytdlp_si_megabytes() {
+        assert_parses("[filesize<1M]");
+    }
+    #[test]
+    fn ytdlp_binary_mebibytes() {
+        assert_parses("[filesize<1MiB]");
+    }
+    #[test]
+    fn ytdlp_all_with_range() {
+        assert_parses("all[width>=400][width<=600]");
+    }
+    #[test]
+    fn ytdlp_float_field() {
+        assert_parses("best[aspect_ratio=1]");
+    }
+    #[test]
+    fn ytdlp_float_comparison() {
+        assert_parses("all[aspect_ratio > 1.00]");
+    }
+    #[test]
+    fn ytdlp_float_exact() {
+        assert_parses("best[aspect_ratio=1.5]");
+    }
+    #[test]
+    fn ytdlp_float_neq() {
+        assert_parses("all[aspect_ratio!=1]");
+    }
 
     // === test_format_selection_issue_10083 ===
-    #[test] fn ytdlp_merge_in_fallback() { assert_parses("best[height>360]/bestvideo[height>360]+bestaudio"); }
+    #[test]
+    fn ytdlp_merge_in_fallback() {
+        assert_parses("best[height>360]/bestvideo[height>360]+bestaudio");
+    }
 
     // === test_invalid_format_specs ===
-    #[test] fn ytdlp_reject_double_comma() { assert_rejects("bestvideo,,best"); }
-    #[test] fn ytdlp_reject_leading_plus() { assert_rejects("+bestaudio"); }
-    #[test] fn ytdlp_reject_trailing_plus() { assert_rejects("bestvideo+"); }
-    #[test] fn ytdlp_reject_bare_slash() { assert_rejects("/"); }
-    #[test] fn ytdlp_reject_value_on_left() { assert_rejects("[720<height]"); }
+    #[test]
+    fn ytdlp_reject_double_comma() {
+        assert_rejects("bestvideo,,best");
+    }
+    #[test]
+    fn ytdlp_reject_leading_plus() {
+        assert_rejects("+bestaudio");
+    }
+    #[test]
+    fn ytdlp_reject_trailing_plus() {
+        assert_rejects("bestvideo+");
+    }
+    #[test]
+    fn ytdlp_reject_bare_slash() {
+        assert_rejects("/");
+    }
+    #[test]
+    fn ytdlp_reject_value_on_left() {
+        assert_rejects("[720<height]");
+    }
 
     // === star variants (all documented in README) ===
-    #[test] fn ytdlp_best_star() { assert_parses("b*"); }
-    #[test] fn ytdlp_worst_star() { assert_parses("w*"); }
-    #[test] fn ytdlp_bestvideo_star_long() { assert_parses("bestvideo*"); }
-    #[test] fn ytdlp_bestaudio_star_long() { assert_parses("bestaudio*"); }
-    #[test] fn ytdlp_worstvideo_star_long() { assert_parses("worstvideo*"); }
-    #[test] fn ytdlp_worstaudio_star_long() { assert_parses("worstaudio*"); }
+    #[test]
+    fn ytdlp_best_star() {
+        assert_parses("b*");
+    }
+    #[test]
+    fn ytdlp_worst_star() {
+        assert_parses("w*");
+    }
+    #[test]
+    fn ytdlp_bestvideo_star_long() {
+        assert_parses("bestvideo*");
+    }
+    #[test]
+    fn ytdlp_bestaudio_star_long() {
+        assert_parses("bestaudio*");
+    }
+    #[test]
+    fn ytdlp_worstvideo_star_long() {
+        assert_parses("worstvideo*");
+    }
+    #[test]
+    fn ytdlp_worstaudio_star_long() {
+        assert_parses("worstaudio*");
+    }
 
     // === default format strings ===
-    #[test] fn ytdlp_default_with_ffmpeg() { assert_parses("bestvideo*+bestaudio/best"); }
-    #[test] fn ytdlp_default_without_ffmpeg() { assert_parses("best/bestvideo+bestaudio"); }
+    #[test]
+    fn ytdlp_default_with_ffmpeg() {
+        assert_parses("bestvideo*+bestaudio/best");
+    }
+    #[test]
+    fn ytdlp_default_without_ffmpeg() {
+        assert_parses("best/bestvideo+bestaudio");
+    }
 
     // === m4a/bestaudio/best (from README example) ===
-    #[test] fn ytdlp_m4a_fallback() { assert_parses("m4a/bestaudio/best"); }
+    #[test]
+    fn ytdlp_m4a_fallback() {
+        assert_parses("m4a/bestaudio/best");
+    }
 
     // Remaining yt-dlp upstream expressions (chained negation, spaces, edge cases)
-    #[test] fn ytdlp_chained_neq_excludes_all() { assert_parses("[format_id!=abc-cba][format_id!=zxc-cxz]"); }
-    #[test] fn ytdlp_chained_not_startswith() { assert_parses("[format_id!^=abc][format_id!^=zxc]"); }
-    #[test] fn ytdlp_chained_not_endswith() { assert_parses("[format_id!$=cba][format_id!$=cxz]"); }
-    #[test] fn ytdlp_chained_not_contains() { assert_parses("[format_id!*=abc][format_id!*=zxc]"); }
-    #[test] fn ytdlp_spaces_width_neq() { assert_parses("best [filesize = 1000] [width!=450]"); }
-    #[test] fn ytdlp_height_no_match() { assert_parses("best[height<40]"); }
-    #[test] fn ytdlp_aspect_ratio_lt() { assert_parses("all[aspect_ratio < 1.00]"); }
+    #[test]
+    fn ytdlp_chained_neq_excludes_all() {
+        assert_parses("[format_id!=abc-cba][format_id!=zxc-cxz]");
+    }
+    #[test]
+    fn ytdlp_chained_not_startswith() {
+        assert_parses("[format_id!^=abc][format_id!^=zxc]");
+    }
+    #[test]
+    fn ytdlp_chained_not_endswith() {
+        assert_parses("[format_id!$=cba][format_id!$=cxz]");
+    }
+    #[test]
+    fn ytdlp_chained_not_contains() {
+        assert_parses("[format_id!*=abc][format_id!*=zxc]");
+    }
+    #[test]
+    fn ytdlp_spaces_width_neq() {
+        assert_parses("best [filesize = 1000] [width!=450]");
+    }
+    #[test]
+    fn ytdlp_height_no_match() {
+        assert_parses("best[height<40]");
+    }
+    #[test]
+    fn ytdlp_aspect_ratio_lt() {
+        assert_parses("all[aspect_ratio < 1.00]");
+    }
 }
 
 // ============================================================================
@@ -2349,8 +2505,7 @@ fn test_eval_height_ne() {
 fn test_eval_height_ne_excludes_all_matching() {
     let formats = test_formats();
     // best[height!=360][height!=720][height!=1080] — excludes all combined formats
-    let sel =
-        FormatSelector::parse("best[height!=360][height!=720][height!=1080]").unwrap();
+    let sel = FormatSelector::parse("best[height!=360][height!=720][height!=1080]").unwrap();
     let result = sel.select(&formats);
     assert!(result.is_empty());
 }
@@ -2393,16 +2548,25 @@ fn test_expression_accessor_preserves_whitespace_trimmed() {
 fn test_error_parse_display() {
     let err = FormatSelector::parse("").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Parse error"), "expected parse error, got: {msg}");
+    assert!(
+        msg.contains("Parse error"),
+        "expected parse error, got: {msg}"
+    );
 }
 
 #[test]
 fn test_error_parse_display_unclosed_bracket() {
     let err = FormatSelector::parse("bv[height<=").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Parse error"), "expected parse error, got: {msg}");
+    assert!(
+        msg.contains("Parse error"),
+        "expected parse error, got: {msg}"
+    );
     // Should contain the original input
-    assert!(msg.contains("bv[height<="), "error should contain input, got: {msg}");
+    assert!(
+        msg.contains("bv[height<="),
+        "error should contain input, got: {msg}"
+    );
 }
 
 #[test]
@@ -2576,7 +2740,12 @@ mod sort_edge_cases {
     #[test]
     fn protocol_score_unknown_protocol() {
         let f_https = {
-            let mut f = Format::new("https", "https://example.com", "mp4", DownloadProtocol::Https);
+            let mut f = Format::new(
+                "https",
+                "https://example.com",
+                "mp4",
+                DownloadProtocol::Https,
+            );
             f.vcodec = Some("h264".to_string());
             f
         };
@@ -2975,7 +3144,10 @@ mod negative_parse {
         let err = FormatSelector::parse("bv[height<=").unwrap_err();
         let display = err.to_string();
         // The display format includes a caret under the error position
-        assert!(display.contains('^'), "display should include caret: {display}");
+        assert!(
+            display.contains('^'),
+            "display should include caret: {display}"
+        );
     }
 }
 
@@ -3126,7 +3298,12 @@ mod negative_eval {
 
     #[test]
     fn fatal_filter_on_missing_vcodec_excludes() {
-        let mut f = Format::new("no_codec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_codec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = None; // truly missing, not "none"
         f.acodec = None;
         let formats = vec![f];
@@ -3138,7 +3315,12 @@ mod negative_eval {
 
     #[test]
     fn non_fatal_filter_on_missing_vcodec_passes() {
-        let mut f = Format::new("no_codec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_codec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = None;
         f.acodec = None;
         let formats = vec![f];
@@ -3173,7 +3355,12 @@ mod negative_eval {
 
     #[test]
     fn fatal_filter_on_missing_acodec_excludes() {
-        let mut f = Format::new("no_acodec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_acodec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = Some("h264".to_string());
         f.acodec = None;
         let formats = vec![f];
@@ -3185,7 +3372,12 @@ mod negative_eval {
 
     #[test]
     fn non_fatal_filter_on_missing_acodec_passes() {
-        let mut f = Format::new("no_acodec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_acodec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = Some("h264".to_string());
         f.acodec = None;
         let formats = vec![f];
@@ -3630,7 +3822,12 @@ mod negative_eval_2 {
         let mut f = make_combined("drm", "mp4", 720, 2);
         f.has_drm = Some(true);
         let formats = vec![f];
-        assert!(FormatSelector::parse("worst").unwrap().select(&formats).is_empty());
+        assert!(
+            FormatSelector::parse("worst")
+                .unwrap()
+                .select(&formats)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3638,7 +3835,12 @@ mod negative_eval_2 {
         let mut f = make_video_only("drm_v", "mp4", 1080);
         f.has_drm = Some(true);
         let formats = vec![f];
-        assert!(FormatSelector::parse("wv").unwrap().select(&formats).is_empty());
+        assert!(
+            FormatSelector::parse("wv")
+                .unwrap()
+                .select(&formats)
+                .is_empty()
+        );
     }
 
     // ---- Extension shorthand no match ----
@@ -3663,7 +3865,9 @@ mod negative_eval_2 {
     fn numeric_eq_exact_match() {
         let formats = test_formats();
         // height=720 should match c720 exactly
-        let result = FormatSelector::parse("best[height=720]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[height=720]")
+            .unwrap()
+            .select(&formats);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].format_id, "c720");
     }
@@ -3672,7 +3876,9 @@ mod negative_eval_2 {
     fn numeric_eq_no_match() {
         let formats = test_formats();
         // height=721 should match nothing (720.0 - 721.0 > epsilon)
-        let result = FormatSelector::parse("best[height=721]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[height=721]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3680,7 +3886,9 @@ mod negative_eval_2 {
     fn numeric_ne_match() {
         let formats = vec![make_combined("c720", "mp4", 720, 2)];
         // height!=720 should exclude the only format
-        let result = FormatSelector::parse("best[height!=720]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[height!=720]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3688,7 +3896,9 @@ mod negative_eval_2 {
     fn numeric_ne_passes() {
         let formats = vec![make_combined("c720", "mp4", 720, 2)];
         // height!=360 should keep c720
-        let result = FormatSelector::parse("best[height!=360]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[height!=360]")
+            .unwrap()
+            .select(&formats);
         assert_eq!(result.len(), 1);
     }
 
@@ -3698,14 +3908,18 @@ mod negative_eval_2 {
     fn string_field_lt_with_number_value_fails() {
         let formats = test_formats();
         // ext < 26 (Number) — ordering ops with numeric value on string field return false
-        let result = FormatSelector::parse("best[ext<26]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[ext<26]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
     #[test]
     fn string_field_ge_with_number_value_fails() {
         let formats = test_formats();
-        let result = FormatSelector::parse("best[ext>=26]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[ext>=26]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3714,14 +3928,18 @@ mod negative_eval_2 {
     #[test]
     fn string_field_lt_with_size_value_fails() {
         let formats = test_formats();
-        let result = FormatSelector::parse("best[ext<500M]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[ext<500M]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
     #[test]
     fn string_field_le_with_size_value_fails() {
         let formats = test_formats();
-        let result = FormatSelector::parse("best[ext<=500M]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[ext<=500M]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3731,11 +3949,18 @@ mod negative_eval_2 {
     fn negated_non_fatal_missing_field_passes() {
         // Negated + non-fatal on missing field:
         // FieldMissing → non_fatal → true (pass), negation not applied to FieldMissing
-        let mut f = Format::new("no_codec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_codec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = None;
         f.acodec = None;
         let formats = vec![f];
-        let result = FormatSelector::parse("b*[vcodec!^=?h264]").unwrap().select(&formats);
+        let result = FormatSelector::parse("b*[vcodec!^=?h264]")
+            .unwrap()
+            .select(&formats);
         // vcodec is None → FieldMissing → non_fatal → pass through
         assert_eq!(result.len(), 1);
     }
@@ -3744,7 +3969,9 @@ mod negative_eval_2 {
     fn negated_non_fatal_present_field_negates() {
         // Negated + non-fatal on present field: normal negation applies
         let formats = test_formats(); // all vcodec = "h264"
-        let result = FormatSelector::parse("bv[vcodec!^=?h26]").unwrap().select(&formats);
+        let result = FormatSelector::parse("bv[vcodec!^=?h26]")
+            .unwrap()
+            .select(&formats);
         // vcodec starts with "h26" → Pass → negated → Fail → excluded
         assert!(result.is_empty());
     }
@@ -3755,11 +3982,18 @@ mod negative_eval_2 {
     fn negated_fatal_missing_field_excludes() {
         // Negated without non-fatal on missing field:
         // FieldMissing → non_fatal=false → excluded
-        let mut f = Format::new("no_codec", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "no_codec",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = None;
         f.acodec = None;
         let formats = vec![f];
-        let result = FormatSelector::parse("b*[vcodec!=h264]").unwrap().select(&formats);
+        let result = FormatSelector::parse("b*[vcodec!=h264]")
+            .unwrap()
+            .select(&formats);
         // vcodec is None → FieldMissing → non_fatal=false → false (excluded)
         assert!(result.is_empty());
     }
@@ -3769,14 +4003,18 @@ mod negative_eval_2 {
     #[test]
     fn protocol_filter_no_match() {
         let formats = test_formats(); // all HTTPS
-        let result = FormatSelector::parse("best[protocol=m3u8]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[protocol=m3u8]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
     #[test]
     fn protocol_filter_match() {
         let formats = test_formats(); // all HTTPS
-        let result = FormatSelector::parse("best[protocol=https]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[protocol=https]")
+            .unwrap()
+            .select(&formats);
         assert_eq!(result.len(), 1);
     }
 
@@ -3808,7 +4046,9 @@ mod negative_eval_2 {
         let mut f = make_combined("no_width", "mp4", 720, 2);
         f.width = None;
         let formats = vec![f];
-        let result = FormatSelector::parse("best[width>=1280]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[width>=1280]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3817,7 +4057,9 @@ mod negative_eval_2 {
     #[test]
     fn asr_filter_missing() {
         let formats = test_formats(); // audio formats have no asr set
-        let result = FormatSelector::parse("ba[asr>=44100]").unwrap().select(&formats);
+        let result = FormatSelector::parse("ba[asr>=44100]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3827,7 +4069,9 @@ mod negative_eval_2 {
     fn tbr_filter_missing() {
         let f = make_audio_only("a1", "m4a", 128.0); // tbr not set
         let formats = vec![f];
-        let result = FormatSelector::parse("ba*[tbr>=100]").unwrap().select(&formats);
+        let result = FormatSelector::parse("ba*[tbr>=100]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3835,7 +4079,9 @@ mod negative_eval_2 {
     fn vbr_filter_missing() {
         let f = make_combined("c720", "mp4", 720, 2); // vbr not set on combined
         let formats = vec![f];
-        let result = FormatSelector::parse("best[vbr>=1000]").unwrap().select(&formats);
+        let result = FormatSelector::parse("best[vbr>=1000]")
+            .unwrap()
+            .select(&formats);
         assert!(result.is_empty());
     }
 
@@ -3844,7 +4090,12 @@ mod negative_eval_2 {
     #[test]
     fn codecs_unknown_matches_best() {
         // Format with vcodec=None, acodec=None → codecs_unknown=true → matches best
-        let f = Format::new("unknown", "https://example.com", "mp4", DownloadProtocol::Https);
+        let f = Format::new(
+            "unknown",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let formats = vec![f];
         let result = FormatSelector::parse("best").unwrap().select(&formats);
         assert_eq!(result.len(), 1);
@@ -3853,7 +4104,12 @@ mod negative_eval_2 {
 
     #[test]
     fn codecs_unknown_matches_bv_star() {
-        let f = Format::new("unknown", "https://example.com", "mp4", DownloadProtocol::Https);
+        let f = Format::new(
+            "unknown",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let formats = vec![f];
         let result = FormatSelector::parse("bv*").unwrap().select(&formats);
         assert_eq!(result.len(), 1);
@@ -3863,7 +4119,12 @@ mod negative_eval_2 {
     fn codecs_unknown_does_not_match_bv_strict() {
         // bv (non-star) requires has_video && !has_audio
         // codecs_unknown=true → has_video=false, has_audio=false → not video-only
-        let f = Format::new("unknown", "https://example.com", "mp4", DownloadProtocol::Https);
+        let f = Format::new(
+            "unknown",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let formats = vec![f];
         let result = FormatSelector::parse("bv").unwrap().select(&formats);
         // matches_token: bv (non-modified Video) checks f.has_video() && !f.has_audio()
@@ -3893,7 +4154,12 @@ mod negative_eval_2 {
 
     #[test]
     fn mergeall_excludes_format_with_no_streams() {
-        let mut f = Format::new("empty", "https://example.com", "mp4", DownloadProtocol::Https);
+        let mut f = Format::new(
+            "empty",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         f.vcodec = Some("none".to_string());
         f.acodec = Some("none".to_string());
         let formats = vec![f];
@@ -4022,7 +4288,12 @@ mod negative_sort_2 {
 
     #[test]
     fn protocol_https_over_http() {
-        let f_https = Format::new("https", "https://example.com", "mp4", DownloadProtocol::Https);
+        let f_https = Format::new(
+            "https",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let f_http = Format::new("http", "http://example.com", "mp4", DownloadProtocol::Http);
 
         let spec = sort::FormatSorter::parse("proto").unwrap();
@@ -4035,7 +4306,12 @@ mod negative_sort_2 {
     #[test]
     fn protocol_http_over_m3u8() {
         let f_http = Format::new("http", "http://example.com", "mp4", DownloadProtocol::Http);
-        let f_m3u8 = Format::new("m3u8", "https://example.com/v.m3u8", "mp4", DownloadProtocol::M3u8);
+        let f_m3u8 = Format::new(
+            "m3u8",
+            "https://example.com/v.m3u8",
+            "mp4",
+            DownloadProtocol::M3u8,
+        );
 
         let spec = sort::FormatSorter::parse("proto").unwrap();
         let mut formats: Vec<&Format> = vec![&f_m3u8, &f_http];
@@ -4046,7 +4322,12 @@ mod negative_sort_2 {
 
     #[test]
     fn protocol_ascending_prefers_worst() {
-        let f_https = Format::new("https", "https://example.com", "mp4", DownloadProtocol::Https);
+        let f_https = Format::new(
+            "https",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let f_http = Format::new("http", "http://example.com", "mp4", DownloadProtocol::Http);
 
         // +proto → ascending → worst protocol first
@@ -4432,10 +4713,9 @@ mod negative_eval_3 {
     #[test]
     fn multi_fallback_uses_third() {
         let formats = test_formats();
-        let result =
-            FormatSelector::parse("bv[height>=9999]/ba[abr>=9999]/best")
-                .unwrap()
-                .select(&formats);
+        let result = FormatSelector::parse("bv[height>=9999]/ba[abr>=9999]/best")
+            .unwrap()
+            .select(&formats);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].format_id, "c1080");
     }
@@ -4737,8 +5017,18 @@ mod negative_sort_3 {
 
     #[test]
     fn sort_vext_uses_ext() {
-        let f_mp4 = Format::new("mp4f", "https://example.com", "mp4", DownloadProtocol::Https);
-        let f_webm = Format::new("webmf", "https://example.com", "webm", DownloadProtocol::Https);
+        let f_mp4 = Format::new(
+            "mp4f",
+            "https://example.com",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        let f_webm = Format::new(
+            "webmf",
+            "https://example.com",
+            "webm",
+            DownloadProtocol::Https,
+        );
 
         let spec = sort::FormatSorter::parse("vext").unwrap();
         let mut formats: Vec<&Format> = vec![&f_mp4, &f_webm];

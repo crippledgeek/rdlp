@@ -1,24 +1,27 @@
 //! Subtitle format types
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
-
-use crate::parse_error::ParseEnumError;
+use strum_macros::{Display, EnumString};
 
 /// Supported subtitle formats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
+#[strum(ascii_case_insensitive)]
 pub enum SubtitleFormat {
     /// SubRip Text
+    #[strum(serialize = "srt")]
     Srt,
     /// Web Video Text Tracks
+    #[strum(serialize = "vtt", serialize = "webvtt")]
     Vtt,
     /// Advanced SubStation Alpha
+    #[strum(serialize = "ass")]
     Ass,
     /// SubStation Alpha
+    #[strum(serialize = "ssa")]
     Ssa,
     /// LRC lyrics format
+    #[strum(serialize = "lrc")]
     Lrc,
 }
 
@@ -33,35 +36,6 @@ impl SubtitleFormat {
             Self::Ass => "ass",
             Self::Ssa => "ssa",
             Self::Lrc => "lrc",
-        }
-    }
-}
-
-impl fmt::Display for SubtitleFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_ext())
-    }
-}
-
-impl FromStr for SubtitleFormat {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("srt") {
-            Ok(Self::Srt)
-        } else if s.eq_ignore_ascii_case("vtt") || s.eq_ignore_ascii_case("webvtt") {
-            Ok(Self::Vtt)
-        } else if s.eq_ignore_ascii_case("ass") {
-            Ok(Self::Ass)
-        } else if s.eq_ignore_ascii_case("ssa") {
-            Ok(Self::Ssa)
-        } else if s.eq_ignore_ascii_case("lrc") {
-            Ok(Self::Lrc)
-        } else {
-            Err(ParseEnumError {
-                type_name: "SubtitleFormat",
-                input: s.to_string(),
-            })
         }
     }
 }

@@ -331,8 +331,8 @@ fn parse_filter_field(input: &mut &str) -> ModalResult<FilterField> {
     if input.starts_with(|c: char| c.is_ascii_digit()) {
         return Err(ErrMode::Backtrack(ContextError::new()));
     }
-    let name: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_')
-        .parse_next(input)?;
+    let name: &str =
+        take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
     let field = match name {
         "height" => FilterField::Height,
         "width" => FilterField::Width,
