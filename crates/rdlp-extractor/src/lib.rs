@@ -40,9 +40,9 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    EMPFlixSearchExtractor, HQPornerExtractor, MovieFapSearchExtractor, NineAnimeExtractor,
-    PornHubExtractor, RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
-    XHamsterExtractor, XTitsExtractor,
+    EMPFlixSearchExtractor, GenericExtractor, HQPornerExtractor, MovieFapSearchExtractor,
+    NineAnimeExtractor, PornHubExtractor, RedTubeExtractor, TNAFlixExtractor,
+    TNAFlixSearchExtractor, XHamsterExtractor, XTitsExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -108,6 +108,9 @@ impl ExtractorRegistry {
 
         // Register HQPorner extractor
         registry.register(Arc::new(HQPornerExtractor::new()));
+
+        // Register Generic fallback extractor (MUST be last — lowest priority)
+        registry.register(Arc::new(GenericExtractor::new()));
 
         // Register search extractors
         registry
@@ -336,8 +339,15 @@ mod tests {
         assert!(hqporner.is_some());
         assert_eq!(hqporner.unwrap().name(), "HQPorner");
 
-        let unknown = registry.find_extractor("https://youtube.com/watch?v=test");
-        assert!(unknown.is_none());
+        // Generic fallback extractor matches all HTTP URLs, so a YouTube URL
+        // now returns the Generic extractor instead of None.
+        let generic = registry.find_extractor("https://youtube.com/watch?v=test");
+        assert!(generic.is_some());
+        assert_eq!(generic.unwrap().name(), "Generic");
+
+        // Non-HTTP URLs still return None
+        let ftp = registry.find_extractor("ftp://example.com/file");
+        assert!(ftp.is_none());
     }
 
     #[test]

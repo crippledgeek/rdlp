@@ -289,10 +289,13 @@ async fn test_extract_info_unsupported_url() {
     assert!(result.is_err(), "Should fail for unsupported URL");
 
     match result.unwrap_err() {
-        RdlpApiError::UnsupportedUrl { .. } | RdlpApiError::ExtractError { .. } => {
-            // Expected
+        RdlpApiError::UnsupportedUrl { .. }
+        | RdlpApiError::ExtractError { .. }
+        | RdlpApiError::NetworkError { .. } => {
+            // Expected — with the generic fallback extractor, unknown sites
+            // may now fail with a network error instead of UnsupportedUrl.
         }
-        other => panic!("Expected UnsupportedUrl or ExtractError, got: {other:?}"),
+        other => panic!("Expected UnsupportedUrl, ExtractError, or NetworkError, got: {other:?}"),
     }
 }
 
