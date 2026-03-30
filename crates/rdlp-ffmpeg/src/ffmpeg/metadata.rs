@@ -113,15 +113,10 @@ impl FFmpegRunner {
             ist_time_bases[ist_index] = ist.time_base();
             ost_index += 1;
 
-            let mut ost = octx
-                .add_stream(ffmpeg_the_third::encoder::find(
-                    ffmpeg_the_third::codec::Id::None,
-                ))
-                .map_err(PostProcessError::from)
-                .context("failed to add output stream for metadata embed")?;
-            ost.set_parameters(ist.parameters());
-            ost.set_metadata(ist.metadata().to_owned());
-            Self::clear_codec_tag(ost.parameters().as_ptr());
+            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for metadata embed")?;
+            octx.stream_mut(ost_idx)
+                .expect("just-added stream")
+                .set_metadata(ist.metadata().to_owned());
         }
 
         // Build metadata dictionary from input metadata + provided overrides

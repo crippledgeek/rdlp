@@ -207,14 +207,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     // Map all input streams to output (stream copy, no re-encoding)
     let stream_count = ictx.streams().count();
     for ist in ictx.streams() {
-        let mut ost = octx
-            .add_stream(ffmpeg_the_third::encoder::find(
-                ffmpeg_the_third::codec::Id::None,
-            ))
-            .map_err(PostProcessError::from)
-            .context("failed to add output stream for salvage")?;
-        ost.set_parameters(ist.parameters());
-        FFmpegRunner::clear_codec_tag(ost.parameters().as_ptr());
+        FFmpegRunner::add_stream_copy(&mut octx, ist.parameters(), "for salvage")?;
     }
 
     // Use FFmpeg's default 10s max_interleave_delta for salvage. This prevents

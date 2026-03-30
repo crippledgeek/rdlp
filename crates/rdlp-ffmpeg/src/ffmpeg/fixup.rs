@@ -227,27 +227,24 @@ impl FFmpegRunner {
                 ist_time_bases[ist_index] = ist.time_base();
                 ost_index += 1;
 
-                let mut ost = octx
-                    .add_stream(ffmpeg_the_third::encoder::find(
-                        ffmpeg_the_third::codec::Id::None,
-                    ))
-                    .context("fixup: failed to add output stream")?;
-                ost.set_parameters(ist.parameters());
-                ost.set_metadata(ist.metadata().to_owned());
-                Self::clear_codec_tag(ost.parameters().as_ptr());
+                let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for fixup")?;
+                octx.stream_mut(ost_idx)
+                    .expect("just-added stream")
+                    .set_metadata(ist.metadata().to_owned());
 
                 // Fix SAR on video streams: set to 1:1 (square pixels)
-                if medium == ffmpeg_the_third::media::Type::Video {
-                    unsafe {
-                        let ost_ptr = ost.as_mut_ptr();
-                        (*ost_ptr).sample_aspect_ratio = ffmpeg_the_third::ffi::AVRational {
-                            num: 1,
-                            den: 1,
-                        };
-                        (*(*ost_ptr).codecpar).sample_aspect_ratio =
-                            ffmpeg_the_third::ffi::AVRational { num: 1, den: 1 };
+                if medium == ffmpeg_the_third::media::Type::Video
+                    && let Some(mut ost) = octx.stream_mut(ost_idx) {
+                        unsafe {
+                            let ost_ptr = ost.as_mut_ptr();
+                            (*ost_ptr).sample_aspect_ratio = ffmpeg_the_third::ffi::AVRational {
+                                num: 1,
+                                den: 1,
+                            };
+                            (*(*ost_ptr).codecpar).sample_aspect_ratio =
+                                ffmpeg_the_third::ffi::AVRational { num: 1, den: 1 };
+                        }
                     }
-                }
             }
 
             // Copy format-level metadata

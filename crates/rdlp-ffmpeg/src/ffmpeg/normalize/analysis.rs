@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use log::{debug, warn};
 
-use crate::error::{PostProcessError, Result};
+use crate::error::{FfmpegResultExt as _, PostProcessError, Result};
 
 use super::super::ffi_helpers::{frame_unref_audio, set_single_thread_codec};
 use super::super::log_capture::LogSuppressGuard;
@@ -56,14 +56,12 @@ pub(super) fn run_analysis_decode_loop(
 
     let mut decoder_ctx =
         ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())
-            .map_err(PostProcessError::from)
-            .context("failed to create decoder context for analysis")?;
+            .ff_context("failed to create decoder context for analysis")?;
     set_single_thread_codec(unsafe { decoder_ctx.as_mut_ptr() });
     let mut decoder = decoder_ctx
         .decoder()
         .audio()
-        .map_err(PostProcessError::from)
-        .context("failed to open audio decoder for analysis")?;
+        .ff_context("failed to open audio decoder for analysis")?;
 
     debug!(
         "[{label}] decoder: rate={}, fmt={}, ch_layout={}, time_base={}/{}",
@@ -89,8 +87,7 @@ pub(super) fn run_analysis_decode_loop(
     )?;
     graph
         .add(&abuffersink, "out", "")
-        .map_err(PostProcessError::from)
-        .context("failed to add abuffersink filter for analysis")?;
+        .ff_context("failed to add abuffersink filter for analysis")?;
 
     FFmpegRunner::parse_and_validate_filter_graph(&mut graph, "in", "out", filter_spec)?;
 
@@ -107,8 +104,7 @@ pub(super) fn run_analysis_decode_loop(
 
     for result in ictx.packets() {
         let (stream, packet) = result
-            .map_err(PostProcessError::from)
-            .context("failed to read packet during analysis")?;
+            .ff_context("failed to read packet during analysis")?;
         if stream.index() != ist_index {
             continue;
         }
@@ -126,8 +122,7 @@ pub(super) fn run_analysis_decode_loop(
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
                 .source()
                 .add(&frame)
-                .map_err(PostProcessError::from)
-                .context("filter source add frame failed")?;
+                .ff_context("filter source add frame failed")?;
             frame_unref_audio(&mut frame);
 
             on_drain(&mut graph, &mut filtered)?;
@@ -148,8 +143,7 @@ pub(super) fn run_analysis_decode_loop(
             .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
             .source()
             .add(&frame)
-            .map_err(PostProcessError::from)
-            .context("filter source add frame (flush) failed")?;
+            .ff_context("filter source add frame (flush) failed")?;
         frame_unref_audio(&mut frame);
 
         on_drain(&mut graph, &mut filtered)?;
@@ -161,8 +155,7 @@ pub(super) fn run_analysis_decode_loop(
         .ok_or_else(|| PostProcessError::ffmpeg_failed("filter node 'in' not found"))?
         .source()
         .flush()
-        .map_err(PostProcessError::from)
-        .context("filter source flush failed")?;
+        .ff_context("filter source flush failed")?;
     on_drain(&mut graph, &mut filtered)?;
 
     Ok(())

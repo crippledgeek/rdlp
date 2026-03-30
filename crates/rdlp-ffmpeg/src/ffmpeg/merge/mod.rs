@@ -109,13 +109,8 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoVideoStream)?;
 
-        let mut ost_video = octx
-            .add_stream(ffmpeg_the_third::encoder::find(
-                ffmpeg_the_third::codec::Id::None,
-            ))
-            .map_err(PostProcessError::from)
-            .context("failed to add video output stream for merge")?;
-        ost_video.set_parameters(
+        let video_ost_index = Self::add_stream_copy(
+            &mut octx,
             ictx_video
                 .stream(video_ist_index)
                 .ok_or_else(|| {
@@ -124,9 +119,8 @@ impl FFmpegRunner {
                     ))
                 })?
                 .parameters(),
-        );
-        Self::clear_codec_tag(ost_video.parameters().as_ptr());
-        let video_ost_index = ost_video.index();
+            "for merge video",
+        )?;
 
         // Find best audio stream from audio input
         let audio_ist_index = ictx_audio
@@ -135,13 +129,8 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
-        let mut ost_audio = octx
-            .add_stream(ffmpeg_the_third::encoder::find(
-                ffmpeg_the_third::codec::Id::None,
-            ))
-            .map_err(PostProcessError::from)
-            .context("failed to add audio output stream for merge")?;
-        ost_audio.set_parameters(
+        let audio_ost_index = Self::add_stream_copy(
+            &mut octx,
             ictx_audio
                 .stream(audio_ist_index)
                 .ok_or_else(|| {
@@ -150,13 +139,15 @@ impl FFmpegRunner {
                     ))
                 })?
                 .parameters(),
-        );
-        Self::clear_codec_tag(ost_audio.parameters().as_ptr());
+            "for merge audio",
+        )?;
         // Set audio as default stream so players select it automatically
-        unsafe {
-            (*ost_audio.as_mut_ptr()).disposition = ffmpeg_the_third::ffi::AV_DISPOSITION_DEFAULT;
+        if let Some(mut ost_audio) = octx.stream_mut(audio_ost_index) {
+            unsafe {
+                (*ost_audio.as_mut_ptr()).disposition =
+                    ffmpeg_the_third::ffi::AV_DISPOSITION_DEFAULT;
+            }
         }
-        let audio_ost_index = ost_audio.index();
 
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
