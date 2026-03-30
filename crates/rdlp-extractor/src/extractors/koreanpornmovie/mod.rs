@@ -198,25 +198,46 @@ impl SearchExtractor for KoreanPornMovieExtractor {
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
-        vec![SearchFilterDescriptor {
-            key: "ordering".to_string(),
-            display_name: "Sort order".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "latest".to_string(),
-                    label: "Latest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "longest".to_string(),
-                    label: "Longest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "random".to_string(),
-                    label: "Random".to_string(),
-                },
-            ],
-            default: Some("latest".to_string()),
-        }]
+        vec![
+            SearchFilterDescriptor {
+                key: "browse".to_string(),
+                display_name: "Browse mode".to_string(),
+                allowed_values: vec![
+                    rdlp_types::SearchFilterValue {
+                        value: "search".to_string(),
+                        label: "Keyword search".to_string(),
+                    },
+                    rdlp_types::SearchFilterValue {
+                        value: "actor".to_string(),
+                        label: "Browse by actor".to_string(),
+                    },
+                    rdlp_types::SearchFilterValue {
+                        value: "tag".to_string(),
+                        label: "Browse by tag".to_string(),
+                    },
+                ],
+                default: Some("search".to_string()),
+            },
+            SearchFilterDescriptor {
+                key: "ordering".to_string(),
+                display_name: "Sort order".to_string(),
+                allowed_values: vec![
+                    rdlp_types::SearchFilterValue {
+                        value: "latest".to_string(),
+                        label: "Latest".to_string(),
+                    },
+                    rdlp_types::SearchFilterValue {
+                        value: "longest".to_string(),
+                        label: "Longest".to_string(),
+                    },
+                    rdlp_types::SearchFilterValue {
+                        value: "random".to_string(),
+                        label: "Random".to_string(),
+                    },
+                ],
+                default: Some("latest".to_string()),
+            },
+        ]
     }
 
     async fn search(
@@ -234,13 +255,42 @@ impl SearchExtractor for KoreanPornMovieExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
         let page = query.page.unwrap_or(1);
-        let search_url = format!(
-            "https://koreanpornmovie.com/?s={}&paged={}",
-            urlencoding::encode(&query.query),
-            page
-        );
+        let browse_mode = query
+            .filters
+            .iter()
+            .find(|f| f.key == "browse")
+            .map(|f| f.value.as_str())
+            .unwrap_or("search");
 
-        debug!("[KoreanPornMovie] Search: {} (page {})", query.query, page);
+        let slug = query.query.to_lowercase().replace(' ', "-");
+        let search_url = match browse_mode {
+            "actor" => {
+                // Browse videos by actor: /actor/<slug>/page/N/
+                if page > 1 {
+                    format!("https://koreanpornmovie.com/actor/{slug}/page/{page}/")
+                } else {
+                    format!("https://koreanpornmovie.com/actor/{slug}/")
+                }
+            }
+            "tag" => {
+                // Browse videos by tag: /tag/<slug>/page/N/
+                if page > 1 {
+                    format!("https://koreanpornmovie.com/tag/{slug}/page/{page}/")
+                } else {
+                    format!("https://koreanpornmovie.com/tag/{slug}/")
+                }
+            }
+            _ => {
+                // Default: keyword search
+                format!(
+                    "https://koreanpornmovie.com/?s={}&paged={}",
+                    urlencoding::encode(&query.query),
+                    page
+                )
+            }
+        };
+
+        debug!("[KoreanPornMovie] {} '{}' (page {})", browse_mode, query.query, page);
 
         let webpage = BaseExtractor::fetch_webpage(&search_url, ctx).await?;
 
