@@ -6,6 +6,7 @@
 
 pub mod generic;
 pub mod hqporner;
+pub mod koreanpornmovie;
 pub mod nine_anime;
 pub mod pornhub;
 pub mod redtube;
@@ -15,6 +16,7 @@ pub mod xtits;
 
 pub use generic::GenericExtractor;
 pub use hqporner::HQPornerExtractor;
+pub use koreanpornmovie::KoreanPornMovieExtractor;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
 pub use redtube::RedTubeExtractor;
