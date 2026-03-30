@@ -513,33 +513,14 @@ impl FFmpegRunner {
 
     /// Build an audio filter graph for sample format/rate/channel conversion.
     ///
-    /// Uses `abuffer` -> `anull` -> `abuffersink` to let FFmpeg handle any
+    /// Uses `abuffer` -> `aformat` -> `abuffersink` to let FFmpeg handle any
     /// necessary sample format, sample rate, or channel layout conversions.
+    /// Delegates to the shared filter graph helper in normalize/helpers.
     fn build_audio_filter(
         decoder: &ffmpeg_the_third::decoder::Audio,
         encoder: &ffmpeg_the_third::encoder::audio::Audio,
         ist_time_base: ffmpeg_the_third::Rational,
     ) -> Result<ffmpeg_the_third::filter::Graph> {
-        let mut graph = ffmpeg_the_third::filter::Graph::new();
-
-        let abuffersink = ffmpeg_the_third::filter::find("abuffersink")
-            .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffersink filter not found"))?;
-
-        Self::add_abuffer_to_graph(
-            &mut graph,
-            "in",
-            ist_time_base,
-            decoder.rate(),
-            decoder.format().name(),
-            &decoder.ch_layout().description(),
-        )?;
-        graph
-            .add(&abuffersink, "out", "")
-            .map_err(|e| PostProcessError::FFmpegLibraryError {
-                message: format!("failed to add abuffersink filter: {e}"),
-            })?;
-
-        // Build aformat spec to convert to encoder's expected format
         let enc_ch_layout_desc = encoder.ch_layout().description();
         let aformat_spec = format!(
             "aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
@@ -548,8 +529,10 @@ impl FFmpegRunner {
             enc_ch_layout_desc,
         );
 
-        Self::parse_and_validate_filter_graph(&mut graph, "in", "out", &aformat_spec)?;
-
-        Ok(graph)
+        crate::ffmpeg::normalize::helpers::build_audio_filter_with_spec(
+            decoder,
+            ist_time_base,
+            &aformat_spec,
+        )
     }
 }

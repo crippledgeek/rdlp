@@ -116,7 +116,7 @@ pub(super) fn build_loudnorm_pass2_filter(
 /// Build an audio filter graph with a custom filter spec string.
 ///
 /// Creates: `abuffer → {filter_spec} → abuffersink`
-pub(super) fn build_audio_filter_with_spec(
+pub(crate) fn build_audio_filter_with_spec(
     decoder: &ffmpeg_the_third::decoder::Audio,
     ist_time_base: ffmpeg_the_third::Rational,
     filter_spec: &str,

@@ -10,7 +10,7 @@
 mod analysis;
 mod dispatch;
 mod encode;
-mod helpers;
+pub(crate) mod helpers;
 mod io_diag;
 
 #[cfg(test)]
