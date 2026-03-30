@@ -363,65 +363,96 @@ impl SearchExtractor for KoreanPornMovieExtractor {
 fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
+    // Try to get width/height from the decoded player tag
+    let decoded_tag = html
+        .select(&PLAYER_IFRAME_SELECTOR)
+        .next()
+        .and_then(|iframe| iframe.value().attr("src"))
+        .and_then(decode_player_iframe);
+
+    let (tag_width, tag_height) = decoded_tag
+        .as_deref()
+        .map(extract_dimensions_from_tag)
+        .unwrap_or((None, None));
+
     // Strategy 1: Schema.org contentURL meta tag (direct MP4)
     if let Some(content_url) = meta_content(html, &META_CONTENT_URL_SELECTOR)
-        && !content_url.is_empty() {
-            let protocol = if content_url.contains(".m3u8") {
-                DownloadProtocol::M3u8
-            } else {
-                DownloadProtocol::Https
-            };
-            let ext = content_url
-                .split('.')
-                .next_back()
-                .unwrap_or("mp4")
-                .split('?')
-                .next()
-                .unwrap_or("mp4");
-            formats.push(Format::new("kpm-direct", &content_url, ext, protocol));
-        }
+        && !content_url.is_empty()
+    {
+        let mut format = make_video_format("kpm-direct", &content_url);
+        format.width = tag_width;
+        format.height = tag_height;
+        formats.push(format);
+    }
 
     // Strategy 2: Decode clean-tube-player iframe base64
-    if let Some(iframe) = html.select(&PLAYER_IFRAME_SELECTOR).next()
-        && let Some(src) = iframe.value().attr("src")
-            && let Some(decoded) = decode_player_iframe(src) {
-                for url in extract_urls_from_decoded_tag(&decoded) {
-                    // Skip if same as contentURL already added
-                    if !formats.iter().any(|f| f.url == url) {
-                        let protocol = if url.contains(".m3u8") {
-                            DownloadProtocol::M3u8
-                        } else {
-                            DownloadProtocol::Https
-                        };
-                        let ext = url
-                            .split('.')
-                            .next_back()
-                            .unwrap_or("mp4")
-                            .split('?')
-                            .next()
-                            .unwrap_or("mp4");
-                        formats.push(Format::new("kpm-player", &url, ext, protocol));
-                    }
-                }
+    if let Some(ref decoded) = decoded_tag {
+        for url in extract_urls_from_decoded_tag(decoded) {
+            if !formats.iter().any(|f| f.url == url) {
+                let mut format = make_video_format("kpm-player", &url);
+                format.width = tag_width;
+                format.height = tag_height;
+                formats.push(format);
             }
+        }
+    }
 
     // Strategy 3: embedURL (external embed — log but don't add as format)
     if formats.is_empty()
-        && let Some(embed_url) = meta_content(html, &META_EMBED_URL_SELECTOR) {
-            log::info!(
-                "[KoreanPornMovie] Video is an external embed: {} — try that URL directly",
-                embed_url
-            );
-            // We could add it as a low-confidence format, but external embeds
-            // (PornHub, etc.) should be handled by their own extractors.
-            // Return empty to signal this to the user.
-            log::info!(
-                "[KoreanPornMovie] Use: rdlp \"{}\" instead",
-                embed_url.replace("/embed/", "/view_video.php?viewkey=")
-            );
-        }
+        && let Some(embed_url) = meta_content(html, &META_EMBED_URL_SELECTOR)
+    {
+        log::info!(
+            "[KoreanPornMovie] Video is an external embed: {} — try that URL directly",
+            embed_url
+        );
+        log::info!(
+            "[KoreanPornMovie] Use: rdlp \"{}\" instead",
+            embed_url.replace("/embed/", "/view_video.php?viewkey=")
+        );
+    }
 
     formats
+}
+
+/// Create a Format with video codec markers set so the UI shows it as video, not audio-only.
+fn make_video_format(format_id: &str, url: &str) -> Format {
+    let protocol = if url.contains(".m3u8") {
+        DownloadProtocol::M3u8
+    } else {
+        DownloadProtocol::Https
+    };
+    let ext = url
+        .split('.')
+        .next_back()
+        .unwrap_or("mp4")
+        .split('?')
+        .next()
+        .unwrap_or("mp4");
+
+    let mut format = Format::new(format_id, url, ext, protocol);
+    // Mark as video (not audio-only) — actual codec determined at download time
+    format.vcodec = Some("video".to_string());
+    format.acodec = Some("audio".to_string());
+    format
+}
+
+/// Extract width/height from a decoded `<video width="640" height="264">` tag.
+fn extract_dimensions_from_tag(tag: &str) -> (Option<u32>, Option<u32>) {
+    static WIDTH_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"width=["'](\d+)["']"#).expect("valid"));
+    static HEIGHT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"height=["'](\d+)["']"#).expect("valid"));
+
+    let width = WIDTH_RE
+        .captures(tag)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok());
+    let height = HEIGHT_RE
+        .captures(tag)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok());
+
+    (width, height)
 }
 
 /// Decode the `player-x.php?q=<base64>` iframe URL.
