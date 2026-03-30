@@ -4,6 +4,7 @@
 //! particular website. Re-exports provide convenient access to the top-level
 //! extractor types.
 
+pub mod generic;
 pub mod hqporner;
 pub mod nine_anime;
 pub mod pornhub;
@@ -12,6 +13,7 @@ pub mod tnaflix;
 pub mod xhamster;
 pub mod xtits;
 
+pub use generic::GenericExtractor;
 pub use hqporner::HQPornerExtractor;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
