@@ -35,8 +35,8 @@ pub(crate) fn parse_size(input: &str) -> Option<u64> {
     // Check suffix to determine SI vs binary
     let remainder = &unit_part[unit_char.len_utf8()..];
     let binary = match remainder {
-        "" | "B" => false,    // bare K/M/G or KB/MB/GB → SI (1000-based)
-        "i" | "iB" => true,  // Ki/Mi/Gi or KiB/MiB/GiB → binary (1024-based)
+        "" | "B" => false,  // bare K/M/G or KB/MB/GB → SI (1000-based)
+        "i" | "iB" => true, // Ki/Mi/Gi or KiB/MiB/GiB → binary (1024-based)
         _ => return None,
     };
 

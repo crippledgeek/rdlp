@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
 winnow = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [dev-dependencies]
 

@@ -67,6 +67,7 @@ fn default_args() -> Args {
         list_encoders: false,
         recode_container: None,
         recode_audio: "copy".to_string(),
+        fixup: "detect_or_warn".to_string(),
     }
 }
 

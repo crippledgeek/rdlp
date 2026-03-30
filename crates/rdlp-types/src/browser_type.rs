@@ -1,18 +1,22 @@
 //! Browser type for cookie extraction
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
-
-use crate::parse_error::ParseEnumError;
+use strum_macros::{Display, EnumString};
 
 /// Supported browsers for cookie extraction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
+#[strum(ascii_case_insensitive)]
 pub enum BrowserType {
     /// Google Chrome / Chromium
+    #[strum(
+        serialize = "chrome",
+        serialize = "chromium",
+        serialize = "google-chrome"
+    )]
     Chrome,
     /// Mozilla Firefox
+    #[strum(serialize = "firefox", serialize = "mozilla")]
     Firefox,
 }
 
@@ -24,32 +28,6 @@ impl BrowserType {
         match self {
             Self::Chrome => "chrome",
             Self::Firefox => "firefox",
-        }
-    }
-}
-
-impl fmt::Display for BrowserType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for BrowserType {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("chrome")
-            || s.eq_ignore_ascii_case("chromium")
-            || s.eq_ignore_ascii_case("google-chrome")
-        {
-            Ok(Self::Chrome)
-        } else if s.eq_ignore_ascii_case("firefox") || s.eq_ignore_ascii_case("mozilla") {
-            Ok(Self::Firefox)
-        } else {
-            Err(ParseEnumError {
-                type_name: "BrowserType",
-                input: s.to_string(),
-            })
         }
     }
 }

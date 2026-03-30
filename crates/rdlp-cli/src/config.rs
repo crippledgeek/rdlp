@@ -55,6 +55,20 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
     })
 }
 
+/// Merge a boolean CLI flag into config (sets to true if flag is set).
+macro_rules! merge_bool {
+    ($config:expr, $args:expr, $field:ident) => {
+        if $args.$field {
+            $config.$field = true;
+        }
+    };
+    ($config:expr, $args:expr, postprocess.$field:ident) => {
+        if $args.$field {
+            $config.postprocess.$field = true;
+        }
+    };
+}
+
 /// Pure config merge: defaults < config file < CLI args.
 ///
 /// This function has no side effects (no interactive prompts, no I/O).
@@ -92,21 +106,11 @@ pub(crate) fn merge_config(
     if let Some(ref format) = args.format {
         config.format = Some(format.clone());
     }
-    if args.audio_multistreams {
-        config.audio_multistreams = true;
-    }
-    if args.quiet {
-        config.quiet = true;
-    }
-    if args.verbose {
-        config.verbose = true;
-    }
-    if args.simulate {
-        config.simulate = true;
-    }
-    if args.extract_audio {
-        config.postprocess.extract_audio = true;
-    }
+    merge_bool!(config, args, audio_multistreams);
+    merge_bool!(config, args, quiet);
+    merge_bool!(config, args, verbose);
+    merge_bool!(config, args, simulate);
+    merge_bool!(config, args, postprocess.extract_audio);
 
     // Audio format: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.audio_format {
@@ -125,23 +129,15 @@ pub(crate) fn merge_config(
     if let Some(ref audio_quality) = args.audio_quality {
         config.postprocess.audio_quality = Some(audio_quality.clone());
     }
-    if args.embed_metadata {
-        config.postprocess.embed_metadata = true;
-    }
+    merge_bool!(config, args, postprocess.embed_metadata);
     if args.no_thumbnail {
         config.postprocess.embed_thumbnail = false;
     }
-    if args.write_thumbnail {
-        config.postprocess.write_thumbnail = true;
-    }
+    merge_bool!(config, args, postprocess.write_thumbnail);
 
     // Subtitles
-    if args.write_subtitles {
-        config.postprocess.write_subtitles = true;
-    }
-    if args.write_auto_subtitles {
-        config.write_auto_subtitles = true;
-    }
+    merge_bool!(config, args, postprocess.write_subtitles);
+    merge_bool!(config, args, write_auto_subtitles);
     if let Some(ref langs) = args.sub_langs {
         config.subtitle_langs = langs.split(',').map(|s| s.trim().to_string()).collect();
     }
@@ -153,9 +149,7 @@ pub(crate) fn merge_config(
                 .with_context(|| format!("invalid subtitle format '{format}'"))?,
         );
     }
-    if args.embed_subtitles {
-        config.postprocess.embed_subtitles = true;
-    }
+    merge_bool!(config, args, postprocess.embed_subtitles);
     // --list-subs implies --write-subtitles
     if args.list_subs || args.list_subs_only {
         config.postprocess.write_subtitles = true;
@@ -165,15 +159,9 @@ pub(crate) fn merge_config(
     if config.postprocess.embed_subtitles && !config.postprocess.write_subtitles {
         config.postprocess.write_subtitles = true;
     }
-    if args.strict_subs {
-        config.strict_subs = true;
-    }
-    if args.verify_sub_urls {
-        config.verify_sub_urls = true;
-    }
-    if args.retry_subs {
-        config.retry_subs = true;
-    }
+    merge_bool!(config, args, strict_subs);
+    merge_bool!(config, args, verify_sub_urls);
+    merge_bool!(config, args, retry_subs);
 
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
@@ -243,12 +231,8 @@ pub(crate) fn merge_config(
     if let Some(lra) = args.loudnorm_lra {
         config.postprocess.loudnorm_target_lra = Some(lra);
     }
-    if args.loudnorm_dynamic {
-        config.postprocess.loudnorm_dynamic = true;
-    }
-    if args.loudnorm_precompress {
-        config.postprocess.loudnorm_precompress = true;
-    }
+    merge_bool!(config, args, postprocess.loudnorm_dynamic);
+    merge_bool!(config, args, postprocess.loudnorm_precompress);
 
     // Fixup policy
     if args.fixup != "detect_or_warn" {
@@ -259,9 +243,7 @@ pub(crate) fn merge_config(
             .with_context(|| format!("invalid fixup policy '{}'", args.fixup))?;
     }
 
-    if args.keep_video {
-        config.postprocess.keep_video = true;
-    }
+    merge_bool!(config, args, postprocess.keep_video);
     if let Some(ref ffmpeg_location) = args.ffmpeg_location {
         config.postprocess.ffmpeg_location = Some(ffmpeg_location.clone());
     }

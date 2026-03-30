@@ -98,6 +98,10 @@ aes-gcm = "0.10"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Enum derives
+strum = "0.27"
+strum_macros = "0.27"
+
 # Parsing
 winnow = "0.7"
 

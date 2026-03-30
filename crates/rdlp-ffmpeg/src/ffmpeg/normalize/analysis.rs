@@ -72,24 +72,9 @@ pub(super) fn run_analysis_decode_loop(
         ist_time_base.denominator(),
     );
 
-    // Build filter graph
-    let mut graph = ffmpeg_the_third::filter::Graph::new();
-    let abuffersink = ffmpeg_the_third::filter::find("abuffersink")
-        .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffersink filter not found"))?;
-
-    FFmpegRunner::add_abuffer_to_graph(
-        &mut graph,
-        "in",
-        ist_time_base,
-        decoder.rate(),
-        decoder.format().name(),
-        &decoder.ch_layout().description(),
-    )?;
-    graph
-        .add(&abuffersink, "out", "")
-        .ff_context("failed to add abuffersink filter for analysis")?;
-
-    FFmpegRunner::parse_and_validate_filter_graph(&mut graph, "in", "out", filter_spec)?;
+    // Build filter graph (reuse shared helper)
+    let mut graph =
+        super::helpers::build_audio_filter_with_spec(&decoder, ist_time_base, filter_spec)?;
 
     // Skip non-audio streams to avoid allocating memory for large video packets
     FFmpegRunner::discard_non_audio_streams(&mut ictx, ist_index);

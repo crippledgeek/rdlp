@@ -1,75 +1,101 @@
 //! Container format types for video/audio files
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
-
-use crate::parse_error::ParseEnumError;
+use strum_macros::{Display, EnumString};
 
 /// Supported container formats for video/audio files.
 ///
 /// Used for merge output, remux targets, and video recode targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
+#[strum(ascii_case_insensitive)]
 pub enum ContainerFormat {
     // === Video containers ===
     /// MPEG-4 Part 14 — best compatibility, supports faststart
+    #[strum(serialize = "mp4")]
     Mp4,
     /// Matroska — supports all codecs, efficient cues index
+    #[strum(serialize = "mkv", serialize = "matroska")]
     Mkv,
     /// Web-optimized, VP8/VP9/AV1 + Opus/Vorbis
+    #[strum(serialize = "webm")]
     WebM,
     /// Apple QuickTime, good for editing
+    #[strum(serialize = "mov", serialize = "quicktime")]
     Mov,
     /// MPEG Transport Stream, broadcast/streaming
+    #[strum(serialize = "ts", serialize = "mpegts")]
     Ts,
     /// Flash Video, legacy format
+    #[strum(serialize = "flv")]
     Flv,
     /// Audio Video Interleave, legacy format
+    #[strum(serialize = "avi")]
     Avi,
     /// 3GPP mobile video
+    #[strum(serialize = "3gp", serialize = "3gpp")]
     ThreeGp,
     /// MPEG-1/2 program stream
+    #[strum(serialize = "mpg", serialize = "mpeg")]
     Mpg,
     /// Flash Video (MP4 variant)
+    #[strum(serialize = "f4v")]
     F4v,
     /// Advanced Streaming Format / Windows Media
+    #[strum(serialize = "asf", serialize = "wmv", serialize = "wma")]
     Asf,
     /// Material eXchange Format (broadcast/professional)
+    #[strum(serialize = "mxf")]
     Mxf,
     /// DVD Video Object
+    #[strum(serialize = "vob")]
     Vob,
     /// Digital Video
+    #[strum(serialize = "dv")]
     Dv,
     /// NUT (FFmpeg native container)
+    #[strum(serialize = "nut")]
     Nut,
     /// On2 IVF (VP8/VP9/AV1 raw)
+    #[strum(serialize = "ivf")]
     Ivf,
 
     // === Audio containers ===
     /// Ogg container
+    #[strum(serialize = "ogg")]
     Ogg,
     /// MPEG-4 Audio (audio-only container)
+    #[strum(serialize = "m4a")]
     M4a,
     /// MPEG Audio Layer 3
+    #[strum(serialize = "mp3")]
     Mp3,
     /// Waveform Audio (PCM)
+    #[strum(serialize = "wav", serialize = "wave")]
     Wav,
     /// Free Lossless Audio Codec
+    #[strum(serialize = "flac")]
     Flac,
     /// Ogg Opus
+    #[strum(serialize = "opus")]
     Opus,
     /// Raw ADTS AAC
+    #[strum(serialize = "aac", serialize = "adts")]
     Aac,
     /// Audio Interchange File Format (Apple)
+    #[strum(serialize = "aiff", serialize = "aif")]
     Aiff,
     /// Matroska Audio
+    #[strum(serialize = "mka")]
     Mka,
     /// WavPack lossless
+    #[strum(serialize = "wv", serialize = "wavpack")]
     Wv,
     /// Core Audio Format (Apple)
+    #[strum(serialize = "caf")]
     Caf,
     /// Dolby AC-3
+    #[strum(serialize = "ac3")]
     Ac3,
 }
 
@@ -136,84 +162,6 @@ impl ContainerFormat {
                 | Self::Caf
                 | Self::Ac3
         )
-    }
-}
-
-impl fmt::Display for ContainerFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_ext())
-    }
-}
-
-impl FromStr for ContainerFormat {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("mp4") {
-            Ok(Self::Mp4)
-        } else if s.eq_ignore_ascii_case("mkv") || s.eq_ignore_ascii_case("matroska") {
-            Ok(Self::Mkv)
-        } else if s.eq_ignore_ascii_case("webm") {
-            Ok(Self::WebM)
-        } else if s.eq_ignore_ascii_case("mov") || s.eq_ignore_ascii_case("quicktime") {
-            Ok(Self::Mov)
-        } else if s.eq_ignore_ascii_case("ts") || s.eq_ignore_ascii_case("mpegts") {
-            Ok(Self::Ts)
-        } else if s.eq_ignore_ascii_case("flv") {
-            Ok(Self::Flv)
-        } else if s.eq_ignore_ascii_case("avi") {
-            Ok(Self::Avi)
-        } else if s.eq_ignore_ascii_case("3gp") || s.eq_ignore_ascii_case("3gpp") {
-            Ok(Self::ThreeGp)
-        } else if s.eq_ignore_ascii_case("mpg") || s.eq_ignore_ascii_case("mpeg") {
-            Ok(Self::Mpg)
-        } else if s.eq_ignore_ascii_case("f4v") {
-            Ok(Self::F4v)
-        } else if s.eq_ignore_ascii_case("asf")
-            || s.eq_ignore_ascii_case("wmv")
-            || s.eq_ignore_ascii_case("wma")
-        {
-            Ok(Self::Asf)
-        } else if s.eq_ignore_ascii_case("mxf") {
-            Ok(Self::Mxf)
-        } else if s.eq_ignore_ascii_case("vob") {
-            Ok(Self::Vob)
-        } else if s.eq_ignore_ascii_case("dv") {
-            Ok(Self::Dv)
-        } else if s.eq_ignore_ascii_case("nut") {
-            Ok(Self::Nut)
-        } else if s.eq_ignore_ascii_case("ivf") {
-            Ok(Self::Ivf)
-        } else if s.eq_ignore_ascii_case("ogg") {
-            Ok(Self::Ogg)
-        } else if s.eq_ignore_ascii_case("m4a") {
-            Ok(Self::M4a)
-        } else if s.eq_ignore_ascii_case("mp3") {
-            Ok(Self::Mp3)
-        } else if s.eq_ignore_ascii_case("wav") || s.eq_ignore_ascii_case("wave") {
-            Ok(Self::Wav)
-        } else if s.eq_ignore_ascii_case("flac") {
-            Ok(Self::Flac)
-        } else if s.eq_ignore_ascii_case("opus") {
-            Ok(Self::Opus)
-        } else if s.eq_ignore_ascii_case("aac") || s.eq_ignore_ascii_case("adts") {
-            Ok(Self::Aac)
-        } else if s.eq_ignore_ascii_case("aiff") || s.eq_ignore_ascii_case("aif") {
-            Ok(Self::Aiff)
-        } else if s.eq_ignore_ascii_case("mka") {
-            Ok(Self::Mka)
-        } else if s.eq_ignore_ascii_case("wv") || s.eq_ignore_ascii_case("wavpack") {
-            Ok(Self::Wv)
-        } else if s.eq_ignore_ascii_case("caf") {
-            Ok(Self::Caf)
-        } else if s.eq_ignore_ascii_case("ac3") {
-            Ok(Self::Ac3)
-        } else {
-            Err(ParseEnumError {
-                type_name: "ContainerFormat",
-                input: s.to_string(),
-            })
-        }
     }
 }
 
