@@ -11,6 +11,34 @@ use crate::error::Result;
 use super::FFmpegRunner;
 
 impl FFmpegRunner {
+    /// Add a stream-copy output stream: add stream, copy parameters, clear codec tag.
+    ///
+    /// This is the standard pattern for remuxing/metadata/merge where a stream
+    /// is copied without re-encoding. Returns the output stream index.
+    ///
+    /// # Arguments
+    /// * `octx` - Output format context
+    /// * `params` - Input stream parameters to copy
+    /// * `context_msg` - Error context message (e.g., "for remux", "for merge video")
+    pub(crate) fn add_stream_copy(
+        octx: &mut ffmpeg_the_third::format::context::Output,
+        params: impl ffmpeg_the_third::AsPtr<ffmpeg_the_third::ffi::AVCodecParameters>,
+        context_msg: &str,
+    ) -> Result<usize> {
+        use crate::error::PostProcessError;
+        use anyhow::Context;
+
+        let mut ost = octx
+            .add_stream(ffmpeg_the_third::encoder::find(
+                ffmpeg_the_third::codec::Id::None,
+            ))
+            .map_err(PostProcessError::from)
+            .context(format!("failed to add output stream {context_msg}"))?;
+        ost.set_parameters(params);
+        Self::clear_codec_tag(ost.parameters().as_ptr());
+        Ok(ost.index())
+    }
+
     /// Reset the codec tag to 0 for container compatibility.
     ///
     /// When remuxing between containers, the source codec tag may not be valid

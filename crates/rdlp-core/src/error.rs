@@ -100,6 +100,24 @@ pub enum RdlpError {
     Other(String),
 }
 
+impl RdlpError {
+    /// Create an `Extraction` error with a URL.
+    pub fn extraction(message: impl Into<String>, url: &str) -> Self {
+        Self::Extraction {
+            message: message.into(),
+            url: Some(url.to_string()),
+        }
+    }
+
+    /// Create a `Network` error with a URL.
+    pub fn network(message: impl Into<String>, url: &str) -> Self {
+        Self::Network {
+            message: message.into(),
+            url: Some(url.to_string()),
+        }
+    }
+}
+
 /// Result type alias for rdlp operations
 pub type Result<T> = std::result::Result<T, RdlpError>;
 

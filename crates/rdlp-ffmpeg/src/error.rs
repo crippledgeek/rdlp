@@ -203,6 +203,23 @@ impl PostProcessError {
 /// Result type for post-processing operations.
 pub type Result<T> = std::result::Result<T, PostProcessError>;
 
+/// Extension trait to shorten the repeated `.map_err(PostProcessError::from).context("...")` pattern.
+///
+/// Before: `result.map_err(PostProcessError::from).context("failed to open input")?;`
+/// After:  `result.ff_context("failed to open input")?;`
+pub(crate) trait FfmpegResultExt<T> {
+    /// Convert an `ffmpeg_the_third::Error` to `PostProcessError` with anyhow context.
+    fn ff_context(self, msg: &str) -> anyhow::Result<T>;
+}
+
+impl<T> FfmpegResultExt<T> for std::result::Result<T, ffmpeg_the_third::Error> {
+    fn ff_context(self, msg: &str) -> anyhow::Result<T> {
+        use anyhow::Context;
+        self.map_err(PostProcessError::from)
+            .context(msg.to_string())
+    }
+}
+
 /// Convert ffmpeg-the-third errors into PostProcessError.
 impl From<ffmpeg_the_third::Error> for PostProcessError {
     fn from(e: ffmpeg_the_third::Error) -> Self {

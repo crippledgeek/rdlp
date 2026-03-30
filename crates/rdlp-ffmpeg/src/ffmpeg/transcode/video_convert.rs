@@ -312,24 +312,19 @@ impl FFmpegRunner {
         // Add audio output stream (stream copy) if audio exists and copy requested
         let audio_ost_index = if opts.audio_copy {
             if let Some(audio_idx) = audio_ist_index {
-                let audio_ost_idx;
-                {
-                    let mut ost = octx
-                        .add_stream(ffmpeg_the_third::encoder::find(
-                            ffmpeg_the_third::codec::Id::None,
-                        ))
-                        .map_err(PostProcessError::from)
-                        .context("failed to add audio output stream for video transcode")?;
-                    let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
-                        PostProcessError::ffmpeg_failed(format!(
-                            "audio input stream {audio_idx} not found"
-                        ))
-                    })?;
-                    ost.set_parameters(audio_ist.parameters());
-                    ost.set_metadata(audio_ist.metadata().to_owned());
-                    audio_ost_idx = ost.index();
-                    Self::clear_codec_tag(ost.parameters().as_ptr());
-                }
+                let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "audio input stream {audio_idx} not found"
+                    ))
+                })?;
+                let audio_ost_idx = Self::add_stream_copy(
+                    &mut octx,
+                    audio_ist.parameters(),
+                    "for video transcode audio copy",
+                )?;
+                octx.stream_mut(audio_ost_idx)
+                    .expect("just-added stream")
+                    .set_metadata(audio_ist.metadata().to_owned());
                 Some(audio_ost_idx)
             } else {
                 None

@@ -113,13 +113,8 @@ impl FFmpegRunner {
             .time_base();
 
         // Add output stream (stream copy mode)
-        let mut ost = octx
-            .add_stream(ffmpeg_the_third::encoder::find(
-                ffmpeg_the_third::codec::Id::None,
-            ))
-            .map_err(PostProcessError::from)
-            .context("failed to add output stream for audio copy extract")?;
-        ost.set_parameters(
+        Self::add_stream_copy(
+            &mut octx,
             ictx.stream(ist_index)
                 .ok_or_else(|| {
                     PostProcessError::ffmpeg_failed(format!(
@@ -127,8 +122,8 @@ impl FFmpegRunner {
                     ))
                 })?
                 .parameters(),
-        );
-        Self::clear_codec_tag(ost.parameters().as_ptr());
+            "for audio copy extract",
+        )?;
 
         // Set format-level encoding_tool metadata (copy, no re-encoding)
         crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "copy");

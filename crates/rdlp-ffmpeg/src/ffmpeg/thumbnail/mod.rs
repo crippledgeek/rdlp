@@ -146,15 +146,10 @@ impl FFmpegRunner {
             ist_time_bases[ist_index] = ist.time_base();
             ost_index += 1;
 
-            let mut ost = octx
-                .add_stream(ffmpeg_the_third::encoder::find(
-                    ffmpeg_the_third::codec::Id::None,
-                ))
-                .map_err(PostProcessError::from)
-                .context("failed to add output stream for thumbnail embed")?;
-            ost.set_parameters(ist.parameters());
-            ost.set_metadata(ist.metadata().to_owned());
-            Self::clear_codec_tag(ost.parameters().as_ptr());
+            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")?;
+            octx.stream_mut(ost_idx)
+                .expect("just-added stream")
+                .set_metadata(ist.metadata().to_owned());
         }
 
         // Add thumbnail stream
@@ -169,23 +164,19 @@ impl FFmpegRunner {
         let thumb_params = thumb_ist.parameters();
 
         // Add thumbnail as video stream with ATTACHED_PIC disposition
-        let mut ost = octx
-            .add_stream(ffmpeg_the_third::encoder::find(
-                ffmpeg_the_third::codec::Id::None,
-            ))
-            .map_err(PostProcessError::from)
-            .context("failed to add thumbnail stream")?;
-        let thumb_ost_index = ost.index();
-        ost.set_parameters(thumb_params);
-        // SAFETY: ost is a valid output stream in a live output context.
-        Self::set_attached_pic_disposition(unsafe { ost.as_mut_ptr() });
+        let thumb_ost_index = Self::add_stream_copy(&mut octx, thumb_params, "for thumbnail")?;
+        {
+            let mut thumb_ost = octx.stream_mut(thumb_ost_index).expect("just-added thumbnail stream");
+            // SAFETY: thumb_ost is a valid output stream in a live output context.
+            Self::set_attached_pic_disposition(unsafe { thumb_ost.as_mut_ptr() });
 
-        // For MP3: set ID3v2 metadata on the thumbnail stream
-        if is_mp3 {
-            let mut dict = ffmpeg_the_third::Dictionary::new();
-            dict.set("title", "Album cover");
-            dict.set("comment", "Cover (Front)");
-            ost.set_metadata(dict);
+            // For MP3: set ID3v2 metadata on the thumbnail stream
+            if is_mp3 {
+                let mut dict = ffmpeg_the_third::Dictionary::new();
+                dict.set("title", "Album cover");
+                dict.set("comment", "Cover (Front)");
+                thumb_ost.set_metadata(dict);
+            }
         }
 
         // Copy format-level metadata from media input

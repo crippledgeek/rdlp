@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use log::{debug, warn};
 
-use crate::error::PostProcessError;
+use crate::error::{FfmpegResultExt as _, PostProcessError};
 
 use super::super::FFmpegRunner;
 use super::super::ffi_helpers::set_single_thread_codec;
@@ -117,8 +117,7 @@ impl FFmpegRunner {
         {
             let ost = octx
                 .add_stream(enc_codec)
-                .map_err(PostProcessError::from)
-                .context("failed to add audio output stream for encode")?;
+                .ff_context("failed to add audio output stream for encode")?;
             audio_ost_index = ost.index();
             audio_enc_context =
                 ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
@@ -172,8 +171,7 @@ impl FFmpegRunner {
 
         let mut audio_encoder = audio_encoder
             .open_as(enc_codec)
-            .map_err(PostProcessError::from)
-            .context("failed to open audio encoder")?;
+            .ff_context("failed to open audio encoder")?;
 
         let enc_time_base = unsafe {
             let tb = (*audio_encoder.as_ptr()).time_base;
@@ -206,8 +204,7 @@ impl FFmpegRunner {
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
         muxer_opts.set("cluster_time_limit", "500");
         octx.write_header_with(muxer_opts)
-            .map_err(PostProcessError::from)
-            .context("failed to write output header for audio encode")?;
+            .ff_context("failed to write output header for audio encode")?;
 
         // Validate mux header state (threading, IO, seekability, file size)
         unsafe {
@@ -312,8 +309,7 @@ impl FFmpegRunner {
         let progress_throttle = Duration::from_millis(100);
         for result in ictx.packets() {
             let (stream, packet) = result
-                .map_err(PostProcessError::from)
-                .context("failed to read packet during audio encode")?;
+                .ff_context("failed to read packet during audio encode")?;
             if stream.index() != audio_ist_index {
                 continue;
             }
@@ -450,8 +446,7 @@ impl FFmpegRunner {
         debug!("[mem] filter graph freed");
 
         octx.write_trailer()
-            .map_err(PostProcessError::from)
-            .context("failed to write output trailer for audio encode")?;
+            .ff_context("failed to write output trailer for audio encode")?;
 
         drop(octx);
         drop(ictx);
