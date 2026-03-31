@@ -270,35 +270,141 @@ impl SearchExtractor for KoreanPornMovieExtractor {
             .map(|f| f.value.as_str())
             .unwrap_or("search");
 
+        debug!(
+            "[KoreanPornMovie] {} '{}' (page {})",
+            browse_mode, query.query, page
+        );
+
+        match browse_mode {
+            "actor" | "tag" => self.search_html(query, ctx, browse_mode, page).await,
+            _ => self.search_api(query, ctx, page).await,
+        }
+    }
+}
+
+// ============================================================================
+// Search Implementations
+// ============================================================================
+
+/// WP REST API response for a post.
+#[derive(serde::Deserialize)]
+struct WpPost {
+    #[allow(dead_code)]
+    id: u64,
+    date: String,
+    link: String,
+    title: WpTitle,
+    #[serde(rename = "_embedded")]
+    embedded: Option<WpEmbedded>,
+}
+
+#[derive(serde::Deserialize)]
+struct WpTitle {
+    rendered: String,
+}
+
+#[derive(serde::Deserialize)]
+struct WpEmbedded {
+    #[serde(rename = "wp:featuredmedia", default)]
+    featured_media: Vec<WpMedia>,
+}
+
+#[derive(serde::Deserialize)]
+struct WpMedia {
+    source_url: Option<String>,
+}
+
+impl KoreanPornMovieExtractor {
+    /// Keyword search via WP REST API — returns dates and thumbnails.
+    async fn search_api(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+        page: u32,
+    ) -> Result<SearchPageResponse> {
+        let per_page = 20;
+        let api_url = format!(
+            "https://koreanpornmovie.com/wp-json/wp/v2/posts?search={}&page={}&per_page={}&_embed",
+            urlencoding::encode(&query.query),
+            page,
+            per_page,
+        );
+
+        let response = ctx
+            .http_client
+            .get(&api_url)
+            .send()
+            .await
+            .map_err(|e| RdlpError::network(format!("REST API request failed: {e}"), &api_url))?;
+
+        // Check X-WP-TotalPages header for pagination
+        let total_pages: u32 = response
+            .headers()
+            .get("x-wp-totalpages")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+
+        let posts: Vec<WpPost> = response
+            .json()
+            .await
+            .map_err(|e| RdlpError::extraction(format!("Failed to parse API response: {e}"), &api_url))?;
+
+        let results = posts
+            .into_iter()
+            .map(|post| {
+                let thumbnail_url = post
+                    .embedded
+                    .and_then(|e| e.featured_media.into_iter().next())
+                    .and_then(|m| m.source_url);
+
+                // Parse date: "2020-06-30T12:00:00" -> "2020-06-30"
+                let upload_date = post.date.split('T').next().map(|s| s.to_string());
+
+                SearchResultPreview {
+                    title: html_entities_decode(&post.title.rendered),
+                    video_url: post.link,
+                    thumbnail_url,
+                    duration: None, // Not available from REST API
+                    view_count: None,
+                    upload_date,
+                }
+            })
+            .collect();
+
+        Ok(SearchPageResponse {
+            results,
+            page,
+            has_more: page < total_pages,
+            total_estimate: None,
+        })
+    }
+
+    /// Actor/tag browse via HTML scraping — REST API doesn't support taxonomy filtering easily.
+    async fn search_html(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+        browse_mode: &str,
+        page: u32,
+    ) -> Result<SearchPageResponse> {
         let slug = query.query.to_lowercase().replace(' ', "-");
         let search_url = match browse_mode {
             "actor" => {
-                // Browse videos by actor: /actor/<slug>/page/N/
                 if page > 1 {
                     format!("https://koreanpornmovie.com/actor/{slug}/page/{page}/")
                 } else {
                     format!("https://koreanpornmovie.com/actor/{slug}/")
                 }
             }
-            "tag" => {
-                // Browse videos by tag: /tag/<slug>/page/N/
+            _ => {
                 if page > 1 {
                     format!("https://koreanpornmovie.com/tag/{slug}/page/{page}/")
                 } else {
                     format!("https://koreanpornmovie.com/tag/{slug}/")
                 }
             }
-            _ => {
-                // Default: keyword search
-                format!(
-                    "https://koreanpornmovie.com/?s={}&paged={}",
-                    urlencoding::encode(&query.query),
-                    page
-                )
-            }
         };
-
-        debug!("[KoreanPornMovie] {} '{}' (page {})", browse_mode, query.query, page);
 
         let webpage = BaseExtractor::fetch_webpage(&search_url, ctx).await?;
 
@@ -311,7 +417,6 @@ impl SearchExtractor for KoreanPornMovieExtractor {
                     let link = article.select(&SEARCH_LINK_SELECTOR).next()?;
                     let href = link.value().attr("href")?;
 
-                    // Skip non-video links
                     if !patterns::VIDEO_URL_PATTERN.is_match(href) {
                         return None;
                     }
@@ -349,7 +454,7 @@ impl SearchExtractor for KoreanPornMovieExtractor {
             let has_more = html.select(&SEARCH_NEXT_PAGE_SELECTOR).next().is_some();
 
             (results, has_more)
-        }; // html dropped
+        };
 
         Ok(SearchPageResponse {
             results,
@@ -358,6 +463,20 @@ impl SearchExtractor for KoreanPornMovieExtractor {
             total_estimate: None,
         })
     }
+}
+
+/// Decode basic HTML entities in WP REST API title (e.g., `&#8211;` → `–`).
+fn html_entities_decode(s: &str) -> String {
+    s.replace("&#8211;", "–")
+        .replace("&#8212;", "—")
+        .replace("&#8216;", "'")
+        .replace("&#8217;", "'")
+        .replace("&#8220;", "\u{201c}")
+        .replace("&#8221;", "\u{201d}")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
 }
 
 // ============================================================================
