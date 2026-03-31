@@ -496,18 +496,14 @@ fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPrevie
     let upload_date = post.date.split('T').next().map(|s| s.to_string());
 
     let title = html_entities_decode(&post.title.rendered);
-    let uploader = if actors.is_empty() {
-        None
-    } else {
-        Some(actors.join(", "))
-    };
 
     SearchResultPreview {
         title,
         video_url: post.link,
         thumbnail_url,
         duration,
-        uploader,
+        uploader: None,
+        actors,
         view_count: None,
         upload_date,
     }

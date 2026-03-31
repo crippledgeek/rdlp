@@ -133,6 +133,7 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         thumbnail_url: video.thumb,
         duration,
         uploader: None,
+                    actors: vec![],
         view_count,
         upload_date: video.publish_date,
     })
@@ -196,6 +197,7 @@ pub(crate) fn parse_html_search_results(html: &str) -> Result<Vec<SearchResultPr
             thumbnail_url: thumb,
             duration,
             uploader: None,
+                    actors: vec![],
             view_count: None,
             upload_date: None,
         });

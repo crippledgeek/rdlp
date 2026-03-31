@@ -50,6 +50,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
                 thumbnail_url,
                 duration: None, // anime search doesn't show per-episode duration
                 uploader: None,
+                    actors: vec![],
                 view_count: None,
                 upload_date: None,
             }

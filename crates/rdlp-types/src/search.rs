@@ -60,8 +60,11 @@ pub struct SearchResultPreview {
     pub thumbnail_url: Option<String>,
     /// Duration in seconds.
     pub duration: Option<f64>,
-    /// Uploader / channel / actor name(s).
+    /// Uploader / channel name.
     pub uploader: Option<String>,
+    /// Actors / performers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<String>,
     /// View count.
     pub view_count: Option<u64>,
     /// Upload date string (site-specific format).
@@ -132,6 +135,7 @@ mod tests {
             thumbnail_url: Some("https://thumb.jpg".to_string()),
             duration: Some(120.0),
             uploader: None,
+                    actors: vec![],
             view_count: Some(1000),
             upload_date: None,
         };
