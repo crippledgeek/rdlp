@@ -56,7 +56,6 @@ pub(crate) struct ApiVideo {
     pub tags: Vec<ApiTag>,
     /// Pornstar list.
     #[serde(default)]
-    #[allow(dead_code)]
     pub pornstars: Vec<ApiPornstar>,
     /// Category list.
     #[serde(default)]
@@ -74,7 +73,6 @@ pub(crate) struct ApiTag {
 /// A single pornstar entry.
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub(crate) struct ApiPornstar {
-    #[allow(dead_code)]
     pub pornstar_name: String,
 }
 
@@ -115,7 +113,7 @@ fn parse_api_search_results_impl(json: &str) -> anyhow::Result<Vec<SearchResultP
 /// Convert an `ApiVideo` into a `SearchResultPreview`.
 ///
 /// Returns `None` if the URL is empty (skips invalid entries).
-fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
+fn api_video_to_preview(mut video: ApiVideo) -> Option<SearchResultPreview> {
     if video.url.is_empty() {
         debug!(
             "[PornHub] Search result missing URL for video_id={}, skipping",
@@ -138,7 +136,7 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         thumbnail_url: thumbnail,
         duration,
         uploader: None,
-                    actors: vec![],
+        actors: video.pornstars.drain(..).map(|p| p.pornstar_name).collect(),
         view_count: video.views,
         upload_date: video.publish_date,
     })
