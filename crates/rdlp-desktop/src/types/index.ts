@@ -45,6 +45,7 @@ export interface SearchResultPreview {
     title: string;
     thumbnail_url: string | null;
     duration: number | null;
+    uploader: string | null;
     view_count: number | null;
     upload_date: string | null;
 }

@@ -119,6 +119,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             title,
             thumbnail_url,
             duration,
+            uploader: None,
             view_count: None,
             upload_date: None,
         });
