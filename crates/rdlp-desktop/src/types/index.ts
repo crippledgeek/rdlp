@@ -46,6 +46,7 @@ export interface SearchResultPreview {
     thumbnail_url: string | null;
     duration: number | null;
     uploader: string | null;
+    actors: string[];
     view_count: number | null;
     upload_date: string | null;
 }
