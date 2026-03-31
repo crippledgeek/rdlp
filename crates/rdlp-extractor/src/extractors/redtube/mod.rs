@@ -29,6 +29,7 @@ use rdlp_core::{
 use rdlp_types::{InfoDict, SearchPageResponse};
 use regex::Regex;
 use scraper::Html;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
@@ -114,20 +115,21 @@ impl RedTubeExtractor {
         info.formats = formats;
 
         // Supplement with HTML-scraped fields the API does not return
-        if let Ok(html_meta) = {
+        {
             let html = Html::parse_document(webpage);
-            self.base.extract_metadata(&html)
-        } {
-            info.description = html_meta.description;
-            info.uploader = html_meta.uploader;
-            info.uploader_id = html_meta.uploader_id;
-            info.uploader_url = html_meta.uploader_url;
-            info.channel = html_meta.channel;
-            info.channel_id = html_meta.channel_id;
-            info.channel_url = html_meta.channel_url;
-            info.like_count = html_meta.like_count;
-            info.average_rating = html_meta.average_rating;
-            info.categories = html_meta.categories;
+            if let Ok(html_meta) = self.base.extract_metadata(&html) {
+                info.description = html_meta.description;
+                info.uploader = html_meta.uploader;
+                info.uploader_id = html_meta.uploader_id;
+                info.uploader_url = html_meta.uploader_url;
+                info.channel = html_meta.channel;
+                info.channel_id = html_meta.channel_id;
+                info.channel_url = html_meta.channel_url;
+                info.like_count = html_meta.like_count;
+                info.average_rating = html_meta.average_rating;
+                info.categories = html_meta.categories;
+            }
+            info.actors = extract_performers(&html);
         }
 
         info.propagate_duration();
@@ -148,12 +150,13 @@ impl RedTubeExtractor {
         formats: Vec<rdlp_types::Format>,
         hls_flags: &crate::hls::HlsStreamFlags,
     ) -> Result<InfoDict> {
-        let metadata = {
+        let (metadata, actors) = {
             let html = Html::parse_document(webpage);
-            self.base.extract_metadata(&html)?
+            (self.base.extract_metadata(&html)?, extract_performers(&html))
         };
 
         let mut info = InfoDict::new(video_id, metadata.title, InfoExtractor::name(self), url);
+        info.actors = actors;
         info.description = metadata.description;
         info.uploader = metadata.uploader;
         info.uploader_id = metadata.uploader_id;
@@ -180,6 +183,21 @@ impl RedTubeExtractor {
 
         Ok(info)
     }
+}
+
+/// Extract performer/pornstar names from RedTube video page HTML.
+///
+/// Looks for `<a href="/pornstar/name">` links within the `.performers-list` section.
+fn extract_performers(html: &Html) -> Vec<String> {
+    static PERFORMER_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+        scraper::Selector::parse(".performers-list a[href*=\"/pornstar/\"]")
+            .expect("valid performer selector")
+    });
+
+    html.select(&PERFORMER_SELECTOR)
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 impl Default for RedTubeExtractor {
