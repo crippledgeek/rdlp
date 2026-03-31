@@ -284,10 +284,11 @@ impl InfoExtractor for XTitsExtractor {
         info.formats = formats_with_size;
         info.propagate_duration();
 
-        // Store first model as uploader (KVS convention)
+        // Store models as actors + first model as uploader (KVS convention)
         if !models.is_empty() {
-            info.uploader = Some(models.join(", "));
+            info.uploader = Some(models[0].clone());
             info.uploader_url = model_url;
+            info.actors = models;
         }
 
         Ok(info)

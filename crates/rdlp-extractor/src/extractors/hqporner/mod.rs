@@ -134,11 +134,19 @@ fn extract_duration_from_html(html: &Html) -> Option<f64> {
     })
 }
 
-/// Extract the actress name from an HQPorner page.
+/// Extract the actress name from an HQPorner page (first match).
 fn extract_actress(html: &Html) -> Option<String> {
     html.select(&ACTRESS_SELECTOR)
         .next()
         .map(|el| el.text().collect::<String>().trim().to_string())
+}
+
+/// Extract all actress names from an HQPorner page.
+fn extract_all_actresses(html: &Html) -> Vec<String> {
+    html.select(&ACTRESS_SELECTOR)
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Extract the actress profile URL from an HQPorner page.
@@ -203,13 +211,14 @@ impl InfoExtractor for HQPornerExtractor {
         })?;
 
         // Parse HTML once for all metadata extraction
-        let (title, duration, actress, actress_url, categories, description) = {
+        let (title, duration, actress, actress_url, all_actresses, categories, description) = {
             let html = Html::parse_document(&webpage);
             (
                 extract_title(&html),
                 extract_duration_from_html(&html),
                 extract_actress(&html),
                 extract_actress_url(&html),
+                extract_all_actresses(&html),
                 extract_categories(&html),
                 extract_description(&html),
             )
@@ -235,6 +244,7 @@ impl InfoExtractor for HQPornerExtractor {
         info.thumbnail = mydaddy_result.thumbnail;
         info.uploader = actress;
         info.uploader_url = actress_url;
+        info.actors = all_actresses;
         info.duration = duration;
         info.age_limit = Some(18);
         info.formats = formats_with_size;
