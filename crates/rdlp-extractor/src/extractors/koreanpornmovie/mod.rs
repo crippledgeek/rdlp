@@ -276,7 +276,8 @@ impl SearchExtractor for KoreanPornMovieExtractor {
         );
 
         match browse_mode {
-            "actor" | "tag" => self.search_html(query, ctx, browse_mode, page).await,
+            "actor" => self.search_api_taxonomy(query, ctx, "actors", page).await,
+            "tag" => self.search_api_taxonomy(query, ctx, "tags", page).await,
             _ => self.search_api(query, ctx, page).await,
         }
     }
@@ -296,6 +297,15 @@ struct WpPost {
     title: WpTitle,
     #[serde(rename = "_embedded")]
     embedded: Option<WpEmbedded>,
+}
+
+/// WP REST API taxonomy term (actor or tag).
+#[derive(serde::Deserialize)]
+struct WpTerm {
+    id: u64,
+    #[allow(dead_code)]
+    name: String,
+    count: u64,
 }
 
 #[derive(serde::Deserialize)]
@@ -380,7 +390,99 @@ impl KoreanPornMovieExtractor {
         })
     }
 
-    /// Actor/tag browse via HTML scraping — REST API doesn't support taxonomy filtering easily.
+    /// Actor/tag browse via WP REST API: resolve slug → term ID, then filter posts.
+    async fn search_api_taxonomy(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+        taxonomy: &str, // "actors" or "tags"
+        page: u32,
+    ) -> Result<SearchPageResponse> {
+        let slug = query.query.to_lowercase().replace(' ', "-");
+
+        // Step 1: Resolve slug to term ID
+        let term_url = format!(
+            "https://koreanpornmovie.com/wp-json/wp/v2/{taxonomy}?slug={slug}&_fields=id,name,count"
+        );
+        let terms: Vec<WpTerm> = ctx
+            .http_client
+            .get(&term_url)
+            .send()
+            .await
+            .map_err(|e| RdlpError::network(format!("term lookup failed: {e}"), &term_url))?
+            .json()
+            .await
+            .map_err(|e| {
+                RdlpError::extraction(format!("failed to parse term response: {e}"), &term_url)
+            })?;
+
+        let term = terms.first().ok_or_else(|| {
+            RdlpError::extraction(
+                format!("No {taxonomy} found with slug '{slug}'"),
+                &term_url,
+            )
+        })?;
+
+        debug!(
+            "[KoreanPornMovie] Resolved {taxonomy} '{slug}' → id={}, count={}",
+            term.id, term.count
+        );
+
+        // Step 2: Query posts filtered by term ID
+        let per_page = 20;
+        let api_url = format!(
+            "https://koreanpornmovie.com/wp-json/wp/v2/posts?{taxonomy}={}&page={page}&per_page={per_page}&_embed",
+            term.id,
+        );
+
+        let response = ctx
+            .http_client
+            .get(&api_url)
+            .send()
+            .await
+            .map_err(|e| RdlpError::network(format!("post query failed: {e}"), &api_url))?;
+
+        let total_pages: u32 = response
+            .headers()
+            .get("x-wp-totalpages")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+
+        let posts: Vec<WpPost> = response.json().await.map_err(|e| {
+            RdlpError::extraction(format!("failed to parse posts: {e}"), &api_url)
+        })?;
+
+        let results = posts
+            .into_iter()
+            .map(|post| {
+                let thumbnail_url = post
+                    .embedded
+                    .and_then(|e| e.featured_media.into_iter().next())
+                    .and_then(|m| m.source_url);
+                let upload_date = post.date.split('T').next().map(|s| s.to_string());
+
+                SearchResultPreview {
+                    title: html_entities_decode(&post.title.rendered),
+                    video_url: post.link,
+                    thumbnail_url,
+                    duration: None,
+                    view_count: None,
+                    upload_date,
+                }
+            })
+            .collect();
+
+        Ok(SearchPageResponse {
+            results,
+            page,
+            has_more: page < total_pages,
+            total_estimate: Some(term.count),
+        })
+    }
+
+    /// Fallback HTML scraping (kept for compatibility but no longer primary path).
+    #[allow(dead_code)]
     async fn search_html(
         &self,
         query: &SearchQuery,
