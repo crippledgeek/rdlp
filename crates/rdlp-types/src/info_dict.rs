@@ -54,6 +54,10 @@ pub struct InfoDict {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uploader_url: Option<String>,
 
+    /// Actors / performers / cast
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<String>,
+
     /// Channel name (may differ from uploader)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
@@ -197,6 +201,7 @@ impl InfoDict {
             uploader: None,
             uploader_id: None,
             uploader_url: None,
+            actors: Vec::new(),
             channel: None,
             channel_id: None,
             channel_url: None,
