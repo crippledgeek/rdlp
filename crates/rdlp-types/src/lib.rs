@@ -30,6 +30,7 @@ pub mod container;
 pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
+pub mod match_filter;
 pub mod parse_error;
 pub mod postprocess;
 pub mod protocol;

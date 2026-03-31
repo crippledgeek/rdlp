@@ -46,5 +46,6 @@ pub use rdlp_types::{
     PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
     SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
 };
+pub use rdlp_types::match_filter::MatchFilter;
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

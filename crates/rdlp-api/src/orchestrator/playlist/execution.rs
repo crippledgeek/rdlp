@@ -45,6 +45,13 @@ impl Orchestrator {
                 {
                     return None;
                 }
+                // Match filter check
+                if !self.config.match_filters.is_empty()
+                    && !super::super::check_match_filters(&self.config.match_filters, ep)
+                {
+                    log::info!(title = ep.title.as_str(); "Does not pass match filter, skipping");
+                    return None;
+                }
                 Some((i, ep.clone()))
             })
             .collect();

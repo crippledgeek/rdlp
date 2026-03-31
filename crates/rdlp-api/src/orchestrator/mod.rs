@@ -354,6 +354,18 @@ impl Orchestrator {
             }
         }
 
+        // Single video — check match filters
+        if !self.config.match_filters.is_empty() {
+            let info = &infos[0];
+            if !check_match_filters(&self.config.match_filters, info) {
+                info!(
+                    title = info.title.as_str();
+                    "Does not pass match filter, skipping"
+                );
+                return Ok(None);
+            }
+        }
+
         // Single video - use existing state machine
         let mut phase = DownloadPhase::Extracting {
             url: url.to_owned(),
@@ -474,4 +486,25 @@ mod download_plan_tests {
         assert!(s.contains("v1"));
         assert!(s.contains("a1"));
     }
+}
+
+/// Check if an InfoDict passes all match filters (OR logic: any filter passing = pass).
+///
+/// Returns `true` if:
+/// - No filters configured (empty list)
+/// - At least one filter evaluates to `true`
+fn check_match_filters(filter_strs: &[String], info: &rdlp_types::InfoDict) -> bool {
+    use rdlp_types::match_filter::MatchFilter;
+
+    let filters: Vec<MatchFilter> = filter_strs
+        .iter()
+        .filter_map(|s| MatchFilter::parse(s).ok())
+        .collect();
+
+    if filters.is_empty() {
+        return true;
+    }
+
+    // OR logic: at least one filter must pass
+    filters.iter().any(|f| f.evaluate_info(info))
 }
