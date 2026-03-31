@@ -76,12 +76,14 @@ static SEARCH_ARTICLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 static SEARCH_LINK_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a[href]").expect("valid selector"));
 
+#[allow(dead_code)]
 static SEARCH_IMG_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("img").expect("valid selector"));
 
 static SEARCH_DURATION_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse(".duration").expect("valid selector"));
 
+#[allow(dead_code)]
 static SEARCH_NEXT_PAGE_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a.next").expect("valid selector"));
 
@@ -317,6 +319,14 @@ struct WpTitle {
 struct WpEmbedded {
     #[serde(rename = "wp:featuredmedia", default)]
     featured_media: Vec<WpMedia>,
+    #[serde(rename = "wp:term", default)]
+    terms: Vec<Vec<WpEmbeddedTerm>>,
+}
+
+#[derive(serde::Deserialize)]
+struct WpEmbeddedTerm {
+    taxonomy: String,
+    name: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -325,7 +335,10 @@ struct WpMedia {
 }
 
 impl KoreanPornMovieExtractor {
-    /// Keyword search via WP REST API — returns dates and thumbnails.
+    /// Keyword search: REST API + HTML listing in parallel.
+    ///
+    /// REST API provides: title, date, thumbnail, actors (embedded terms).
+    /// HTML listing provides: duration (only source for this field).
     async fn search_api(
         &self,
         query: &SearchQuery,
@@ -333,52 +346,36 @@ impl KoreanPornMovieExtractor {
         page: u32,
     ) -> Result<SearchPageResponse> {
         let per_page = 20;
+        let encoded_query = urlencoding::encode(&query.query);
         let api_url = format!(
-            "https://koreanpornmovie.com/wp-json/wp/v2/posts?search={}&page={}&per_page={}&_embed",
-            urlencoding::encode(&query.query),
-            page,
-            per_page,
+            "https://koreanpornmovie.com/wp-json/wp/v2/posts?search={encoded_query}&page={page}&per_page={per_page}&_embed",
+        );
+        let html_url = format!(
+            "https://koreanpornmovie.com/?s={encoded_query}&paged={page}",
         );
 
-        let response = ctx
-            .http_client
-            .get(&api_url)
-            .send()
-            .await
-            .map_err(|e| RdlpError::network(format!("REST API request failed: {e}"), &api_url))?;
+        // Fire both requests concurrently
+        let (api_result, html_result) = tokio::join!(
+            ctx.http_client.get(&api_url).send(),
+            ctx.http_client.get(&html_url).send(),
+        );
 
-        // Check X-WP-TotalPages header for pagination
-        let total_pages: u32 = response
-            .headers()
-            .get("x-wp-totalpages")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
+        // Parse REST API (primary source)
+        let response = api_result
+            .map_err(|e| RdlpError::network(format!("REST API failed: {e}"), &api_url))?;
+        let total_pages = extract_total_pages(&response);
+        let posts: Vec<WpPost> = response.json().await.map_err(|e| {
+            RdlpError::extraction(format!("Failed to parse API response: {e}"), &api_url)
+        })?;
 
-        let posts: Vec<WpPost> = response
-            .json()
-            .await
-            .map_err(|e| RdlpError::extraction(format!("Failed to parse API response: {e}"), &api_url))?;
+        // Parse HTML for durations (best-effort, non-fatal)
+        let durations = scrape_durations_from_html_response(html_result).await;
 
         let results = posts
             .into_iter()
             .map(|post| {
-                let thumbnail_url = post
-                    .embedded
-                    .and_then(|e| e.featured_media.into_iter().next())
-                    .and_then(|m| m.source_url);
-
-                // Parse date: "2020-06-30T12:00:00" -> "2020-06-30"
-                let upload_date = post.date.split('T').next().map(|s| s.to_string());
-
-                SearchResultPreview {
-                    title: html_entities_decode(&post.title.rendered),
-                    video_url: post.link,
-                    thumbnail_url,
-                    duration: None, // Not available from REST API
-                    view_count: None,
-                    upload_date,
-                }
+                let duration = durations.get(post.link.as_str()).copied();
+                wp_post_to_preview(post, duration)
             })
             .collect();
 
@@ -390,12 +387,12 @@ impl KoreanPornMovieExtractor {
         })
     }
 
-    /// Actor/tag browse via WP REST API: resolve slug → term ID, then filter posts.
+    /// Actor/tag browse: resolve slug → term ID, then REST API + HTML in parallel.
     async fn search_api_taxonomy(
         &self,
         query: &SearchQuery,
         ctx: &ExtractionContext,
-        taxonomy: &str, // "actors" or "tags"
+        taxonomy: &str,
         page: u32,
     ) -> Result<SearchPageResponse> {
         let slug = query.query.to_lowercase().replace(' ', "-");
@@ -413,7 +410,7 @@ impl KoreanPornMovieExtractor {
             .json()
             .await
             .map_err(|e| {
-                RdlpError::extraction(format!("failed to parse term response: {e}"), &term_url)
+                RdlpError::extraction(format!("failed to parse term: {e}"), &term_url)
             })?;
 
         let term = terms.first().ok_or_else(|| {
@@ -428,48 +425,38 @@ impl KoreanPornMovieExtractor {
             term.id, term.count
         );
 
-        // Step 2: Query posts filtered by term ID
+        // Step 2: REST API + HTML listing in parallel
         let per_page = 20;
         let api_url = format!(
             "https://koreanpornmovie.com/wp-json/wp/v2/posts?{taxonomy}={}&page={page}&per_page={per_page}&_embed",
             term.id,
         );
+        let browse_prefix = if taxonomy == "actors" { "actor" } else { "tag" };
+        let html_url = if page > 1 {
+            format!("https://koreanpornmovie.com/{browse_prefix}/{slug}/page/{page}/")
+        } else {
+            format!("https://koreanpornmovie.com/{browse_prefix}/{slug}/")
+        };
 
-        let response = ctx
-            .http_client
-            .get(&api_url)
-            .send()
-            .await
+        let (api_result, html_result) = tokio::join!(
+            ctx.http_client.get(&api_url).send(),
+            ctx.http_client.get(&html_url).send(),
+        );
+
+        let response = api_result
             .map_err(|e| RdlpError::network(format!("post query failed: {e}"), &api_url))?;
-
-        let total_pages: u32 = response
-            .headers()
-            .get("x-wp-totalpages")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
-
+        let total_pages = extract_total_pages(&response);
         let posts: Vec<WpPost> = response.json().await.map_err(|e| {
             RdlpError::extraction(format!("failed to parse posts: {e}"), &api_url)
         })?;
 
+        let durations = scrape_durations_from_html_response(html_result).await;
+
         let results = posts
             .into_iter()
             .map(|post| {
-                let thumbnail_url = post
-                    .embedded
-                    .and_then(|e| e.featured_media.into_iter().next())
-                    .and_then(|m| m.source_url);
-                let upload_date = post.date.split('T').next().map(|s| s.to_string());
-
-                SearchResultPreview {
-                    title: html_entities_decode(&post.title.rendered),
-                    video_url: post.link,
-                    thumbnail_url,
-                    duration: None,
-                    view_count: None,
-                    upload_date,
-                }
+                let duration = durations.get(post.link.as_str()).copied();
+                wp_post_to_preview(post, duration)
             })
             .collect();
 
@@ -480,91 +467,95 @@ impl KoreanPornMovieExtractor {
             total_estimate: Some(term.count),
         })
     }
+}
 
-    /// Fallback HTML scraping (kept for compatibility but no longer primary path).
-    #[allow(dead_code)]
-    async fn search_html(
-        &self,
-        query: &SearchQuery,
-        ctx: &ExtractionContext,
-        browse_mode: &str,
-        page: u32,
-    ) -> Result<SearchPageResponse> {
-        let slug = query.query.to_lowercase().replace(' ', "-");
-        let search_url = match browse_mode {
-            "actor" => {
-                if page > 1 {
-                    format!("https://koreanpornmovie.com/actor/{slug}/page/{page}/")
-                } else {
-                    format!("https://koreanpornmovie.com/actor/{slug}/")
-                }
-            }
-            _ => {
-                if page > 1 {
-                    format!("https://koreanpornmovie.com/tag/{slug}/page/{page}/")
-                } else {
-                    format!("https://koreanpornmovie.com/tag/{slug}/")
-                }
-            }
-        };
+/// Convert a WP REST API post to a SearchResultPreview with all available data.
+fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPreview {
+    let (thumbnail_url, actors) = match post.embedded {
+        Some(embed) => {
+            let thumb = embed
+                .featured_media
+                .into_iter()
+                .next()
+                .and_then(|m| m.source_url);
 
-        let webpage = BaseExtractor::fetch_webpage(&search_url, ctx).await?;
-
-        let (results, has_more) = {
-            let html = Html::parse_document(&webpage);
-
-            let results: Vec<SearchResultPreview> = html
-                .select(&SEARCH_ARTICLE_SELECTOR)
-                .filter_map(|article| {
-                    let link = article.select(&SEARCH_LINK_SELECTOR).next()?;
-                    let href = link.value().attr("href")?;
-
-                    if !patterns::VIDEO_URL_PATTERN.is_match(href) {
-                        return None;
-                    }
-
-                    let img = article.select(&SEARCH_IMG_SELECTOR).next();
-                    let thumbnail = img.and_then(|i| {
-                        i.value()
-                            .attr("src")
-                            .or_else(|| i.value().attr("data-src"))
-                            .map(|s| s.to_string())
-                    });
-
-                    let title = img
-                        .and_then(|i| i.value().attr("alt"))
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-
-                    let duration = article
-                        .select(&SEARCH_DURATION_SELECTOR)
-                        .next()
-                        .map(|d| d.text().collect::<String>().trim().to_string())
-                        .and_then(|d| parse_hms_duration(&d));
-
-                    Some(SearchResultPreview {
-                        title,
-                        video_url: href.to_string(),
-                        thumbnail_url: thumbnail,
-                        duration,
-                        view_count: None,
-                        upload_date: None,
-                    })
-                })
+            // Extract actor names from embedded wp:term (taxonomy = "actors")
+            let actors: Vec<String> = embed
+                .terms
+                .into_iter()
+                .flatten()
+                .filter(|t| t.taxonomy == "actors")
+                .map(|t| html_entities_decode(&t.name))
                 .collect();
 
-            let has_more = html.select(&SEARCH_NEXT_PAGE_SELECTOR).next().is_some();
+            (thumb, actors)
+        }
+        None => (None, Vec::new()),
+    };
 
-            (results, has_more)
-        };
+    let upload_date = post.date.split('T').next().map(|s| s.to_string());
 
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more,
-            total_estimate: None,
-        })
+    // Append actors to title for richer display in search results
+    let base_title = html_entities_decode(&post.title.rendered);
+    let title = if actors.is_empty() {
+        base_title
+    } else {
+        format!("{base_title} — {}", actors.join(", "))
+    };
+
+    SearchResultPreview {
+        title,
+        video_url: post.link,
+        thumbnail_url,
+        duration,
+        view_count: None,
+        upload_date,
     }
+}
+
+/// Extract X-WP-TotalPages from response headers.
+fn extract_total_pages(response: &reqwest::Response) -> u32 {
+    response
+        .headers()
+        .get("x-wp-totalpages")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+}
+
+/// Scrape durations from an HTML listing response (best-effort, non-fatal).
+async fn scrape_durations_from_html_response(
+    result: std::result::Result<reqwest::Response, reqwest::Error>,
+) -> std::collections::HashMap<String, f64> {
+    let text = match result {
+        Ok(resp) => resp.text().await.unwrap_or_default(),
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    scrape_durations_from_html(&text)
+}
+
+/// Parse HTML listing page and extract a URL → duration map.
+fn scrape_durations_from_html(html_text: &str) -> std::collections::HashMap<String, f64> {
+    let html = Html::parse_document(html_text);
+    let mut map = std::collections::HashMap::new();
+
+    for article in html.select(&SEARCH_ARTICLE_SELECTOR) {
+        let url = article
+            .select(&SEARCH_LINK_SELECTOR)
+            .next()
+            .and_then(|a| a.value().attr("href"));
+        let duration = article
+            .select(&SEARCH_DURATION_SELECTOR)
+            .next()
+            .map(|d| d.text().collect::<String>())
+            .and_then(|d| parse_hms_duration(d.trim()));
+
+        if let (Some(url), Some(dur)) = (url, duration) {
+            map.insert(url.to_string(), dur);
+        }
+    }
+
+    map
 }
 
 /// Decode basic HTML entities in WP REST API title (e.g., `&#8211;` → `–`).
