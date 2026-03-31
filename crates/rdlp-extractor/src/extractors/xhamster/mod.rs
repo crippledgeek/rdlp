@@ -174,6 +174,7 @@ impl XHamsterExtractor {
             detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;
 
         info.formats = formats_with_size;
+        info.actors = utils::extract_actors(&webpage);
         info.propagate_duration();
 
         if hls_flags.is_live {
