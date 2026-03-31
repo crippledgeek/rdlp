@@ -416,3 +416,74 @@ mod tests {
         assert_eq!(info.age_limit, Some(18));
     }
 }
+
+// ============================================================================
+// Actor extraction
+// ============================================================================
+
+static PORNSTAR_LINK_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse(r#"a[href*="/pornstars/"]"#).expect("valid selector")
+});
+
+/// Extract pornstar/actor names from the video page HTML.
+///
+/// Looks for `<a href="/pornstars/name">Name</a>` links in the video info
+/// section. Filters out navigation links ("By Countries", empty text).
+pub fn extract_actors(webpage: &str) -> Vec<String> {
+    let html = Html::parse_document(webpage);
+    let mut seen = std::collections::HashSet::new();
+    let mut actors = Vec::new();
+
+    for link in html.select(&PORNSTAR_LINK_SELECTOR) {
+        let name = link.text().collect::<String>();
+        let name = name.trim().to_string();
+
+        // Skip empty, navigation, and duplicate entries
+        if name.is_empty()
+            || name == "By Countries"
+            || name.starts_with('#')
+            || !seen.insert(name.clone())
+        {
+            continue;
+        }
+
+        actors.push(name);
+    }
+
+    actors
+}
+
+#[cfg(test)]
+mod actor_tests {
+    use super::*;
+
+    #[test]
+    fn extract_actors_from_html() {
+        let html = r#"<html><body>
+            <a href="/pornstars/mia-malkova" class="item-50dd2">Mia Malkova</a>
+            <a href="/pornstars/jodi-taylor" class="item-50dd2">Jodi Taylor</a>
+            <a href="/pornstars/all/countries">By Countries</a>
+            <a href="/pornstars/mia-malkova">Mia Malkova</a>
+        </body></html>"#;
+        let actors = extract_actors(html);
+        assert_eq!(actors, vec!["Mia Malkova", "Jodi Taylor"]);
+    }
+
+    #[test]
+    fn extract_actors_none() {
+        let html = r#"<html><body><p>No pornstar links here</p></body></html>"#;
+        let actors = extract_actors(html);
+        assert!(actors.is_empty());
+    }
+
+    #[test]
+    fn extract_actors_filters_navigation() {
+        let html = r#"<html><body>
+            <a href="/pornstars/all/countries">By Countries</a>
+            <a href="/pornstars/kelsi-monroe">#697</a>
+            <a href="/pornstars/kelsi-monroe">Kelsi Monroe</a>
+        </body></html>"#;
+        let actors = extract_actors(html);
+        assert_eq!(actors, vec!["Kelsi Monroe"]);
+    }
+}
