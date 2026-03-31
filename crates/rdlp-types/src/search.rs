@@ -60,6 +60,8 @@ pub struct SearchResultPreview {
     pub thumbnail_url: Option<String>,
     /// Duration in seconds.
     pub duration: Option<f64>,
+    /// Uploader / channel / actor name(s).
+    pub uploader: Option<String>,
     /// View count.
     pub view_count: Option<u64>,
     /// Upload date string (site-specific format).
@@ -129,6 +131,7 @@ mod tests {
             title: "Test Video".to_string(),
             thumbnail_url: Some("https://thumb.jpg".to_string()),
             duration: Some(120.0),
+            uploader: None,
             view_count: Some(1000),
             upload_date: None,
         };

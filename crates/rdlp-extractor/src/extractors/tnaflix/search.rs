@@ -136,6 +136,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             title,
             thumbnail_url,
             duration,
+            uploader: None,
             view_count,
             upload_date: None,
         });

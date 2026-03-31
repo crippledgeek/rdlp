@@ -137,6 +137,7 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         title: video.title,
         thumbnail_url: thumbnail,
         duration,
+        uploader: None,
         view_count: video.views,
         upload_date: video.publish_date,
     })

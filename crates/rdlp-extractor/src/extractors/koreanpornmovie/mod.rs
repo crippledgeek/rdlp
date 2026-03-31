@@ -495,12 +495,11 @@ fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPrevie
 
     let upload_date = post.date.split('T').next().map(|s| s.to_string());
 
-    // Append actors to title for richer display in search results
-    let base_title = html_entities_decode(&post.title.rendered);
-    let title = if actors.is_empty() {
-        base_title
+    let title = html_entities_decode(&post.title.rendered);
+    let uploader = if actors.is_empty() {
+        None
     } else {
-        format!("{base_title} — {}", actors.join(", "))
+        Some(actors.join(", "))
     };
 
     SearchResultPreview {
@@ -508,6 +507,7 @@ fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPrevie
         video_url: post.link,
         thumbnail_url,
         duration,
+        uploader,
         view_count: None,
         upload_date,
     }
