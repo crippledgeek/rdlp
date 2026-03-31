@@ -285,6 +285,18 @@ pub(crate) fn merge_config(
         );
     }
 
+    // Match filters (CLI appends to config file values)
+    if !args.match_filter.is_empty() {
+        config.match_filters.extend(args.match_filter.iter().cloned());
+    }
+
+    // Validate match filter syntax early
+    for filter_str in &config.match_filters {
+        rdlp_api::MatchFilter::parse(filter_str)
+            .map_err(|e| anyhow::anyhow!(e))
+            .with_context(|| format!("invalid match filter '{filter_str}'"))?;
+    }
+
     // Derived settings
     config.progress = !config.quiet;
 

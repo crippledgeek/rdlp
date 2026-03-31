@@ -222,6 +222,12 @@ pub struct Config {
     /// Path to download archive file (logs completed downloads to skip on re-run)
     pub download_archive: Option<PathBuf>,
 
+    // === Filtering ===
+    /// Match filter expressions (OR logic between multiple filters, AND within each).
+    /// Evaluated against InfoDict before download — non-matching videos are skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_filters: Vec<String>,
+
     // === Plugin system ===
     /// Directories to search for plugins
     pub plugin_directories: Vec<PathBuf>,
@@ -318,6 +324,9 @@ impl Default for Config {
 
             // Archive
             download_archive: None,
+
+            // Filtering
+            match_filters: Vec::new(),
 
             // Plugin system
             plugin_directories: Vec::new(),

@@ -251,6 +251,11 @@ pub(crate) struct Args {
     #[arg(long)]
     pub download_archive: Option<PathBuf>,
 
+    /// Filter videos by metadata (yt-dlp syntax). Repeatable (OR logic between filters).
+    /// Examples: "duration > 60", "!is_live", "title *= cats", "like_count >? 100"
+    #[arg(long = "match-filter", action = clap::ArgAction::Append)]
+    pub match_filter: Vec<String>,
+
     // === Search options ===
     /// Perform a keyword search instead of downloading a URL
     #[arg(long)]

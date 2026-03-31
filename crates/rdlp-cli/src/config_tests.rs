@@ -68,6 +68,7 @@ fn default_args() -> Args {
         recode_container: None,
         recode_audio: "copy".to_string(),
         fixup: "detect_or_warn".to_string(),
+        match_filter: vec![],
     }
 }
 
