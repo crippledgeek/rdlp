@@ -393,11 +393,16 @@ fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<Format> {
         formats.push(format);
     }
 
-    // Strategy 2: Decode clean-tube-player iframe base64
+    // Strategy 2: Decode clean-tube-player iframe base64 (may contain multiple sources)
     if let Some(ref decoded) = decoded_tag {
-        for url in extract_urls_from_decoded_tag(decoded) {
+        for (i, url) in extract_urls_from_decoded_tag(decoded).into_iter().enumerate() {
             if !formats.iter().any(|f| f.url == url) {
-                let mut format = make_video_format("kpm-player", &url);
+                let format_id = if i == 0 {
+                    "kpm-player".to_string()
+                } else {
+                    format!("kpm-player-{}", i + 1)
+                };
+                let mut format = make_video_format(&format_id, &url);
                 format.width = tag_width;
                 format.height = tag_height;
                 formats.push(format);
@@ -622,6 +627,21 @@ mod tests {
         let urls = extract_urls_from_decoded_tag(tag);
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "https://koreanporn.stream/Movie.mp4");
+    }
+
+    #[test]
+    fn extract_urls_multi_source() {
+        // Multi-quality: multiple <source> tags in one <video>
+        let tag = r#"<video class="video-js" controls>
+            <source src="https://koreanporn.stream/Movie-480p.mp4" type="video/mp4" />
+            <source src="https://koreanporn.stream/Movie-720p.mp4" type="video/mp4" />
+            <source src="https://koreanporn.stream/Movie-1080p.mp4" type="video/mp4" />
+        </video>"#;
+        let urls = extract_urls_from_decoded_tag(tag);
+        assert_eq!(urls.len(), 3);
+        assert!(urls[0].contains("480p"));
+        assert!(urls[1].contains("720p"));
+        assert!(urls[2].contains("1080p"));
     }
 
     #[test]
