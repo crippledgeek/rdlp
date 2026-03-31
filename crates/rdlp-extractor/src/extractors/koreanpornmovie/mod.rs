@@ -169,9 +169,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             info.thumbnail = thumbnail;
             info.upload_date = upload_date;
             info.duration = duration;
-            if !actors.is_empty() {
-                info.uploader = Some(actors.join(", "));
-            }
+            info.actors = actors;
             info.tags = if tags.is_empty() { None } else { Some(tags) };
 
             (info, formats)
