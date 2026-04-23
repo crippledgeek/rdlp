@@ -70,10 +70,13 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let title_sel = Selector::parse("p.title a").expect("static selector");
     let img_sel = Selector::parse("div.thumb-inside img").expect("static selector");
     let dur_sel = Selector::parse(".duration, span.duration").expect("static selector");
-    // Uploader / channel / profile link lives inside p.metadata on XVideos search pages.
-    let uploader_sel =
-        Selector::parse("p.metadata a[href^='/profiles/'] .name, p.metadata a[href^='/channels/'] .name, p.metadata a[href^='/amateur-channels/'] .name, p.metadata a[href^='/pornstar-channels/'] .name")
-            .expect("static selector");
+    // Uploader link inside p.metadata. XVideos uses many href shapes for
+    // uploaders — `/profiles/<user>`, `/channels/<slug>`, `/amateur-channels/…`,
+    // `/pornstar-channels/…`, AND bare vanity URLs like `/young-libertines` or
+    // `/tommy_cabrio_official`. The reliable common denominator across all of
+    // them is `p.metadata a .name`, so use that rather than an href-prefix
+    // allow-list (which caught only ~4% of cards in testing).
+    let uploader_sel = Selector::parse("p.metadata a .name").expect("static selector");
 
     let mut results = Vec::new();
 
@@ -343,6 +346,45 @@ mod tests {
             thumb.contains("xv_1_t.jpg"),
             "expected xv_1_t.jpg, got: {thumb}"
         );
+    }
+
+    /// Regression: the uploader selector must match all of XVideos'
+    /// uploader-link shapes, not just `/profiles/<user>`.  In practice the
+    /// majority of cards use vanity URLs (`/tommy_cabrio_official`,
+    /// `/young-libertines`, `/familystrokes`, …) with no `/profiles/` prefix.
+    #[test]
+    fn uploader_matches_profiles_and_vanity_urls() {
+        let html = r#"
+        <div class="thumb-block"><div class="thumb-inside"><div class="thumb">
+          <a href="/video.a1/slug"><img data-src="https://x/1.jpg"/></a>
+        </div></div><div class="thumb-under">
+          <p class="title"><a title="Vanity URL">Vanity URL</a></p>
+          <p class="metadata"><span class="bg">
+            <a href="/tommy_cabrio_official"><span class="name">Tommycabrio</span></a>
+          </span></p>
+        </div></div>
+        <div class="thumb-block"><div class="thumb-inside"><div class="thumb">
+          <a href="/video.a2/slug"><img data-src="https://x/2.jpg"/></a>
+        </div></div><div class="thumb-under">
+          <p class="title"><a title="Profiles URL">Profiles URL</a></p>
+          <p class="metadata"><span class="bg">
+            <a href="/profiles/skinnyboba"><span class="name">Skinnyboba</span></a>
+          </span></p>
+        </div></div>
+        <div class="thumb-block"><div class="thumb-inside"><div class="thumb">
+          <a href="/video.a3/slug"><img data-src="https://x/3.jpg"/></a>
+        </div></div><div class="thumb-under">
+          <p class="title"><a title="Hyphen vanity">Hyphen vanity</a></p>
+          <p class="metadata"><span class="bg">
+            <a href="/young-libertines"><span class="name">Young Libertines</span></a>
+          </span></p>
+        </div></div>
+        "#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].uploader.as_deref(), Some("Tommycabrio"));
+        assert_eq!(results[1].uploader.as_deref(), Some("Skinnyboba"));
+        assert_eq!(results[2].uploader.as_deref(), Some("Young Libertines"));
     }
 
     /// The `src` attribute always holds the lazy-load placeholder
