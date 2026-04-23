@@ -24,6 +24,21 @@ use regex::Regex;
 use crate::base::common::BaseExtractor;
 use crate::base::wgcz_network::WgczNetworkBase;
 
+/// Parse height (in pixels) from an XVideos MP4 URL.
+///
+/// XVideos/XNXX (WGCZ) MP4 URLs tend to follow one of these patterns:
+///   - `.../video_240p.mp4`, `.../video_360p.mp4` — height is encoded directly
+///   - `.../mp4_sd.mp4`, `.../mp4_hd.mp4`         — symbolic labels, no explicit height
+///
+/// Returns `Some(height)` when a `_(\d+)p` fragment is present, otherwise `None`.
+fn parse_mp4_height(url: &str) -> Option<u32> {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"[_-](\d{3,4})p").unwrap());
+    RE.captures(url)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok())
+}
+
 /// XVideos extractor
 #[derive(Default)]
 pub struct XVideosExtractor;
@@ -51,24 +66,40 @@ impl XVideosExtractor {
             .or(json_ld.name.clone())
             .unwrap_or_else(|| "Untitled".to_string());
 
-        // Build formats
+        // Build formats. XVideos (WGCZ Holding) always serves muxed H.264 +
+        // AAC video. Setting vcodec/acodec/container explicitly is what lets
+        // the UI classify these as video formats — otherwise they fall into
+        // the "Audio Only" bucket by default.
         let mut formats: Vec<Format> = Vec::new();
 
         if let Some(hls_url) = fmt_urls.hls {
             let mut f = Format::new("hls-0", hls_url, "m3u8", DownloadProtocol::M3u8Native);
             f.format_note = Some("HLS".to_string());
+            f.vcodec = Some("h264".to_string());
+            f.acodec = Some("aac".to_string());
+            f.container = Some("m3u8".to_string());
             formats.push(f);
         }
 
         if let Some(high_url) = fmt_urls.mp4_high {
+            let height = parse_mp4_height(&high_url).or(Some(720));
             let mut f = Format::new("mp4-hd", high_url, "mp4", DownloadProtocol::Https);
             f.format_note = Some("HD".to_string());
+            f.vcodec = Some("h264".to_string());
+            f.acodec = Some("aac".to_string());
+            f.container = Some("mp4".to_string());
+            f.height = height;
             formats.push(f);
         }
 
         if let Some(low_url) = fmt_urls.mp4_low {
+            let height = parse_mp4_height(&low_url).or(Some(360));
             let mut f = Format::new("mp4-sd", low_url, "mp4", DownloadProtocol::Https);
             f.format_note = Some("SD".to_string());
+            f.vcodec = Some("h264".to_string());
+            f.acodec = Some("aac".to_string());
+            f.container = Some("mp4".to_string());
+            f.height = height;
             f.quality = Some(-2);
             formats.push(f);
         }

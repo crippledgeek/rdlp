@@ -41,28 +41,55 @@ impl XNXXExtractor {
     }
 }
 
+/// Parse height (in pixels) from an XNXX MP4 URL.
+///
+/// XNXX MP4 URLs commonly include `_240p`, `_360p`, `_720p` etc. in the
+/// filename (e.g. `video_360p.mp4`). Falls back to `None` when the URL
+/// uses a symbolic label like `mp4_sd.mp4`.
+fn parse_mp4_height(url: &str) -> Option<u32> {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"[_-](\d{3,4})p").unwrap());
+    RE.captures(url)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse().ok())
+}
+
 /// Build `Format` entries from `WgczFormatUrls`.
+///
+/// XNXX (WGCZ Holding) always serves muxed H.264 + AAC. Setting
+/// vcodec/acodec/container explicitly prevents the UI from misclassifying
+/// these as audio-only formats.
 fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec<Format> {
     let mut formats = Vec::new();
 
     if let Some(hls_url) = &format_urls.hls {
-        formats.push(Format::new("hls", hls_url, "mp4", DownloadProtocol::M3u8));
+        let mut f = Format::new("hls", hls_url, "m3u8", DownloadProtocol::M3u8);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.container = Some("m3u8".to_string());
+        f.format_note = Some("HLS".to_string());
+        formats.push(f);
     }
     if let Some(low_url) = &format_urls.mp4_low {
-        formats.push(Format::new(
-            "mp4_low",
-            low_url,
-            "mp4",
-            DownloadProtocol::Https,
-        ));
+        let height = parse_mp4_height(low_url).or(Some(360));
+        let mut f = Format::new("mp4_low", low_url, "mp4", DownloadProtocol::Https);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.container = Some("mp4".to_string());
+        f.format_note = Some("SD".to_string());
+        f.height = height;
+        f.quality = Some(-2);
+        formats.push(f);
     }
     if let Some(high_url) = &format_urls.mp4_high {
-        formats.push(Format::new(
-            "mp4_high",
-            high_url,
-            "mp4",
-            DownloadProtocol::Https,
-        ));
+        let height = parse_mp4_height(high_url).or(Some(720));
+        let mut f = Format::new("mp4_high", high_url, "mp4", DownloadProtocol::Https);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.container = Some("mp4".to_string());
+        f.format_note = Some("HD".to_string());
+        f.height = height;
+        formats.push(f);
     }
 
     formats

@@ -86,20 +86,22 @@ pub(crate) fn parse_xhr_formats(value: &Value) -> Vec<Format> {
         None => return formats,
     };
 
-    // HLS stream (if present)
+    // HLS stream (if present). EPorner serves muxed H.264 + AAC HLS.
     if let Some(hls) = sources.get("hls")
         && let Some(src) = hls.get("src").and_then(|v| v.as_str())
         && !src.is_empty()
     {
-        formats.push(Format::new(
-            "hls",
-            src,
-            "m3u8",
-            DownloadProtocol::M3u8Native,
-        ));
+        let mut f = Format::new("hls", src, "m3u8", DownloadProtocol::M3u8Native);
+        f.vcodec = Some("h264".to_string());
+        f.acodec = Some("aac".to_string());
+        f.container = Some("m3u8".to_string());
+        f.format_note = Some("HLS".to_string());
+        formats.push(f);
     }
 
-    // MP4 streams — nested object keyed by label
+    // MP4 streams — nested object keyed by label.
+    // EPorner serves muxed H.264 + AAC by default; AV1 variants are handled
+    // by the `/dload/` fallback parser (`parse_dload_formats`).
     if let Some(mp4_obj) = sources.get("mp4").and_then(|v| v.as_object()) {
         for (label, entry) in mp4_obj {
             let src = match entry.get("src").and_then(|v| v.as_str()) {
@@ -121,6 +123,9 @@ pub(crate) fn parse_xhr_formats(value: &Value) -> Vec<Format> {
             let format_id = format!("mp4-{short}");
             let mut f = Format::new(format_id, src, "mp4", DownloadProtocol::Https);
             f.height = height;
+            f.vcodec = Some("h264".to_string());
+            f.acodec = Some("aac".to_string());
+            f.container = Some("mp4".to_string());
             formats.push(f);
         }
     }
@@ -160,6 +165,8 @@ pub(crate) fn parse_dload_formats(page_url: &str, html: &str) -> Vec<Format> {
         let mut f = Format::new(format_id, absolute_url, "mp4", DownloadProtocol::Https);
         f.height = height;
         f.vcodec = Some(codec_tag.to_string());
+        f.acodec = Some("aac".to_string());
+        f.container = Some("mp4".to_string());
         formats.push(f);
     }
     formats
