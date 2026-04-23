@@ -232,7 +232,7 @@ impl SearchExtractor for XNXXExtractor {
 }
 
 // The name string must match XNXXExtractor::name()
-const XNXX_NAME_STR: &str = "xnxx";
+const XNXX_NAME_STR: &str = "XNXX";
 
 #[cfg(test)]
 mod tests {

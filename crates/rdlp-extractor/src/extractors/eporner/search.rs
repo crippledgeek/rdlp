@@ -102,7 +102,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
 #[async_trait]
 impl SearchExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        "eporner"
+        "EPorner"
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

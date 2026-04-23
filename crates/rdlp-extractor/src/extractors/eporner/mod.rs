@@ -26,7 +26,7 @@ use crate::base::common::BaseExtractor;
 use hash::calc_hash;
 
 /// Extractor name.
-const EPORNER_NAME: &str = "eporner";
+const EPORNER_NAME: &str = "EPorner";
 /// Extractor priority (higher than generic fallback).
 const EPORNER_PRIORITY: i32 = 100;
 /// EPorner root URL.

@@ -26,7 +26,7 @@ use regex::Regex;
 use crate::base::common::BaseExtractor;
 use crate::base::wgcz_network::WgczNetworkBase;
 
-const XNXX_NAME: &str = "xnxx";
+const XNXX_NAME: &str = "XNXX";
 const XNXX_PRIORITY: i32 = 100;
 
 /// XNXX site extractor.
@@ -199,7 +199,7 @@ mod tests {
         info.actors = Vec::new();
         info.formats = formats;
 
-        assert_eq!(info.extractor, "xnxx");
+        assert_eq!(info.extractor, "XNXX");
         assert!(info.actors.is_empty(), "XNXX has no performer taxonomy");
     }
 

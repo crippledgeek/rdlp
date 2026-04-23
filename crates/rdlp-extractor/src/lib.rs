@@ -296,17 +296,17 @@ mod registry_c4a_tests {
         assert_eq!(
             reg.find_extractor("https://www.xvideos.com/video.ooumovia9b7/")
                 .map(|e| e.name().to_string()),
-            Some("xvideos".to_string())
+            Some("XVideos".to_string())
         );
         assert_eq!(
             reg.find_extractor("https://www.xnxx.com/video-14cco143/slug")
                 .map(|e| e.name().to_string()),
-            Some("xnxx".to_string())
+            Some("XNXX".to_string())
         );
         assert_eq!(
             reg.find_extractor("https://www.eporner.com/video-svXh0Ne27Ig/slug/")
                 .map(|e| e.name().to_string()),
-            Some("eporner".to_string())
+            Some("EPorner".to_string())
         );
     }
 }

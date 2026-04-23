@@ -133,7 +133,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 #[async_trait]
 impl SearchExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        "xvideos"
+        "XVideos"
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

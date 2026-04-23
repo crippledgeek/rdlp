@@ -95,7 +95,7 @@ impl XVideosExtractor {
         // Thumbnail: prefer inline JS, fall back to JSON-LD
         let thumbnail = inline_meta.thumbnail_url.or(json_ld.thumbnail_url.clone());
 
-        let mut info = InfoDict::new(eid, title, "xvideos", url);
+        let mut info = InfoDict::new(eid, title, "XVideos", url);
         info.thumbnail = thumbnail;
         info.description = json_ld.description;
         info.duration = duration;
@@ -115,7 +115,7 @@ impl XVideosExtractor {
 #[async_trait]
 impl InfoExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        "xvideos"
+        "XVideos"
     }
 
     fn valid_url(&self) -> &Regex {
@@ -164,7 +164,7 @@ mod tests {
         .expect("build_info should succeed");
 
         assert!(!info.title.is_empty(), "title should not be empty");
-        assert_eq!(info.extractor, "xvideos", "extractor should be 'xvideos'");
+        assert_eq!(info.extractor, "XVideos", "extractor should be 'XVideos'");
         assert!(info.actors.is_empty(), "actors should be empty for XVideos");
 
         let has_m3u8 = info.formats.iter().any(|f| {
