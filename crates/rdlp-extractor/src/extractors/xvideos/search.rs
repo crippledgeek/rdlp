@@ -107,11 +107,17 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             })
             .unwrap_or_else(|| "Untitled".to_string());
 
-        // Thumbnail from img src
-        let thumbnail_url = block
-            .select(&img_sel)
-            .next()
-            .and_then(|img| img.value().attr("src").map(String::from));
+        // Thumbnail: XVideos lazy-loads thumbs, so `src` is a placeholder
+        // (`assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif`).
+        // The real URL lives in `data-src`. Fall back to `src` only if the
+        // data-src attribute isn't present (defensive).
+        let thumbnail_url = block.select(&img_sel).next().and_then(|img| {
+            img.value()
+                .attr("data-src")
+                .or_else(|| img.value().attr("src"))
+                .filter(|u| !u.contains("lightbox-blank"))
+                .map(String::from)
+        });
 
         // Duration from .duration or span.duration
         let duration = block.select(&dur_sel).next().and_then(|el| {
