@@ -11,7 +11,7 @@
 //   - Same-origin (blob:, data:, http://localhost) URLs are rendered directly.
 //   - If the proxy itself fails, show a placeholder.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -79,7 +79,31 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
         [useProxyFromStart, src],
     );
     const [directFailed, setDirectFailed] = useState(initialDirectFailed);
-    const { data: proxyUrl, isError: proxyFailed, isPending: proxyPending } = useProxyThumbnail(src, directFailed);
+    const {
+        data: proxyUrl,
+        isError: proxyFailed,
+        isPending: proxyPending,
+        error: proxyErr,
+    } = useProxyThumbnail(src, directFailed);
+
+    // Diagnostic logging — emit one line per state transition so we can tell
+    // whether the proxy is running, succeeding, or the blob URL isn't painting.
+    // TODO: remove once the rendering quirk is root-caused.
+    useEffect(() => {
+        if (!src) return;
+        if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.debug("[Thumbnail]", {
+                src: src.slice(0, 80),
+                useProxyFromStart,
+                directFailed,
+                proxyPending,
+                proxyFailed,
+                proxyErr: proxyErr instanceof Error ? proxyErr.message : String(proxyErr ?? ""),
+                proxyUrl: proxyUrl?.slice(0, 60),
+            });
+        }
+    }, [src, useProxyFromStart, directFailed, proxyPending, proxyFailed, proxyErr, proxyUrl]);
 
     // Ref callback: runs when the img element mounts or src changes.
     // Handles the WebKitGTK race condition where img.complete is true before
