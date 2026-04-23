@@ -174,6 +174,16 @@ impl XHamsterExtractor {
 
         info.formats = formats_with_size;
         info.actors = utils::extract_actors(&webpage);
+
+        // Channel / studio (e.g. "Julia Reaves world" under /channels/…).
+        // Complements `uploader` which carries the per-user submitter name
+        // from videoModel.author. Only set when the page actually exposes
+        // a channel chip; otherwise leave untouched.
+        if let Some((name, url)) = utils::extract_channel(&webpage) {
+            info.channel = Some(name);
+            info.channel_url = Some(url);
+        }
+
         info.propagate_duration();
 
         if hls_flags.is_live {

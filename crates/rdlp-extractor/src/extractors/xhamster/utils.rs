@@ -478,6 +478,63 @@ pub fn extract_actors(webpage: &str) -> Vec<String> {
 static MAIN_SELECTOR: LazyLock<scraper::Selector> =
     LazyLock::new(|| scraper::Selector::parse("main").expect("valid selector"));
 
+// ============================================================================
+// Channel / studio extraction
+// ============================================================================
+//
+// XHamster videos belong to a "channel" (e.g. `/channels/julia-reaves-world`)
+// which is distinct from the per-user uploader (e.g. `/users/jasminrougexxx`).
+// The channel link sits in the top info row above the player; the same scoping
+// rules as actors apply — must be inside <main> to exclude the top-nav
+// "Channels" mega-dropdown. Falls back to the unscoped selector for legacy
+// layouts without <main>.
+static CHANNEL_LINK_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse(r#"main a[href*="/channels/"]"#).expect("valid selector")
+});
+static CHANNEL_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> =
+    LazyLock::new(|| scraper::Selector::parse(r#"a[href*="/channels/"]"#).expect("valid selector"));
+
+/// Extract the channel (studio) name and URL from an XHamster video page.
+///
+/// Returns the first `<a href="/channels/..." >` link inside `<main>`,
+/// skipping aggregate navigation links like `/channels/all` or
+/// `/channels/top-rated`. When no `<main>` is present (legacy layouts),
+/// falls back to an unscoped document-wide search.
+pub fn extract_channel(webpage: &str) -> Option<(String, String)> {
+    let html = Html::parse_document(webpage);
+    let has_main = html.select(&MAIN_SELECTOR).next().is_some();
+    let selector: &scraper::Selector = if has_main {
+        &CHANNEL_LINK_SELECTOR
+    } else {
+        &CHANNEL_LINK_SELECTOR_LEGACY
+    };
+
+    for link in html.select(selector) {
+        let href = link.value().attr("href").unwrap_or("");
+        // Skip aggregate / navigation endpoints
+        if href.contains("/channels/all")
+            || href.contains("/channels/top")
+            || href.contains("/channels/popular")
+            || href.ends_with("/channels")
+            || href.ends_with("/channels/")
+        {
+            continue;
+        }
+        let name = link.text().collect::<String>().trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        // Absolute URL: some hrefs are relative, others absolute
+        let url = if href.starts_with("http") {
+            href.to_string()
+        } else {
+            format!("https://xhamster.com{href}")
+        };
+        return Some((name, url));
+    }
+    None
+}
+
 #[cfg(test)]
 mod actor_tests {
     use super::*;
@@ -548,5 +605,46 @@ mod actor_tests {
         </div></body></html>"#;
         let actors = extract_actors(html);
         assert_eq!(actors, vec!["Legacy Actor"]);
+    }
+
+    #[test]
+    fn extracts_channel_from_video_page() {
+        let html = r#"<html><body>
+            <nav class="top-menu-container">
+              <a href="/channels/popular-studio">Popular Studio</a>
+            </nav>
+            <main class="video-type-video">
+              <a href="/channels/julia-reaves-world">Julia Reaves world</a>
+            </main>
+        </body></html>"#;
+        let (name, url) = extract_channel(html).expect("channel should be found");
+        assert_eq!(name, "Julia Reaves world");
+        assert_eq!(url, "https://xhamster.com/channels/julia-reaves-world");
+    }
+
+    #[test]
+    fn channel_absolute_urls_are_preserved() {
+        let html = r#"<html><body><main>
+            <a href="https://xhamster.com/channels/acme-studio">Acme Studio</a>
+        </main></body></html>"#;
+        let (_name, url) = extract_channel(html).expect("channel should be found");
+        assert_eq!(url, "https://xhamster.com/channels/acme-studio");
+    }
+
+    #[test]
+    fn channel_skips_aggregate_nav_links() {
+        let html = r#"<html><body><main>
+            <a href="/channels/all">All Channels</a>
+            <a href="/channels/top-rated">Top Rated</a>
+            <a href="/channels/real-studio">Real Studio</a>
+        </main></body></html>"#;
+        let (name, _url) = extract_channel(html).expect("should skip aggregates");
+        assert_eq!(name, "Real Studio");
+    }
+
+    #[test]
+    fn channel_returns_none_when_absent() {
+        let html = r#"<html><body><main><p>no channels here</p></main></body></html>"#;
+        assert!(extract_channel(html).is_none());
     }
 }
