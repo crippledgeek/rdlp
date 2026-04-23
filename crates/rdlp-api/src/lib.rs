@@ -41,11 +41,11 @@ pub use handle::{DownloadHandle, DownloadId};
 pub use orchestrator::InteractiveCallback;
 pub use rdlp_core::{DownloadProgress, config_io};
 pub use rdlp_postprocess::TempRegistry;
-pub use rdlp_types::{
-    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, Format, InfoDict,
-    PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue,
-    SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
-};
 pub use rdlp_types::match_filter::MatchFilter;
+pub use rdlp_types::{
+    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, Format, InfoDict, PostProcess,
+    RecodeAudioMode, SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse,
+    SearchQuery, SearchResultPreview, SearchSiteInfo, SubtitleFormat,
+};
 pub use request::DownloadRequest;
 pub use result::DownloadResult;

@@ -109,13 +109,10 @@ impl PornHubExtractor {
 
         rdlp_core::check_http_response(&response)?;
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to read PornHub API response: {e}"),
-                url: Some(url.to_string()),
-            })?;
+        let body = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read PornHub API response: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
         search::parse_api_search_results(&body)
     }
@@ -305,11 +302,10 @@ impl InfoExtractor for PornHubExtractor {
         }
 
         // Get video ID
-        let video_id = patterns::extract_video_id(url)
-            .ok_or_else(|| RdlpError::Extraction {
-                message: format!("Could not extract video ID: {url}"),
-                url: Some(url.to_string()),
-            })?;
+        let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID: {url}"),
+            url: Some(url.to_string()),
+        })?;
 
         // Parse HTML and extract all metadata before async operations
         // Extract duration from flashvars (before HTML parsing drops webpage borrow)

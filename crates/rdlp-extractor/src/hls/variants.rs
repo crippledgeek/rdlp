@@ -113,11 +113,10 @@ impl HlsSizeDetector {
                 }
 
                 // Resolve and fetch the media playlist for segment info
-                let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction {
-                        message: format!("Invalid base URL: {e}"),
-                        url: Some(m3u8_url.to_string()),
-                    })?;
+                let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
+                    message: format!("Invalid base URL: {e}"),
+                    url: Some(m3u8_url.to_string()),
+                })?;
                 let media_url = base_url
                     .join(&variant.uri)
                     .map_err(|e| RdlpError::Extraction {
@@ -238,11 +237,10 @@ impl HlsSizeDetector {
             return Ok(Vec::new());
         }
 
-        let base_url = url::Url::parse(m3u8_url)
-            .map_err(|e| RdlpError::Extraction {
-                message: format!("Invalid base URL: {e}"),
-                url: Some(m3u8_url.to_string()),
-            })?;
+        let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
+            message: format!("Invalid base URL: {e}"),
+            url: Some(m3u8_url.to_string()),
+        })?;
 
         // Resolve all variant media playlist URLs and extract per-variant metadata.
         // Skip I-frame-only variants (EXT-X-I-FRAME-STREAM-INF) — these are trick-play

@@ -54,8 +54,12 @@ impl WgczNetworkBase {
     pub fn extract_format_urls(html: &str) -> WgczFormatUrls {
         WgczFormatUrls {
             hls: patterns::VIDEO_HLS.captures(html).map(|c| c[1].to_string()),
-            mp4_low: patterns::VIDEO_URL_LOW.captures(html).map(|c| c[1].to_string()),
-            mp4_high: patterns::VIDEO_URL_HIGH.captures(html).map(|c| c[1].to_string()),
+            mp4_low: patterns::VIDEO_URL_LOW
+                .captures(html)
+                .map(|c| c[1].to_string()),
+            mp4_high: patterns::VIDEO_URL_HIGH
+                .captures(html)
+                .map(|c| c[1].to_string()),
         }
     }
 
@@ -63,9 +67,13 @@ impl WgczNetworkBase {
     #[must_use]
     pub fn extract_inline_meta(html: &str) -> WgczInlineMeta {
         WgczInlineMeta {
-            title: patterns::VIDEO_TITLE.captures(html).map(|c| c[1].to_string()),
+            title: patterns::VIDEO_TITLE
+                .captures(html)
+                .map(|c| c[1].to_string()),
             thumbnail_url: patterns::THUMB_URL.captures(html).map(|c| c[1].to_string()),
-            uploader: patterns::UPLOADER_NAME.captures(html).map(|c| c[1].to_string()),
+            uploader: patterns::UPLOADER_NAME
+                .captures(html)
+                .map(|c| c[1].to_string()),
         }
     }
 
@@ -88,15 +96,26 @@ impl WgczNetworkBase {
             }
             return WgczJsonLd {
                 name: v.get("name").and_then(Value::as_str).map(String::from),
-                description: v.get("description").and_then(Value::as_str).map(String::from),
+                description: v
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(String::from),
                 duration_iso: v.get("duration").and_then(Value::as_str).map(String::from),
-                upload_date: v.get("uploadDate").and_then(Value::as_str).map(String::from),
+                upload_date: v
+                    .get("uploadDate")
+                    .and_then(Value::as_str)
+                    .map(String::from),
                 thumbnail_url: match v.get("thumbnailUrl") {
                     Some(Value::String(s)) => Some(s.clone()),
-                    Some(Value::Array(arr)) => arr.first().and_then(Value::as_str).map(String::from),
+                    Some(Value::Array(arr)) => {
+                        arr.first().and_then(Value::as_str).map(String::from)
+                    }
                     _ => None,
                 },
-                content_url: v.get("contentUrl").and_then(Value::as_str).map(String::from),
+                content_url: v
+                    .get("contentUrl")
+                    .and_then(Value::as_str)
+                    .map(String::from),
                 view_count: v
                     .get("interactionStatistic")
                     .and_then(|s| s.get("userInteractionCount"))

@@ -45,45 +45,48 @@ impl DetectionStrategy for OpenGraphStrategy {
         // og:video:secure_url takes priority (listed first in selector)
         for elem in ctx.html.select(&OG_VIDEO_SELECTOR) {
             if let Some(content) = elem.value().attr("content")
-                && let Some(url) = resolve_url(ctx.base_url, content) {
-                    let ext = super::detection::ext_from_url(&url);
-                    formats.push(DetectedFormat {
-                        url,
-                        ext,
-                        quality: None,
-                        confidence: Confidence::High,
-                        source: "og:video",
-                    });
-                }
+                && let Some(url) = resolve_url(ctx.base_url, content)
+            {
+                let ext = super::detection::ext_from_url(&url);
+                formats.push(DetectedFormat {
+                    url,
+                    ext,
+                    quality: None,
+                    confidence: Confidence::High,
+                    source: "og:video",
+                });
+            }
         }
 
         // og:audio
         for elem in ctx.html.select(&OG_AUDIO_SELECTOR) {
             if let Some(content) = elem.value().attr("content")
-                && let Some(url) = resolve_url(ctx.base_url, content) {
-                    let ext = super::detection::ext_from_url(&url);
-                    formats.push(DetectedFormat {
-                        url,
-                        ext,
-                        quality: None,
-                        confidence: Confidence::High,
-                        source: "og:audio",
-                    });
-                }
+                && let Some(url) = resolve_url(ctx.base_url, content)
+            {
+                let ext = super::detection::ext_from_url(&url);
+                formats.push(DetectedFormat {
+                    url,
+                    ext,
+                    quality: None,
+                    confidence: Confidence::High,
+                    source: "og:audio",
+                });
+            }
         }
 
         // Check og:video:type for MIME hint
         if let Some(type_elem) = ctx.html.select(&OG_VIDEO_TYPE_SELECTOR).next()
-            && let Some(mime) = type_elem.value().attr("content") {
-                // If type indicates a Flash embed (not direct media), lower confidence
-                if mime.contains("flash") || mime.contains("shockwave") {
-                    for f in &mut formats {
-                        if f.source == "og:video" {
-                            f.confidence = Confidence::Low;
-                        }
+            && let Some(mime) = type_elem.value().attr("content")
+        {
+            // If type indicates a Flash embed (not direct media), lower confidence
+            if mime.contains("flash") || mime.contains("shockwave") {
+                for f in &mut formats {
+                    if f.source == "og:video" {
+                        f.confidence = Confidence::Low;
                     }
                 }
             }
+        }
 
         formats
     }
@@ -105,16 +108,17 @@ impl DetectionStrategy for TwitterPlayerStrategy {
 
         for elem in ctx.html.select(&TWITTER_PLAYER_STREAM_SELECTOR) {
             if let Some(content) = elem.value().attr("content")
-                && let Some(url) = resolve_url(ctx.base_url, content) {
-                    let ext = super::detection::ext_from_url(&url);
-                    formats.push(DetectedFormat {
-                        url,
-                        ext,
-                        quality: None,
-                        confidence: Confidence::Medium,
-                        source: "twitter:player:stream",
-                    });
-                }
+                && let Some(url) = resolve_url(ctx.base_url, content)
+            {
+                let ext = super::detection::ext_from_url(&url);
+                formats.push(DetectedFormat {
+                    url,
+                    ext,
+                    quality: None,
+                    confidence: Confidence::Medium,
+                    source: "twitter:player:stream",
+                });
+            }
         }
 
         formats
@@ -164,9 +168,11 @@ mod tests {
         let formats = OpenGraphStrategy.detect(&ctx);
         assert_eq!(formats.len(), 2);
         // Both are extracted; dedup happens at pipeline level
-        assert!(formats
-            .iter()
-            .any(|f| f.url == "https://cdn.example.com/secure.mp4"));
+        assert!(
+            formats
+                .iter()
+                .any(|f| f.url == "https://cdn.example.com/secure.mp4")
+        );
     }
 
     #[test]

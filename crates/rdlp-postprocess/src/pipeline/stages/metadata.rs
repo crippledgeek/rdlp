@@ -158,11 +158,7 @@ impl PipelineStage for MetadataStage {
                 },
             ))
         });
-        let log_callback = if msg.verbose {
-            stage_callback
-        } else {
-            None
-        };
+        let log_callback = if msg.verbose { stage_callback } else { None };
 
         match self
             .ffmpeg
@@ -201,8 +197,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
+    use rdlp_types::PostProcess;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 

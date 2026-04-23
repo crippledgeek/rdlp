@@ -42,8 +42,8 @@ pub mod utils;
 pub use extractors::{
     EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
-    RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor,
-    XNXXExtractor, XTitsExtractor, XVideosExtractor,
+    RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor,
+    XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access

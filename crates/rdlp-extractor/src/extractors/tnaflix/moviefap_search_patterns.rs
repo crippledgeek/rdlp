@@ -221,8 +221,14 @@ mod tests {
         let query = rdlp_types::SearchQuery {
             query: "test".to_string(),
             filters: vec![
-                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "adddate".to_string() },
-                rdlp_types::SearchFilter { key: "ordering".to_string(), value: "rate".to_string() },
+                rdlp_types::SearchFilter {
+                    key: "ordering".to_string(),
+                    value: "adddate".to_string(),
+                },
+                rdlp_types::SearchFilter {
+                    key: "ordering".to_string(),
+                    value: "rate".to_string(),
+                },
             ],
             max_results: None,
             page: None,

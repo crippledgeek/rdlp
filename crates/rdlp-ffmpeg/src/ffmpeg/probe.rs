@@ -166,8 +166,8 @@ impl FFmpegRunner {
             let stream_duration_ts = stream.duration();
             if stream_duration_ts > 0 {
                 let tb = stream.time_base();
-                let dur = stream_duration_ts as f64 * tb.numerator() as f64
-                    / tb.denominator() as f64;
+                let dur =
+                    stream_duration_ts as f64 * tb.numerator() as f64 / tb.denominator() as f64;
                 stream_info.duration = Some(dur);
             }
 

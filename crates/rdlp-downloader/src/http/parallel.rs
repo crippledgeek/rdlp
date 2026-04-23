@@ -129,7 +129,10 @@ impl HttpDownloader {
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let filename = path
             .file_name()
-            .ok_or_else(|| RdlpError::Download { message: "Invalid output path: no filename".to_string(), url: Some(url.to_string()) })?
+            .ok_or_else(|| RdlpError::Download {
+                message: "Invalid output path: no filename".to_string(),
+                url: Some(url.to_string()),
+            })?
             .to_string_lossy()
             .into_owned();
 
@@ -215,7 +218,10 @@ impl HttpDownloader {
         let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let filename = path
             .file_name()
-            .ok_or_else(|| RdlpError::Download { message: "Invalid output path: no filename".to_string(), url: Some(url.to_string()) })?
+            .ok_or_else(|| RdlpError::Download {
+                message: "Invalid output path: no filename".to_string(),
+                url: Some(url.to_string()),
+            })?
             .to_string_lossy()
             .into_owned();
 
@@ -361,10 +367,11 @@ impl HttpDownloader {
                     };
 
                     let download_fut = async move {
-                        let _permit = sem
-                            .acquire_owned()
-                            .await
-                            .map_err(|_| RdlpError::Download { message: "Semaphore closed".to_string(), url: Some(url.to_string()) })?;
+                        let _permit =
+                            sem.acquire_owned().await.map_err(|_| RdlpError::Download {
+                                message: "Semaphore closed".to_string(),
+                                url: Some(url.to_string()),
+                            })?;
                         let start_time = Instant::now();
                         let abs_start = byte_offset + chunk.start;
                         // end is exclusive in ChunkRequest, but HTTP Range is inclusive
@@ -515,16 +522,25 @@ async fn merge_chunks_ordered(
 
     tokio::time::timeout(merge_timeout, async {
         let file = match mode {
-            MergeMode::Create => File::create(path).await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to create output file '{}': {e}", path.display()))
-            ))?,
+            MergeMode::Create => File::create(path).await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("failed to create output file '{}': {e}", path.display()),
+                ))
+            })?,
             MergeMode::Append => tokio::fs::OpenOptions::new()
                 .append(true)
                 .open(path)
                 .await
-                .map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to open output file for append '{}': {e}", path.display()))
-                ))?,
+                .map_err(|e| {
+                    RdlpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "failed to open output file for append '{}': {e}",
+                            path.display()
+                        ),
+                    ))
+                })?,
         };
         let mut writer = BufWriter::with_capacity(config.buffer_size, file);
 
@@ -532,14 +548,23 @@ async fn merge_chunks_ordered(
         let mut deleted_chunks = 0;
         let total = chunk_paths.len();
         for (idx, chunk_path) in chunk_paths.iter().enumerate() {
-            let mut chunk_file = File::open(chunk_path).await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to open chunk file '{}': {e}", chunk_path.display()))
-            ))?;
+            let mut chunk_file = File::open(chunk_path).await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("failed to open chunk file '{}': {e}", chunk_path.display()),
+                ))
+            })?;
             tokio::io::copy(&mut chunk_file, &mut writer)
                 .await
-                .map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to copy chunk '{}' into output: {e}", chunk_path.display()))
-                ))?;
+                .map_err(|e| {
+                    RdlpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "failed to copy chunk '{}' into output: {e}",
+                            chunk_path.display()
+                        ),
+                    ))
+                })?;
 
             match tokio::fs::remove_file(chunk_path).await {
                 Ok(()) => deleted_chunks += 1,
@@ -553,9 +578,15 @@ async fn merge_chunks_ordered(
         }
         debug!(deleted = deleted_chunks; "Chunk cleanup complete");
 
-        writer.flush().await.map_err(|e| RdlpError::Io(
-            std::io::Error::new(e.kind(), format!("failed to flush merged output file '{}': {e}", path.display()))
-        ))?;
+        writer.flush().await.map_err(|e| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to flush merged output file '{}': {e}",
+                    path.display()
+                ),
+            ))
+        })?;
         Ok(())
     })
     .await

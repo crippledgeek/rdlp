@@ -51,9 +51,7 @@ impl Orchestrator {
             && !parent.exists()
         {
             std::fs::create_dir_all(parent)
-                .with_context(|| {
-                    format!("failed to create output directory {}", parent.display())
-                })
+                .with_context(|| format!("failed to create output directory {}", parent.display()))
                 .map_err(super::OrchestratorError::Other)?;
         }
 

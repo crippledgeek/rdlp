@@ -7,8 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::{info, warn};
 
-use rdlp_ffmpeg::ffmpeg::fixup::{FixupIssue, detect_issues};
 use rdlp_ffmpeg::FFmpegRunner;
+use rdlp_ffmpeg::ffmpeg::fixup::{FixupIssue, detect_issues};
 use rdlp_types::FixupPolicy;
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
@@ -94,7 +94,11 @@ impl PipelineStage for FixupStage {
         }
 
         // DetectOrWarn: attempt repair
-        let repairable: Vec<FixupIssue> = issues.iter().filter(|i| i.is_repairable()).cloned().collect();
+        let repairable: Vec<FixupIssue> = issues
+            .iter()
+            .filter(|i| i.is_repairable())
+            .cloned()
+            .collect();
         if repairable.is_empty() {
             return Ok(msg);
         }
@@ -109,7 +113,12 @@ impl PipelineStage for FixupStage {
 
         match self
             .ffmpeg
-            .fixup_repair(&input_file, &temp_output, &repairable, msg.encoding_tool.clone())
+            .fixup_repair(
+                &input_file,
+                &temp_output,
+                &repairable,
+                msg.encoding_tool.clone(),
+            )
             .await
         {
             Ok(()) => {

@@ -47,7 +47,10 @@ mod tests {
     #[test]
     fn captures_hls_url() {
         let cap = VIDEO_HLS.captures(SAMPLE).expect("match");
-        assert_eq!(&cap[1], "https://hls-cdn77.xvideos-cdn.com/TOK,123/uuid/3/hls.m3u8");
+        assert_eq!(
+            &cap[1],
+            "https://hls-cdn77.xvideos-cdn.com/TOK,123/uuid/3/hls.m3u8"
+        );
     }
 
     #[test]
@@ -65,7 +68,10 @@ mod tests {
     #[test]
     fn captures_title_thumb_uploader() {
         assert_eq!(&VIDEO_TITLE.captures(SAMPLE).unwrap()[1], "Example Title");
-        assert_eq!(&THUMB_URL.captures(SAMPLE).unwrap()[1], "https://thumb.example/xv_13_t.jpg");
+        assert_eq!(
+            &THUMB_URL.captures(SAMPLE).unwrap()[1],
+            "https://thumb.example/xv_13_t.jpg"
+        );
         assert_eq!(&UPLOADER_NAME.captures(SAMPLE).unwrap()[1], "Acme");
     }
 }

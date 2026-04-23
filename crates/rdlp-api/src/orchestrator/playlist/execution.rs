@@ -74,13 +74,15 @@ impl Orchestrator {
             async move {
                 debug!("{}", "\u{2500}".repeat(60));
                 info!(position, total, title:? = info_owned.title; "Downloading");
-                let _ = self.event_tx.try_send(crate::events::Event::PlaylistItemStarted {
-                    id: self.download_id,
-                    index: position,
-                    total,
-                    url: info_owned.webpage_url.clone(),
-                    title: info_owned.title.clone(),
-                });
+                let _ = self
+                    .event_tx
+                    .try_send(crate::events::Event::PlaylistItemStarted {
+                        id: self.download_id,
+                        index: position,
+                        total,
+                        url: info_owned.webpage_url.clone(),
+                        title: info_owned.title.clone(),
+                    });
                 let result = self
                     .download_from_info_to_dir(
                         &info_owned,

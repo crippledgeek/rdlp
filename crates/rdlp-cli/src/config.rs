@@ -6,8 +6,8 @@
 
 use anyhow::{Context, Result};
 use rdlp_api::{
-    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode, SubtitleFormat,
-    config_io,
+    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode,
+    SubtitleFormat, config_io,
 };
 
 use crate::args::Args;
@@ -287,7 +287,9 @@ pub(crate) fn merge_config(
 
     // Match filters (CLI appends to config file values)
     if !args.match_filter.is_empty() {
-        config.match_filters.extend(args.match_filter.iter().cloned());
+        config
+            .match_filters
+            .extend(args.match_filter.iter().cloned());
     }
 
     // Validate match filter syntax early

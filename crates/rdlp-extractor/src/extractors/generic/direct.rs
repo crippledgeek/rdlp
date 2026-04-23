@@ -119,10 +119,7 @@ mod tests {
             title_from_url("https://cdn.example.com/My%20Video.mp4"),
             "My Video"
         );
-        assert_eq!(
-            title_from_url("https://cdn.example.com/video.mp4"),
-            "video"
-        );
+        assert_eq!(title_from_url("https://cdn.example.com/video.mp4"), "video");
     }
 
     #[test]
@@ -159,8 +156,7 @@ mod tests {
     fn prefetch_response_mpd_detection() {
         let resp = PrefetchResponse {
             content_type: Some("application/dash+xml".to_string()),
-            bytes: b"<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema\">"
-                .to_vec(),
+            bytes: b"<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema\">".to_vec(),
             content_length: None,
         };
         assert!(resp.is_mpd_manifest());

@@ -28,50 +28,39 @@ use crate::base::common::BaseExtractor;
 // Selectors
 // ============================================================================
 
-static META_NAME_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="name"]"#).expect("valid selector")
-});
+static META_NAME_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="name"]"#).expect("valid selector"));
 
-static META_DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="description"]"#).expect("valid selector")
-});
+static META_DESCRIPTION_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="description"]"#).expect("valid selector"));
 
-static META_DURATION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="duration"]"#).expect("valid selector")
-});
+static META_DURATION_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="duration"]"#).expect("valid selector"));
 
-static META_THUMBNAIL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="thumbnailUrl"]"#).expect("valid selector")
-});
+static META_THUMBNAIL_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="thumbnailUrl"]"#).expect("valid selector"));
 
-static META_CONTENT_URL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="contentURL"]"#).expect("valid selector")
-});
+static META_CONTENT_URL_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="contentURL"]"#).expect("valid selector"));
 
-static META_EMBED_URL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="embedURL"]"#).expect("valid selector")
-});
+static META_EMBED_URL_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="embedURL"]"#).expect("valid selector"));
 
-static META_UPLOAD_DATE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[itemprop="uploadDate"]"#).expect("valid selector")
-});
+static META_UPLOAD_DATE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"meta[itemprop="uploadDate"]"#).expect("valid selector"));
 
-static PLAYER_IFRAME_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"iframe[src*="player-x.php"]"#).expect("valid selector")
-});
+static PLAYER_IFRAME_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"iframe[src*="player-x.php"]"#).expect("valid selector"));
 
-static ACTOR_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"a[href*="/actor/"]"#).expect("valid selector")
-});
+static ACTOR_LINK_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"a[href*="/actor/"]"#).expect("valid selector"));
 
-static TAG_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"a[href*="/tag/"]"#).expect("valid selector")
-});
+static TAG_LINK_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse(r#"a[href*="/tag/"]"#).expect("valid selector"));
 
 // Search result selectors
-static SEARCH_ARTICLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("article.loop-video").expect("valid selector")
-});
+static SEARCH_ARTICLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("article.loop-video").expect("valid selector"));
 
 static SEARCH_LINK_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a[href]").expect("valid selector"));
@@ -348,9 +337,7 @@ impl KoreanPornMovieExtractor {
         let api_url = format!(
             "https://koreanpornmovie.com/wp-json/wp/v2/posts?search={encoded_query}&page={page}&per_page={per_page}&_embed",
         );
-        let html_url = format!(
-            "https://koreanpornmovie.com/?s={encoded_query}&paged={page}",
-        );
+        let html_url = format!("https://koreanpornmovie.com/?s={encoded_query}&paged={page}",);
 
         // Fire both requests concurrently
         let (api_result, html_result) = tokio::join!(
@@ -407,15 +394,10 @@ impl KoreanPornMovieExtractor {
             .map_err(|e| RdlpError::network(format!("term lookup failed: {e}"), &term_url))?
             .json()
             .await
-            .map_err(|e| {
-                RdlpError::extraction(format!("failed to parse term: {e}"), &term_url)
-            })?;
+            .map_err(|e| RdlpError::extraction(format!("failed to parse term: {e}"), &term_url))?;
 
         let term = terms.first().ok_or_else(|| {
-            RdlpError::extraction(
-                format!("No {taxonomy} found with slug '{slug}'"),
-                &term_url,
-            )
+            RdlpError::extraction(format!("No {taxonomy} found with slug '{slug}'"), &term_url)
         })?;
 
         debug!(
@@ -444,9 +426,10 @@ impl KoreanPornMovieExtractor {
         let response = api_result
             .map_err(|e| RdlpError::network(format!("post query failed: {e}"), &api_url))?;
         let total_pages = extract_total_pages(&response);
-        let posts: Vec<WpPost> = response.json().await.map_err(|e| {
-            RdlpError::extraction(format!("failed to parse posts: {e}"), &api_url)
-        })?;
+        let posts: Vec<WpPost> = response
+            .json()
+            .await
+            .map_err(|e| RdlpError::extraction(format!("failed to parse posts: {e}"), &api_url))?;
 
         let durations = scrape_durations_from_html_response(html_result).await;
 
@@ -601,7 +584,10 @@ fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<Format> {
 
     // Strategy 2: Decode clean-tube-player iframe base64 (may contain multiple sources)
     if let Some(ref decoded) = decoded_tag {
-        for (i, url) in extract_urls_from_decoded_tag(decoded).into_iter().enumerate() {
+        for (i, url) in extract_urls_from_decoded_tag(decoded)
+            .into_iter()
+            .enumerate()
+        {
             if !formats.iter().any(|f| f.url == url) {
                 let format_id = if i == 0 {
                     "kpm-player".to_string()
@@ -682,11 +668,8 @@ fn decode_player_iframe(iframe_src: &str) -> Option<String> {
     let q = url.query_pairs().find(|(k, _)| k == "q")?.1;
 
     // Base64 decode
-    let decoded_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        q.as_bytes(),
-    )
-    .ok()?;
+    let decoded_bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, q.as_bytes()).ok()?;
     let decoded = String::from_utf8(decoded_bytes).ok()?;
 
     // URL-decode the tag parameter
@@ -706,9 +689,8 @@ fn decode_player_iframe(iframe_src: &str) -> Option<String> {
 fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
     use regex::Regex;
 
-    static SRC_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"src=["']([^"']+)["']"#).expect("valid src pattern")
-    });
+    static SRC_PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"src=["']([^"']+)["']"#).expect("valid src pattern"));
 
     SRC_PATTERN
         .captures_iter(tag_html)
@@ -769,9 +751,18 @@ fn parse_iso8601_duration(duration: &str) -> Option<f64> {
     });
 
     let caps = DURATION_PATTERN.captures(duration)?;
-    let hours: f64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-    let minutes: f64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-    let seconds: f64 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+    let hours: f64 = caps
+        .get(1)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
+    let minutes: f64 = caps
+        .get(2)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
+    let seconds: f64 = caps
+        .get(3)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
 
     let total = hours * 3600.0 + minutes * 60.0 + seconds;
     if total > 0.0 { Some(total) } else { None }

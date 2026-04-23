@@ -133,13 +133,10 @@ async fn fetch_embed(url: &str, ctx: &ExtractionContext) -> Result<String> {
 
     rdlp_core::check_http_response(&response)?;
 
-    response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read mydaddy.cc response: {e}"),
-            url: Some(url.to_string()),
-        })
+    response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read mydaddy.cc response: {e}"),
+        url: Some(url.to_string()),
+    })
 }
 
 /// Parse MP4 format URLs from the embed HTML.

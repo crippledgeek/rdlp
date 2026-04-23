@@ -298,13 +298,14 @@ impl InfoExtractor for NineAnimeExtractor {
             url: Some(url.to_string()),
         })?;
 
-        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!(
-                "Could not extract episode ID from URL: {url}. \
+        let episode_id =
+            patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
+                message: format!(
+                    "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
-            ),
-            url: Some(url.to_string()),
-        })?;
+                ),
+                url: Some(url.to_string()),
+            })?;
 
         let slug = patterns::extract_slug(url).unwrap_or_default();
 
@@ -373,13 +374,14 @@ impl InfoExtractor for NineAnimeExtractor {
     /// already available from playlist extraction). Only resolves Megacloud
     /// video sources and subtitles, avoiding Cloudflare rate-limiting.
     async fn extract_lazy(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        let episode_id = patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!(
-                "Could not extract episode ID from URL: {url}. \
+        let episode_id =
+            patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
+                message: format!(
+                    "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
-            ),
-            url: Some(url.to_string()),
-        })?;
+                ),
+                url: Some(url.to_string()),
+            })?;
 
         debug!(episode_id:%; "Lazily resolving 9anime episode formats");
 

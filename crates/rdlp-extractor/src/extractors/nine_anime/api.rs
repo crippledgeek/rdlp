@@ -80,13 +80,18 @@ static DATA_TYPE_ATTR: LazyLock<Regex> =
 /// Calls `/ajax/episode/servers?episodeId={episode_id}` and parses
 /// the HTML response for SUB and DUB server entries.
 pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<Vec<ServerEntry>> {
-    fetch_servers_impl(episode_id, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    fetch_servers_impl(episode_id, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
-async fn fetch_servers_impl(episode_id: &str, ctx: &ExtractionContext) -> anyhow::Result<Vec<ServerEntry>> {
+async fn fetch_servers_impl(
+    episode_id: &str,
+    ctx: &ExtractionContext,
+) -> anyhow::Result<Vec<ServerEntry>> {
     let url = format!("{BASE_URL}/ajax/episode/servers?episodeId={episode_id}");
     debug!(url:%; "Fetching 9anime servers");
 
@@ -199,10 +204,12 @@ pub fn sort_by_preference(servers: &mut [ServerEntry]) {
 ///
 /// Calls `/ajax/episode/sources?id={data_id}` and returns the embed URL.
 pub async fn fetch_source(data_id: &str, ctx: &ExtractionContext) -> Result<SourceResult> {
-    fetch_source_impl(data_id, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    fetch_source_impl(data_id, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
 async fn fetch_source_impl(data_id: &str, ctx: &ExtractionContext) -> anyhow::Result<SourceResult> {
@@ -225,13 +232,17 @@ async fn fetch_source_impl(data_id: &str, ctx: &ExtractionContext) -> anyhow::Re
 
     let embed_url = json["link"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("no 'link' field in 9anime source response for data_id={data_id}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no 'link' field in 9anime source response for data_id={data_id}")
+        })?
         .to_string();
 
     let server_id = json["server"].as_u64().unwrap_or(0) as u32;
 
     if embed_url.is_empty() {
-        return Err(anyhow::anyhow!("empty embed URL in 9anime source response for data_id={data_id}"));
+        return Err(anyhow::anyhow!(
+            "empty embed URL in 9anime source response for data_id={data_id}"
+        ));
     }
 
     debug!(embed_url:%, server_id; "Resolved 9anime source");

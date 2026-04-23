@@ -24,9 +24,9 @@ use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use crate::base::common::BaseExtractor;
 
 use self::detection::{
-    run_detection_pipeline, DetectedFormat, DetectionStrategy, PageContext, ext_from_url,
+    DetectedFormat, DetectionStrategy, PageContext, ext_from_url, run_detection_pipeline,
 };
-use self::direct::{prefetch, title_from_url, PrefetchResponse};
+use self::direct::{PrefetchResponse, prefetch, title_from_url};
 use self::json_ld::JsonLdStrategy;
 
 /// Maximum page size to parse (2 MB). Pages larger than this are truncated.
@@ -85,16 +85,20 @@ impl InfoExtractor for GenericExtractor {
         })?;
 
         let domain = parsed_url.host_str().unwrap_or("unknown");
-        log::info!("No site-specific extractor for {}, trying generic extraction", domain);
+        log::info!(
+            "No site-specific extractor for {}, trying generic extraction",
+            domain
+        );
 
         // === Phase 1: Prefetch (512 bytes) ===
         let prefetch_result = prefetch(url, ctx).await.ok();
 
         // Check for direct media URL
         if let Some(ref pf) = prefetch_result
-            && let Some(info) = try_direct_media(url, pf)? {
-                return Ok(info);
-            }
+            && let Some(info) = try_direct_media(url, pf)?
+        {
+            return Ok(info);
+        }
 
         // === Phase 2: Fetch full page ===
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
@@ -355,10 +359,7 @@ mod tests {
     #[test]
     fn content_type_to_ext_works() {
         assert_eq!(content_type_to_ext("video/mp4"), Some("mp4"));
-        assert_eq!(
-            content_type_to_ext("video/mp4; codecs=avc1"),
-            Some("mp4")
-        );
+        assert_eq!(content_type_to_ext("video/mp4; codecs=avc1"), Some("mp4"));
         assert_eq!(
             content_type_to_ext("application/vnd.apple.mpegurl"),
             Some("m3u8")

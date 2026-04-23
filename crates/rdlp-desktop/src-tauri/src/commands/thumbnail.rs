@@ -143,7 +143,9 @@ mod tests {
     #[test]
     fn test_derive_referer_xtits_cdn() {
         // i.xtits.com CDN requires www.xtits.com Referer (bare xtits.com → 403)
-        let referer = derive_referer("https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg");
+        let referer = derive_referer(
+            "https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg",
+        );
         assert_eq!(referer.as_deref(), Some("https://www.xtits.com"));
     }
 

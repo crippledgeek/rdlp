@@ -6,12 +6,12 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
-use std::sync::Arc;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
 };
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
@@ -140,22 +140,23 @@ impl Downloader for HttpDownloader {
             let url_string = url.to_string();
             let hdrs = self.headers();
 
-            let response =
-                with_retry(&self.config.retry_config, "HTTP GET (stdout)", || {
-                    let client = client.clone();
-                    let url = url_string.clone();
-                    let hdrs = hdrs.clone();
-                    async move {
-                        let response =
-                            client.get(&url).headers(hdrs).send().await.map_err(|e| {
-                                RdlpError::Network { message: format!("GET request failed: {e}"), url: Some(url.clone()) }
-                            })?;
+            let response = with_retry(&self.config.retry_config, "HTTP GET (stdout)", || {
+                let client = client.clone();
+                let url = url_string.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    let response = client.get(&url).headers(hdrs).send().await.map_err(|e| {
+                        RdlpError::Network {
+                            message: format!("GET request failed: {e}"),
+                            url: Some(url.clone()),
+                        }
+                    })?;
 
-                        check_http_response(&response)?;
-                        Ok(response)
-                    }
-                })
-                .await?;
+                    check_http_response(&response)?;
+                    Ok(response)
+                }
+            })
+            .await?;
 
             let total_size = response.content_length();
             let mut buf_writer = BufWriter::with_capacity(self.config.buffer_size, writer);
@@ -169,11 +170,13 @@ impl Downloader for HttpDownloader {
             while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
                 .await
                 .map_err(|_| RdlpError::Network {
-                    message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
+                message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
+                url: Some(url_string.clone()),
+            })? {
+                let chunk = chunk_result.map_err(|e| RdlpError::Network {
+                    message: format!("Failed to read chunk: {e}"),
                     url: Some(url_string.clone()),
-                })? {
-                let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Failed to read chunk: {e}"), url: Some(url_string.clone()) })?;
+                })?;
 
                 match buf_writer.write_all(&chunk).await {
                     Ok(()) => {}
@@ -257,7 +260,10 @@ impl Downloader for HttpDownloader {
                     .headers(hdrs)
                     .send()
                     .await
-                    .map_err(|e| RdlpError::Network { message: format!("HEAD request failed: {e}"), url: Some(url.clone()) })
+                    .map_err(|e| RdlpError::Network {
+                        message: format!("HEAD request failed: {e}"),
+                        url: Some(url.clone()),
+                    })
             }
         })
         .await?;

@@ -479,13 +479,21 @@ impl FFmpegRunner {
         }
 
         // Set per-stream encoder tag on video output stream
-        crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, video_ost_index, video_codec_name);
+        crate::ffmpeg::encoding_tag::set_stream_encoder(
+            &mut octx,
+            video_ost_index,
+            video_codec_name,
+        );
 
         // Set per-stream encoder tag on audio output stream (only if re-encoding)
         if let Some((_, _, _, audio_enc_ost_idx, _, _)) = audio_transcode_state.as_ref()
             && let Some(enc_name) = audio_encode_codec
         {
-            crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, *audio_enc_ost_idx, enc_name);
+            crate::ffmpeg::encoding_tag::set_stream_encoder(
+                &mut octx,
+                *audio_enc_ost_idx,
+                enc_name,
+            );
         }
 
         // Write header with options
@@ -509,9 +517,14 @@ impl FFmpegRunner {
             mut audio_transcode_filter,
             audio_transcode_input_rate,
         ) = match audio_transcode_state {
-            Some((dec, enc, enc_tb, idx, filter, rate)) => {
-                (Some(dec), Some(enc), Some(enc_tb), Some(idx), Some(filter), Some(rate))
-            }
+            Some((dec, enc, enc_tb, idx, filter, rate)) => (
+                Some(dec),
+                Some(enc),
+                Some(enc_tb),
+                Some(idx),
+                Some(filter),
+                Some(rate),
+            ),
             None => (None, None, None, None, None, None),
         };
 
@@ -587,7 +600,8 @@ impl FFmpegRunner {
                     audio_transcode_filter.as_mut(),
                     audio_transcode_input_rate,
                 ) {
-                    let input_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
+                    let input_tb =
+                        audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
                     // Audio transcode path: decode → filter (format convert + frame size) → encode → write
                     audio_dec.send_packet(&packet)?;
                     Self::drain_audio_transcode_filtered(

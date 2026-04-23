@@ -6,8 +6,7 @@
 use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, RdlpError, Result, SearchExtractor};
 use rdlp_types::{
-    SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
-    SearchResultPreview,
+    SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
@@ -212,6 +211,9 @@ mod tests {
     #[test]
     fn parse_results_finds_video_links() {
         let results = parse_results(FIXTURE);
-        assert!(!results.is_empty(), "Expected search results from tag page fixture");
+        assert!(
+            !results.is_empty(),
+            "Expected search results from tag page fixture"
+        );
     }
 }

@@ -551,12 +551,24 @@ mod tests {
     #[test]
     fn test_all_rdlp_error_variants_convert() {
         let variants: Vec<RdlpError> = vec![
-            RdlpError::Network { message: "a".into(), url: None },
-            RdlpError::Http { status: 500, reason: "b".into() },
-            RdlpError::Extraction { message: "c".into(), url: None },
+            RdlpError::Network {
+                message: "a".into(),
+                url: None,
+            },
+            RdlpError::Http {
+                status: 500,
+                reason: "b".into(),
+            },
+            RdlpError::Extraction {
+                message: "c".into(),
+                url: None,
+            },
             RdlpError::NoExtractor("d".into()),
             RdlpError::InvalidUrl("e".into()),
-            RdlpError::Download { message: "f".into(), url: None },
+            RdlpError::Download {
+                message: "f".into(),
+                url: None,
+            },
             RdlpError::PostProcess("g".into()),
             RdlpError::FFmpeg("h".into()),
             RdlpError::JavaScript("i".into()),

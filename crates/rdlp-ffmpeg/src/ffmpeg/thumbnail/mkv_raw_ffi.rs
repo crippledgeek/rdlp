@@ -295,7 +295,10 @@ impl FFmpegRunner {
             if let Some(tag) = encoding_tool_override {
                 crate::ffmpeg::encoding_tag::set_encoding_tool_ffi(ofmt_ctx, tag);
             } else {
-                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(ofmt_ctx, "thumbnail");
+                crate::ffmpeg::encoding_tag::set_encoding_tool_ffi_if_missing(
+                    ofmt_ctx,
+                    "thumbnail",
+                );
             }
 
             let ret = ffi::avformat_write_header(ofmt_ctx, ptr::null_mut());

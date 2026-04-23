@@ -1013,7 +1013,10 @@ mod async_tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let config = Config { verbose: false, ..Config::default() };
+        let config = Config {
+            verbose: false,
+            ..Config::default()
+        };
         ExtractionContext::new(
             Arc::new(client),
             Arc::new(NoOpJsEngine),

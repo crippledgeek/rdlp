@@ -182,13 +182,10 @@ async fn fetch_megacloud_key(ctx: &ExtractionContext) -> Result<String> {
             url: Some(KEYS_URL.to_string()),
         })?;
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| RdlpError::Extraction {
-            message: format!("Failed to parse megacloud keys: {e}"),
-            url: Some(KEYS_URL.to_string()),
-        })?;
+    let json: serde_json::Value = response.json().await.map_err(|e| RdlpError::Extraction {
+        message: format!("Failed to parse megacloud keys: {e}"),
+        url: Some(KEYS_URL.to_string()),
+    })?;
 
     let key = json["mega"].as_str().ok_or_else(|| RdlpError::Extraction {
         message: "No 'mega' field in megacloud keys response".to_string(),
@@ -244,13 +241,10 @@ async fn fetch_get_sources(
         })?;
 
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read getSources body: {e}"),
-            url: Some(url.to_string()),
-        })?;
+    let body = response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read getSources body: {e}"),
+        url: Some(url.to_string()),
+    })?;
 
     if !status.is_success() {
         return Err(RdlpError::Extraction {
@@ -281,9 +275,11 @@ fn parse_sources_response(
     client_key: Option<&str>,
     megacloud_key: Option<&str>,
 ) -> Result<MegacloudSources> {
-    parse_sources_response_impl(json, client_key, megacloud_key).map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
+    parse_sources_response_impl(json, client_key, megacloud_key).map_err(|e| {
+        RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        }
     })
 }
 

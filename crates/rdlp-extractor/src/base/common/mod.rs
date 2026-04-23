@@ -127,13 +127,10 @@ impl BaseExtractor {
 
         check_http_response(&response)?;
 
-        let webpage = response
-            .text()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to read response body: {e}"),
-                url: Some(url.to_string()),
-            })?;
+        let webpage = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read response body: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
         // Debug output if verbose
         if ctx.config.verbose {
@@ -180,23 +177,17 @@ impl BaseExtractor {
             request = request.header(*name, *value);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to fetch webpage: {e}"),
-                url: Some(url.to_string()),
-            })?;
+        let response = request.send().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to fetch webpage: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
         check_http_response(&response)?;
 
-        let webpage = response
-            .text()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to read response body: {e}"),
-                url: Some(url.to_string()),
-            })?;
+        let webpage = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read response body: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
         if ctx.config.verbose {
             crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);

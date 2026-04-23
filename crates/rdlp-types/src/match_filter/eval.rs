@@ -44,15 +44,16 @@ fn evaluate_comparison(op: ComparisonOp, actual: &Value, filter_val: &FilterValu
         // Numeric/string comparison operators
         ComparisonOp::Lt | ComparisonOp::Le | ComparisonOp::Gt | ComparisonOp::Ge => {
             if let Some(actual_num) = as_number(actual)
-                && let FilterValue::Number(filter_num) = filter_val {
-                    return match op {
-                        ComparisonOp::Lt => actual_num < *filter_num,
-                        ComparisonOp::Le => actual_num <= *filter_num,
-                        ComparisonOp::Gt => actual_num > *filter_num,
-                        ComparisonOp::Ge => actual_num >= *filter_num,
-                        _ => unreachable!(),
-                    };
-                }
+                && let FilterValue::Number(filter_num) = filter_val
+            {
+                return match op {
+                    ComparisonOp::Lt => actual_num < *filter_num,
+                    ComparisonOp::Le => actual_num <= *filter_num,
+                    ComparisonOp::Gt => actual_num > *filter_num,
+                    ComparisonOp::Ge => actual_num >= *filter_num,
+                    _ => unreachable!(),
+                };
+            }
             // String comparison fallback
             let actual_str = as_string(actual);
             let filter_str = filter_value_as_string(filter_val);

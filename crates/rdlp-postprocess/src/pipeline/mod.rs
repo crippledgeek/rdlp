@@ -15,8 +15,8 @@ use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use rdlp_core::PostProcessCallbackFactory;
-use rdlp_types::PostProcess;
 use rdlp_types::InfoDict;
+use rdlp_types::PostProcess;
 
 pub use registry::TempRegistry;
 pub use tracker::FileTracker;
@@ -145,11 +145,10 @@ impl Pipeline {
         verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
     ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-        let _permit = self
-            .concurrency
-            .acquire()
-            .await
-            .map_err(|_| anyhow::anyhow!("pipeline concurrency semaphore closed unexpectedly"))?;
+        let _permit =
+            self.concurrency.acquire().await.map_err(|_| {
+                anyhow::anyhow!("pipeline concurrency semaphore closed unexpectedly")
+            })?;
 
         let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
 
@@ -451,8 +450,11 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_passthrough() {
         let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb)
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
     }
@@ -460,16 +462,22 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_skip_stage() {
         let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb)
+            .await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_pipeline_fatal_error_cascades() {
         let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb)
+            .await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("test error"), "unexpected error: {err}");
@@ -481,8 +489,11 @@ mod tests {
             Arc::new(NonFatalFailStage),
             Arc::new(PassthroughStage),
         ]);
-        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-        let result = pipeline.run(info, files, config, stem, hls, verbose, cb).await;
+        let (info, files, config, stem, hls, verbose, cb) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -504,7 +515,9 @@ mod tests {
         let result: anyhow::Result<()> = Err(io_err).context("thumbnail stage failed");
         let err = result.unwrap_err();
         let root = err.root_cause();
-        let io = root.downcast_ref::<std::io::Error>().expect("should downcast to io::Error");
+        let io = root
+            .downcast_ref::<std::io::Error>()
+            .expect("should downcast to io::Error");
         assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
     }
 

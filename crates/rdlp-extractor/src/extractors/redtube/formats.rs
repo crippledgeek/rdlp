@@ -113,8 +113,8 @@ pub(crate) fn parse_api_video_response(json: &str) -> Result<ApiVideoMetadata> {
 }
 
 fn parse_api_video_response_impl(json: &str) -> anyhow::Result<ApiVideoMetadata> {
-    let response: ApiVideoInfoResponse = serde_json::from_str(json)
-        .context("failed to parse RedTube video API JSON response")?;
+    let response: ApiVideoInfoResponse =
+        serde_json::from_str(json).context("failed to parse RedTube video API JSON response")?;
 
     let video = response.video;
 

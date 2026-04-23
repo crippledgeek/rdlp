@@ -88,8 +88,7 @@ pub(super) fn run_analysis_decode_loop(
     let _log_suppress = LogSuppressGuard::new();
 
     for result in ictx.packets() {
-        let (stream, packet) = result
-            .ff_context("failed to read packet during analysis")?;
+        let (stream, packet) = result.ff_context("failed to read packet during analysis")?;
         if stream.index() != ist_index {
             continue;
         }

@@ -54,13 +54,18 @@ static COMMENT_KEY: LazyLock<Regex> =
 
 /// Fetch the v3 embed page and extract the client key.
 pub(super) async fn extract_client_key(source_id: &str, ctx: &ExtractionContext) -> Result<String> {
-    extract_client_key_impl(source_id, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    extract_client_key_impl(source_id, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
-async fn extract_client_key_impl(source_id: &str, ctx: &ExtractionContext) -> anyhow::Result<String> {
+async fn extract_client_key_impl(
+    source_id: &str,
+    ctx: &ExtractionContext,
+) -> anyhow::Result<String> {
     let url = format!("{MEGACLOUD_API}/embed-2/v3/e-1/{source_id}");
     let response = ctx
         .http_client
@@ -68,12 +73,13 @@ async fn extract_client_key_impl(source_id: &str, ctx: &ExtractionContext) -> an
         .header("Referer", "https://9animetv.to/")
         .send()
         .await
-        .with_context(|| format!("failed to fetch megacloud v3 embed page for source_id={source_id}"))?;
+        .with_context(|| {
+            format!("failed to fetch megacloud v3 embed page for source_id={source_id}")
+        })?;
 
-    let html = response
-        .text()
-        .await
-        .with_context(|| format!("failed to read megacloud v3 embed body for source_id={source_id}"))?;
+    let html = response.text().await.with_context(|| {
+        format!("failed to read megacloud v3 embed body for source_id={source_id}")
+    })?;
 
     parse_client_key(&html)
 }
@@ -85,23 +91,30 @@ pub(super) fn parse_client_key(html: &str) -> anyhow::Result<String> {
         .iter()
         .enumerate()
         .find_map(|(idx, pattern)| pattern.find(html).map(|m| (idx, m.as_str().to_string())))
-        .ok_or_else(|| anyhow::anyhow!("could not find megacloud client key in embed page (no pattern matched)"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not find megacloud client key in embed page (no pattern matched)"
+            )
+        })?;
 
     match pattern_idx {
         // Pattern 1: Comment -- key follows colon, no quotes
         1 => {
-            let key_match = COMMENT_KEY.find(&text)
-                .ok_or_else(|| anyhow::anyhow!("failed to extract megacloud client key from comment pattern"))?;
+            let key_match = COMMENT_KEY.find(&text).ok_or_else(|| {
+                anyhow::anyhow!("failed to extract megacloud client key from comment pattern")
+            })?;
             Ok(key_match.as_str().replace([':', ' '], ""))
         }
         // Pattern 2: 3-part _lk_db script -- assemble x+y+z
         2 => {
             let mut parts = Vec::new();
             for part_re in LK_DB_PARTS.iter() {
-                let part_match = part_re.find(&text)
-                    .ok_or_else(|| anyhow::anyhow!("failed to extract _lk_db key part from megacloud embed"))?;
-                let val = QUOTED_KEY.find(part_match.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("failed to extract quoted value from _lk_db megacloud key"))?;
+                let part_match = part_re.find(&text).ok_or_else(|| {
+                    anyhow::anyhow!("failed to extract _lk_db key part from megacloud embed")
+                })?;
+                let val = QUOTED_KEY.find(part_match.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("failed to extract quoted value from _lk_db megacloud key")
+                })?;
                 parts.push(val.as_str().replace('"', ""));
             }
             Ok(parts.join(""))

@@ -286,10 +286,8 @@ async fn async_main() -> Result<()> {
         if args.list_formats {
             for info in &infos {
                 let refs: Vec<&rdlp_api::Format> = info.formats.iter().collect();
-                let table = rdlp_table::render_formats_table(
-                    &refs,
-                    &rdlp_table::TableOpts::default(),
-                );
+                let table =
+                    rdlp_table::render_formats_table(&refs, &rdlp_table::TableOpts::default());
                 println!("{}", info.title);
                 println!("{table}");
             }

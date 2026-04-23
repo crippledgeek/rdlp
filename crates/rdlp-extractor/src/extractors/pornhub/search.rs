@@ -98,8 +98,8 @@ pub(crate) fn parse_api_search_results(json: &str) -> Result<Vec<SearchResultPre
 }
 
 fn parse_api_search_results_impl(json: &str) -> anyhow::Result<Vec<SearchResultPreview>> {
-    let response: ApiSearchResponse = serde_json::from_str(json)
-        .context("failed to parse PornHub API search response")?;
+    let response: ApiSearchResponse =
+        serde_json::from_str(json).context("failed to parse PornHub API search response")?;
 
     let results: Vec<SearchResultPreview> = response
         .videos

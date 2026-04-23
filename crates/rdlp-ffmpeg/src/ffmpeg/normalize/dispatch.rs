@@ -188,7 +188,10 @@ impl FFmpegRunner {
                 progress_fn,
             );
             if let Err(e) = std::fs::remove_file(&temp_audio) {
-                log::warn!("Failed to remove temp audio file {}: {e}", temp_audio.display());
+                log::warn!(
+                    "Failed to remove temp audio file {}: {e}",
+                    temp_audio.display()
+                );
             }
             merge_result
         } else if salvage {

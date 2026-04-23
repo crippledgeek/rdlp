@@ -77,11 +77,10 @@ impl XHamsterExtractor {
         let url = patterns::rewrite_mobile_url(url);
 
         // Extract video ID and display ID
-        let video_id = patterns::extract_video_id(&url)
-            .ok_or_else(|| RdlpError::Extraction {
-                message: format!("Could not extract video ID: {url}"),
-                url: Some(url.to_string()),
-            })?;
+        let video_id = patterns::extract_video_id(&url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("Could not extract video ID: {url}"),
+            url: Some(url.to_string()),
+        })?;
         let display_id = patterns::extract_display_id(&url);
 
         // Fetch the webpage

@@ -9,8 +9,8 @@ use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 use std::time::Duration;
 
-use super::search_patterns;
 use super::NineAnimeExtractor;
+use super::search_patterns;
 use crate::base::common::BaseExtractor;
 
 const BASE_URL: &str = "https://9animetv.to";
@@ -50,7 +50,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
                 thumbnail_url,
                 duration: None, // anime search doesn't show per-episode duration
                 uploader: None,
-                    actors: vec![],
+                actors: vec![],
                 view_count: None,
                 upload_date: None,
             }
@@ -151,8 +151,7 @@ impl SearchExtractor for NineAnimeExtractor {
         let page_results = parse_search_results(&webpage);
         let has_more = has_next_page(&webpage) && !page_results.is_empty();
         let total_pages = extract_total_pages(&webpage);
-        let total_estimate =
-            total_pages.map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
+        let total_estimate = total_pages.map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
 
         Ok(SearchPageResponse {
             results: page_results,

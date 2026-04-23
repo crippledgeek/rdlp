@@ -186,18 +186,19 @@ impl Orchestrator {
     ///
     /// Returns `None` if FFmpeg is not available (graceful degradation).
     fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
-        let ffmpeg =
-            match rdlp_ffmpeg::FFmpegRunner::with_location(config.postprocess.ffmpeg_location.as_deref()) {
-                Ok(f) => {
-                    debug!("FFmpeg initialized successfully");
-                    rdlp_ffmpeg::set_verbose(config.verbose);
-                    Arc::new(f)
-                }
-                Err(e) => {
-                    warn!("FFmpeg NOT found: {e}");
-                    return None;
-                }
-            };
+        let ffmpeg = match rdlp_ffmpeg::FFmpegRunner::with_location(
+            config.postprocess.ffmpeg_location.as_deref(),
+        ) {
+            Ok(f) => {
+                debug!("FFmpeg initialized successfully");
+                rdlp_ffmpeg::set_verbose(config.verbose);
+                Arc::new(f)
+            }
+            Err(e) => {
+                warn!("FFmpeg NOT found: {e}");
+                return None;
+            }
+        };
 
         // Stage order: 0→Merge 1→AudioExtract 2→Normalize 3→Remux 4→Recode 5→Subtitle 6→Metadata 7→Thumbnail 8→Fixup
         let stages: Vec<Arc<dyn rdlp_postprocess::pipeline::PipelineStage>> = vec![

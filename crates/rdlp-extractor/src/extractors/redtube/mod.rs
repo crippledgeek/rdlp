@@ -74,10 +74,14 @@ impl RedTubeExtractor {
         debug!("[RedTube] Fetching API video info: {api_url}");
 
         let response =
-            ctx.http_client.get(&api_url).send().await.map_err(|e| RdlpError::Network {
-                message: format!("Failed to fetch RedTube video API: {e}"),
-                url: Some(api_url.clone()),
-            })?;
+            ctx.http_client
+                .get(&api_url)
+                .send()
+                .await
+                .map_err(|e| RdlpError::Network {
+                    message: format!("Failed to fetch RedTube video API: {e}"),
+                    url: Some(api_url.clone()),
+                })?;
 
         rdlp_core::check_http_response(&response)?;
 
@@ -152,7 +156,10 @@ impl RedTubeExtractor {
     ) -> Result<InfoDict> {
         let (metadata, actors) = {
             let html = Html::parse_document(webpage);
-            (self.base.extract_metadata(&html)?, extract_performers(&html))
+            (
+                self.base.extract_metadata(&html)?,
+                extract_performers(&html),
+            )
         };
 
         let mut info = InfoDict::new(video_id, metadata.title, InfoExtractor::name(self), url);
@@ -404,13 +411,10 @@ impl RedTubeExtractor {
 
         rdlp_core::check_http_response(&response)?;
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to read search API response: {e}"),
-                url: Some(url.to_string()),
-            })?;
+        let body = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read search API response: {e}"),
+            url: Some(url.to_string()),
+        })?;
 
         search::parse_api_search_results(&body)
     }

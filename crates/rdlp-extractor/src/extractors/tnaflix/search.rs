@@ -137,7 +137,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             thumbnail_url,
             duration,
             uploader: None,
-                    actors: vec![],
+            actors: vec![],
             view_count,
             upload_date: None,
         });
@@ -762,8 +762,14 @@ mod tests {
     #[test]
     fn test_validate_filters_multiple_different_keys() {
         let filters = vec![
-            SearchFilter { key: "ordering".to_string(), value: "newest".to_string() },
-            SearchFilter { key: "category".to_string(), value: "teen-porn".to_string() },
+            SearchFilter {
+                key: "ordering".to_string(),
+                value: "newest".to_string(),
+            },
+            SearchFilter {
+                key: "category".to_string(),
+                value: "teen-porn".to_string(),
+            },
         ];
         assert!(validate_search_filters(&filters).is_ok());
     }

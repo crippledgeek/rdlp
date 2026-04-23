@@ -228,7 +228,10 @@ mod tests {
                 let attempts = counter.fetch_add(1, Ordering::SeqCst);
                 if attempts < 1 {
                     // Fail on first attempt
-                    Err(RdlpError::Network { message: "temporary failure".to_string(), url: None })
+                    Err(RdlpError::Network {
+                        message: "temporary failure".to_string(),
+                        url: None,
+                    })
                 } else {
                     // Succeed on second attempt
                     Ok(42)
@@ -263,7 +266,10 @@ mod tests {
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 // Always fail with retryable error
-                Err(RdlpError::Network { message: "persistent failure".to_string(), url: None })
+                Err(RdlpError::Network {
+                    message: "persistent failure".to_string(),
+                    url: None,
+                })
             }
         })
         .retry(config.to_backoff())
@@ -319,7 +325,10 @@ mod tests {
             let counter = counter_clone.clone();
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
-                Err(RdlpError::Network { message: "always fails".to_string(), url: None })
+                Err(RdlpError::Network {
+                    message: "always fails".to_string(),
+                    url: None,
+                })
             }
         })
         .retry(config.to_backoff())
@@ -349,7 +358,10 @@ mod tests {
                 let attempts = counter.fetch_add(1, Ordering::SeqCst);
                 if attempts < 2 {
                     // First two attempts: retryable error
-                    Err(RdlpError::Network { message: "timeout".to_string(), url: None })
+                    Err(RdlpError::Network {
+                        message: "timeout".to_string(),
+                        url: None,
+                    })
                 } else {
                     // Third attempt: permanent error
                     Err(RdlpError::Http {
