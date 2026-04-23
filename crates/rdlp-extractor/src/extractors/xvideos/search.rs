@@ -70,6 +70,10 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let title_sel = Selector::parse("p.title a").expect("static selector");
     let img_sel = Selector::parse("div.thumb-inside img").expect("static selector");
     let dur_sel = Selector::parse(".duration, span.duration").expect("static selector");
+    // Uploader / channel / profile link lives inside p.metadata on XVideos search pages.
+    let uploader_sel =
+        Selector::parse("p.metadata a[href^='/profiles/'] .name, p.metadata a[href^='/channels/'] .name, p.metadata a[href^='/amateur-channels/'] .name, p.metadata a[href^='/pornstar-channels/'] .name")
+            .expect("static selector");
 
     let mut results = Vec::new();
 
@@ -115,12 +119,19 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             parse_duration_text(text.trim())
         });
 
+        // Uploader from the first profile/channel link in p.metadata
+        let uploader = block
+            .select(&uploader_sel)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
+
         results.push(SearchResultPreview {
             video_url,
             title,
             thumbnail_url,
             duration,
-            uploader: None,
+            uploader,
             actors: vec![],
             view_count: None,
             upload_date: None,
