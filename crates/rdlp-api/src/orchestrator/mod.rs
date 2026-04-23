@@ -441,6 +441,7 @@ impl Orchestrator {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod download_plan_tests {
     use super::*;
     use rdlp_types::{DownloadProtocol, Format};

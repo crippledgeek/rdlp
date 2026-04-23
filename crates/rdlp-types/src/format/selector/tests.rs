@@ -4999,7 +4999,7 @@ mod negative_sort_3 {
 
     #[test]
     fn sort_source_uses_container() {
-        let mut f_none = make_format("none");
+        let f_none = make_format("none");
         // container is None
 
         let mut f_mp4 = make_format("mp4c");

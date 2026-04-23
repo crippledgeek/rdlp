@@ -812,6 +812,7 @@ impl FFmpegRunner {
     ///
     /// The counter is in sample units (1/sample_rate) and rescaled to the
     /// filter graph's input time_base via `Rescale::rescale`.
+    #[allow(clippy::too_many_arguments)]
     fn drain_audio_transcode_filtered(
         decoder: &mut ffmpeg_the_third::decoder::Audio,
         filter: &mut ffmpeg_the_third::filter::Graph,

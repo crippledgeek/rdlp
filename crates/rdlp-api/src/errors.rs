@@ -576,7 +576,7 @@ mod tests {
             RdlpError::Plugin("k".into()),
             RdlpError::FormatSelection("l".into()),
             RdlpError::Config("m".into()),
-            RdlpError::Io(std::io::Error::new(std::io::ErrorKind::Other, "n")),
+            RdlpError::Io(std::io::Error::other("n")),
             RdlpError::Unsupported("o".into()),
             RdlpError::Other("p".into()),
         ];
