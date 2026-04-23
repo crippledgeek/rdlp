@@ -4,8 +4,9 @@
 
 import { useState } from "react";
 import { Toolbar } from "@/components/ui/toolbar";
-import { ToggleButton } from "react-aria-components";
-import { setSelectedFormat } from "@/stores/uiStore";
+import { Checkbox, ToggleButton } from "react-aria-components";
+import { useStore } from "@tanstack/react-store";
+import { setSelectedFormat, setShowExpertFormats, uiStore } from "@/stores/uiStore";
 import { cn } from "@/lib/utils";
 import type { FormatInfo } from "@/types";
 
@@ -49,6 +50,13 @@ interface PresetToolbarProps {
 
 export function PresetToolbar({ formats }: PresetToolbarProps) {
     const [activePreset, setActivePreset] = useState<Preset>("best");
+    const showExpertFormats = useStore(uiStore, (s) => s.showExpertFormats);
+
+    // Count of video-only rows — used to decide whether the Expert toggle is
+    // even meaningful on this particular video (most sites expose zero).
+    const videoOnlyCount = formats.filter(
+        (f) => f.has_video && !f.has_audio,
+    ).length;
 
     function handlePreset(preset: Preset) {
         setActivePreset(preset);
@@ -78,6 +86,29 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
             </Toolbar>
 
             <div className="flex-1" />
+
+            {videoOnlyCount > 0 && (
+                <Checkbox
+                    isSelected={showExpertFormats}
+                    onChange={setShowExpertFormats}
+                    className="flex items-center gap-1.5 text-[10px] text-[#666666] hover:text-[#aaaaaa] cursor-pointer select-none"
+                    aria-label="Show video-only streams"
+                >
+                    {({ isSelected }) => (
+                        <>
+                            <span
+                                className={cn(
+                                    "inline-block w-[11px] h-[11px] rounded-[2px] border",
+                                    isSelected
+                                        ? "bg-[#4a9eff] border-[#4a9eff]"
+                                        : "bg-transparent border-[#444444]",
+                                )}
+                            />
+                            <span>Video-only streams ({videoOnlyCount})</span>
+                        </>
+                    )}
+                </Checkbox>
+            )}
 
             <span className="text-[10px] text-[#444444]">
                 {formats.length} {formats.length === 1 ? "format" : "formats"}

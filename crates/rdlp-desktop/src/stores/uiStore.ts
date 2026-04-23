@@ -14,6 +14,17 @@ export interface UiState {
     analyzeUrl: string | null;
     /** When viewing a single episode from a playlist, stores the playlist URL for back navigation. */
     playlistBackUrl: string | null;
+    /**
+     * Show video-only / advanced streams in the formats table.
+     *
+     * HLS renditions that declare a separate AUDIO group (e.g. AV1 variants
+     * on XHamster) are marked video-only by the extractor — downloading one
+     * by itself produces silent video. We hide that group by default so
+     * non-expert users don't pick a silent stream by mistake. Ticking this
+     * flag reveals it for users who want to combine video+audio streams
+     * manually (or via the backend's format-selection DSL).
+     */
+    showExpertFormats: boolean;
 }
 
 const initialState: UiState = {
@@ -25,6 +36,7 @@ const initialState: UiState = {
     commandPaletteOpen: false,
     analyzeUrl: null,
     playlistBackUrl: null,
+    showExpertFormats: false,
 };
 
 export const uiStore = new Store<UiState>(initialState);
@@ -67,4 +79,8 @@ export function setAnalyzeUrl(url: string | null): void {
         // Clear playlist back URL when navigating to a non-playlist context
         playlistBackUrl: url === null ? null : prev.playlistBackUrl,
     }));
+}
+
+export function setShowExpertFormats(value: boolean): void {
+    uiStore.setState((prev) => ({ ...prev, showExpertFormats: value }));
 }

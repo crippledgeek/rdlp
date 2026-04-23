@@ -40,6 +40,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
         { id: "quality", desc: true },
     ]);
     const selectedFormatId = useStore(uiStore, (s) => s.selectedFormatId);
+    const showExpertFormats = useStore(uiStore, (s) => s.showExpertFormats);
 
     const bestFormatId = useMemo(() => getBestFormatId(formats), [formats]);
 
@@ -79,7 +80,12 @@ export function FormatsTable({ formats }: FormatsTableProps) {
             result.push({ type: "header", label: "Video + Audio", count: videoAudio.length, key: "va" });
             videoAudio.forEach((row) => result.push({ type: "row", row }));
         }
-        if (videoOnly.length > 0) {
+        // Video Only rows are hidden by default. HLS variants that declare a
+        // separate AUDIO rendition group (e.g. AV1 on XHamster) arrive here
+        // as video-only — selecting one without merging an audio track would
+        // produce a silent download. Surface behind the Expert toggle for
+        // users who know to pair with an Audio Only stream manually.
+        if (videoOnly.length > 0 && showExpertFormats) {
             result.push({ type: "header", label: "Video Only", count: videoOnly.length, key: "vo" });
             videoOnly.forEach((row) => result.push({ type: "row", row }));
         }
@@ -88,7 +94,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
             audioOnly.forEach((row) => result.push({ type: "row", row }));
         }
         return result;
-    }, [videoAudio, videoOnly, audioOnly]);
+    }, [videoAudio, videoOnly, audioOnly, showExpertFormats]);
 
     const useVirtual = formats.length > 50;
 
