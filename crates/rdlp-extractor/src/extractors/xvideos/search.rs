@@ -109,14 +109,20 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 
         // Thumbnail: XVideos lazy-loads thumbs, so `src` is a placeholder
         // (`assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif`).
-        // The real URL lives in `data-src`. Fall back to `src` only if the
-        // data-src attribute isn't present (defensive).
+        // The real URL lives in `data-src`. Some cards use a `THUMBNUM`
+        // template placeholder in `data-src` that is replaced by XVideos'
+        // client-side JS (`xv.thumbs.prepareVideo(videoId)`) at render time
+        // — we substitute with `1` (the first-frame thumb, universally
+        // available). Falls back to `data-mzl` (mosaique listing image)
+        // if neither works, then `src` as last resort.
         let thumbnail_url = block.select(&img_sel).next().and_then(|img| {
-            img.value()
+            let attrs = img.value();
+            attrs
                 .attr("data-src")
-                .or_else(|| img.value().attr("src"))
+                .or_else(|| attrs.attr("data-mzl"))
+                .or_else(|| attrs.attr("src"))
                 .filter(|u| !u.contains("lightbox-blank"))
-                .map(String::from)
+                .map(|u| u.replace("THUMBNUM", "1"))
         });
 
         // Duration from .duration or span.duration
@@ -308,5 +314,53 @@ mod tests {
         assert_eq!(results[1].duration, Some(4800.0), "second item duration");
         // Third item: "45 min" -> 2700s
         assert_eq!(results[2].duration, Some(2700.0), "third item duration");
+    }
+
+    /// XVideos sometimes serves a `THUMBNUM` template placeholder in the
+    /// `data-src` attribute — meant to be filled in client-side by
+    /// `xv.thumbs.prepareVideo()`. Our parser must substitute it with a
+    /// concrete number (1) or the CDN returns 404. Regression test for
+    /// the bug where the Chase Taylor result in `?k=just+18` had no thumb.
+    #[test]
+    fn thumbnum_placeholder_is_substituted() {
+        let html = r#"
+        <div class="thumb-block"><div class="thumb-inside"><div class="thumb">
+          <a href="/video.abc123/test">
+            <img src="https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif"
+                 data-src="https://thumb-cdn77.xvideos-cdn.com/uuid/3/xv_THUMBNUM_t.jpg"
+                 data-mzl="https://thumb-cdn77.xvideos-cdn.com/uuid/3/mozaique_listing.jpg"/>
+          </a>
+        </div></div><div class="thumb-under"><p class="title"><a title="Test">Test</a></p></div></div>
+        "#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 1);
+        let thumb = results[0].thumbnail_url.as_deref().unwrap_or("");
+        assert!(
+            !thumb.contains("THUMBNUM"),
+            "THUMBNUM must be substituted; got: {thumb}"
+        );
+        assert!(
+            thumb.contains("xv_1_t.jpg"),
+            "expected xv_1_t.jpg, got: {thumb}"
+        );
+    }
+
+    /// The `src` attribute always holds the lazy-load placeholder
+    /// `lightbox-blank.gif`; the parser must never return that URL.
+    #[test]
+    fn never_returns_lightbox_placeholder() {
+        let html = r#"
+        <div class="thumb-block"><div class="thumb-inside"><div class="thumb">
+          <a href="/video.abc/test">
+            <img src="https://assets-cdn77.xvideos-cdn.com/img/lightbox/lightbox-blank.gif"/>
+          </a>
+        </div></div><div class="thumb-under"><p class="title"><a title="T">T</a></p></div></div>
+        "#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].thumbnail_url.is_none(),
+            "should not expose the lightbox-blank placeholder"
+        );
     }
 }
