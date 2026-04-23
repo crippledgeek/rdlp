@@ -1,11 +1,17 @@
 // Resilient thumbnail component with proxy fallback.
 //
-// Layer 1: Direct <img> with referrerPolicy="no-referrer".
-// Layer 2: On load failure, fetches via Rust proxy_thumbnail command
-//          which injects the correct Referer header for CDNs like CDN77.
-// Layer 3: Placeholder <div> if proxy also fails.
+// Strategy:
+//   - External HTTPS URLs are always routed through the Rust proxy_thumbnail
+//     command. WebKitGTK (Tauri's Linux webview) has race conditions with
+//     cross-origin <img> loads under the `referrerPolicy="no-referrer"` policy
+//     used to avoid leaking the app origin, especially with the DMA-BUF
+//     renderer disabled (required on NVIDIA proprietary drivers). Always
+//     proxying side-steps that WebKit quirk at the cost of one extra IPC
+//     round-trip per thumbnail.
+//   - Same-origin (blob:, data:, http://localhost) URLs are rendered directly.
+//   - If the proxy itself fails, show a placeholder.
 
-import { useState, useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -13,6 +19,22 @@ import { queryKeys } from "@/query/queryKeys";
 
 /** URLs known to fail direct load — skip straight to proxy on remount. */
 const directFailCache = new Set<string>();
+
+/** Returns true when the URL points at an external origin that should go
+ *  through the Rust proxy (HTTPS, non-localhost). */
+function shouldProxy(url: string): boolean {
+    if (url.startsWith("blob:") || url.startsWith("data:")) return false;
+    if (url.startsWith("http://")) return false; // dev assets, localhost
+    try {
+        const u = new URL(url);
+        if (u.protocol !== "https:") return false;
+        // Tauri asset: / localhost-style hosts — render direct
+        if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return false;
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Fetch a thumbnail via the Rust proxy, returning a Blob URL.
@@ -48,8 +70,15 @@ interface ThumbnailProps {
 
 /** Thumbnail with automatic proxy fallback for CDNs requiring Referer. */
 export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
-    // Check module-level cache so remounted components skip the direct attempt
-    const [directFailed, setDirectFailed] = useState(() => !!src && directFailCache.has(src));
+    // External HTTPS URLs always go through the proxy on WebKitGTK (see module
+    // header comment for rationale). Same-origin/local URLs try direct first,
+    // with proxy fallback on failure.
+    const useProxyFromStart = useMemo(() => !!src && shouldProxy(src), [src]);
+    const initialDirectFailed = useMemo(
+        () => useProxyFromStart || (!!src && directFailCache.has(src)),
+        [useProxyFromStart, src],
+    );
+    const [directFailed, setDirectFailed] = useState(initialDirectFailed);
     const { data: proxyUrl, isError: proxyFailed, isPending: proxyPending } = useProxyThumbnail(src, directFailed);
 
     // Ref callback: runs when the img element mounts or src changes.
@@ -94,7 +123,7 @@ export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
         return <img src={proxyUrl} alt={alt} className={className} loading="lazy" decoding={decoding} />;
     }
 
-    // Default: try direct load
+    // Default: try direct load (same-origin / local URLs)
     return (
         <img
             ref={imgRefCallback}

@@ -18,17 +18,43 @@ describe("Thumbnail", () => {
         clearInvokeHandlers();
     });
 
-    it("renders direct img with no-referrer policy", () => {
+    it("renders direct img with no-referrer policy for local URLs", () => {
+        // Same-origin / local URLs bypass the proxy and render directly.
         render(
-            <Thumbnail src="https://example.com/thumb.jpg" alt="test" className="w-16 h-9" />,
+            <Thumbnail src="http://localhost/thumb.jpg" alt="test" className="w-16 h-9" />,
             { wrapper: createWrapper() },
         );
         const img = screen.getByRole("img");
-        expect(img).toHaveAttribute("src", "https://example.com/thumb.jpg");
+        expect(img).toHaveAttribute("src", "http://localhost/thumb.jpg");
         expect(img).toHaveAttribute("referrerPolicy", "no-referrer");
         expect(img).toHaveAttribute("loading", "lazy");
         expect(img).toHaveAttribute("alt", "test");
         expect(img).toHaveClass("w-16", "h-9");
+    });
+
+    it("routes external HTTPS URLs straight through the Rust proxy", async () => {
+        // External HTTPS URLs skip the direct <img> attempt entirely because
+        // WebKitGTK has known issues with cross-origin loads under
+        // referrerPolicy=no-referrer on NVIDIA with DMA-BUF disabled.
+        const fakeImageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+        setInvokeHandler("proxy_thumbnail", () => fakeImageBytes);
+
+        const mockBlobUrl = "blob:http://tauri.localhost/proxy-first";
+        vi.spyOn(URL, "createObjectURL").mockReturnValue(mockBlobUrl);
+        vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+        render(
+            <Thumbnail src="https://cdn.example.com/thumb.jpg" alt="proxy-first" />,
+            { wrapper: createWrapper() },
+        );
+
+        // Directly renders via proxy (no intermediate direct <img> attempt).
+        await waitFor(() => {
+            const img = screen.getByRole("img");
+            expect(img).toHaveAttribute("src", mockBlobUrl);
+        });
+
+        vi.restoreAllMocks();
     });
 
     it("renders placeholder when src is null", () => {
@@ -51,30 +77,27 @@ describe("Thumbnail", () => {
         expect(container.firstElementChild?.tagName).toBe("DIV");
     });
 
-    it("falls back to proxy on direct load error", async () => {
+    it("falls back to proxy when a local direct load errors", async () => {
+        // Local/same-origin URLs still use the direct-then-fallback flow.
         const fakeImageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
         setInvokeHandler("proxy_thumbnail", () => fakeImageBytes);
 
-        // Spy on URL.createObjectURL / revokeObjectURL (preserves URL class)
         const mockBlobUrl = "blob:http://tauri.localhost/fake-uuid";
         vi.spyOn(URL, "createObjectURL").mockReturnValue(mockBlobUrl);
         vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
 
         render(
-            <Thumbnail src="https://cdn.example.com/thumb.jpg" alt="proxy test" />,
+            <Thumbnail src="http://localhost/thumb.jpg" alt="proxy test" />,
             { wrapper: createWrapper() },
         );
 
-        // Direct img renders first
         const directImg = screen.getByRole("img");
-        expect(directImg).toHaveAttribute("src", "https://cdn.example.com/thumb.jpg");
+        expect(directImg).toHaveAttribute("src", "http://localhost/thumb.jpg");
 
-        // Simulate direct load failure
         await act(async () => {
             fireEvent.error(directImg);
         });
 
-        // Wait for proxy query to resolve
         await waitFor(() => {
             const proxyImg = screen.getByRole("img");
             expect(proxyImg).toHaveAttribute("src", mockBlobUrl);
@@ -83,7 +106,7 @@ describe("Thumbnail", () => {
         vi.restoreAllMocks();
     });
 
-    it("shows placeholder when both direct and proxy fail", async () => {
+    it("shows placeholder when proxy fails for an external URL", async () => {
         setInvokeHandler("proxy_thumbnail", () => {
             throw new Error("Proxy failed");
         });
@@ -93,14 +116,8 @@ describe("Thumbnail", () => {
             { wrapper: createWrapper() },
         );
 
-        const directImg = screen.getByRole("img");
-
-        await act(async () => {
-            fireEvent.error(directImg);
-        });
-
-        // After direct fails, shows pulsing placeholder while proxy loads,
-        // then static placeholder when proxy also fails
+        // External URL → proxy is used straight away; when the proxy query
+        // fails, the placeholder appears without any prior direct <img>.
         await waitFor(() => {
             expect(screen.queryByRole("img")).toBeNull();
             const placeholder = container.firstElementChild;
@@ -122,11 +139,8 @@ describe("Thumbnail", () => {
             { wrapper: createWrapper() },
         );
 
-        // Trigger proxy path
-        await act(async () => {
-            fireEvent.error(screen.getByRole("img"));
-        });
-
+        // External URL → proxy used immediately, blob URL appears after the
+        // query resolves.
         await waitFor(() => {
             expect(screen.getByRole("img")).toHaveAttribute("src", mockBlobUrl);
         });

@@ -48,6 +48,13 @@ export const searchResultColumns = [
         size: 400,
         sortingFn: "text",
     }),
+    columnHelper.accessor("uploader", {
+        header: "Uploader",
+        size: 140,
+        sortingFn: "text",
+        sortUndefined: "last",
+        cell: ({ getValue }) => getValue() ?? "—",
+    }),
     columnHelper.accessor("duration", {
         header: "Duration",
         size: 80,
