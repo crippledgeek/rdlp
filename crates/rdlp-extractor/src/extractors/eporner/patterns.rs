@@ -18,9 +18,7 @@ mod tests {
 
     #[test]
     fn matches_video_path() {
-        assert!(VIDEO_URL.is_match(
-            "https://www.eporner.com/video-svXh0Ne27Ig/harleysummers/"
-        ));
+        assert!(VIDEO_URL.is_match("https://www.eporner.com/video-svXh0Ne27Ig/harleysummers/"));
     }
 
     #[test]
