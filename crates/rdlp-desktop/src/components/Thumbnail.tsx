@@ -11,7 +11,7 @@
 //   - Same-origin (blob:, data:, http://localhost) URLs are rendered directly.
 //   - If the proxy itself fails, show a placeholder.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
@@ -70,38 +70,49 @@ interface ThumbnailProps {
 
 /** Thumbnail with automatic proxy fallback for CDNs requiring Referer. */
 export function Thumbnail({ src, alt, className, decoding }: ThumbnailProps) {
-    // External HTTPS URLs always go through the proxy on WebKitGTK (see module
-    // header comment for rationale). Same-origin/local URLs try direct first,
-    // with proxy fallback on failure.
-    const useProxyFromStart = useMemo(() => !!src && shouldProxy(src), [src]);
-    const initialDirectFailed = useMemo(
-        () => useProxyFromStart || (!!src && directFailCache.has(src)),
-        [useProxyFromStart, src],
-    );
-    const [directFailed, setDirectFailed] = useState(initialDirectFailed);
+    // State tracks WHICH src was last observed as failing a direct load, not
+    // a bare boolean. Storing the URL instead of a flag means `directFailed`
+    // naturally becomes false when the parent passes a different `src`, so
+    // state does not leak across Thumbnail reuses (e.g. table sort / pagination).
+    // Equivalent to keying the component by src but avoids forcing parent change.
+    const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+    // Derived during render — no effects, no duplicated state.
+    const useProxyFromStart = !!src && shouldProxy(src);
+    const directFailed =
+        useProxyFromStart || (!!src && (failedSrc === src || directFailCache.has(src)));
+
     const { data: proxyUrl, isError: proxyFailed, isPending: proxyPending } = useProxyThumbnail(src, directFailed);
+
+    const markDirectFailed = useCallback(() => {
+        if (src) {
+            directFailCache.add(src);
+            setFailedSrc(src);
+        }
+    }, [src]);
 
     // Ref callback: runs when the img element mounts or src changes.
     // Handles the WebKitGTK race condition where img.complete is true before
     // React attaches onLoad/onError. No useEffect needed.
-    const imgRefCallback = useCallback((img: HTMLImageElement | null) => {
-        if (img && img.complete && img.naturalWidth === 0) {
-            if (src) directFailCache.add(src);
-            setDirectFailed(true);
-        }
-    }, [src]);
+    const imgRefCallback = useCallback(
+        (img: HTMLImageElement | null) => {
+            if (img && img.complete && img.naturalWidth === 0) {
+                markDirectFailed();
+            }
+        },
+        [markDirectFailed],
+    );
 
-    const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
-        if (e.currentTarget.naturalWidth === 0) {
-            if (src) directFailCache.add(src);
-            setDirectFailed(true);
-        }
-    }, [src]);
+    const handleLoad = useCallback(
+        (e: React.SyntheticEvent<HTMLImageElement>) => {
+            if (e.currentTarget.naturalWidth === 0) {
+                markDirectFailed();
+            }
+        },
+        [markDirectFailed],
+    );
 
-    const handleError = useCallback(() => {
-        if (src) directFailCache.add(src);
-        setDirectFailed(true);
-    }, [src]);
+    const handleError = useCallback(() => markDirectFailed(), [markDirectFailed]);
 
     // No source → placeholder
     if (!src) {
