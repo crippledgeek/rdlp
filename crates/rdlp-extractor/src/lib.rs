@@ -48,6 +48,7 @@ pub use extractors::{
 // Re-export base utilities for convenient access
 pub use base::common::BaseExtractor;
 pub use base::tnaflix_network::TnaFlixNetworkBase;
+pub use base::wgcz_network::WgczNetworkBase;
 
 use rdlp_core::{InfoExtractor, SearchExtractor};
 use std::sync::Arc;
