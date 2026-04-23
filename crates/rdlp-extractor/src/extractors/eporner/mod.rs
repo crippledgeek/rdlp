@@ -35,17 +35,15 @@ const EPORNER_ROOT: &str = "https://www.eporner.com";
 /// Regex that extracts the 32-char hex page hash from a script block.
 ///
 /// Matches both `hash = "…"` and `hash: "…"` variants and supports single quotes.
-static PAGE_HASH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"hash\s*[:=]\s*["']([0-9a-f]{32})"#).unwrap()
-});
+static PAGE_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"hash\s*[:=]\s*["']([0-9a-f]{32})"#).unwrap());
 
 /// Regex for `/dload/` download links.
 ///
 /// Captures: (1) relative path, (2) height digits.
 /// The `-av1` suffix is optional.
-static DLOAD_LINK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"href="(/dload/[^"]+?-(\d+)p(?:-av1)?\.mp4)""#).unwrap()
-});
+static DLOAD_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"href="(/dload/[^"]+?-(\d+)p(?:-av1)?\.mp4)""#).unwrap());
 
 // ============================================================================
 // EPornerExtractor struct
@@ -177,7 +175,9 @@ pub(crate) fn parse_dload_formats(page_url: &str, html: &str) -> Vec<Format> {
 /// `interactionType` object (which breaks the shared typed deserializer).
 ///
 /// Returns `(title, duration_iso, views, actors)`.
-pub(crate) fn parse_json_ld(html: &str) -> (Option<String>, Option<String>, Option<u64>, Vec<String>) {
+pub(crate) fn parse_json_ld(
+    html: &str,
+) -> (Option<String>, Option<String>, Option<u64>, Vec<String>) {
     use crate::base::common::JSONLD_SELECTOR;
 
     let document = Html::parse_document(html);
@@ -205,9 +205,7 @@ pub(crate) fn parse_json_ld(html: &str) -> (Option<String>, Option<String>, Opti
             .and_then(|a| a.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|a| {
-                        a.get("name").and_then(|n| n.as_str()).map(str::to_string)
-                    })
+                    .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(str::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -250,8 +248,7 @@ fn extract_watch_count(stat: &Value) -> Option<u64> {
             })
             .unwrap_or(false);
         if action_type_matches {
-            item.get("userInteractionCount")
-                .and_then(|c| c.as_u64())
+            item.get("userInteractionCount").and_then(|c| c.as_u64())
         } else {
             None
         }
@@ -282,7 +279,11 @@ async fn build_info(
     let title = title.unwrap_or_else(|| "Untitled".to_string());
 
     // --- Primary path: XHR ---
-    let xhr_formats = if let Some(raw_hash) = PAGE_HASH.captures(html).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()) {
+    let xhr_formats = if let Some(raw_hash) = PAGE_HASH
+        .captures(html)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+    {
         if let Some(computed_hash) = calc_hash(&raw_hash) {
             let url = xhr_url(id, &computed_hash);
             debug!("[eporner] XHR: {url}");
@@ -371,12 +372,13 @@ impl InfoExtractor for EPornerExtractor {
                 url: Some(url.to_string()),
             })?;
 
-        let html = BaseExtractor::fetch_webpage(url, ctx)
-            .await
-            .map_err(|e| RdlpError::Extraction {
-                message: format!("EPorner: page fetch failed: {e:#}"),
-                url: Some(url.to_string()),
-            })?;
+        let html =
+            BaseExtractor::fetch_webpage(url, ctx)
+                .await
+                .map_err(|e| RdlpError::Extraction {
+                    message: format!("EPorner: page fetch failed: {e:#}"),
+                    url: Some(url.to_string()),
+                })?;
 
         build_info(&id, url, &html, ctx).await.map_err(|e| match e {
             RdlpError::Extraction { .. } | RdlpError::Network { .. } | RdlpError::Http { .. } => e,
@@ -413,7 +415,10 @@ mod tests {
     fn parse_xhr_formats_finds_mp4() {
         let json: Value = serde_json::from_str(XHR_FIXTURE).expect("valid json");
         let formats = parse_xhr_formats(&json);
-        assert!(!formats.is_empty(), "Expected at least one format from XHR fixture");
+        assert!(
+            !formats.is_empty(),
+            "Expected at least one format from XHR fixture"
+        );
         // All should be mp4 or m3u8
         for f in &formats {
             assert!(
@@ -430,7 +435,10 @@ mod tests {
             "https://www.eporner.com/video-svXh0Ne27Ig/harleysummers/",
             PAGE_FIXTURE,
         );
-        assert!(!formats.is_empty(), "Expected /dload/ formats from page fixture");
+        assert!(
+            !formats.is_empty(),
+            "Expected /dload/ formats from page fixture"
+        );
         assert!(
             formats.iter().any(|f| f.height.is_some()),
             "Expected at least one format with a height"
