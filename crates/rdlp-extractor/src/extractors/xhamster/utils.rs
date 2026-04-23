@@ -421,20 +421,42 @@ mod tests {
 // Actor extraction
 // ============================================================================
 
+// Scoped to <main> so we only match pornstar links inside the video page
+// body (performer chips above the player + "in this video" side panel),
+// not the top-nav "Pornstars" mega-dropdown that lists popular performers
+// across the whole site. Without the main prefix, unrelated names from
+// nav.top-menu-container (e.g. "Mia Malkova" on a video she isn't in)
+// leak into actors.
+//
+// Secondary guard: `<main>` also excludes the sidebar nav on some layouts.
+// The video-page's performer chips live under `main.video-type-video`.
 static PORNSTAR_LINK_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+    scraper::Selector::parse(r#"main a[href*="/pornstars/"]"#).expect("valid selector")
+});
+
+/// Fallback selector for legacy-layout pages that do not wrap content in
+/// `<main>`. Same pattern as before this scoping fix.
+static PORNSTAR_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> = LazyLock::new(|| {
     scraper::Selector::parse(r#"a[href*="/pornstars/"]"#).expect("valid selector")
 });
 
 /// Extract pornstar/actor names from the video page HTML.
 ///
-/// Looks for `<a href="/pornstars/name">Name</a>` links in the video info
-/// section. Filters out navigation links ("By Countries", empty text).
+/// Prefers `<main>`-scoped selection. On older layouts that don't wrap
+/// content in `<main>`, falls back to the unscoped selector. Filters
+/// out navigation links ("By Countries", `#NNN` rank labels, duplicates).
 pub fn extract_actors(webpage: &str) -> Vec<String> {
     let html = Html::parse_document(webpage);
+    let has_main = html.select(&MAIN_SELECTOR).next().is_some();
+    let selector: &scraper::Selector = if has_main {
+        &PORNSTAR_LINK_SELECTOR
+    } else {
+        &PORNSTAR_LINK_SELECTOR_LEGACY
+    };
     let mut seen = std::collections::HashSet::new();
     let mut actors = Vec::new();
 
-    for link in html.select(&PORNSTAR_LINK_SELECTOR) {
+    for link in html.select(selector) {
         let name = link.text().collect::<String>();
         let name = name.trim().to_string();
 
@@ -453,37 +475,78 @@ pub fn extract_actors(webpage: &str) -> Vec<String> {
     actors
 }
 
+static MAIN_SELECTOR: LazyLock<scraper::Selector> =
+    LazyLock::new(|| scraper::Selector::parse("main").expect("valid selector"));
+
 #[cfg(test)]
 mod actor_tests {
     use super::*;
 
     #[test]
     fn extract_actors_from_html() {
-        let html = r#"<html><body>
+        let html = r#"<html><body><main>
             <a href="/pornstars/mia-malkova" class="item-50dd2">Mia Malkova</a>
             <a href="/pornstars/jodi-taylor" class="item-50dd2">Jodi Taylor</a>
             <a href="/pornstars/all/countries">By Countries</a>
             <a href="/pornstars/mia-malkova">Mia Malkova</a>
-        </body></html>"#;
+        </main></body></html>"#;
         let actors = extract_actors(html);
         assert_eq!(actors, vec!["Mia Malkova", "Jodi Taylor"]);
     }
 
     #[test]
     fn extract_actors_none() {
-        let html = r#"<html><body><p>No pornstar links here</p></body></html>"#;
+        let html = r#"<html><body><main><p>No pornstar links here</p></main></body></html>"#;
         let actors = extract_actors(html);
         assert!(actors.is_empty());
     }
 
     #[test]
     fn extract_actors_filters_navigation() {
-        let html = r#"<html><body>
+        let html = r#"<html><body><main>
             <a href="/pornstars/all/countries">By Countries</a>
             <a href="/pornstars/kelsi-monroe">#697</a>
             <a href="/pornstars/kelsi-monroe">Kelsi Monroe</a>
-        </body></html>"#;
+        </main></body></html>"#;
         let actors = extract_actors(html);
         assert_eq!(actors, vec!["Kelsi Monroe"]);
+    }
+
+    /// Regression: pornstar links inside the top-nav dropdown (outside of
+    /// <main>) must NOT be counted as actors. Without main-scoping,
+    /// "Mia Malkova" in nav.top-menu-container leaked into actors of
+    /// unrelated videos.
+    #[test]
+    fn excludes_pornstar_links_from_top_nav() {
+        let html = r#"<html><body>
+            <nav class="top-menu-container">
+              <ul class="dropdown"><li>
+                <a href="/pornstars/mia-malkova">Mia Malkova</a>
+              </li></ul>
+            </nav>
+            <main class="video-type-video">
+              <a href="/pornstars/irina-pavlova">Irina Pavlova</a>
+              <a href="/pornstars/milana-fox">Milana Fox</a>
+            </main>
+        </body></html>"#;
+        let actors = extract_actors(html);
+        assert_eq!(
+            actors,
+            vec!["Irina Pavlova", "Milana Fox"],
+            "nav dropdown pornstars must be excluded"
+        );
+    }
+
+    /// Legacy layouts without <main> fall back to the unscoped selector,
+    /// so pre-redesign pages still work (at the cost of the nav-scope
+    /// guard — acceptable because legacy pages typically don't render
+    /// the new top-nav dropdown either).
+    #[test]
+    fn falls_back_when_main_missing() {
+        let html = r#"<html><body><div class="video-info">
+            <a href="/pornstars/legacy-actor">Legacy Actor</a>
+        </div></body></html>"#;
+        let actors = extract_actors(html);
+        assert_eq!(actors, vec!["Legacy Actor"]);
     }
 }
