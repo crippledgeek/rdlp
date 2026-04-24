@@ -52,9 +52,7 @@ impl FixupIssue {
     pub fn is_repairable(&self) -> bool {
         matches!(
             self,
-            Self::StretchedVideo { .. }
-                | Self::MissingMoovAtom
-                | Self::ZeroDurationStream { .. }
+            Self::StretchedVideo { .. } | Self::MissingMoovAtom | Self::ZeroDurationStream { .. }
         )
     }
 }
@@ -67,7 +65,10 @@ impl std::fmt::Display for FixupIssue {
                 sar_num,
                 sar_den,
             } => {
-                write!(f, "stream {stream_index}: stretched SAR {sar_num}:{sar_den}")
+                write!(
+                    f,
+                    "stream {stream_index}: stretched SAR {sar_num}:{sar_den}"
+                )
             }
             Self::MissingMoovAtom => write!(f, "missing or misplaced moov atom (MP4)"),
             Self::ZeroDurationStream {
@@ -105,27 +106,26 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
         if stream.codec_type == "video"
             && let (Some(num), Some(den)) = (stream.sar_num, stream.sar_den)
         {
-                let is_broken = num == 0
-                    || den == 0
-                    || (num > 0
-                        && den > 0
-                        && (num as f64 / den as f64 > 10.0
-                            || den as f64 / num as f64 > 10.0));
+            let is_broken = num == 0
+                || den == 0
+                || (num > 0
+                    && den > 0
+                    && (num as f64 / den as f64 > 10.0 || den as f64 / num as f64 > 10.0));
 
-                if is_broken {
-                    issues.push(FixupIssue::StretchedVideo {
-                        stream_index: stream.index,
-                        sar_num: num,
-                        sar_den: den,
-                    });
-                }
+            if is_broken {
+                issues.push(FixupIssue::StretchedVideo {
+                    stream_index: stream.index,
+                    sar_num: num,
+                    sar_den: den,
+                });
+            }
         }
 
         // Zero-duration stream (video or audio)
         if matches!(stream.codec_type.as_str(), "video" | "audio") {
             let zero_dur = stream.duration.is_some_and(|d| d <= 0.0);
-            let zero_frames = stream.codec_type == "video"
-                && stream.nb_frames.is_some_and(|n| n == 0);
+            let zero_frames =
+                stream.codec_type == "video" && stream.nb_frames.is_some_and(|n| n == 0);
 
             if zero_dur || zero_frames {
                 issues.push(FixupIssue::ZeroDurationStream {
@@ -161,7 +161,9 @@ impl FFmpegRunner {
         issues: &[FixupIssue],
         encoding_tool_override: Option<String>,
     ) -> Result<()> {
-        let has_sar_fix = issues.iter().any(|i| matches!(i, FixupIssue::StretchedVideo { .. }));
+        let has_sar_fix = issues
+            .iter()
+            .any(|i| matches!(i, FixupIssue::StretchedVideo { .. }));
         let is_mp4 = input
             .as_ref()
             .extension()
@@ -234,17 +236,16 @@ impl FFmpegRunner {
 
                 // Fix SAR on video streams: set to 1:1 (square pixels)
                 if medium == ffmpeg_the_third::media::Type::Video
-                    && let Some(mut ost) = octx.stream_mut(ost_idx) {
-                        unsafe {
-                            let ost_ptr = ost.as_mut_ptr();
-                            (*ost_ptr).sample_aspect_ratio = ffmpeg_the_third::ffi::AVRational {
-                                num: 1,
-                                den: 1,
-                            };
-                            (*(*ost_ptr).codecpar).sample_aspect_ratio =
-                                ffmpeg_the_third::ffi::AVRational { num: 1, den: 1 };
-                        }
+                    && let Some(mut ost) = octx.stream_mut(ost_idx)
+                {
+                    unsafe {
+                        let ost_ptr = ost.as_mut_ptr();
+                        (*ost_ptr).sample_aspect_ratio =
+                            ffmpeg_the_third::ffi::AVRational { num: 1, den: 1 };
+                        (*(*ost_ptr).codecpar).sample_aspect_ratio =
+                            ffmpeg_the_third::ffi::AVRational { num: 1, den: 1 };
                     }
+                }
             }
 
             // Copy format-level metadata

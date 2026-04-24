@@ -146,7 +146,8 @@ impl FFmpegRunner {
             ist_time_bases[ist_index] = ist.time_base();
             ost_index += 1;
 
-            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")?;
+            let ost_idx =
+                Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -166,7 +167,9 @@ impl FFmpegRunner {
         // Add thumbnail as video stream with ATTACHED_PIC disposition
         let thumb_ost_index = Self::add_stream_copy(&mut octx, thumb_params, "for thumbnail")?;
         {
-            let mut thumb_ost = octx.stream_mut(thumb_ost_index).expect("just-added thumbnail stream");
+            let mut thumb_ost = octx
+                .stream_mut(thumb_ost_index)
+                .expect("just-added thumbnail stream");
             // SAFETY: thumb_ost is a valid output stream in a live output context.
             Self::set_attached_pic_disposition(unsafe { thumb_ost.as_mut_ptr() });
 

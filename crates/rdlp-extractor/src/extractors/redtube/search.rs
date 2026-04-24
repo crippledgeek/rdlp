@@ -92,10 +92,11 @@ where
 pub(crate) fn parse_api_search_results(
     json: &str,
 ) -> Result<(Vec<SearchResultPreview>, Option<u64>)> {
-    let response: ApiSearchResponse = serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
-        message: format!("Failed to parse RedTube API response: {e}"),
-        url: None,
-    })?;
+    let response: ApiSearchResponse =
+        serde_json::from_str(json).map_err(|e| RdlpError::Extraction {
+            message: format!("Failed to parse RedTube API response: {e}"),
+            url: None,
+        })?;
 
     let total_count = response.count;
     let results: Vec<SearchResultPreview> = response
@@ -133,7 +134,7 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         thumbnail_url: video.thumb,
         duration,
         uploader: None,
-                    actors: vec![],
+        actors: vec![],
         view_count,
         upload_date: video.publish_date,
     })
@@ -197,7 +198,7 @@ pub(crate) fn parse_html_search_results(html: &str) -> Result<Vec<SearchResultPr
             thumbnail_url: thumb,
             duration,
             uploader: None,
-                    actors: vec![],
+            actors: vec![],
             view_count: None,
             upload_date: None,
         });

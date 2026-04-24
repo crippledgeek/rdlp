@@ -36,30 +36,27 @@ pub async fn parse_empflix_ajax(
 
     check_http_response(&response)?;
 
-    let json_text = response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read AJAX response: {e}"),
-            url: Some(ajax_url.clone()),
-        })?;
+    let json_text = response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read AJAX response: {e}"),
+        url: Some(ajax_url.clone()),
+    })?;
 
     BaseExtractor::log_content_if_verbose(ctx, "EMPFlix", "AJAX Response", &json_text, 500);
 
     // Parse JSON to extract HTML field
-    let json: serde_json::Value = serde_json::from_str(&json_text)
-        .map_err(|e| RdlpError::Extraction {
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).map_err(|e| RdlpError::Extraction {
             message: format!("Failed to parse AJAX JSON: {e}"),
             url: Some(ajax_url.clone()),
         })?;
 
-    let html_str = json
-        .get("html")
-        .and_then(|h| h.as_str())
-        .ok_or_else(|| RdlpError::Extraction {
-            message: "No 'html' field in AJAX response".to_string(),
-            url: Some(ajax_url.clone()),
-        })?;
+    let html_str =
+        json.get("html")
+            .and_then(|h| h.as_str())
+            .ok_or_else(|| RdlpError::Extraction {
+                message: "No 'html' field in AJAX response".to_string(),
+                url: Some(ajax_url.clone()),
+            })?;
 
     // Parse the HTML to extract <source> tags using base
     let html = Html::parse_document(html_str);
@@ -99,13 +96,10 @@ pub async fn parse_moviefap_xml(
 
     check_http_response(&response)?;
 
-    let xml_text = response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read XML response: {e}"),
-            url: Some(cdn_url.to_string()),
-        })?;
+    let xml_text = response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read XML response: {e}"),
+        url: Some(cdn_url.to_string()),
+    })?;
 
     BaseExtractor::log_content_if_verbose(ctx, "MovieFap", "XML Response", &xml_text, 1000);
 

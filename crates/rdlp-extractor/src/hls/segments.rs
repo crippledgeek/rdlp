@@ -56,11 +56,10 @@ impl HlsSizeDetector {
         // Extract segment URLs
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
-                let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction {
-                        message: format!("Invalid base URL: {e}"),
-                        url: Some(m3u8_url.to_string()),
-                    })?;
+                let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
+                    message: format!("Invalid base URL: {e}"),
+                    url: Some(m3u8_url.to_string()),
+                })?;
 
                 let segments: Vec<String> = media
                     .segments
@@ -126,11 +125,10 @@ impl HlsSizeDetector {
                 }
 
                 // Resolve relative URL for media playlist
-                let base_url = url::Url::parse(m3u8_url)
-                    .map_err(|e| RdlpError::Extraction {
-                        message: format!("Invalid base URL: {e}"),
-                        url: Some(m3u8_url.to_string()),
-                    })?;
+                let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
+                    message: format!("Invalid base URL: {e}"),
+                    url: Some(m3u8_url.to_string()),
+                })?;
 
                 let media_playlist_url = base_url
                     .join(media_playlist_uri)
@@ -210,7 +208,10 @@ impl HlsSizeDetector {
 
         if !range_response.status().is_success() {
             return Err(RdlpError::Network {
-                message: format!("HTTP {} for segment: {segment_url}", range_response.status()),
+                message: format!(
+                    "HTTP {} for segment: {segment_url}",
+                    range_response.status()
+                ),
                 url: Some(segment_url.to_string()),
             });
         }

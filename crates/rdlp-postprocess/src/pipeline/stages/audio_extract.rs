@@ -168,8 +168,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::oneshot;
 
-    use rdlp_types::PostProcess;
     use rdlp_types::InfoDict;
+    use rdlp_types::PostProcess;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
 

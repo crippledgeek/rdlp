@@ -79,21 +79,26 @@ fn dedup_format_ids(formats: &mut [Format]) {
 
 /// Extract formats from flashvars JavaScript object
 async fn extract_from_flashvars(webpage: &str, ctx: &ExtractionContext) -> Result<Vec<Format>> {
-    extract_from_flashvars_impl(webpage, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    extract_from_flashvars_impl(webpage, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
-async fn extract_from_flashvars_impl(webpage: &str, ctx: &ExtractionContext) -> anyhow::Result<Vec<Format>> {
+async fn extract_from_flashvars_impl(
+    webpage: &str,
+    ctx: &ExtractionContext,
+) -> anyhow::Result<Vec<Format>> {
     let flashvars_json = FLASHVARS_PATTERN
         .captures(webpage)
         .and_then(|cap| cap.get(1))
         .map(|m| m.as_str())
         .ok_or_else(|| anyhow::anyhow!("no flashvars block found in PornHub page"))?;
 
-    let flashvars: Value = serde_json::from_str(flashvars_json)
-        .context("failed to parse PornHub flashvars JSON")?;
+    let flashvars: Value =
+        serde_json::from_str(flashvars_json).context("failed to parse PornHub flashvars JSON")?;
 
     let mut formats = Vec::new();
 
@@ -124,7 +129,9 @@ async fn extract_from_flashvars_impl(webpage: &str, ctx: &ExtractionContext) -> 
     }
 
     if formats.is_empty() {
-        return Err(anyhow::anyhow!("no formats found in PornHub mediaDefinitions"));
+        return Err(anyhow::anyhow!(
+            "no formats found in PornHub mediaDefinitions"
+        ));
     }
 
     Ok(formats)

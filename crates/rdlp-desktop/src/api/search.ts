@@ -30,8 +30,10 @@ export function filtersQueryOptions(site: string) {
 }
 
 /**
- * Infinite search query. `enabled: false` by default — must be triggered via `refetch()`.
- * The key includes query/site/filters so each unique combination gets its own cache entry.
+ * Infinite search query. Auto-fetches when `query` is non-empty; the key
+ * includes query/site/filters so each unique combination gets its own cache
+ * entry and TanStack Query handles refetching automatically when any of them
+ * changes. No manual `refetch()` Effect needed in consumers.
  * pageParam is managed internally by useInfiniteQuery.
  */
 export function searchInfiniteQueryOptions(
@@ -46,7 +48,7 @@ export function searchInfiniteQueryOptions(
         initialPageParam: 1,
         getNextPageParam: (lastPage) =>
             lastPage.has_more && lastPage.results.length > 0 ? lastPage.page + 1 : undefined,
-        enabled: false,
+        enabled: query.trim().length > 0,
         maxPages: 5,
     });
 }

@@ -349,8 +349,7 @@ pub async fn start_download(
                         job.status = JobStatus::Completed;
                         job.progress = Some(1.0);
                         job.completed_at = Some(chrono::Utc::now().timestamp());
-                        job.output_path =
-                            output_files.first().map(|p| p.display().to_string());
+                        job.output_path = output_files.first().map(|p| p.display().to_string());
                     }
                     Event::Failed { error, .. } => {
                         job.status = JobStatus::Failed;

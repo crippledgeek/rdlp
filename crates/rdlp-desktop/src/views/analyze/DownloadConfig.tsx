@@ -64,6 +64,11 @@ type DownloadConfigValues = z.infer<typeof downloadConfigSchema>;
 export function DownloadConfig() {
     const analyzeUrl = useStore(uiStore, (s) => s.analyzeUrl);
     const selectedFormatId = useStore(uiStore, (s) => s.selectedFormatId);
+    const selectedSelector = useStore(uiStore, (s) => s.selectedSelector);
+    // A selection exists when either a single format row is picked OR an
+    // auto-pair preset (which emits a DSL string) is active. The two fields
+    // are mutually exclusive per `uiStore` setters.
+    const hasSelection = selectedFormatId !== null || selectedSelector !== null;
 
     const { data: formatData } = useQuery(formatsQueryOptions(analyzeUrl));
     const { data: settings } = useQuery(settingsQueryOptions());
@@ -84,7 +89,12 @@ export function DownloadConfig() {
             verboseMode: false as boolean,
         } satisfies DownloadConfigValues,
         onSubmit: async ({ value }) => {
-            if (!analyzeUrl || !selectedFormatId) return;
+            if (!analyzeUrl || !hasSelection) return;
+            // Selector override wins if present (e.g. the "Best" preset
+            // resolved to `bv*+ba/best`); otherwise send the single
+            // `format_id` the user picked from the formats table.
+            const formatArg = selectedSelector ?? selectedFormatId;
+            if (!formatArg) return;
 
             const codecInfo = CODEC_MAP[value.recodeCodec];
             const isExpertEncoder = value.recodeCodec !== "" && !codecInfo;
@@ -93,7 +103,7 @@ export function DownloadConfig() {
 
             try {
                 await startDownload(analyzeUrl, {
-                    format: selectedFormatId,
+                    format: formatArg,
                     outputDir: value.outputPath || settings?.output_dir || null,
                     subtitles: false,
                     subtitleLangs: [],
@@ -161,6 +171,18 @@ export function DownloadConfig() {
         (f) => f.format_id === selectedFormatId,
     );
 
+    // Preview rows that the auto-pair selector will pick. Used to render a
+    // helpful summary when `selectedSelector` is active (no single format
+    // row is highlighted in that mode).
+    const autoPairPreview = selectedSelector
+        ? {
+              video: [...formatData.formats]
+                  .filter((f) => f.has_video && !f.has_audio)
+                  .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0] ?? null,
+              audio: formatData.formats.find((f) => !f.has_video && f.has_audio) ?? null,
+          }
+        : null;
+
     return (
         <form
             className="flex flex-col h-full overflow-y-auto gap-0"
@@ -193,6 +215,35 @@ export function DownloadConfig() {
                                 <span>{formatFileSize(selectedFormat.filesize)}</span>
                             )}
                         </div>
+                    </div>
+                ) : selectedSelector ? (
+                    <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <StreamBadge value="AUTO PAIR" category="protocol" />
+                            {autoPairPreview?.video?.height && (
+                                <StreamBadge
+                                    value={`${autoPairPreview.video.height}p`}
+                                    category="resolution"
+                                />
+                            )}
+                            {autoPairPreview?.video?.vcodec &&
+                                autoPairPreview.video.vcodec !== "none" && (
+                                    <StreamBadge
+                                        value={autoPairPreview.video.vcodec}
+                                        category="codec"
+                                    />
+                                )}
+                            {autoPairPreview?.audio?.acodec &&
+                                autoPairPreview.audio.acodec !== "none" && (
+                                    <StreamBadge
+                                        value={autoPairPreview.audio.acodec}
+                                        category="codec"
+                                    />
+                                )}
+                        </div>
+                        <p className="text-[11px] text-[#666666]">
+                            Best video + best audio, merged via FFmpeg.
+                        </p>
                     </div>
                 ) : (
                     <p className="text-[11px] text-[#444444]">No format selected</p>
@@ -480,10 +531,10 @@ export function DownloadConfig() {
             <section className="p-3 border-t border-[#1a1a2e]">
                 <button
                     type="submit"
-                    disabled={!selectedFormatId || isSubmitting}
+                    disabled={!hasSelection || isSubmitting}
                     className={cn(
                         "w-full flex items-center justify-center gap-2 py-2 rounded-[6px] text-[13px] font-medium transition-colors",
-                        selectedFormatId && !isSubmitting
+                        hasSelection && !isSubmitting
                             ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0]"
                             : "bg-[#1a2a4a] text-[#444444] cursor-not-allowed",
                     )}

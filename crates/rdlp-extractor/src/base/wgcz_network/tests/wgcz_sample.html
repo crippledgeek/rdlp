@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>Sample WGCZ Video</title></head>
+<body>
+<script type="application/ld+json">
+{"@context":"http://schema.org","@type":"VideoObject","name":"Example Video Title","duration":"PT00H05M00S","uploadDate":"2026-04-01T12:00:00+00:00","thumbnailUrl":"https://thumb.example/xv_13_t.jpg","contentUrl":"https://mp4.example/uuid/3/mp4_sd.mp4","interactionStatistic":{"@type":"InteractionCounter","interactionType":"https://schema.org/WatchAction","userInteractionCount":12345}}
+</script>
+<script>
+  html5player.setVideoHLS('https://hls.example/TOK,123/uuid/3/hls.m3u8');
+  html5player.setVideoUrlLow('https://mp4.example/uuid/3/mp4_sd.mp4?secure=SIG,123');
+  html5player.setVideoUrlHigh('https://mp4.example/uuid/3/mp4_hd.mp4?secure=SIG,123');
+  html5player.setVideoTitle('Example Video Title');
+  html5player.setThumbUrl('https://thumb.example/xv_13_t.jpg');
+  html5player.setUploaderName('TestUploader');
+</script>
+</body></html>

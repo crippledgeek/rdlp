@@ -166,8 +166,7 @@ pub(crate) async fn build_formats(
     // Parallel filesize detection — reuses the shared HLS module helper
     // which runs HEAD requests concurrently. HLS flags are discarded
     // since TNAFlix network formats are all direct HTTPS.
-    let (mut formats, _hls_flags) =
-        crate::hls::detect_format_sizes(formats, ctx, "TNAFlix").await;
+    let (mut formats, _hls_flags) = crate::hls::detect_format_sizes(formats, ctx, "TNAFlix").await;
 
     BaseExtractor::dedup_format_ids(&mut formats);
     formats

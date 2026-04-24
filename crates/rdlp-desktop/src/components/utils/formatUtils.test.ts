@@ -28,6 +28,7 @@ function makeFormat(overrides: Partial<FormatInfo> = {}): FormatInfo {
         protocol: "https",
         has_video: true,
         has_audio: true,
+        audio_group_id: null,
         ...overrides,
     };
 }

@@ -308,8 +308,8 @@ impl FFmpegRunner {
         let mut last_progress = Instant::now();
         let progress_throttle = Duration::from_millis(100);
         for result in ictx.packets() {
-            let (stream, packet) = result
-                .ff_context("failed to read packet during audio encode")?;
+            let (stream, packet) =
+                result.ff_context("failed to read packet during audio encode")?;
             if stream.index() != audio_ist_index {
                 continue;
             }

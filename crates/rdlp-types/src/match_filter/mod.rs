@@ -115,7 +115,7 @@ impl MatchFilter {
     /// Evaluate against a JSON value (InfoDict serialized as JSON).
     ///
     /// Returns `true` if the filter passes (video should be downloaded).
-    #[must_use] 
+    #[must_use]
     pub fn evaluate(&self, value: &serde_json::Value) -> bool {
         self.conditions
             .iter()
@@ -123,7 +123,7 @@ impl MatchFilter {
     }
 
     /// Evaluate against an InfoDict by serializing to JSON first.
-    #[must_use] 
+    #[must_use]
     pub fn evaluate_info(&self, info: &crate::InfoDict) -> bool {
         match serde_json::to_value(info) {
             Ok(value) => self.evaluate(&value),

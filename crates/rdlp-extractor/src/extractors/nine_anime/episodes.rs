@@ -3,8 +3,8 @@
 //! Handles fetching and parsing the episode list from the AJAX API,
 //! including individual episode info lookup and full episode list parsing.
 
-use anyhow::Context as _;
 use crate::utils::decode_html_entities;
+use anyhow::Context as _;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use regex::Regex;
@@ -60,10 +60,12 @@ pub async fn fetch_episode_info(
     episode_data_id: &str,
     ctx: &ExtractionContext,
 ) -> Result<Option<EpisodeInfo>> {
-    fetch_episode_info_impl(anime_id, episode_data_id, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    fetch_episode_info_impl(anime_id, episode_data_id, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
 async fn fetch_episode_info_impl(
@@ -83,10 +85,9 @@ async fn fetch_episode_info_impl(
         .await
         .with_context(|| format!("failed to fetch 9anime episode list for anime_id={anime_id}"))?;
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .with_context(|| format!("failed to parse 9anime episode list JSON for anime_id={anime_id}"))?;
+    let json: serde_json::Value = response.json().await.with_context(|| {
+        format!("failed to parse 9anime episode list JSON for anime_id={anime_id}")
+    })?;
 
     let html = json["html"].as_str().unwrap_or_default();
 
@@ -158,10 +159,12 @@ pub async fn fetch_all_episodes(
     anime_id: &str,
     ctx: &ExtractionContext,
 ) -> Result<Vec<EpisodeListEntry>> {
-    fetch_all_episodes_impl(anime_id, ctx).await.map_err(|e| RdlpError::Extraction {
-        message: format!("{e:#}"),
-        url: None,
-    })
+    fetch_all_episodes_impl(anime_id, ctx)
+        .await
+        .map_err(|e| RdlpError::Extraction {
+            message: format!("{e:#}"),
+            url: None,
+        })
 }
 
 async fn fetch_all_episodes_impl(
@@ -178,12 +181,13 @@ async fn fetch_all_episodes_impl(
         .header("X-Requested-With", "XMLHttpRequest")
         .send()
         .await
-        .with_context(|| format!("failed to fetch 9anime full episode list for anime_id={anime_id}"))?;
+        .with_context(|| {
+            format!("failed to fetch 9anime full episode list for anime_id={anime_id}")
+        })?;
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .with_context(|| format!("failed to parse 9anime episode list JSON for anime_id={anime_id}"))?;
+    let json: serde_json::Value = response.json().await.with_context(|| {
+        format!("failed to parse 9anime episode list JSON for anime_id={anime_id}")
+    })?;
 
     let html = json["html"].as_str().unwrap_or_default();
     let episodes = parse_all_episodes(html);

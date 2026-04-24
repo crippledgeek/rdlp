@@ -40,7 +40,10 @@ fn test_postprocess_none_preserves_extract_audio() {
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
     assert!(config.postprocess.extract_audio);
-    assert_eq!(config.postprocess.audio_format, Some(rdlp_types::AudioFormat::Mp3));
+    assert_eq!(
+        config.postprocess.audio_format,
+        Some(rdlp_types::AudioFormat::Mp3)
+    );
 }
 
 #[test]
@@ -54,7 +57,10 @@ fn test_postprocess_some_overrides_extract_audio() {
     };
     opts.merge_into(&mut config);
     assert!(config.postprocess.extract_audio);
-    assert_eq!(config.postprocess.audio_format, Some(rdlp_types::AudioFormat::Aac));
+    assert_eq!(
+        config.postprocess.audio_format,
+        Some(rdlp_types::AudioFormat::Aac)
+    );
 }
 
 #[test]
@@ -193,7 +199,10 @@ fn test_postprocess_none_preserves_loudnorm_preset() {
     config.postprocess.loudnorm_preset = Some("broadcast".into());
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.postprocess.loudnorm_preset.as_deref(), Some("broadcast"));
+    assert_eq!(
+        config.postprocess.loudnorm_preset.as_deref(),
+        Some("broadcast")
+    );
 }
 
 #[test]
@@ -205,7 +214,10 @@ fn test_postprocess_some_overrides_loudnorm_preset() {
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.postprocess.loudnorm_preset.as_deref(), Some("streaming"));
+    assert_eq!(
+        config.postprocess.loudnorm_preset.as_deref(),
+        Some("streaming")
+    );
 }
 
 #[test]
@@ -361,7 +373,10 @@ fn test_postprocess_none_preserves_recode_video() {
     config.postprocess.recode_video = Some(rdlp_types::ContainerFormat::Mkv);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
-    assert_eq!(config.postprocess.recode_video, Some(rdlp_types::ContainerFormat::Mkv));
+    assert_eq!(
+        config.postprocess.recode_video,
+        Some(rdlp_types::ContainerFormat::Mkv)
+    );
 }
 
 #[test]
@@ -373,7 +388,10 @@ fn test_postprocess_some_overrides_recode_video() {
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
-    assert_eq!(config.postprocess.recode_video, Some(rdlp_types::ContainerFormat::Mp4));
+    assert_eq!(
+        config.postprocess.recode_video,
+        Some(rdlp_types::ContainerFormat::Mp4)
+    );
 }
 
 // --- NetworkOptions ---

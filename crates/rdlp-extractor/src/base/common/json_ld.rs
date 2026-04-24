@@ -123,7 +123,9 @@ impl JsonLdThumbnail {
     pub fn first_url(&self) -> Option<&str> {
         match self {
             JsonLdThumbnail::Single(url) if !url.is_empty() => Some(url.as_str()),
-            JsonLdThumbnail::Multiple(urls) => urls.iter().find(|u| !u.is_empty()).map(|s| s.as_str()),
+            JsonLdThumbnail::Multiple(urls) => {
+                urls.iter().find(|u| !u.is_empty()).map(|s| s.as_str())
+            }
             JsonLdThumbnail::Object(obj) => obj.url.as_deref().filter(|u| !u.is_empty()),
             _ => None,
         }
@@ -259,9 +261,7 @@ pub(crate) fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_types
         let urls: Vec<&str> = match thumb {
             JsonLdThumbnail::Single(url) => vec![url.as_str()],
             JsonLdThumbnail::Multiple(urls) => urls.iter().map(|s| s.as_str()).collect(),
-            JsonLdThumbnail::Object(obj) => {
-                obj.url.as_deref().map(|u| vec![u]).unwrap_or_default()
-            }
+            JsonLdThumbnail::Object(obj) => obj.url.as_deref().map(|u| vec![u]).unwrap_or_default(),
         };
 
         urls.iter()
@@ -336,9 +336,18 @@ pub(crate) fn parse_iso8601_duration(duration: &str) -> Option<f64> {
     use super::selectors::ISO8601_DURATION_PATTERN;
 
     let caps = ISO8601_DURATION_PATTERN.captures(duration)?;
-    let hours: f64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-    let minutes: f64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-    let seconds: f64 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+    let hours: f64 = caps
+        .get(1)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
+    let minutes: f64 = caps
+        .get(2)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
+    let seconds: f64 = caps
+        .get(3)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0.0);
 
     let total = hours * 3600.0 + minutes * 60.0 + seconds;
     if total > 0.0 { Some(total) } else { None }
@@ -356,7 +365,10 @@ mod tests {
         let html = Html::parse_document(html_str);
         let video = extract_json_ld(&html).unwrap();
         assert_eq!(video.name.as_deref(), Some("Test"));
-        assert_eq!(video.content_url.as_deref(), Some("https://cdn.example.com/v.mp4"));
+        assert_eq!(
+            video.content_url.as_deref(),
+            Some("https://cdn.example.com/v.mp4")
+        );
     }
 
     #[test]

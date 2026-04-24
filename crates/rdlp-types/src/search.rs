@@ -135,7 +135,7 @@ mod tests {
             thumbnail_url: Some("https://thumb.jpg".to_string()),
             duration: Some(120.0),
             uploader: None,
-                    actors: vec![],
+            actors: vec![],
             view_count: Some(1000),
             upload_date: None,
         };

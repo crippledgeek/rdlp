@@ -40,14 +40,16 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    EMPFlixSearchExtractor, GenericExtractor, HQPornerExtractor, KoreanPornMovieExtractor,
-    MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor, RedTubeExtractor,
-    TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor, XTitsExtractor,
+    EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
+    KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
+    RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor,
+    XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access
 pub use base::common::BaseExtractor;
 pub use base::tnaflix_network::TnaFlixNetworkBase;
+pub use base::wgcz_network::WgczNetworkBase;
 
 use rdlp_core::{InfoExtractor, SearchExtractor};
 use std::sync::Arc;
@@ -112,6 +114,13 @@ impl ExtractorRegistry {
         // Register KoreanPornMovie extractor
         registry.register(Arc::new(KoreanPornMovieExtractor::new()));
 
+        // Register WGCZ network extractors (XVideos, XNXX)
+        registry.register(Arc::new(XVideosExtractor::new()));
+        registry.register(Arc::new(XNXXExtractor::new()));
+
+        // Register EPorner extractor
+        registry.register(Arc::new(EPornerExtractor::new()));
+
         // Register Generic fallback extractor (MUST be last — lowest priority)
         registry.register(Arc::new(GenericExtractor::new()));
 
@@ -146,6 +155,15 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(KoreanPornMovieExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(XVideosExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(XNXXExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(EPornerExtractor::new()));
 
         registry
     }
@@ -241,6 +259,55 @@ impl ExtractorRegistryTrait for ExtractorRegistry {
 
     fn list_search_extractors(&self) -> Vec<&str> {
         self.list_search_extractors()
+    }
+}
+
+#[cfg(test)]
+mod registry_c4a_tests {
+    use super::*;
+
+    #[test]
+    fn registers_all_c4a_extractors() {
+        let reg = ExtractorRegistry::new();
+        let names = reg.list_extractors();
+        for expected in ["xvideos", "xnxx", "eporner"] {
+            assert!(
+                names.iter().any(|n| n.eq_ignore_ascii_case(expected)),
+                "expected {expected} in list_extractors, got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn registers_all_c4a_search_extractors() {
+        let reg = ExtractorRegistry::new();
+        let names = reg.list_search_extractors();
+        for expected in ["xvideos", "xnxx", "eporner"] {
+            assert!(
+                names.iter().any(|n| n.eq_ignore_ascii_case(expected)),
+                "expected {expected} in search extractors, got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_extractor_by_url_returns_correct_impl() {
+        let reg = ExtractorRegistry::new();
+        assert_eq!(
+            reg.find_extractor("https://www.xvideos.com/video.ooumovia9b7/")
+                .map(|e| e.name().to_string()),
+            Some("XVideos".to_string())
+        );
+        assert_eq!(
+            reg.find_extractor("https://www.xnxx.com/video-14cco143/slug")
+                .map(|e| e.name().to_string()),
+            Some("XNXX".to_string())
+        );
+        assert_eq!(
+            reg.find_extractor("https://www.eporner.com/video-svXh0Ne27Ig/slug/")
+                .map(|e| e.name().to_string()),
+            Some("EPorner".to_string())
+        );
     }
 }
 

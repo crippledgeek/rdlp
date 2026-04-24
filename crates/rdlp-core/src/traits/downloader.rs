@@ -238,7 +238,11 @@ impl DownloadProgress {
             };
             let remaining_bytes = remaining_segments * avg_segment_size;
             let secs = remaining_bytes as f64 / speed;
-            if secs <= 86_400.0 { Some(Duration::from_secs_f64(secs)) } else { None }
+            if secs <= 86_400.0 {
+                Some(Duration::from_secs_f64(secs))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -284,7 +288,11 @@ impl DownloadProgress {
             };
             let estimated_remaining_bytes = (bytes_downloaded as f64 * duration_ratio) as u64;
             let secs = estimated_remaining_bytes as f64 / speed;
-            if secs <= 86_400.0 { Some(Duration::from_secs_f64(secs)) } else { None }
+            if secs <= 86_400.0 {
+                Some(Duration::from_secs_f64(secs))
+            } else {
+                None
+            }
         } else {
             None
         };

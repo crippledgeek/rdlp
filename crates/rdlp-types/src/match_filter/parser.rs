@@ -30,8 +30,8 @@ pub(super) fn parse_filter(input: &str) -> Result<Vec<Condition>, String> {
         if trimmed.is_empty() {
             continue;
         }
-        let condition = parse_condition(trimmed)
-            .map_err(|e| format!("in condition '{}': {}", trimmed, e))?;
+        let condition =
+            parse_condition(trimmed).map_err(|e| format!("in condition '{}': {}", trimmed, e))?;
         conditions.push(condition);
     }
 
@@ -93,10 +93,12 @@ fn try_parse_comparison(input: &mut &str) -> Result<Condition, String> {
     let _ = multispace0::<_, ContextError>.parse_next(input);
 
     // operator (must match)
-    let op = parse_op.parse_next(input).map_err(|_: winnow::error::ErrMode<ContextError>| {
-        *input = original;
-        "no operator found".to_string()
-    })?;
+    let op = parse_op
+        .parse_next(input)
+        .map_err(|_: winnow::error::ErrMode<ContextError>| {
+            *input = original;
+            "no operator found".to_string()
+        })?;
 
     // optional none-inclusive `?`
     let none_inclusive = opt('?')
@@ -108,9 +110,12 @@ fn try_parse_comparison(input: &mut &str) -> Result<Condition, String> {
     let _ = multispace0::<_, ContextError>.parse_next(input);
 
     // value
-    let raw_value = parse_value
-        .parse_next(input)
-        .map_err(|_: winnow::error::ErrMode<ContextError>| "expected value after operator".to_string())?;
+    let raw_value =
+        parse_value
+            .parse_next(input)
+            .map_err(|_: winnow::error::ErrMode<ContextError>| {
+                "expected value after operator".to_string()
+            })?;
 
     // Unescape literal `\&` in the value
     let raw_value = raw_value.replace("\\&", "&");
@@ -183,8 +188,10 @@ fn parse_unary(input: &str) -> Result<Condition, String> {
 
 /// Parse a field key: `[a-z_][a-z0-9_]*`.
 fn parse_key<'s>(input: &mut &'s str) -> ModalResult<&'s str> {
-    take_while(1.., |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        .parse_next(input)
+    take_while(1.., |c: char| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'
+    })
+    .parse_next(input)
 }
 
 /// Parse an operator token (longest match first).
@@ -240,21 +247,25 @@ fn try_parse_numeric(s: &str) -> Option<f64> {
     // Filesize suffixes: 1K = 1000, 1M = 1_000_000, 1G = 1_000_000_000
     let s_upper = s.to_uppercase();
     if let Some(num_str) = s_upper.strip_suffix('K')
-        && let Ok(n) = num_str.parse::<f64>() {
-            return Some(n * 1000.0);
-        }
+        && let Ok(n) = num_str.parse::<f64>()
+    {
+        return Some(n * 1000.0);
+    }
     if let Some(num_str) = s_upper.strip_suffix('M')
-        && let Ok(n) = num_str.parse::<f64>() {
-            return Some(n * 1_000_000.0);
-        }
+        && let Ok(n) = num_str.parse::<f64>()
+    {
+        return Some(n * 1_000_000.0);
+    }
     if let Some(num_str) = s_upper.strip_suffix('G')
-        && let Ok(n) = num_str.parse::<f64>() {
-            return Some(n * 1_000_000_000.0);
-        }
+        && let Ok(n) = num_str.parse::<f64>()
+    {
+        return Some(n * 1_000_000_000.0);
+    }
     if let Some(num_str) = s_upper.strip_suffix('B')
-        && let Ok(n) = num_str.parse::<f64>() {
-            return Some(n);
-        }
+        && let Ok(n) = num_str.parse::<f64>()
+    {
+        return Some(n);
+    }
 
     // Duration: H:M:S or M:S
     let parts: Vec<&str> = s.split(':').collect();

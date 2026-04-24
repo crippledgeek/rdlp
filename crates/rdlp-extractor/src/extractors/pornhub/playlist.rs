@@ -46,8 +46,8 @@ pub async fn extract_playlist(
     url: &str,
     ctx: &ExtractionContext,
 ) -> Result<Vec<InfoDict>> {
-    let playlist_id = super::patterns::extract_playlist_id(url)
-        .ok_or_else(|| RdlpError::Extraction {
+    let playlist_id =
+        super::patterns::extract_playlist_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract playlist ID: {url}"),
             url: Some(url.to_string()),
         })?;
@@ -72,13 +72,10 @@ pub async fn extract_playlist(
 
     check_http_response(&response)?;
 
-    let webpage = response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read response: {e}"),
-            url: Some(url.to_string()),
-        })?;
+    let webpage = response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read response: {e}"),
+        url: Some(url.to_string()),
+    })?;
 
     // Extract metadata
     let (playlist_title, pagination_info, mut all_video_urls) = {
@@ -335,13 +332,10 @@ async fn download_page(
 
     check_http_response(&response)?;
 
-    response
-        .text()
-        .await
-        .map_err(|e| RdlpError::Network {
-            message: format!("Failed to read page {page_num}: {e}"),
-            url: Some(url),
-        })
+    response.text().await.map_err(|e| RdlpError::Network {
+        message: format!("Failed to read page {page_num}: {e}"),
+        url: Some(url),
+    })
 }
 
 #[cfg(test)]

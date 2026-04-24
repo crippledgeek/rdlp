@@ -3,7 +3,9 @@
 use scraper::Selector;
 use std::sync::LazyLock;
 
-use super::detection::{Confidence, DetectedFormat, DetectionStrategy, PageContext, resolve_url, ext_from_url};
+use super::detection::{
+    Confidence, DetectedFormat, DetectionStrategy, PageContext, ext_from_url, resolve_url,
+};
 
 // ============================================================================
 // Selectors
@@ -35,40 +37,42 @@ impl DetectionStrategy for Html5VideoStrategy {
         for video_elem in ctx.html.select(&VIDEO_SELECTOR) {
             // Check <video src="..."> directly
             if let Some(src) = video_elem.value().attr("src")
-                && let Some(url) = resolve_url(ctx.base_url, src) {
-                    formats.push(DetectedFormat {
-                        ext: ext_from_url(&url),
-                        url,
-                        quality: None,
-                        confidence: Confidence::Medium,
-                        source: "video[src]",
-                    });
-                }
+                && let Some(url) = resolve_url(ctx.base_url, src)
+            {
+                formats.push(DetectedFormat {
+                    ext: ext_from_url(&url),
+                    url,
+                    quality: None,
+                    confidence: Confidence::Medium,
+                    source: "video[src]",
+                });
+            }
 
             // Check child <source> elements
             for source_elem in video_elem.select(&SOURCE_SELECTOR) {
                 if let Some(src) = source_elem.value().attr("src")
-                    && let Some(url) = resolve_url(ctx.base_url, src) {
-                        let ext = source_elem
-                            .value()
-                            .attr("type")
-                            .and_then(mime_to_ext)
-                            .or_else(|| ext_from_url(&url));
+                    && let Some(url) = resolve_url(ctx.base_url, src)
+                {
+                    let ext = source_elem
+                        .value()
+                        .attr("type")
+                        .and_then(mime_to_ext)
+                        .or_else(|| ext_from_url(&url));
 
-                        let quality = source_elem
-                            .value()
-                            .attr("label")
-                            .or_else(|| source_elem.value().attr("data-quality"))
-                            .map(|s| s.to_string());
+                    let quality = source_elem
+                        .value()
+                        .attr("label")
+                        .or_else(|| source_elem.value().attr("data-quality"))
+                        .map(|s| s.to_string());
 
-                        formats.push(DetectedFormat {
-                            url,
-                            ext,
-                            quality,
-                            confidence: Confidence::Medium,
-                            source: "video>source",
-                        });
-                    }
+                    formats.push(DetectedFormat {
+                        url,
+                        ext,
+                        quality,
+                        confidence: Confidence::Medium,
+                        source: "video>source",
+                    });
+                }
             }
         }
 
@@ -76,23 +80,24 @@ impl DetectionStrategy for Html5VideoStrategy {
         // (some sites use <source> outside <video> in custom players)
         for source_elem in ctx.html.select(&SOURCE_SELECTOR) {
             if let Some(src) = source_elem.value().attr("src")
-                && let Some(url) = resolve_url(ctx.base_url, src) {
-                    // Only add if not already found
-                    if !formats.iter().any(|f| f.url == url) {
-                        let ext = source_elem
-                            .value()
-                            .attr("type")
-                            .and_then(mime_to_ext)
-                            .or_else(|| ext_from_url(&url));
-                        formats.push(DetectedFormat {
-                            url,
-                            ext,
-                            quality: None,
-                            confidence: Confidence::Low,
-                            source: "source",
-                        });
-                    }
+                && let Some(url) = resolve_url(ctx.base_url, src)
+            {
+                // Only add if not already found
+                if !formats.iter().any(|f| f.url == url) {
+                    let ext = source_elem
+                        .value()
+                        .attr("type")
+                        .and_then(mime_to_ext)
+                        .or_else(|| ext_from_url(&url));
+                    formats.push(DetectedFormat {
+                        url,
+                        ext,
+                        quality: None,
+                        confidence: Confidence::Low,
+                        source: "source",
+                    });
                 }
+            }
         }
 
         formats
@@ -133,7 +138,8 @@ impl DetectionStrategy for IframeEmbedStrategy {
                     if src.contains(host) {
                         log::info!(
                             "Found embedded player from {} — try using that URL directly (iframe: {})",
-                            host, src
+                            host,
+                            src
                         );
                         break;
                     }
@@ -217,16 +223,10 @@ mod tests {
 
         let formats = Html5VideoStrategy.detect(&ctx);
         assert_eq!(formats.len(), 2);
-        assert_eq!(
-            formats[0].url,
-            "https://example.com/video_720.mp4"
-        );
+        assert_eq!(formats[0].url, "https://example.com/video_720.mp4");
         assert_eq!(formats[0].ext, Some("mp4".to_string()));
         assert_eq!(formats[0].quality, Some("720p".to_string()));
-        assert_eq!(
-            formats[1].url,
-            "https://example.com/video_1080.webm"
-        );
+        assert_eq!(formats[1].url, "https://example.com/video_1080.webm");
         assert_eq!(formats[1].ext, Some("webm".to_string()));
         assert_eq!(formats[1].quality, Some("1080p".to_string()));
     }

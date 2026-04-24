@@ -261,15 +261,22 @@ fn parse_nth_suffix(input: &mut &str) -> ModalResult<Option<u32>> {
 /// Try to match a known bare-extension shorthand.
 ///
 /// Extensions are matched only when the word is not followed by characters
-/// that would extend it into an arbitrary format ID (alpha-numeric or `_`).
+/// that could extend it into an arbitrary format ID. The set of
+/// format-id-continuation characters must stay in sync with
+/// [`parse_format_id`], otherwise IDs like `mp4-hd` (XVideos emits these)
+/// get eaten as `Extension("mp4")` with a leftover `-hd` that fails the
+/// outer parse.
 fn parse_extension_shorthand(input: &mut &str) -> ModalResult<FormatToken> {
     for &ext in KNOWN_EXTENSIONS {
-        // Match `ext` as a prefix, then verify the next char terminates the word.
+        // Match `ext` as a prefix, then verify the next char terminates the
+        // token. A "terminator" is whitespace, EOF, or one of the expression
+        // separators/filter brackets — everything else is assumed to be part
+        // of a longer format_id (matching `parse_format_id`'s accept set).
         let matched = input.starts_with(ext)
             && input[ext.len()..]
                 .chars()
                 .next()
-                .map(|c| !c.is_alphanumeric() && c != '_' && c != '.')
+                .map(is_token_terminator)
                 .unwrap_or(true);
         if matched {
             // Advance the input past the extension.
@@ -278,6 +285,12 @@ fn parse_extension_shorthand(input: &mut &str) -> ModalResult<FormatToken> {
         }
     }
     Err(ErrMode::Backtrack(ContextError::new()))
+}
+
+/// Characters that end a bare token (extension shorthand, keyword, format id)
+/// in the selector grammar. Inverse of the accept-set in [`parse_format_id`].
+fn is_token_terminator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '+' | '/' | '[' | ']' | ',' | '(' | ')')
 }
 
 /// Parse a literal format ID (anything except whitespace and special chars).

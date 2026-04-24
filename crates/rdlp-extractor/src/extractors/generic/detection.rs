@@ -130,8 +130,8 @@ pub(crate) fn ext_from_url(url: &str) -> Option<String> {
     let ext = path.rsplit('.').next()?;
     let ext = ext.to_lowercase();
     match ext.as_str() {
-        "mp4" | "webm" | "mkv" | "m3u8" | "mpd" | "ts" | "flv" | "avi" | "mov" | "m4v"
-        | "mp3" | "m4a" | "ogg" | "opus" | "wav" | "flac" | "aac" => Some(ext),
+        "mp4" | "webm" | "mkv" | "m3u8" | "mpd" | "ts" | "flv" | "avi" | "mov" | "m4v" | "mp3"
+        | "m4a" | "ogg" | "opus" | "wav" | "flac" | "aac" => Some(ext),
         _ => None,
     }
 }

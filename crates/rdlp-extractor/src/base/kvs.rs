@@ -306,9 +306,7 @@ mod tests {
 
     #[test]
     fn test_is_kvs_page() {
-        assert!(is_kvs_page(
-            r#"<script src="/js/kt_player.js"></script>"#
-        ));
+        assert!(is_kvs_page(r#"<script src="/js/kt_player.js"></script>"#));
         assert!(is_kvs_page(
             r#"<script src="https://cdn.example.com/kt_player.js?v=1.2"></script>"#
         ));

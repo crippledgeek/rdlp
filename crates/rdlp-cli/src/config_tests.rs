@@ -337,7 +337,10 @@ fn test_merge_config_normalize_boost_implies_loudnorm() {
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
     assert!(config.postprocess.normalize_boost);
-    assert!(config.postprocess.loudnorm, "normalize_boost should imply loudnorm");
+    assert!(
+        config.postprocess.loudnorm,
+        "normalize_boost should imply loudnorm"
+    );
     assert!(
         config.postprocess.normalize_audio,
         "normalize_boost should imply normalize_audio"

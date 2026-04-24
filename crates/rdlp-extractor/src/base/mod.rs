@@ -54,3 +54,4 @@
 pub mod common;
 pub(crate) mod kvs;
 pub(crate) mod tnaflix_network;
+pub mod wgcz_network;

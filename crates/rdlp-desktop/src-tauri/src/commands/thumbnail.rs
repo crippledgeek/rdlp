@@ -20,6 +20,14 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// CDN subdomains (e.g. `fastporndelivery.hqporner.com`, `cdn77.phncdn.com`)
 /// are stripped to the registrable domain so the Referer matches what the
 /// CDN expects (e.g. `https://hqporner.com`).
+///
+/// Some CDNs live on a separate `*-cdn.tld` domain from the content site
+/// (e.g. `thumbs-gcore.xvideos-cdn.com` → content site `www.xvideos.com`,
+/// `thumb-cdn77.xnxx-cdn.com` → content site `www.xnxx.com`). When the
+/// registrable domain's second-level label ends with `-cdn`, strip that
+/// suffix to derive the content domain. Other CDN patterns that contain
+/// `cdn` without the `-cdn` hyphen suffix (e.g. `phncdn.com`) are left
+/// unchanged because their CDNs accept self-referential Referers.
 fn derive_referer(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?;
@@ -45,7 +53,19 @@ fn derive_referer(url: &str) -> Option<String> {
         host.to_string()
     };
 
-    Some(format!("{scheme}://www.{registrable}"))
+    // Rewrite "<name>-cdn.<tld>" → "<name>.<tld>" so the Referer points at
+    // the content site, not the CDN domain.
+    let reg_parts: Vec<&str> = registrable.split('.').collect();
+    let content_domain = if reg_parts.len() == 2
+        && let Some(stripped) = reg_parts[0].strip_suffix("-cdn")
+        && !stripped.is_empty()
+    {
+        format!("{stripped}.{}", reg_parts[1])
+    } else {
+        registrable
+    };
+
+    Some(format!("{scheme}://www.{content_domain}"))
 }
 
 /// Fetch a thumbnail image from `url` with a derived `Referer` header
@@ -143,7 +163,9 @@ mod tests {
     #[test]
     fn test_derive_referer_xtits_cdn() {
         // i.xtits.com CDN requires www.xtits.com Referer (bare xtits.com → 403)
-        let referer = derive_referer("https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg");
+        let referer = derive_referer(
+            "https://i.xtits.com/contents/videos_screenshots/50000/50088/402x225/2.jpg",
+        );
         assert_eq!(referer.as_deref(), Some("https://www.xtits.com"));
     }
 
@@ -151,6 +173,31 @@ mod tests {
     fn test_derive_referer_no_subdomain() {
         let referer = derive_referer("https://example.com/image.jpg");
         assert_eq!(referer.as_deref(), Some("https://www.example.com"));
+    }
+
+    #[test]
+    fn test_derive_referer_xvideos_cdn() {
+        // xvideos-cdn.com is a separate CDN domain; Referer must be the
+        // content site (xvideos.com) or the CDN returns 403.
+        let referer = derive_referer(
+            "https://thumbs-gcore.xvideos-cdn.com/b91c9571-e1e9-4910-9759-c5da7bdea535/0/xv_12_t.jpg",
+        );
+        assert_eq!(referer.as_deref(), Some("https://www.xvideos.com"));
+    }
+
+    #[test]
+    fn test_derive_referer_xnxx_cdn() {
+        // xnxx-cdn.com same pattern as xvideos-cdn.com.
+        let referer = derive_referer("https://thumb-cdn77.xnxx-cdn.com/abc/0/thumbnail.jpg");
+        assert_eq!(referer.as_deref(), Some("https://www.xnxx.com"));
+    }
+
+    #[test]
+    fn test_derive_referer_phncdn_unchanged() {
+        // phncdn.com does NOT end in `-cdn`; leave as-is (phncdn CDN
+        // accepts www.phncdn.com Referer for PornHub content).
+        let referer = derive_referer("https://di.phncdn.com/videos/abc/thumb.jpg");
+        assert_eq!(referer.as_deref(), Some("https://www.phncdn.com"));
     }
 
     #[test]

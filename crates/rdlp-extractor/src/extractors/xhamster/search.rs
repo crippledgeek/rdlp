@@ -27,8 +27,7 @@ fn extract_initials_json_impl(html: &str) -> anyhow::Result<Value> {
     .map(|m| m.as_str())
     .ok_or_else(|| anyhow::anyhow!("could not find window.initials in search page"))?;
 
-    serde_json::from_str(json_str)
-        .context("failed to parse window.initials JSON")
+    serde_json::from_str(json_str).context("failed to parse window.initials JSON")
 }
 
 /// Parse search result previews from the `window.initials` JSON.
@@ -43,7 +42,9 @@ fn parse_search_results_json_impl(initials: &Value) -> anyhow::Result<Vec<Search
     let data = initials
         .pointer("/searchResult/videoThumbProps")
         .and_then(|d| d.as_array())
-        .ok_or_else(|| anyhow::anyhow!("missing searchResult.videoThumbProps array in initials JSON"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("missing searchResult.videoThumbProps array in initials JSON")
+        })?;
 
     let mut results = Vec::with_capacity(data.len());
     for item in data {
@@ -77,7 +78,7 @@ fn parse_search_results_json_impl(initials: &Value) -> anyhow::Result<Vec<Search
             thumbnail_url,
             duration,
             uploader: None,
-                    actors: vec![],
+            actors: vec![],
             view_count,
             upload_date,
         });

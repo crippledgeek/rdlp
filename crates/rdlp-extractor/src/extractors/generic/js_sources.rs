@@ -205,15 +205,16 @@ impl DetectionStrategy for GenericJsParamsStrategy {
             if let Some(url_match) = caps.get(1) {
                 let raw = url_match.as_str();
                 if let Some(url) = resolve_url(ctx.base_url, raw)
-                    && seen.insert(url.clone()) {
-                        formats.push(DetectedFormat {
-                            ext: ext_from_url(&url),
-                            url,
-                            quality: None,
-                            confidence: Confidence::Low,
-                            source: "js.param",
-                        });
-                    }
+                    && seen.insert(url.clone())
+                {
+                    formats.push(DetectedFormat {
+                        ext: ext_from_url(&url),
+                        url,
+                        quality: None,
+                        confidence: Confidence::Low,
+                        source: "js.param",
+                    });
+                }
             }
         }
 
@@ -274,15 +275,16 @@ fn add_format(
     source: &'static str,
 ) {
     if let Some(url) = resolve_url(ctx.base_url, raw_url)
-        && seen.insert(url.clone()) {
-            formats.push(DetectedFormat {
-                ext: ext_from_url(&url),
-                url,
-                quality: None,
-                confidence: Confidence::Medium,
-                source,
-            });
-        }
+        && seen.insert(url.clone())
+    {
+        formats.push(DetectedFormat {
+            ext: ext_from_url(&url),
+            url,
+            quality: None,
+            confidence: Confidence::Medium,
+            source,
+        });
+    }
 }
 
 /// Filter out URLs that are unlikely to be actual media content.

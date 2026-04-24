@@ -317,7 +317,10 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         }
 
         Event::PlaylistItemStarted {
-            index, total, title, ..
+            index,
+            total,
+            title,
+            ..
         } => {
             let payload = UnitStartedPayload {
                 job_id: job_id.to_owned(),

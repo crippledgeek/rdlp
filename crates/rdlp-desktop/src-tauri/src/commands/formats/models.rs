@@ -43,6 +43,11 @@ pub struct FormatInfo {
     pub has_video: bool,
     /// Whether this format contains an audio stream.
     pub has_audio: bool,
+    /// HLS audio-rendition group identifier (EXT-X-MEDIA `GROUP-ID` or the
+    /// `AUDIO=` attribute referenced by an EXT-X-STREAM-INF). Lets the UI
+    /// visually pair video-only and audio-only rows that share a group.
+    /// `None` outside HLS.
+    pub audio_group_id: Option<String>,
 }
 
 /// Subtitle availability for a single language.

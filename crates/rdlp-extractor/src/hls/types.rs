@@ -49,6 +49,12 @@ pub struct HlsInfo {
 ///
 /// Each variant represents a specific quality level (e.g., 720p, 1080p)
 /// with its own media playlist URL and metadata.
+///
+/// Entries can be produced from two sources:
+/// - `EXT-X-STREAM-INF` — a combined or video-only variant (default)
+/// - `EXT-X-MEDIA TYPE=AUDIO` — an audio-only rendition group member;
+///   these are flagged via `is_audio_only = true` and have no resolution
+///   or video codec.
 #[derive(Debug, Clone)]
 pub struct HlsVariantInfo {
     /// Resolved absolute URL to this variant's media playlist
@@ -65,6 +71,17 @@ pub struct HlsVariantInfo {
     pub bandwidth: u64,
     /// Average bandwidth in bits per second
     pub average_bandwidth: Option<u64>,
+    /// True if this entry was derived from an `EXT-X-MEDIA TYPE=AUDIO`
+    /// rendition group rather than an `EXT-X-STREAM-INF`. Audio-only
+    /// entries carry `video_codec=None` and no `resolution`.
+    pub is_audio_only: bool,
+    /// BCP-47 language tag from `LANGUAGE` attribute (EXT-X-MEDIA only)
+    pub language: Option<String>,
+    /// Audio-rendition `GROUP-ID` (EXT-X-MEDIA only). Matches the
+    /// `AUDIO=` attribute on paired `EXT-X-STREAM-INF` variants.
+    pub audio_group_id: Option<String>,
+    /// Rendition `NAME` attribute, e.g. "English", "Stereo" (EXT-X-MEDIA only)
+    pub rendition_name: Option<String>,
     // Shared fields (from one media playlist, applied to all variants):
     /// Number of segments
     pub segment_count: usize,

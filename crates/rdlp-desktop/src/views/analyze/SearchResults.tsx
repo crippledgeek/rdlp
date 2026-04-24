@@ -1,7 +1,7 @@
 // SearchResults: infinite scroll search results with TanStack Table sorting.
 // Columns: Thumbnail, Title (sortable), Duration (sortable), Views (sortable), Date (sortable).
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import {
@@ -30,6 +30,10 @@ export function SearchResults({ query, site }: SearchResultsProps) {
     const filters = useStore(searchStore, (s) => s.filters);
     const [sorting, setSorting] = useState<SortingState>([]);
 
+    // queryKey is derived from (query, site, filters); TanStack Query
+    // refetches automatically when any of them changes. `enabled` in the
+    // options gates on query non-empty. No manual refetch Effect — `refetch`
+    // is still exposed for the Retry button in the error state.
     const {
         data,
         isLoading,
@@ -39,12 +43,6 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         hasNextPage,
         refetch,
     } = useInfiniteQuery(searchInfiniteQueryOptions(query, site, filters));
-
-    useEffect(() => {
-        if (query.trim()) {
-            void refetch();
-        }
-    }, [query, site, refetch]);
 
     const allResults = useMemo(
         () => data?.pages.flatMap((p) => p.results) ?? [],

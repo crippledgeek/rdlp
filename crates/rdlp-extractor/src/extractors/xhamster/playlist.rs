@@ -27,8 +27,8 @@ impl XHamsterExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<InfoDict>> {
-        let (user_id, _is_user) = patterns::extract_user_info(url)
-            .ok_or_else(|| RdlpError::Extraction {
+        let (user_id, _is_user) =
+            patterns::extract_user_info(url).ok_or_else(|| RdlpError::Extraction {
                 message: format!("Could not extract user ID: {url}"),
                 url: Some(url.to_string()),
             })?;
@@ -63,13 +63,10 @@ impl XHamsterExtractor {
 
             check_http_response(&response)?;
 
-            let webpage = response
-                .text()
-                .await
-                .map_err(|e| RdlpError::Network {
-                    message: format!("Failed to read user page {page}: {e}"),
-                    url: Some(page_url.clone()),
-                })?;
+            let webpage = response.text().await.map_err(|e| RdlpError::Network {
+                message: format!("Failed to read user page {page}: {e}"),
+                url: Some(page_url.clone()),
+            })?;
 
             // Extract video URLs from the page
             let page_urls = extract_user_video_urls(&webpage);

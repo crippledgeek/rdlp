@@ -125,7 +125,11 @@ impl From<&Event> for EventDto {
             }
 
             Event::PlaylistItemStarted {
-                index, total, url, title, ..
+                index,
+                total,
+                url,
+                title,
+                ..
             } => (
                 "playlist_item_started",
                 json!({
@@ -136,9 +140,7 @@ impl From<&Event> for EventDto {
                 }),
             ),
 
-            Event::UnitCompleted { index, .. } => {
-                ("unit_completed", json!({ "index": index }))
-            }
+            Event::UnitCompleted { index, .. } => ("unit_completed", json!({ "index": index })),
 
             Event::Retrying {
                 attempt,

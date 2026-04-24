@@ -70,11 +70,20 @@ pub(crate) async fn download_segment_with_retry(
                 .await
                 .map_err(|e| {
                     if e.is_timeout() {
-                        RdlpError::Network { message: format!("Segment {idx} timeout"), url: Some(url.to_string()) }
+                        RdlpError::Network {
+                            message: format!("Segment {idx} timeout"),
+                            url: Some(url.to_string()),
+                        }
                     } else if e.is_connect() {
-                        RdlpError::Network { message: format!("Segment {idx} connection failed"), url: Some(url.to_string()) }
+                        RdlpError::Network {
+                            message: format!("Segment {idx} connection failed"),
+                            url: Some(url.to_string()),
+                        }
                     } else {
-                        RdlpError::Network { message: format!("Segment {idx} request failed: {e}"), url: Some(url.to_string()) }
+                        RdlpError::Network {
+                            message: format!("Segment {idx} request failed: {e}"),
+                            url: Some(url.to_string()),
+                        }
                     }
                 })?;
 
@@ -86,20 +95,34 @@ pub(crate) async fn download_segment_with_retry(
             }
 
             // Stream segment to file with progress tracking
-            let file = File::create(&*segment_path).await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to create segment file '{}': {e}", segment_path.display()))
-            ))?;
+            let file = File::create(&*segment_path).await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to create segment file '{}': {e}",
+                        segment_path.display()
+                    ),
+                ))
+            })?;
             let mut writer = BufWriter::with_capacity(buffer_size, file);
             let mut stream = response.bytes_stream();
             let mut downloaded = 0u64;
 
             while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Segment {idx} read error from {url}: {e}"), url: Some(url.to_string()) })?;
+                let chunk = chunk_result.map_err(|e| RdlpError::Network {
+                    message: format!("Segment {idx} read error from {url}: {e}"),
+                    url: Some(url.to_string()),
+                })?;
 
-                writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to write segment {idx} to '{}': {e}", segment_path.display()))
-                ))?;
+                writer.write_all(&chunk).await.map_err(|e| {
+                    RdlpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "failed to write segment {idx} to '{}': {e}",
+                            segment_path.display()
+                        ),
+                    ))
+                })?;
                 downloaded += chunk.len() as u64;
 
                 // Update shared progress counter (lock-free atomic)
@@ -110,9 +133,15 @@ pub(crate) async fn download_segment_with_retry(
                 }
             }
 
-            writer.flush().await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to flush segment {idx} to '{}': {e}", segment_path.display()))
-            ))?;
+            writer.flush().await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to flush segment {idx} to '{}': {e}",
+                        segment_path.display()
+                    ),
+                ))
+            })?;
 
             Ok((idx, PathBuf::from(&*segment_path), downloaded))
         }
@@ -162,10 +191,10 @@ pub(crate) async fn download_init_segment(
                 debug!(start, end; "Init segment byte-range request");
             }
 
-            let response = req
-                .send()
-                .await
-                .map_err(|e| RdlpError::Network { message: format!("Init segment request failed: {e}"), url: Some(url.to_string()) })?;
+            let response = req.send().await.map_err(|e| RdlpError::Network {
+                message: format!("Init segment request failed: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
             if !response.status().is_success() {
                 return Err(RdlpError::Http {
@@ -174,16 +203,17 @@ pub(crate) async fn download_init_segment(
                 });
             }
 
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| RdlpError::Network { message: format!("Init segment read error: {e}"), url: Some(url.to_string()) })?;
+            let bytes = response.bytes().await.map_err(|e| RdlpError::Network {
+                message: format!("Init segment read error: {e}"),
+                url: Some(url.to_string()),
+            })?;
 
-            tokio::fs::write(&*dest, &bytes)
-                .await
-                .map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to write init segment to '{}': {e}", dest.display()))
-                ))?;
+            tokio::fs::write(&*dest, &bytes).await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("failed to write init segment to '{}': {e}", dest.display()),
+                ))
+            })?;
             debug!(bytes = bytes.len(); "Init segment downloaded");
             Ok(())
         }

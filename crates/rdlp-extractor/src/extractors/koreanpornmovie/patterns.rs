@@ -12,9 +12,21 @@ pub(crate) static VIDEO_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Non-video path prefixes to exclude.
 const EXCLUDED_SLUGS: &[&str] = &[
-    "tags", "tag", "actors", "actor", "category", "author", "page",
-    "wp-admin", "wp-content", "wp-json", "dmca", "contact-us",
-    "privacy-policy", "our-partner", "2557-statement",
+    "tags",
+    "tag",
+    "actors",
+    "actor",
+    "category",
+    "author",
+    "page",
+    "wp-admin",
+    "wp-content",
+    "wp-json",
+    "dmca",
+    "contact-us",
+    "privacy-policy",
+    "our-partner",
+    "2557-statement",
 ];
 
 /// Check if a URL is a video page (not a tag/actor/category/static page).
@@ -23,7 +35,9 @@ pub(crate) fn is_video_url(url: &str) -> bool {
         return false;
     }
     if let Some(slug) = extract_slug(url) {
-        !EXCLUDED_SLUGS.iter().any(|&excl| slug == excl || slug.starts_with(&format!("{excl}/")))
+        !EXCLUDED_SLUGS
+            .iter()
+            .any(|&excl| slug == excl || slug.starts_with(&format!("{excl}/")))
     } else {
         false
     }
@@ -50,10 +64,16 @@ mod tests {
 
     #[test]
     fn video_url_matches() {
-        assert!(is_video_url("https://koreanpornmovie.com/taste-of-a-young-woman-2025/"));
-        assert!(is_video_url("https://koreanpornmovie.com/gangnam-full-salon-2024/"));
+        assert!(is_video_url(
+            "https://koreanpornmovie.com/taste-of-a-young-woman-2025/"
+        ));
+        assert!(is_video_url(
+            "https://koreanpornmovie.com/gangnam-full-salon-2024/"
+        ));
         assert!(is_video_url("https://www.koreanpornmovie.com/some-video/"));
-        assert!(is_video_url("https://koreanpornmovie.com/%ed%99%98%ec%9e%a5%ed%95%98%eb%88%88%ea%b5%ac%eb%a8%bc/"));
+        assert!(is_video_url(
+            "https://koreanpornmovie.com/%ed%99%98%ec%9e%a5%ed%95%98%eb%88%88%ea%b5%ac%eb%a8%bc/"
+        ));
     }
 
     #[test]

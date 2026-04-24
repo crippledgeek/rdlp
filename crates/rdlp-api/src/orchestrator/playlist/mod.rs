@@ -11,10 +11,10 @@ mod resume;
 #[cfg(test)]
 mod tests;
 
-use anyhow::Context;
 use super::errors::is_reextractable_error;
 use super::session_state::{self, FailedEpisode, PlaylistState, SessionState};
 use super::{DownloadPlan, Orchestrator, OrchestratorError, Result, archive};
+use anyhow::Context;
 use futures_util::StreamExt;
 use helpers::{detect_audio_types, filter_formats_by_language};
 use log::{debug, error, info, warn};

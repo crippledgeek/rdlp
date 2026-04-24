@@ -64,14 +64,18 @@ fn decrypt_src_impl(src: &str, client_key: &str, megacloud_key: &str) -> anyhow:
     let data_len: usize = result
         .get(..4)
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| anyhow::anyhow!("invalid data length prefix in decrypted megacloud source"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("invalid data length prefix in decrypted megacloud source")
+        })?;
 
     result
         .get(4..4 + data_len)
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!(
-            "decrypted megacloud source too short: expected {data_len} chars after prefix"
-        ))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "decrypted megacloud source too short: expected {data_len} chars after prefix"
+            )
+        })
 }
 
 /// Reverse one layer of the cipher.

@@ -366,6 +366,30 @@ fn test_parse_extension_webm() {
     assert!(FormatSelector::parse("webm").is_ok());
 }
 
+/// Regression: `mp4-hd` and similar format_ids whose prefix collides
+/// with a known-extension shorthand (`mp4`, `webm`, ...) must parse as
+/// a literal format_id, not as `Extension("mp4")` with `-hd` leftover.
+///
+/// XVideos emits exactly these ids (`mp4-hd`, `mp4-low`, `mp4-high`) —
+/// passing one as a selector previously errored with
+/// `Parse error at position 3`.
+#[test]
+fn test_parse_extension_prefix_collision_is_format_id() {
+    for id in &["mp4-hd", "mp4-low", "mp4-high", "webm-720", "aac-128"] {
+        let sel = FormatSelector::parse(id)
+            .unwrap_or_else(|e| panic!("failed to parse `{id}`: {e:?}"));
+        let spec = &sel.selectors[0].fallbacks[0];
+        match spec {
+            FormatSpec::Single(s) => assert!(
+                matches!(&s.base, FormatToken::FormatId(fid) if fid == *id),
+                "expected FormatId({id:?}), got {:?}",
+                s.base
+            ),
+            other => panic!("expected Single spec for `{id}`, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn test_parse_all_known_extensions() {
     for ext in &[
@@ -1758,20 +1782,18 @@ mod compat_tests {
     fn compat_group_partial_merge_when_one_side_fails() {
         // "(bv[height>=9000]+ba)/b"
         //
-        // The merge inside the group: bv[height>=9000] returns nothing (no video at
-        // 9000p), but ba returns the best audio-only format. A Merge where one side
-        // is empty still yields the other side's result — the group is non-empty
-        // (1 format), so the /b fallback is NOT reached.
+        // The merge inside the group: bv[height>=9000] returns nothing
+        // (no 9000p video). Per yt-dlp semantics, a merge with a missing
+        // side fails entirely, the group produces no results, and the
+        // `/b` fallback returns the best muxed format.
         let formats = compat_formats();
         let result = FormatSelector::parse("(bv[height>=9000]+ba)/b")
             .unwrap()
             .select(&formats);
-        assert_eq!(result.len(), 1, "partial merge: audio-only result from ba");
-        // The result is the audio-only format from ba, not a combined format.
-        assert!(result[0].has_audio());
+        assert_eq!(result.len(), 1, "fallback to /b after failed merge");
         assert!(
-            !result[0].has_video(),
-            "video side failed, only audio is returned"
+            result[0].has_video() && result[0].has_audio(),
+            "fallback picks best muxed, not the dangling audio side"
         );
     }
 
@@ -1923,15 +1945,13 @@ mod compat_tests {
 
     #[test]
     fn compat_merge_partial_result_when_one_side_impossible() {
-        // "(bv*[vcodec^=avc]+ba[ext=m4a])/(bv*+ba)/b" on a format list with NO avc video.
+        // "(bv*[vcodec^=avc]+ba[ext=m4a])/(bv*+ba)/b" on a format list
+        // with NO avc video.
         //
-        // Behavior: a Merge produces PARTIAL results when one side has no match.
-        // bv*[vcodec^=avc] → None (no avc video in the reduced list)
-        // ba[ext=m4a]      → Some(141) — m4a audio still exists
-        //
-        // The merge yields [141] (1 format) — non-empty, so the fallback /(bv*+ba)/b
-        // is NOT triggered. This is correct: any non-empty result from a merge arm
-        // stops the fallback chain.
+        // Per yt-dlp semantics a merge requires BOTH sides to succeed.
+        // Since bv*[vcodec^=avc] has no match, the first group's merge
+        // fails entirely; the fallback `/(bv*+ba)/b` kicks in and picks
+        // the best video-only + audio-only pair available.
         let formats: Vec<Format> = compat_formats()
             .into_iter()
             .filter(|f| {
@@ -1948,11 +1968,14 @@ mod compat_tests {
         let result = FormatSelector::parse("(bv*[vcodec^=avc]+ba[ext=m4a])/(bv*+ba)/b")
             .unwrap()
             .select(&formats);
-        // bv*[vcodec^=avc] fails; ba[ext=m4a] succeeds → partial merge = 1 audio format.
-        // Fallback /(bv*+ba)/b is NOT reached because the first group is non-empty.
-        assert_eq!(result.len(), 1, "partial merge: only audio side returned");
-        assert!(result[0].has_audio() && !result[0].has_video());
-        assert_eq!(result[0].ext, "m4a");
+        // First group fails (no avc video). Fallback `/(bv*+ba)` picks
+        // a video-only + audio-only pair.
+        assert_eq!(result.len(), 2, "fallback yields a full bv+ba pair");
+        assert!(result[0].has_video());
+        assert!(result[1].has_audio() && !result[1].has_video());
+        // The audio side comes from `ba`, which ranks audio-only formats
+        // by abr. On `compat_formats` the m4a 141 is the top audio.
+        assert_eq!(result[1].ext, "m4a");
     }
 
     #[test]
@@ -3475,11 +3498,14 @@ mod negative_eval {
             make_audio_only("a1", "m4a", 128.0),
             make_audio_only("a2", "m4a", 256.0),
         ];
-        // bv has no match, ba matches a2
+        // bv has no match, ba matches a2. Per yt-dlp semantics, a merge
+        // requires BOTH sides — if either is missing, the whole merge
+        // fails (empty) so the outer fallback chain can take over.
         let result = FormatSelector::parse("bv+ba").unwrap().select(&formats);
-        // Partial merge: only audio side
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].format_id, "a2");
+        assert!(
+            result.is_empty(),
+            "merge with missing video side must fail cleanly (no partial result)"
+        );
     }
 
     #[test]
@@ -3488,10 +3514,48 @@ mod negative_eval {
             make_video_only("v1", "mp4", 720),
             make_video_only("v2", "mp4", 1080),
         ];
-        // bv matches v2, ba has no match
+        // bv matches v2, ba has no match. Merge requires both sides →
+        // empty result (yt-dlp parity).
         let result = FormatSelector::parse("bv+ba").unwrap().select(&formats);
+        assert!(
+            result.is_empty(),
+            "merge with missing audio side must fail cleanly (no partial result)"
+        );
+    }
+
+    #[test]
+    fn merge_video_side_missing_falls_through_to_muxed() {
+        // Typical yt-dlp-default pattern `bv*+ba/best` on a muxed-only
+        // site: the merge arm produces nothing (no audio-only), so the
+        // fallback `/best` picks the best muxed format. Regression guard
+        // for the bv+ba auto-pair design (path 1).
+        let formats = vec![
+            make_combined("c720", "mp4", 720, 2),
+            make_combined("c1080", "mp4", 1080, 3),
+        ];
+        let result = FormatSelector::parse("bv*+ba/best")
+            .unwrap()
+            .select(&formats);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].format_id, "v2");
+        assert_eq!(result[0].format_id, "c1080");
+    }
+
+    #[test]
+    fn merge_succeeds_on_split_audio_video_site() {
+        // Companion to `merge_video_side_missing_falls_through_to_muxed`:
+        // when a site exposes both a video-only and audio-only stream
+        // (XHamster AV1 / EXT-X-MEDIA case), `bv*+ba/best` picks the pair.
+        let formats = vec![
+            make_combined("c720", "mp4", 720, 2),
+            make_video_only("v1440", "mp4", 1440),
+            make_audio_only("a256", "m4a", 256.0),
+        ];
+        let result = FormatSelector::parse("bv*+ba/best")
+            .unwrap()
+            .select(&formats);
+        assert_eq!(result.len(), 2, "should return a bv+ba pair");
+        assert_eq!(result[0].format_id, "v1440");
+        assert_eq!(result[1].format_id, "a256");
     }
 
     #[test]
@@ -4999,7 +5063,7 @@ mod negative_sort_3 {
 
     #[test]
     fn sort_source_uses_container() {
-        let mut f_none = make_format("none");
+        let f_none = make_format("none");
         // container is None
 
         let mut f_mp4 = make_format("mp4c");

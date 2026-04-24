@@ -115,7 +115,9 @@ mod tests {
     #[test]
     fn test_moviefap_rejects_uppercase_hex() {
         // Regex is [0-9a-f] only — uppercase hex should not match
-        assert!(!MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/ABCDEF/title.html"));
+        assert!(
+            !MOVIEFAP_URL_PATTERN.is_match("https://www.moviefap.com/videos/ABCDEF/title.html")
+        );
     }
 
     #[test]

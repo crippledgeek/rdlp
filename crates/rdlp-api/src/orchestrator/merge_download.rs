@@ -63,10 +63,7 @@ impl Orchestrator {
             url: video.url.clone(),
             title: "Video".to_string(),
         });
-        let video_outcome = match self
-            .download_with_cdn_fallback(video, &video_path, 0)
-            .await
-        {
+        let video_outcome = match self.download_with_cdn_fallback(video, &video_path, 0).await {
             Ok(Some(outcome)) => outcome,
             Ok(None) => {
                 self.cleanup_merge_file(&video_path).await;
@@ -91,10 +88,7 @@ impl Orchestrator {
             url: audio.url.clone(),
             title: "Audio".to_string(),
         });
-        match self
-            .download_with_cdn_fallback(audio, &audio_path, 0)
-            .await
-        {
+        match self.download_with_cdn_fallback(audio, &audio_path, 0).await {
             Ok(Some(audio_outcome)) => {
                 let _ = self.event_tx.try_send(Event::UnitCompleted {
                     id: self.download_id,

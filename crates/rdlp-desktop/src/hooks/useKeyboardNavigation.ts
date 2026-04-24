@@ -1,41 +1,66 @@
 // Virtual focus keyboard navigation for the search results table.
-// Manages focusIndex; selection is delegated to the TanStack Table instance.
+// Owns focusIndex internally; selection is delegated to the TanStack Table
+// instance passed in by the caller.
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Table } from "@tanstack/react-table";
 import type { SearchResultPreview } from "../types";
 
 interface UseKeyboardNavigationOptions {
-    focusIndex: number;
-    setFocusIndex: React.Dispatch<React.SetStateAction<number>>;
+    /** Number of rows currently rendered in the table. */
     resultCount: number;
+    /** Whether keyboard handling is active. */
     enabled: boolean;
+    /** Underlying TanStack Table instance for selection toggles. */
     table: Table<SearchResultPreview> | null;
+    /** Triggered when the user presses D on a focused row. */
     onDownload: (index: number) => void;
+    /** Triggered on Enter — open the format chooser for the focused row. */
     onOpenFormatDialog: (index: number) => void;
+    /** Triggered on O — open the source URL in the system browser. */
     onOpenInBrowser: (index: number) => void;
 }
 
-/** Hook providing virtual focus for the results table. Selection is owned by TanStack Table. */
+interface UseKeyboardNavigationResult {
+    /** Currently focused row index, or -1 if no row is focused. */
+    focusIndex: number;
+}
+
+/**
+ * Hook providing virtual focus for the results table.
+ *
+ * Returns the current `focusIndex`. When `resultCount` changes (e.g. a new
+ * search loads), the focus is cleared automatically via React's supported
+ * "adjust state during render" pattern — no Effect required.
+ */
 export function useKeyboardNavigation({
-    focusIndex,
-    setFocusIndex,
     resultCount,
     enabled,
     table,
     onDownload,
     onOpenFormatDialog,
     onOpenInBrowser,
-}: UseKeyboardNavigationOptions) {
-    // Reset when results change
-    useEffect(() => {
+}: UseKeyboardNavigationOptions): UseKeyboardNavigationResult {
+    const [focusIndex, setFocusIndex] = useState(-1);
+
+    // Reset focus when the data set changes. React's documented pattern for
+    // resetting state in response to a prop change without useEffect:
+    // compare against the previous prop value tracked in its own useState,
+    // and call both setters during render. React short-circuits the render
+    // and re-runs with the new state — no extra commit / repaint.
+    // See: https://react.dev/reference/react/useState#storing-information-from-previous-renders
+    const [lastSeenCount, setLastSeenCount] = useState(resultCount);
+    if (lastSeenCount !== resultCount) {
+        setLastSeenCount(resultCount);
         setFocusIndex(-1);
-    }, [resultCount, setFocusIndex]);
+    }
 
-    useEffect(() => {
-        if (!enabled || resultCount === 0) return;
-
-        const handler = (e: KeyboardEvent) => {
+    // Keyboard handler lives on `document` — a genuine external-system
+    // subscription, so useEffect is the correct primitive per the
+    // dont-use-use-effect skill §7.
+    const handleKey = useCallback(
+        (e: KeyboardEvent) => {
+            if (!enabled || resultCount === 0) return;
             const target = e.target as HTMLElement;
             const tag = target.tagName.toLowerCase();
             // Don't capture when typing in inputs/selects
@@ -44,16 +69,12 @@ export function useKeyboardNavigation({
             switch (e.key) {
                 case "ArrowDown": {
                     e.preventDefault();
-                    setFocusIndex((prev) =>
-                        prev < resultCount - 1 ? prev + 1 : 0,
-                    );
+                    setFocusIndex((prev) => (prev < resultCount - 1 ? prev + 1 : 0));
                     break;
                 }
                 case "ArrowUp": {
                     e.preventDefault();
-                    setFocusIndex((prev) =>
-                        prev > 0 ? prev - 1 : resultCount - 1,
-                    );
+                    setFocusIndex((prev) => (prev > 0 ? prev - 1 : resultCount - 1));
                     break;
                 }
                 case "Home": {
@@ -68,9 +89,7 @@ export function useKeyboardNavigation({
                 }
                 case "PageDown": {
                     e.preventDefault();
-                    setFocusIndex((prev) =>
-                        Math.min(prev + 10, resultCount - 1),
-                    );
+                    setFocusIndex((prev) => Math.min(prev + 10, resultCount - 1));
                     break;
                 }
                 case "PageUp": {
@@ -123,18 +142,15 @@ export function useKeyboardNavigation({
                     break;
                 }
             }
-        };
+        },
+        [enabled, resultCount, focusIndex, table, onDownload, onOpenFormatDialog, onOpenInBrowser],
+    );
 
-        document.addEventListener("keydown", handler);
-        return () => document.removeEventListener("keydown", handler);
-    }, [
-        enabled,
-        resultCount,
-        focusIndex,
-        table,
-        onDownload,
-        onOpenFormatDialog,
-        onOpenInBrowser,
-    ]);
+    useEffect(() => {
+        if (!enabled || resultCount === 0) return;
+        document.addEventListener("keydown", handleKey);
+        return () => document.removeEventListener("keydown", handleKey);
+    }, [enabled, resultCount, handleKey]);
 
+    return { focusIndex };
 }

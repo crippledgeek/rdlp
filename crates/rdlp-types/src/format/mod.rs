@@ -109,6 +109,22 @@ pub struct Format {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
+    /// HLS audio-rendition group identifier.
+    ///
+    /// - On a video-only variant derived from an `EXT-X-STREAM-INF` that
+    ///   carries an `AUDIO="group-id"` attribute, this is the **referenced**
+    ///   group — the audio rendition the variant expects to be paired with.
+    /// - On an audio-only variant derived from an `EXT-X-MEDIA TYPE=AUDIO`
+    ///   rendition, this is the **owned** group identifier.
+    /// - `None` for any other source (muxed HLS variants, direct progressive
+    ///   downloads, extractors that don't surface groups).
+    ///
+    /// Lets UIs visually pair video-only and audio-only rows when a user
+    /// hand-picks without the preset — matching `audio_group_id` values
+    /// indicate a compatible pair.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_group_id: Option<String>,
+
     /// Dynamic range (e.g., "SDR", "HDR10", "HDR10+")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_range: Option<String>,
@@ -244,6 +260,7 @@ impl Format {
             fragment_base_url: None,
             http_headers: None,
             language: None,
+            audio_group_id: None,
             dynamic_range: None,
             cached_description: OnceLock::new(),
             has_drm: None,

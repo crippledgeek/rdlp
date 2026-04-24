@@ -1,8 +1,8 @@
 //! Tests for configuration types and validation.
+#![allow(clippy::field_reassign_with_default)]
 
 use super::*;
 use crate::container::ContainerFormat;
-use crate::postprocess::PostProcess;
 
 #[test]
 fn test_default_config() {

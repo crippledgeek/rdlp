@@ -37,15 +37,13 @@ pub(crate) static EPISODE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Detect "Next" pagination link.
-pub(crate) static NEXT_PAGE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#">Next\s*<"#).expect("Valid next page pattern")
-});
+pub(crate) static NEXT_PAGE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#">Next\s*<"#).expect("Valid next page pattern"));
 
 /// Extract total page count from "of {N}" text.
 /// Captures: (1) total pages number.
-pub(crate) static TOTAL_PAGES_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"of\s+(\d+)"#).expect("Valid total pages pattern")
-});
+pub(crate) static TOTAL_PAGES_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"of\s+(\d+)"#).expect("Valid total pages pattern"));
 
 /// Build the search URL for a given query and page.
 ///

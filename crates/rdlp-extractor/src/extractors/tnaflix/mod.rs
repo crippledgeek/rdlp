@@ -862,26 +862,38 @@ mod tests {
     #[test]
     fn test_tnaflix_extract_id_non_matching_url() {
         let extractor = &*TEST_TNAFLIX;
-        assert_eq!(extractor.extract_id("https://youtube.com/watch?v=123"), None);
+        assert_eq!(
+            extractor.extract_id("https://youtube.com/watch?v=123"),
+            None
+        );
     }
 
     #[test]
     fn test_empflix_extract_id_non_matching_url() {
         let extractor = &*TEST_EMPFLIX;
-        assert_eq!(extractor.extract_id("https://www.tnaflix.com/cat/title/video123"), None);
+        assert_eq!(
+            extractor.extract_id("https://www.tnaflix.com/cat/title/video123"),
+            None
+        );
     }
 
     #[test]
     fn test_moviefap_extract_id_non_matching_url() {
         let extractor = &*TEST_MOVIEFAP;
-        assert_eq!(extractor.extract_id("https://www.empflix.com/videos/title-123"), None);
+        assert_eq!(
+            extractor.extract_id("https://www.empflix.com/videos/title-123"),
+            None
+        );
     }
 
     #[test]
     fn test_moviefap_extract_id_uppercase_hex_fails() {
         let extractor = &*TEST_MOVIEFAP;
         // Regex is [0-9a-f] only; uppercase hex doesn't match
-        assert_eq!(extractor.extract_id("https://www.moviefap.com/videos/ABCDEF/title.html"), None);
+        assert_eq!(
+            extractor.extract_id("https://www.moviefap.com/videos/ABCDEF/title.html"),
+            None
+        );
     }
 
     #[test]
@@ -1001,8 +1013,10 @@ mod async_tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let mut config = Config::default();
-        config.verbose = false;
+        let config = Config {
+            verbose: false,
+            ..Config::default()
+        };
         ExtractionContext::new(
             Arc::new(client),
             Arc::new(NoOpJsEngine),
@@ -1081,10 +1095,7 @@ mod async_tests {
     #[tokio::test]
     async fn test_tnaflix_search_page_returns_results() {
         let mut server = Server::new_async().await;
-        let html = tnaflix_search_html(
-            &[("/video/test/video1", "Test Video", "05:00")],
-            1,
-        );
+        let html = tnaflix_search_html(&[("/video/test/video1", "Test Video", "05:00")], 1);
         let mock = server
             .mock("GET", mockito::Matcher::Any)
             .with_body(&html)
@@ -1094,10 +1105,15 @@ mod async_tests {
         let ctx = test_ctx(&server);
 
         // Fetch from mock server and parse
-        let webpage = ctx.http_client
+        let webpage = ctx
+            .http_client
             .get(format!("{}/search?what=test&tab=&page=1", server.url()))
-            .send().await.unwrap()
-            .text().await.unwrap();
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         let results = search::parse_search_results(&webpage);
 
         assert_eq!(results.len(), 1);
@@ -1196,7 +1212,11 @@ mod async_tests {
     async fn test_moviefap_fetch_and_parse_results() {
         let mut server = Server::new_async().await;
         let html = moviefap_search_html(
-            &[("https://moviefap.com/videos/abc123/title.html", "Test", "10:00")],
+            &[(
+                "https://moviefap.com/videos/abc123/title.html",
+                "Test",
+                "10:00",
+            )],
             3,
         );
         let mock = server
@@ -1300,7 +1320,9 @@ mod async_tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("Failed to fetch") || err_msg.contains("connection") || err_msg.contains("Network"),
+            err_msg.contains("Failed to fetch")
+                || err_msg.contains("connection")
+                || err_msg.contains("Network"),
             "Error should mention network failure: {err_msg}"
         );
     }
@@ -1321,6 +1343,9 @@ mod async_tests {
         let result = BaseExtractor::fetch_webpage(&long_url, &ctx).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("too long"), "Error should mention URL too long: {err_msg}");
+        assert!(
+            err_msg.contains("too long"),
+            "Error should mention URL too long: {err_msg}"
+        );
     }
 }

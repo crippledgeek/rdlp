@@ -77,7 +77,10 @@ export const formatColumns = [
     }),
     helper.accessor("acodec", {
         header: "Audio",
-        size: 50,
+        // Slightly wider than before to fit the optional HLS audio-group tag
+        // that FormatRow appends when a variant references an EXT-X-MEDIA
+        // rendition. Falls back to "—" / "<codec>" on rows without a group.
+        size: 70,
         enableSorting: true,
         cell: (info) => {
             const a = info.getValue();

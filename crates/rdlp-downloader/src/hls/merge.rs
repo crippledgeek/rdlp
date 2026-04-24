@@ -187,10 +187,10 @@ pub(crate) async fn download_segments_with_resume(
 
                 // Acquire semaphore permit before starting the download so that
                 // the adaptive controller governs the actual concurrency level.
-                let _permit = sem
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| RdlpError::Download { message: "Semaphore closed".to_string(), url: Some(seg_url.clone()) })?;
+                let _permit = sem.acquire_owned().await.map_err(|_| RdlpError::Download {
+                    message: "Semaphore closed".to_string(),
+                    url: Some(seg_url.clone()),
+                })?;
 
                 let download_start = Instant::now();
 
@@ -268,7 +268,9 @@ pub(crate) async fn download_segments_with_resume(
                     let snapshot = state.lock().await.clone();
                     let _ = snapshot.save(output_path).await;
                     return Err(RdlpError::Download {
-                        message: format!("Too many segment failures ({segment_failures}), aborting"),
+                        message: format!(
+                            "Too many segment failures ({segment_failures}), aborting"
+                        ),
                         url: None,
                     });
                 }
@@ -343,9 +345,15 @@ pub(crate) async fn merge_segments(
             "Merging segments into final file"
         );
 
-        let final_file = File::create(output_path).await.map_err(|e| RdlpError::Io(
-            std::io::Error::new(e.kind(), format!("failed to create HLS output file '{}': {e}", output_path.display()))
-        ))?;
+        let final_file = File::create(output_path).await.map_err(|e| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to create HLS output file '{}': {e}",
+                    output_path.display()
+                ),
+            ))
+        })?;
         let mut writer = BufWriter::with_capacity(buffer_size, final_file);
         let mut total_bytes = 0u64;
 
@@ -358,28 +366,53 @@ pub(crate) async fn merge_segments(
 
             if seg_init != current_init {
                 if let Some(init_path) = seg_init {
-                    let mut init_file = File::open(init_path).await.map_err(|e| RdlpError::Io(
-                        std::io::Error::new(e.kind(), format!("failed to open init segment file '{}': {e}", init_path.display()))
-                    ))?;
-                    let bytes = tokio::io::copy(&mut init_file, &mut writer)
-                        .await
-                        .map_err(|e| RdlpError::Io(
-                            std::io::Error::new(e.kind(), format!("failed to copy init segment '{}' to output: {e}", init_path.display()))
-                        ))?;
+                    let mut init_file = File::open(init_path).await.map_err(|e| {
+                        RdlpError::Io(std::io::Error::new(
+                            e.kind(),
+                            format!(
+                                "failed to open init segment file '{}': {e}",
+                                init_path.display()
+                            ),
+                        ))
+                    })?;
+                    let bytes =
+                        tokio::io::copy(&mut init_file, &mut writer)
+                            .await
+                            .map_err(|e| {
+                                RdlpError::Io(std::io::Error::new(
+                                    e.kind(),
+                                    format!(
+                                        "failed to copy init segment '{}' to output: {e}",
+                                        init_path.display()
+                                    ),
+                                ))
+                            })?;
                     total_bytes += bytes;
                     debug!(bytes, segment = idx; "Wrote fMP4 init segment");
                 }
                 current_init = seg_init;
             }
 
-            let mut segment_file = File::open(segment_path).await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to open segment file '{}': {e}", segment_path.display()))
-            ))?;
+            let mut segment_file = File::open(segment_path).await.map_err(|e| {
+                RdlpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to open segment file '{}': {e}",
+                        segment_path.display()
+                    ),
+                ))
+            })?;
             let bytes = tokio::io::copy(&mut segment_file, &mut writer)
                 .await
-                .map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to copy segment '{}' to output: {e}", segment_path.display()))
-                ))?;
+                .map_err(|e| {
+                    RdlpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "failed to copy segment '{}' to output: {e}",
+                            segment_path.display()
+                        ),
+                    ))
+                })?;
             total_bytes += bytes;
 
             if (idx + 1) % 100 == 0 || idx == segment_paths.len() - 1 {
@@ -392,9 +425,15 @@ pub(crate) async fn merge_segments(
             }
         }
 
-        writer.flush().await.map_err(|e| RdlpError::Io(
-            std::io::Error::new(e.kind(), format!("failed to flush HLS output file '{}': {e}", output_path.display()))
-        ))?;
+        writer.flush().await.map_err(|e| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to flush HLS output file '{}': {e}",
+                    output_path.display()
+                ),
+            ))
+        })?;
         debug!(mb = total_bytes / (1024 * 1024); "Merge complete");
 
         Ok(total_bytes)
