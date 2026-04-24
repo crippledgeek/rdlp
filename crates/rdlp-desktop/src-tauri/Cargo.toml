@@ -21,6 +21,7 @@ rdlp-types = { path = "../../rdlp-types" }
 rdlp-core = { path = "../../rdlp-core" }
 rdlp-postprocess = { path = "../../rdlp-postprocess" }
 rdlp-security = { path = "../../rdlp-security" }
+rdlp-http = { path = "../../rdlp-http" }
 wreq = { workspace = true }
 url = { workspace = true }
 

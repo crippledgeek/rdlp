@@ -96,12 +96,13 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
 
     let referer = derive_referer(&url).unwrap_or_default();
 
-    let client = wreq::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .map_err(|e| AppError::Internal {
-            message: format!("Failed to create HTTP client: {e}"),
-        })?;
+    // Route through HttpClientFactory so the default browser emulation
+    // profile is applied. Preserves the 10s read budget via
+    // HttpClientConfig::with_read_timeout_secs (spec §6.8, D2.2).
+    let http_config = rdlp_http::HttpClientConfig::default()
+        .with_read_timeout_secs(TIMEOUT.as_secs())
+        .with_connect_timeout_secs(TIMEOUT.as_secs());
+    let client = rdlp_http::HttpClientFactory::from_config(&http_config).build();
 
     let resp = client
         .get(&url)

@@ -84,7 +84,15 @@ impl HttpDownloader {
     /// Create a new HTTP downloader
     #[must_use]
     pub fn new() -> Self {
-        Self::with_client(wreq::Client::new())
+        // Route through HttpClientFactory so the default browser emulation
+        // profile (ChromeLatest) is applied — otherwise this constructor
+        // would hand back a wreq client with no JA4 / JA4H emulation,
+        // bypassing the Phase 2 fingerprint guarantee (spec §6.8).
+        let client = rdlp_http::HttpClientFactory::from_config(
+            &rdlp_http::HttpClientConfig::default(),
+        )
+        .build();
+        Self::with_client(client)
     }
 
     /// Create with custom client
