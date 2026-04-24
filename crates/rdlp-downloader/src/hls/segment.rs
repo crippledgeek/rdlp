@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use reqwest::header::HeaderMap;
+use wreq::header::HeaderMap;
 use std::time::Duration;
 
 use backon::Retryable;
