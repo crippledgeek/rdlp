@@ -3542,6 +3542,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "openssl-sys"
+version = "0.9.114"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4268,6 +4280,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
  "wreq",
 ]
 
@@ -4370,6 +4383,7 @@ dependencies = [
  "rdlp-api",
  "rdlp-core",
  "rdlp-ffmpeg",
+ "rdlp-http",
  "rdlp-postprocess",
  "rdlp-security",
  "rdlp-types",
@@ -4450,6 +4464,7 @@ dependencies = [
  "anyhow",
  "ffmpeg-the-third",
  "log",
+ "openssl-sys",
  "rdlp-core",
  "rdlp-types",
  "serde",
@@ -4463,6 +4478,7 @@ name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
  "rdlp-types",
+ "serde_json",
  "tokio",
  "tracing",
  "wreq",
