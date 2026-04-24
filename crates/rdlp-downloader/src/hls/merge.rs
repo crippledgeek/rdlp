@@ -1,9 +1,15 @@
 //! HLS segment merging and cleanup.
+//!
+//! std::sync::Mutex is intentional for `Arc<Mutex<HlsDownloadState>>`: guards
+//! never cross an .await point. Snapshots are cloned out of the lock before
+//! any `.save().await` call, and all critical sections are pure sync
+//! (HashSet edits, counter updates, clone-out-for-save).
+//! See docs/implementation/tls-impersonation/phase-1-report.md Finding 2.2.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
@@ -11,7 +17,6 @@ use log::{debug, warn};
 use rdlp_core::{ProgressCallback, RdlpError, Result, RetryConfig};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::Mutex;
 use tracing::instrument;
 
 use super::segment::download_segment_with_retry;
@@ -65,7 +70,11 @@ pub(crate) async fn download_segments_with_resume(
     let total_segments = segments.len();
 
     // Get already completed segments and validate they exist on disk
-    let original_completed: HashSet<usize> = state.lock().await.completed_segments.clone();
+    let original_completed: HashSet<usize> = state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .completed_segments
+        .clone();
 
     // Verify completed segments actually exist on disk (handles corrupted/deleted files)
     let is_valid_on_disk = |idx: &usize| -> bool {
@@ -94,7 +103,7 @@ pub(crate) async fn download_segments_with_resume(
         );
         // Update state to remove invalid entries
         {
-            let mut state_guard = state.lock().await;
+            let mut state_guard = state.lock().unwrap_or_else(|e| e.into_inner());
             for idx in &missing_segments {
                 state_guard.completed_segments.remove(idx);
             }
@@ -176,7 +185,7 @@ pub(crate) async fn download_segments_with_resume(
                     let bytes = meta.len();
                     // Mark as completed in state
                     {
-                        let mut state_guard = state.lock().await;
+                        let mut state_guard = state.lock().unwrap_or_else(|e| e.into_inner());
                         state_guard.mark_completed(idx, bytes);
                     }
                     segments.fetch_add(1, Ordering::Relaxed);
@@ -217,9 +226,9 @@ pub(crate) async fn download_segments_with_resume(
 
                         // Update state on success; clone if periodic save needed
                         let snapshot = {
-                            let mut guard = state.lock().await;
+                            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
                             guard.mark_completed(idx, *bytes);
-                            if guard.completed_segments.len() % 50 == 0 {
+                            if guard.completed_segments.len().is_multiple_of(50) {
                                 Some(guard.clone())
                             } else {
                                 None
@@ -237,7 +246,7 @@ pub(crate) async fn download_segments_with_resume(
                     }
                     Err(e) => {
                         // Save state on error before propagating
-                        let snapshot = state.lock().await.clone();
+                        let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Err(save_err) = snapshot.save(&output_path).await {
                             warn!("Failed to save HLS state on error: {save_err}");
                         }
@@ -265,7 +274,7 @@ pub(crate) async fn download_segments_with_resume(
                     "Segment failed: {e}"
                 );
                 if segment_failures >= max_segment_failures {
-                    let snapshot = state.lock().await.clone();
+                    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     let _ = snapshot.save(output_path).await;
                     return Err(RdlpError::Download {
                         message: format!(
@@ -282,7 +291,7 @@ pub(crate) async fn download_segments_with_resume(
     }
 
     // Save final state (clone under lock, then save outside lock)
-    let snapshot = state.lock().await.clone();
+    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Err(e) = snapshot.save(output_path).await {
         warn!("Failed to save final HLS state: {e}");
     }

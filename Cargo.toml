@@ -122,6 +122,8 @@ tempfile = "3.14"
 
 [workspace.lints.clippy]
 must_use_candidate = "warn"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]

@@ -23,14 +23,17 @@ mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+// std::sync::Mutex is intentional for `Arc<Mutex<HlsDownloadState>>`: guards
+// never cross an .await point. Snapshots are cloned out of the lock before
+// any `.save().await` call.
+// See docs/implementation/tls-impersonation/phase-1-report.md Finding 2.2.
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig};
-use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::hls_state::HlsDownloadState;
@@ -235,9 +238,18 @@ impl Downloader for HlsDownloader {
             };
 
             // Step 3: Setup progress tracking
-            let downloaded = Arc::new(AtomicU64::new(state.lock().await.total_bytes_downloaded));
+            let downloaded = Arc::new(AtomicU64::new(
+                state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .total_bytes_downloaded,
+            ));
             let segments_completed = Arc::new(AtomicU64::new(
-                state.lock().await.completed_segments.len() as u64,
+                state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .completed_segments
+                    .len() as u64,
             ));
             // Duration in centiseconds for atomic precision (f64 -> u64)
             let duration_completed = Arc::new(AtomicU64::new(0));
@@ -285,7 +297,7 @@ impl Downloader for HlsDownloader {
                 Ok(paths) => paths,
                 Err(e) => {
                     // Save state on error (so we can resume later)
-                    let snapshot = state.lock().await.clone();
+                    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     if let Err(save_err) = snapshot.save(path).await {
                         warn!("Failed to save HLS state: {save_err}");
                     }
