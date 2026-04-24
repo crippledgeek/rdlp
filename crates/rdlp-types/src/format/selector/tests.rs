@@ -366,6 +366,30 @@ fn test_parse_extension_webm() {
     assert!(FormatSelector::parse("webm").is_ok());
 }
 
+/// Regression: `mp4-hd` and similar format_ids whose prefix collides
+/// with a known-extension shorthand (`mp4`, `webm`, ...) must parse as
+/// a literal format_id, not as `Extension("mp4")` with `-hd` leftover.
+///
+/// XVideos emits exactly these ids (`mp4-hd`, `mp4-low`, `mp4-high`) —
+/// passing one as a selector previously errored with
+/// `Parse error at position 3`.
+#[test]
+fn test_parse_extension_prefix_collision_is_format_id() {
+    for id in &["mp4-hd", "mp4-low", "mp4-high", "webm-720", "aac-128"] {
+        let sel = FormatSelector::parse(id)
+            .unwrap_or_else(|e| panic!("failed to parse `{id}`: {e:?}"));
+        let spec = &sel.selectors[0].fallbacks[0];
+        match spec {
+            FormatSpec::Single(s) => assert!(
+                matches!(&s.base, FormatToken::FormatId(fid) if fid == *id),
+                "expected FormatId({id:?}), got {:?}",
+                s.base
+            ),
+            other => panic!("expected Single spec for `{id}`, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn test_parse_all_known_extensions() {
     for ext in &[
