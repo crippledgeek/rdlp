@@ -6,20 +6,23 @@ use std::time::Duration;
 
 /// Factory for creating configured HTTP clients
 ///
-/// This factory provides a consistent way to create reqwest clients
-/// with optimized settings for download operations.
+/// This factory provides a consistent way to create wreq clients
+/// with optimized settings for download operations. Every client built
+/// here carries the emulation profile selected by
+/// [`HttpClientConfig::emulation`], so TLS handshake shape, HTTP/2
+/// SETTINGS, and User-Agent match a real browser.
 ///
 /// # Example
 ///
 /// ```rust,no_run
 /// use rdlp_http::HttpClientFactory;
 ///
-/// // Create with defaults
+/// // Create with defaults (Chrome-latest emulation)
 /// let client = HttpClientFactory::default().build();
 ///
 /// // Create with custom config
 /// let config = rdlp_http::HttpClientConfig::default()
-///     .with_user_agent("MyApp/1.0");
+///     .with_connect_timeout_secs(15);
 /// let client = HttpClientFactory::from_config(&config).build();
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -50,24 +53,27 @@ impl HttpClientFactory {
         }
     }
 
-    /// Build a reqwest::Client with the configured settings
+    /// Build a wreq::Client with the configured settings
     #[must_use]
-    pub fn build(&self) -> reqwest::Client {
+    pub fn build(&self) -> wreq::Client {
         self.build_inner(None)
     }
 
-    /// Build a reqwest::Client with a cookie provider.
+    /// Build a wreq::Client with a cookie provider.
     ///
     /// Cookies in the jar are automatically sent with every request and
     /// `Set-Cookie` response headers are stored back into the jar.
     #[must_use]
-    pub fn build_with_cookies(&self, jar: Arc<reqwest::cookie::Jar>) -> reqwest::Client {
+    pub fn build_with_cookies(&self, jar: Arc<wreq::cookie::Jar>) -> wreq::Client {
         self.build_inner(Some(jar))
     }
 
-    fn build_inner(&self, cookie_jar: Option<Arc<reqwest::cookie::Jar>>) -> reqwest::Client {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(&self.config.user_agent)
+    fn build_inner(&self, cookie_jar: Option<Arc<wreq::cookie::Jar>>) -> wreq::Client {
+        // NOTE: Do NOT call `.user_agent(...)` here — the emulation profile
+        // owns User-Agent. Overriding it desyncs the JA4H fingerprint.
+        // (spec §6.4)
+        let mut builder = wreq::Client::builder()
+            .emulation(self.config.emulation.resolve())
             .pool_max_idle_per_host(self.config.pool_max_idle_per_host)
             .pool_idle_timeout(Duration::from_secs(self.config.pool_idle_timeout_secs))
             .tcp_keepalive(Duration::from_secs(self.config.tcp_keepalive_secs))
@@ -80,24 +86,24 @@ impl HttpClientFactory {
         }
 
         if let Some(proxy_url) = &self.config.proxy {
-            match reqwest::Proxy::all(proxy_url) {
+            match wreq::Proxy::all(proxy_url) {
                 Ok(proxy) => builder = builder.proxy(proxy),
                 Err(e) => tracing::debug!("Invalid proxy URL '{}': {}", proxy_url, e),
             }
         }
 
-        builder.build().unwrap_or_else(|_| reqwest::Client::new())
+        builder.build().unwrap_or_else(|_| wreq::Client::new())
     }
 
     /// Build and wrap in Arc for sharing across async tasks
     #[must_use]
-    pub fn build_arc(&self) -> Arc<reqwest::Client> {
+    pub fn build_arc(&self) -> Arc<wreq::Client> {
         Arc::new(self.build())
     }
 
     /// Build with cookie provider and wrap in Arc for sharing across async tasks
     #[must_use]
-    pub fn build_arc_with_cookies(&self, jar: Arc<reqwest::cookie::Jar>) -> Arc<reqwest::Client> {
+    pub fn build_arc_with_cookies(&self, jar: Arc<wreq::cookie::Jar>) -> Arc<wreq::Client> {
         Arc::new(self.build_with_cookies(jar))
     }
 }
@@ -115,9 +121,7 @@ mod tests {
 
     #[test]
     fn test_from_config() {
-        let config = HttpClientConfig::new()
-            .with_user_agent("Test/1.0")
-            .with_connect_timeout_secs(15);
+        let config = HttpClientConfig::new().with_connect_timeout_secs(15);
 
         let factory = HttpClientFactory::from_config(&config);
         let _client = factory.build();

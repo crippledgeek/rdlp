@@ -1,6 +1,7 @@
 //! HTTP client configuration
 
 use crate::DEFAULT_USER_AGENT;
+use rdlp_types::BrowserEmulation;
 
 /// Configuration for HTTP client behavior
 ///
@@ -8,8 +9,19 @@ use crate::DEFAULT_USER_AGENT;
 /// Use the builder methods to customize behavior.
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
-    /// User agent string for requests
+    /// User agent string.
+    ///
+    /// Retained for backwards compatibility and diagnostic logging.
+    /// The wreq client does NOT set User-Agent from this field — the
+    /// emulation profile owns it. Setting this has no observable effect
+    /// on outgoing requests.
     pub user_agent: String,
+
+    /// Browser emulation profile applied to every request.
+    ///
+    /// Drives TLS handshake fingerprint, HTTP/2 SETTINGS frame shape,
+    /// header order, and User-Agent.
+    pub emulation: BrowserEmulation,
 
     /// Connection timeout in seconds
     pub connect_timeout_secs: u64,
@@ -37,6 +49,7 @@ impl Default for HttpClientConfig {
     fn default() -> Self {
         Self {
             user_agent: DEFAULT_USER_AGENT.to_string(),
+            emulation: BrowserEmulation::default(),
             connect_timeout_secs: 30,
             read_timeout_secs: 60,
             pool_max_idle_per_host: 10,
@@ -68,15 +81,26 @@ impl HttpClientConfig {
             http_config.connect_timeout_secs = timeout;
         }
 
+        http_config.emulation = config.browser_emulation.clone();
         http_config.proxy.clone_from(&config.proxy);
 
         http_config
     }
 
-    /// Set the user agent string
+    /// Set the user agent string.
+    ///
+    /// NOTE: wreq's emulation profile owns User-Agent — this setter
+    /// only updates the diagnostic-use field on the config.
     #[must_use]
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
+        self
+    }
+
+    /// Set the browser emulation profile.
+    #[must_use]
+    pub fn with_emulation(mut self, emulation: BrowserEmulation) -> Self {
+        self.emulation = emulation;
         self
     }
 
@@ -142,6 +166,7 @@ mod tests {
         assert_eq!(config.read_timeout_secs, 60);
         assert!(config.tcp_nodelay);
         assert!(config.proxy.is_none());
+        assert!(matches!(config.emulation, BrowserEmulation::ChromeLatest));
     }
 
     #[test]
@@ -157,5 +182,11 @@ mod tests {
             config.proxy.as_deref(),
             Some("http://proxy.example.com:8080")
         );
+    }
+
+    #[test]
+    fn test_with_emulation() {
+        let config = HttpClientConfig::new().with_emulation(BrowserEmulation::FirefoxLatest);
+        assert!(matches!(config.emulation, BrowserEmulation::FirefoxLatest));
     }
 }

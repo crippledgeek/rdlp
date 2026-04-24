@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::browser_emulation::BrowserEmulation;
 use crate::browser_type::BrowserType;
 use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
@@ -137,6 +138,13 @@ pub struct Config {
 
     /// User agent string
     pub user_agent: Option<String>,
+
+    /// Browser emulation profile for the TLS / HTTP stack.
+    ///
+    /// Drives the JA4 / JA4H fingerprint presented to servers. Defaults
+    /// to `BrowserEmulation::ChromeLatest`.
+    #[serde(default)]
+    pub browser_emulation: BrowserEmulation,
 
     /// Custom HTTP headers
     pub http_headers: Vec<(String, String)>,
@@ -283,6 +291,7 @@ impl Default for Config {
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
             ),
+            browser_emulation: BrowserEmulation::default(),
             http_headers: Vec::new(),
 
             // Post-processing
