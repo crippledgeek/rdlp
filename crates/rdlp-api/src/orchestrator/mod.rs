@@ -323,7 +323,7 @@ impl Orchestrator {
         let infos = self.extract_playlist_info(url).await?;
 
         // Load archive once at start
-        let archive = self.load_archive_if_configured();
+        let archive = self.load_archive_if_configured().await;
 
         // If multiple videos found, this is a playlist.
         // Playlist prints its own summary, so return None to suppress
@@ -378,7 +378,8 @@ impl Orchestrator {
             match phase {
                 DownloadPhase::Complete { path } => {
                     // Record in archive after successful download
-                    self.record_in_archive(&infos[0].extractor, &infos[0].id);
+                    self.record_in_archive(&infos[0].extractor, &infos[0].id)
+                        .await;
                     return Ok(Some(path));
                 }
                 DownloadPhase::Cancelled => return Ok(None),
@@ -423,19 +424,40 @@ impl Orchestrator {
     }
 
     /// Load archive if configured, returning `None` if not configured.
-    fn load_archive_if_configured(&self) -> Option<HashSet<String>> {
-        self.config
-            .download_archive
-            .as_ref()
-            .map(|path| archive::load_archive(path))
+    ///
+    /// Archive reads are synchronous file I/O. In an async context we dispatch
+    /// to a blocking worker so the runtime thread isn't stalled while the
+    /// archive file is read, especially when it lives on a slow or network
+    /// filesystem.
+    pub(super) async fn load_archive_if_configured(&self) -> Option<HashSet<String>> {
+        let path = self.config.download_archive.clone()?;
+        match tokio::task::spawn_blocking(move || archive::load_archive(&path)).await {
+            Ok(set) => Some(set),
+            Err(e) => {
+                warn!("Archive load task join failed: {e}");
+                Some(HashSet::new())
+            }
+        }
     }
 
     /// Record a completed download in the archive (no-op if not configured).
-    fn record_in_archive(&self, extractor: &str, id: &str) {
-        if let Some(ref path) = self.config.download_archive
-            && let Err(e) = archive::record_in_archive(path, extractor, id)
-        {
-            warn!("Failed to write to download archive: {e}");
+    ///
+    /// The archive append is synchronous file I/O, dispatched via
+    /// `spawn_blocking` to avoid stalling the async runtime.
+    pub(super) async fn record_in_archive(&self, extractor: &str, id: &str) {
+        let Some(path) = self.config.download_archive.clone() else {
+            return;
+        };
+        let extractor = extractor.to_owned();
+        let id = id.to_owned();
+        let result = tokio::task::spawn_blocking(move || {
+            archive::record_in_archive(&path, &extractor, &id)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("Failed to write to download archive: {e}"),
+            Err(e) => warn!("Archive record task join failed: {e}"),
         }
     }
 }

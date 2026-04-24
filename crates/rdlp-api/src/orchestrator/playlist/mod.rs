@@ -86,7 +86,7 @@ impl Orchestrator {
                 .map(|opt| opt.map(|path| vec![path]));
         }
 
-        let archive = self.load_archive_if_configured();
+        let archive = self.load_archive_if_configured().await;
         self.download_playlist_internal(infos, interactive, archive)
             .await
     }
