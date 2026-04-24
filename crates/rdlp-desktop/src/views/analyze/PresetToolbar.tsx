@@ -6,7 +6,12 @@ import { useState } from "react";
 import { Toolbar } from "@/components/ui/toolbar";
 import { Checkbox, ToggleButton } from "react-aria-components";
 import { useStore } from "@tanstack/react-store";
-import { setSelectedFormat, setShowExpertFormats, uiStore } from "@/stores/uiStore";
+import {
+    setSelectedFormat,
+    setSelectedSelector,
+    setShowExpertFormats,
+    uiStore,
+} from "@/stores/uiStore";
 import { cn } from "@/lib/utils";
 import type { FormatInfo } from "@/types";
 
@@ -19,25 +24,61 @@ const PRESETS: { id: Preset; label: string }[] = [
     { id: "audio", label: "Audio Only" },
 ];
 
-function findFormatForPreset(formats: FormatInfo[], preset: Preset): string | null {
+/**
+ * Result of resolving a preset against the current format list.
+ *
+ * - `"formatId"` — pick this single `format_id` and download it directly.
+ * - `"selector"` — pass this DSL string to the backend's format selector
+ *   (e.g. `"bv*+ba/best"` for auto-pair). Used when the best choice is a
+ *   video-only + audio-only merge rather than any single row.
+ */
+type PresetResult =
+    | { kind: "formatId"; value: string }
+    | { kind: "selector"; value: string };
+
+function findFormatForPreset(formats: FormatInfo[], preset: Preset): PresetResult | null {
     switch (preset) {
         case "best": {
+            // Auto-pair bv+ba when BOTH a video-only and audio-only format
+            // exist AND the video-only outranks the best muxed by height
+            // (mirrors yt-dlp's default `bestvideo*+bestaudio/best`). Falls
+            // back to the best muxed row otherwise — muxed-only sites keep
+            // their original behaviour.
             const muxed = formats.filter((f) => f.has_video && f.has_audio);
-            const sorted = (muxed.length > 0 ? muxed : formats.filter((f) => f.has_video))
-                .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
-            return sorted[0]?.format_id ?? null;
+            const videoOnly = formats.filter((f) => f.has_video && !f.has_audio);
+            const audioOnly = formats.filter((f) => !f.has_video && f.has_audio);
+            const bestMuxedHeight = Math.max(0, ...muxed.map((f) => f.height ?? 0));
+            const bestVideoOnlyHeight = Math.max(0, ...videoOnly.map((f) => f.height ?? 0));
+            const pairAvailable = videoOnly.length > 0 && audioOnly.length > 0;
+            const pairBeatsMuxed = bestVideoOnlyHeight > bestMuxedHeight;
+            if (pairAvailable && pairBeatsMuxed) {
+                // `bv*` includes muxed as a video candidate, so on sites
+                // where the muxed variant has the highest bitrate despite
+                // lower resolution, the backend can still pick it. The
+                // `/best` tail covers the degenerate case where `ba` fails.
+                return { kind: "selector", value: "bv*+ba/best" };
+            }
+            const sorted = (muxed.length > 0 ? muxed : videoOnly).sort(
+                (a, b) => (b.height ?? 0) - (a.height ?? 0),
+            );
+            const best = sorted[0]?.format_id;
+            return best ? { kind: "formatId", value: best } : null;
         }
         case "1080p": {
             const candidates = formats.filter((f) => f.has_video && (f.height ?? 0) <= 1080);
-            return candidates.sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0]?.format_id ?? null;
+            const top = candidates.sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0]
+                ?.format_id;
+            return top ? { kind: "formatId", value: top } : null;
         }
         case "720p": {
             const candidates = formats.filter((f) => f.has_video && (f.height ?? 0) <= 720);
-            return candidates.sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0]?.format_id ?? null;
+            const top = candidates.sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0]
+                ?.format_id;
+            return top ? { kind: "formatId", value: top } : null;
         }
         case "audio": {
-            const audioOnly = formats.filter((f) => !f.has_video && f.has_audio);
-            return audioOnly[0]?.format_id ?? null;
+            const id = formats.filter((f) => !f.has_video && f.has_audio)[0]?.format_id;
+            return id ? { kind: "formatId", value: id } : null;
         }
         default:
             return null;
@@ -60,8 +101,13 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
 
     function handlePreset(preset: Preset) {
         setActivePreset(preset);
-        const formatId = findFormatForPreset(formats, preset);
-        if (formatId) setSelectedFormat(formatId);
+        const result = findFormatForPreset(formats, preset);
+        if (!result) return;
+        if (result.kind === "selector") {
+            setSelectedSelector(result.value);
+        } else {
+            setSelectedFormat(result.value);
+        }
     }
 
     return (

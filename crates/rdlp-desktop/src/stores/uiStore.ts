@@ -9,6 +9,21 @@ export interface UiState {
     navPanelCollapsed: boolean;
     bottomDrawerExpanded: boolean;
     selectedFormatId: string | null;
+    /**
+     * Backend format-selector DSL override (yt-dlp syntax, e.g. `"bv*+ba/best"`).
+     *
+     * Mutually exclusive with `selectedFormatId`: setters on either field
+     * null the other out. Presets like "Best" set this to a DSL string when
+     * the extractor exposes both video-only and audio-only renditions so the
+     * download side auto-pairs (`bv*+ba/best` falls back to the best muxed on
+     * sites that don't offer a split); otherwise they pick a single `format_id`
+     * and leave this null.
+     *
+     * Format-table row highlighting is driven by `selectedFormatId` only —
+     * when `selectedSelector` is active no single row is highlighted; the
+     * toolbar's preset pill carries the visual state instead.
+     */
+    selectedSelector: string | null;
     selectedJobId: string | null;
     commandPaletteOpen: boolean;
     analyzeUrl: string | null;
@@ -32,6 +47,7 @@ const initialState: UiState = {
     navPanelCollapsed: false,
     bottomDrawerExpanded: false,
     selectedFormatId: null,
+    selectedSelector: null,
     selectedJobId: null,
     commandPaletteOpen: false,
     analyzeUrl: null,
@@ -57,7 +73,26 @@ export function toggleBottomDrawer(): void {
 }
 
 export function setSelectedFormat(id: string | null): void {
-    uiStore.setState((prev) => ({ ...prev, selectedFormatId: id }));
+    // Mutually exclusive with selectedSelector — picking a single format_id
+    // clears any active DSL override so the two states never drift.
+    uiStore.setState((prev) => ({
+        ...prev,
+        selectedFormatId: id,
+        selectedSelector: id !== null ? null : prev.selectedSelector,
+    }));
+}
+
+/**
+ * Set a format-selector DSL override (e.g. `"bv*+ba/best"`). Passing a
+ * non-null value clears `selectedFormatId`; passing null only clears the
+ * selector and leaves any previously-selected format_id untouched.
+ */
+export function setSelectedSelector(selector: string | null): void {
+    uiStore.setState((prev) => ({
+        ...prev,
+        selectedSelector: selector,
+        selectedFormatId: selector !== null ? null : prev.selectedFormatId,
+    }));
 }
 
 export function setSelectedJob(id: string | null): void {
