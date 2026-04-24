@@ -14,7 +14,7 @@ rdlp-security = { path = "../rdlp-security" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-reqwest = { workspace = true }
+wreq = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }

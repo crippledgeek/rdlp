@@ -51,7 +51,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTTP and networking
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "stream"] }
+wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks"] }
+wreq-util = "3.0.0-rc.10"
 url = "2.5"
 
 # HTML/JSON parsing
