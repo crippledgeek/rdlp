@@ -79,6 +79,17 @@ export interface FormatInfo {
     protocol: string;
     has_video: boolean;
     has_audio: boolean;
+    /**
+     * HLS audio-rendition group identifier.
+     *
+     * - On a video-only row: the `AUDIO="group-id"` referenced by the
+     *   variant's `EXT-X-STREAM-INF` — i.e. the group it expects to be
+     *   paired with.
+     * - On an audio-only row: the row's own `EXT-X-MEDIA` `GROUP-ID`.
+     *
+     * Matching values indicate a compatible bv+ba pair. `null` outside HLS.
+     */
+    audio_group_id: string | null;
 }
 
 /** Subtitle availability for a single language. */

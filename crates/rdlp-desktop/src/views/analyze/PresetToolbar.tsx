@@ -2,7 +2,7 @@
 // Presets: Best, 1080p, 720p, Audio Only.
 // Clicking a preset auto-selects the best matching format.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Toolbar } from "@/components/ui/toolbar";
 import { Checkbox, ToggleButton } from "react-aria-components";
 import { useStore } from "@tanstack/react-store";
@@ -90,8 +90,15 @@ interface PresetToolbarProps {
 }
 
 export function PresetToolbar({ formats }: PresetToolbarProps) {
-    const [activePreset, setActivePreset] = useState<Preset>("best");
+    // `clickedPreset` captures the user's explicit preset choice. The
+    // visible `activePreset` (lit pill) is derived below by checking
+    // whether the current uiStore selection still matches that choice —
+    // clicking a row manually via FormatsTable changes uiStore out from
+    // under us, and the pill should deselect.
+    const [clickedPreset, setClickedPreset] = useState<Preset | null>(null);
     const showExpertFormats = useStore(uiStore, (s) => s.showExpertFormats);
+    const selectedFormatId = useStore(uiStore, (s) => s.selectedFormatId);
+    const selectedSelector = useStore(uiStore, (s) => s.selectedSelector);
 
     // Count of video-only rows — used to decide whether the Expert toggle is
     // even meaningful on this particular video (most sites expose zero).
@@ -99,8 +106,23 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
         (f) => f.has_video && !f.has_audio,
     ).length;
 
+    // Visible preset: the clicked one IF its resolved value still matches
+    // what's currently selected. Deriving at render time (rather than via
+    // useEffect) per the project's React-state rules — the value has no
+    // independent identity, it's a pure function of (clickedPreset, formats,
+    // uiStore selection).
+    const activePreset: Preset | null = useMemo(() => {
+        if (!clickedPreset) return null;
+        const result = findFormatForPreset(formats, clickedPreset);
+        if (!result) return null;
+        const matches = result.kind === "selector"
+            ? selectedSelector === result.value
+            : selectedFormatId === result.value;
+        return matches ? clickedPreset : null;
+    }, [clickedPreset, formats, selectedFormatId, selectedSelector]);
+
     function handlePreset(preset: Preset) {
-        setActivePreset(preset);
+        setClickedPreset(preset);
         const result = findFormatForPreset(formats, preset);
         if (!result) return;
         if (result.kind === "selector") {

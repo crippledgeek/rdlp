@@ -333,6 +333,13 @@ async fn detect_format_sizes_inner(
                             .language
                             .clone()
                             .or_else(|| format.language.clone());
+                        // Propagate the HLS audio-rendition group:
+                        //   - video-only rows carry the AUDIO= reference (the
+                        //     group their paired audio lives in)
+                        //   - audio-only rows carry their own GROUP-ID.
+                        // UIs use matching values to visually pair rows when
+                        // a user hand-picks without the Best preset.
+                        expanded_format.audio_group_id = variant.audio_group_id.clone();
                         expanded_format.duration = variant.total_duration;
                         // Estimate size from bitrate × duration (bytes = bps × s / 8)
                         expanded_format.filesize_approx = match (variant.bandwidth, variant.total_duration) {

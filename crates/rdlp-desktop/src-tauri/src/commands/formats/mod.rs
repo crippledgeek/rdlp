@@ -126,6 +126,7 @@ pub async fn get_formats(
             protocol: f.protocol.to_string(),
             has_video: f.has_video(),
             has_audio: f.has_audio(),
+            audio_group_id: f.audio_group_id.clone(),
         })
         .collect();
 
@@ -251,6 +252,7 @@ mod tests {
             protocol: "https".to_owned(),
             has_video: true,
             has_audio: true,
+            audio_group_id: None,
         };
 
         let json = serde_json::to_value(&info).expect("serialization");
@@ -286,6 +288,7 @@ mod tests {
             protocol: "m3u8_native".to_owned(),
             has_video: false,
             has_audio: true,
+            audio_group_id: None,
         };
 
         let json = serde_json::to_value(&info).expect("serialization");
@@ -336,6 +339,7 @@ mod tests {
                 protocol: "https".to_owned(),
                 has_video: true,
                 has_audio: true,
+                audio_group_id: None,
             }],
             subtitles: vec![SubtitleInfo {
                 lang: "en".to_owned(),

@@ -68,6 +68,45 @@ export const FormatRow = memo(
                         );
                     }
 
+                    if (colId === "acodec") {
+                        const audio = format.acodec;
+                        const group = format.audio_group_id;
+                        // Video-only rows in an HLS master reference an
+                        // EXT-X-MEDIA audio group; we render "→ group" so a
+                        // user hand-picking can match it to the paired
+                        // audio-only row (which renders the same group id).
+                        if (!audio || audio === "none") {
+                            return (
+                                <td key={cell.id} className="px-2 py-1.5 text-[11px] w-[60px]">
+                                    {group ? (
+                                        <span
+                                            className="inline-flex items-center gap-0.5 px-1 rounded-[3px] text-[10px] font-mono text-[#7aa57a] bg-[#0f1a0f] border border-[#1f2f1f]"
+                                            title={`Pairs with audio rendition group "${group}"`}
+                                        >
+                                            <span aria-hidden>→</span>
+                                            <span>{group}</span>
+                                        </span>
+                                    ) : (
+                                        <span className="text-[#444444]">—</span>
+                                    )}
+                                </td>
+                            );
+                        }
+                        return (
+                            <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#aaaaaa] w-[60px]">
+                                <span className="mr-1">{audio}</span>
+                                {group && (
+                                    <span
+                                        className="inline-block px-1 rounded-[3px] text-[10px] font-mono text-[#7aa57a] bg-[#0f1a0f] border border-[#1f2f1f]"
+                                        title={`HLS audio rendition group "${group}"`}
+                                    >
+                                        {group}
+                                    </span>
+                                )}
+                            </td>
+                        );
+                    }
+
                     if (colId === "protocol") {
                         const proto = format.protocol;
                         const isHls = HLS_PROTOCOLS.has(proto.toLowerCase());
