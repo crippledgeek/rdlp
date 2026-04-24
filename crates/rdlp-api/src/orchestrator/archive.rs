@@ -14,6 +14,8 @@ use std::path::Path;
 /// Returns an empty set if the file does not exist. Blank lines and lines
 /// starting with `#` are ignored.
 pub fn load_archive(path: &Path) -> HashSet<String> {
+    // Safe: sync helper invoked only via tokio::task::spawn_blocking (see orchestrator/mod.rs::load_archive_if_configured).
+    #[allow(clippy::disallowed_methods)]
     let Ok(file) = std::fs::File::open(path) else {
         return HashSet::new();
     };
@@ -41,6 +43,8 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
     if let Some(parent) = path.parent()
         && !parent.exists()
     {
+        // Safe: sync helper invoked only via tokio::task::spawn_blocking (see orchestrator/mod.rs::record_in_archive).
+        #[allow(clippy::disallowed_methods)]
         std::fs::create_dir_all(parent)?;
     }
 

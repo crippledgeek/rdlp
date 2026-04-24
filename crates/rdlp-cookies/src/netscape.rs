@@ -31,6 +31,8 @@ pub(crate) fn load_cookie_file(
     path: &Path,
     jar: &impl CookieStore,
 ) -> Result<usize, std::io::Error> {
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let content = std::fs::read_to_string(path)?;
     Ok(load_cookie_string(&content, jar))
 }

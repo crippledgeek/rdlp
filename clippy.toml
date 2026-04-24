@@ -1,0 +1,22 @@
+# Phase 1.5 async-correctness gate: these std::fs APIs are blocking and
+# must not appear in async fn bodies. Per-site `#[allow(clippy::disallowed_methods)]`
+# is accepted ONLY at (a) FFmpeg / rusqlite wrappers inside spawn_blocking,
+# (b) Tauri / CLI startup code that runs before any concurrent work,
+# (c) test fixtures and build.rs.
+#
+# Research basis: docs/implementation/tls-impersonation/phase-1-report.md Appendix C.
+# Pattern: Embark's rust-ecosystem + Oxide's oxide-tokio-rt.
+
+disallowed-methods = [
+    { path = "std::fs::create_dir_all", reason = "blocking in async context — use tokio::fs::create_dir_all or spawn_blocking" },
+    { path = "std::fs::read_dir", reason = "blocking in async context — use tokio::fs::read_dir or spawn_blocking" },
+    { path = "std::fs::read", reason = "blocking in async context — use tokio::fs::read or spawn_blocking" },
+    { path = "std::fs::read_to_string", reason = "blocking in async context — use tokio::fs::read_to_string or spawn_blocking" },
+    { path = "std::fs::write", reason = "blocking in async context — use tokio::fs::write or spawn_blocking" },
+    { path = "std::fs::remove_file", reason = "blocking in async context — use tokio::fs::remove_file or spawn_blocking" },
+    { path = "std::fs::remove_dir_all", reason = "blocking in async context — use tokio::fs::remove_dir_all or spawn_blocking" },
+    { path = "std::fs::rename", reason = "blocking in async context — use tokio::fs::rename or spawn_blocking" },
+    { path = "std::fs::metadata", reason = "blocking in async context — use tokio::fs::metadata or spawn_blocking" },
+    { path = "std::fs::File::open", reason = "blocking in async context — use tokio::fs::File::open or spawn_blocking" },
+    { path = "std::fs::File::create", reason = "blocking in async context — use tokio::fs::File::create or spawn_blocking" },
+]

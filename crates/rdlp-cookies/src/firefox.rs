@@ -58,6 +58,8 @@ fn find_default_profile() -> Result<PathBuf, std::io::Error> {
 
     // Fallback: scan directories for preferred profile suffixes, then any profile
     let suffixes = [".default-release", ".default"];
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     if let Ok(entries) = std::fs::read_dir(&profiles_dir) {
         let dirs: Vec<_> = entries
             .flatten()
@@ -90,6 +92,8 @@ fn find_default_profile() -> Result<PathBuf, std::io::Error> {
 
 /// Parse profiles.ini to find the default profile path.
 fn parse_profiles_ini(ini_path: &Path, profiles_dir: &Path) -> Option<PathBuf> {
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let content = std::fs::read_to_string(ini_path).ok()?;
 
     let try_commit = |path: Option<&str>, is_relative: bool| -> Option<PathBuf> {
@@ -234,11 +238,17 @@ mod tests {
     #[test]
     fn test_parse_profiles_ini() {
         let dir = std::env::temp_dir().join("rdlp_test_firefox_profiles");
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
         let _ = std::fs::create_dir_all(&dir);
 
         // Create a fake profile directory with cookies.sqlite
         let profile_dir = dir.join("abc123.default-release");
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
         let _ = std::fs::create_dir_all(&profile_dir);
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
         std::fs::write(profile_dir.join("cookies.sqlite"), b"fake").unwrap();
 
         // Write a profiles.ini
@@ -250,6 +260,8 @@ IsRelative=1
 Path=abc123.default-release
 Default=1
 ";
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
         std::fs::write(&ini_path, ini_content).unwrap();
 
         let result = parse_profiles_ini(&ini_path, &dir);
@@ -257,6 +269,8 @@ Default=1
         assert_eq!(result.unwrap(), profile_dir);
 
         // Clean up
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

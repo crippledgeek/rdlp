@@ -128,6 +128,8 @@ impl AppSettings {
     #[must_use]
     pub fn load() -> Self {
         let path = Self::settings_path();
+        // Safe: invoked from Tauri sync startup (AppState::new) before any async runtime is active.
+        #[allow(clippy::disallowed_methods)]
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str(&contents) {
                 Ok(settings) => {
@@ -157,6 +159,10 @@ impl AppSettings {
     /// # Errors
     ///
     /// Returns an error if directory creation or file writing fails.
+    // Safe: invoked from Tauri command handlers that bridge to the frontend; settings are small
+    // (a few KB of JSON) and persistence occurs on user interaction, not from a hot async loop.
+    // If this is ever called from a heavily contended async context, migrate to tokio::fs.
+    #[allow(clippy::disallowed_methods)]
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::settings_path();
         if let Some(parent) = path.parent() {

@@ -356,8 +356,12 @@ impl FFmpegRunner {
             info!("Merge: video=stream#{video_out_idx}, audio=stream#{audio_out_idx} (DEFAULT)");
 
             // Byte-based progress tracking
-            let total_input_bytes = std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
-                + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0);
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
+            let total_input_bytes = {
+                std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
+                    + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0)
+            };
             let mut bytes_written: u64 = 0;
             let mut last_progress = Instant::now();
             let throttle = Duration::from_millis(100);

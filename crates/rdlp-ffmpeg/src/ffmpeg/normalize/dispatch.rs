@@ -187,6 +187,8 @@ impl FFmpegRunner {
                 &super::super::RemuxOptions::default(),
                 progress_fn,
             );
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
             if let Err(e) = std::fs::remove_file(&temp_audio) {
                 log::warn!(
                     "Failed to remove temp audio file {}: {e}",

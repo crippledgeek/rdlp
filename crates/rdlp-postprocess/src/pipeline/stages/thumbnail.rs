@@ -93,6 +93,8 @@ impl ThumbnailStage {
         let thumb = thumbnail_file.to_path_buf();
 
         let result = tokio::task::spawn_blocking(move || {
+            // Safe: inside spawn_blocking closure — explicitly the correct place for blocking I/O.
+            #[allow(clippy::disallowed_methods)]
             let cover_bytes =
                 std::fs::read(&thumb).context("thumbnail stage: failed to read thumbnail file")?;
             let ext = thumb.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -263,6 +265,8 @@ impl PipelineStage for ThumbnailStage {
 }
 
 #[cfg(test)]
+// Safe: test fixtures — no async runtime in #[test] fns.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
