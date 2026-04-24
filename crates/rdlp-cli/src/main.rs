@@ -97,7 +97,13 @@ async fn async_main() -> Result<()> {
     }
 
     // Remove stale temp files left by a prior crash in the output directory.
-    TempRegistry::cleanup_stale(&config.output_directory);
+    // cleanup_stale performs a blocking directory walk with per-entry metadata
+    // syscalls — move to a blocking worker so async_main's runtime thread
+    // isn't stalled during startup on slow / network filesystems.
+    {
+        let output_dir = config.output_directory.clone();
+        let _ = tokio::task::spawn_blocking(move || TempRegistry::cleanup_stale(&output_dir)).await;
+    }
 
     if let Some(rate) = config.rate_limit {
         debug!("Rate limit: {rate} bytes/s");
