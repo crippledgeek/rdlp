@@ -10,10 +10,21 @@ use super::*;
 /// Checks `{stem}.{lang}.{ext}` for all subtitle formats. If no exact match,
 /// scans `{stem}.*.{ext}` patterns for fuzzy prefix matches (e.g., `"en"` finds
 /// `title.English.vtt`).
-pub(super) fn has_subtitle_file(dir: &std::path::Path, stem: &str, lang: &str) -> bool {
+///
+/// `files` is the pre-scanned list of files in the playlist directory. Passing
+/// this in rather than re-scanning the directory on every call avoids an
+/// `O(episodes × langs)` blocking `std::fs::read_dir` walk on the async
+/// runtime thread.
+pub(super) fn has_subtitle_file(files: &[PathBuf], stem: &str, lang: &str) -> bool {
     // Exact match: {stem}.{lang}.{ext}
-    for fmt in RESUME_SUB_FORMATS {
-        if dir.join(format!("{stem}.{lang}.{}", fmt.as_ext())).exists() {
+    let exact_names: Vec<String> = RESUME_SUB_FORMATS
+        .iter()
+        .map(|fmt| format!("{stem}.{lang}.{}", fmt.as_ext()))
+        .collect();
+    for file in files {
+        if let Some(name) = file.file_name().and_then(|n| n.to_str())
+            && exact_names.iter().any(|e| e == name)
+        {
             return true;
         }
     }
@@ -21,23 +32,22 @@ pub(super) fn has_subtitle_file(dir: &std::path::Path, stem: &str, lang: &str) -
     // Fuzzy match: scan for {stem}.*.{ext} and prefix-match the middle segment
     if lang.len() <= 3 {
         let lang_lower = lang.to_ascii_lowercase();
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                // Must start with "{stem}." and have at least one more dot
-                if let Some(rest) = name_str
-                    .strip_prefix(stem)
-                    .and_then(|r| r.strip_prefix('.'))
-                {
-                    // rest = "English.vtt" -> split into ("English", "vtt")
-                    if let Some((mid, ext)) = rest.rsplit_once('.') {
-                        let is_sub_ext = RESUME_SUB_FORMATS
-                            .iter()
-                            .any(|f| f.as_ext().eq_ignore_ascii_case(ext));
-                        if is_sub_ext && mid.to_ascii_lowercase().starts_with(&lang_lower) {
-                            return true;
-                        }
+        for file in files {
+            let Some(name_str) = file.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // Must start with "{stem}." and have at least one more dot
+            if let Some(rest) = name_str
+                .strip_prefix(stem)
+                .and_then(|r| r.strip_prefix('.'))
+            {
+                // rest = "English.vtt" -> split into ("English", "vtt")
+                if let Some((mid, ext)) = rest.rsplit_once('.') {
+                    let is_sub_ext = RESUME_SUB_FORMATS
+                        .iter()
+                        .any(|f| f.as_ext().eq_ignore_ascii_case(ext));
+                    if is_sub_ext && mid.to_ascii_lowercase().starts_with(&lang_lower) {
+                        return true;
                     }
                 }
             }
@@ -143,12 +153,14 @@ impl Orchestrator {
                     // Check if file has reasonable size (> 1MB)
                     if let Ok(metadata) = file_path.metadata() {
                         if metadata.len() > 1_000_000 {
-                            // Check subtitle file existence
+                            // Check subtitle file existence. Use the already-
+                            // collected `files` list from the outer async scan
+                            // to avoid re-entering std::fs::read_dir once per
+                            // (episode × lang) pair.
                             let subs_missing = if !subtitle_langs.is_empty() {
-                                let dir = file_path.parent().unwrap_or(playlist_dir);
                                 !subtitle_langs
                                     .iter()
-                                    .any(|lang| has_subtitle_file(dir, &sanitized_title, lang))
+                                    .any(|lang| has_subtitle_file(&files, &sanitized_title, lang))
                             } else {
                                 false
                             };
@@ -291,5 +303,57 @@ impl Orchestrator {
                 let pos = info.playlist_index.unwrap_or(0);
                 warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression guard for Phase 1 async audit Finding 3.6 (spec §5.1.3).
+    //
+    // Before the fix, `has_subtitle_file` performed an `std::fs::read_dir`
+    // for every (episode × lang) pair in the fuzzy-match branch, on the
+    // async runtime thread. After the fix, the directory is scanned exactly
+    // once (via `tokio::fs::read_dir` in the enclosing async fn) and this
+    // helper takes the pre-collected `&[PathBuf]`.
+    //
+    // This test locks in the new in-memory signature: the helper must
+    // resolve matches purely from the slice, with no filesystem access.
+    // Using a non-existent `/nonexistent` directory in the paths would make
+    // a filesystem-reading implementation return false; the in-memory
+    // implementation returns true.
+
+    #[test]
+    fn has_subtitle_file_exact_match_from_slice() {
+        let files = vec![
+            PathBuf::from("/nonexistent/video.mp4"),
+            PathBuf::from("/nonexistent/video.en.srt"),
+        ];
+        assert!(has_subtitle_file(&files, "video", "en"));
+    }
+
+    #[test]
+    fn has_subtitle_file_fuzzy_match_from_slice() {
+        let files = vec![
+            PathBuf::from("/nonexistent/video.mp4"),
+            PathBuf::from("/nonexistent/video.English.vtt"),
+        ];
+        assert!(has_subtitle_file(&files, "video", "en"));
+    }
+
+    #[test]
+    fn has_subtitle_file_returns_false_when_missing() {
+        let files = vec![
+            PathBuf::from("/nonexistent/video.mp4"),
+            PathBuf::from("/nonexistent/other.en.srt"),
+        ];
+        assert!(!has_subtitle_file(&files, "video", "en"));
+    }
+
+    #[test]
+    fn has_subtitle_file_empty_slice_returns_false() {
+        let files: Vec<PathBuf> = Vec::new();
+        assert!(!has_subtitle_file(&files, "video", "en"));
     }
 }
