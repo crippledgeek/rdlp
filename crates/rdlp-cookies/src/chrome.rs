@@ -10,7 +10,7 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use log::debug;
-use reqwest::cookie::CookieStore;
+use wreq::cookie::CookieStore;
 
 use crate::util;
 

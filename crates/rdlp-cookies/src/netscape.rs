@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use log::trace;
-use reqwest::cookie::CookieStore;
+use wreq::cookie::CookieStore;
 
 use crate::util;
 
@@ -104,7 +104,7 @@ fn parse_cookie_line(line: &str) -> Option<NetscapeCookie> {
     })
 }
 
-/// Insert a parsed cookie into the reqwest jar.
+/// Insert a parsed cookie into the wreq jar.
 fn insert_cookie(cookie: &NetscapeCookie, jar: &impl CookieStore) -> bool {
     util::insert_cookie_into_jar(
         jar,
@@ -123,8 +123,8 @@ mod tests {
     use std::sync::Arc;
     use url::Url;
 
-    fn make_jar() -> Arc<reqwest::cookie::Jar> {
-        Arc::new(reqwest::cookie::Jar::default())
+    fn make_jar() -> Arc<wreq::cookie::Jar> {
+        Arc::new(wreq::cookie::Jar::default())
     }
 
     #[test]

@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use log::debug;
-use reqwest::cookie::CookieStore;
-use reqwest::header::HeaderValue;
+use wreq::cookie::CookieStore;
+use wreq::header::HeaderValue;
 use url::Url;
 
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.

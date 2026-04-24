@@ -18,17 +18,17 @@ use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
 use rdlp_types::BrowserType;
-use reqwest::cookie::CookieStore;
+use wreq::cookie::CookieStore;
 use std::path::Path;
 use std::sync::Arc;
 use url::Url;
 
-/// Cookie jar backed by `reqwest::cookie::Jar`.
+/// Cookie jar backed by `wreq::cookie::Jar`.
 ///
 /// Cookies added via `add_cookie()` are automatically sent by any
-/// `reqwest::Client` that was built with this jar's `cookie_provider()`.
+/// `wreq::Client` that was built with this jar's `cookie_provider()`.
 pub struct SimpleCookieJar {
-    jar: Arc<reqwest::cookie::Jar>,
+    jar: Arc<wreq::cookie::Jar>,
 }
 
 impl SimpleCookieJar {
@@ -36,13 +36,13 @@ impl SimpleCookieJar {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            jar: Arc::new(reqwest::cookie::Jar::default()),
+            jar: Arc::new(wreq::cookie::Jar::default()),
         }
     }
 
-    /// Get the underlying `reqwest::cookie::Jar` for use with `cookie_provider()`.
+    /// Get the underlying `wreq::cookie::Jar` for use with `cookie_provider()`.
     #[must_use]
-    pub fn jar(&self) -> Arc<reqwest::cookie::Jar> {
+    pub fn jar(&self) -> Arc<wreq::cookie::Jar> {
         Arc::clone(&self.jar)
     }
 }

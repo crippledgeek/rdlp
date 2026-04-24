@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use log::debug;
-use reqwest::cookie::CookieStore;
+use wreq::cookie::CookieStore;
 
 use crate::util;
 
