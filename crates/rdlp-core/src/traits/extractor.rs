@@ -227,7 +227,7 @@ pub struct ExtractionContext {
     ///
     /// **Arc-wrapped** for sharing across multiple extraction tasks without cloning the
     /// underlying connection pool. Reqwest's Client already uses Arc internally.
-    pub http_client: Arc<reqwest::Client>,
+    pub http_client: Arc<wreq::Client>,
 
     /// JavaScript engine for executing site JavaScript (e.g., signature decryption)
     ///
@@ -251,7 +251,7 @@ pub struct ExtractionContext {
 impl ExtractionContext {
     /// Create a new extraction context
     pub fn new(
-        http_client: Arc<reqwest::Client>,
+        http_client: Arc<wreq::Client>,
         js_engine: Arc<dyn JsEngine>,
         cookie_jar: Arc<dyn CookieJar>,
         config: Arc<Config>,
