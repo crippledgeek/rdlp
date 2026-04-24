@@ -9,6 +9,114 @@ use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 
+/// Expand a parsed HLS master playlist into per-variant `HlsVariantInfo`
+/// entries. Pure function — does no I/O; safe to unit-test against any
+/// `base_url` (including loopback) without hitting the SSRF gate.
+///
+/// Emits two kinds of entries:
+/// 1. One per `EXT-X-STREAM-INF` (skipping I-frame trick-play variants)
+///    as a video-or-muxed entry. When the variant references a separate
+///    `AUDIO` rendition group, `audio_codec` stays `None` (video-only).
+/// 2. One per `EXT-X-MEDIA TYPE=AUDIO` rendition group member that
+///    carries a `URI`, as an audio-only entry. The `audio_codec` is
+///    sourced from the first paired `EXT-X-STREAM-INF`'s `CODECS`
+///    attribute (audio component), falling back to `"mp4a"` (AAC) when
+///    no paired variant declares one.
+///
+/// Shared fields (`segment_count`, `total_duration`, etc.) are left at
+/// their defaults; callers populate them from a probed media playlist.
+pub(crate) fn expand_master_variants(
+    master: &m3u8_rs::MasterPlaylist,
+    base_url: &url::Url,
+) -> Vec<HlsVariantInfo> {
+    let mut variants: Vec<HlsVariantInfo> =
+        Vec::with_capacity(master.variants.len() + master.alternatives.len());
+
+    // Skip I-frame-only variants (EXT-X-I-FRAME-STREAM-INF) — these are
+    // trick-play playlists whose segments are not downloadable as
+    // standalone media.
+    for variant in master.variants.iter().filter(|v| !v.is_i_frame) {
+        let Ok(media_url) = base_url.join(&variant.uri) else {
+            continue;
+        };
+        let (video_codec, audio_codec) = variant
+            .codecs
+            .as_deref()
+            .map(rdlp_core::parse_hls_codecs)
+            .unwrap_or((None, None));
+        let audio_codec = infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
+
+        variants.push(HlsVariantInfo {
+            media_playlist_url: media_url.to_string(),
+            resolution: variant.resolution.as_ref().map(|r| (r.width, r.height)),
+            video_codec: video_codec.map(String::from),
+            audio_codec: audio_codec.map(String::from),
+            frame_rate: variant.frame_rate,
+            bandwidth: variant.bandwidth,
+            average_bandwidth: variant.average_bandwidth,
+            is_audio_only: false,
+            language: None,
+            audio_group_id: variant.audio.clone(),
+            rendition_name: None,
+            segment_count: 0,
+            total_duration: None,
+            is_live: false,
+            has_encryption: false,
+            segment_container: None,
+        });
+    }
+
+    // Expand `EXT-X-MEDIA TYPE=AUDIO` rendition groups into audio-only
+    // variant entries. Skips TYPE=SUBTITLES / CLOSED-CAPTIONS / VIDEO
+    // (not audio) and entries without a URI (in-band renditions).
+    for media in &master.alternatives {
+        if media.media_type != m3u8_rs::AlternativeMediaType::Audio {
+            continue;
+        }
+        let Some(uri) = media.uri.as_deref() else {
+            continue;
+        };
+        let Ok(audio_playlist_url) = base_url.join(uri) else {
+            continue;
+        };
+
+        let acodec = master
+            .variants
+            .iter()
+            .filter(|v| v.audio.as_deref() == Some(media.group_id.as_str()))
+            .find_map(|v| {
+                let codecs = v.codecs.as_deref()?;
+                let (_, a) = rdlp_core::parse_hls_codecs(codecs);
+                a.map(String::from)
+            })
+            .unwrap_or_else(|| "mp4a".to_string());
+
+        variants.push(HlsVariantInfo {
+            media_playlist_url: audio_playlist_url.to_string(),
+            resolution: None,
+            video_codec: None,
+            audio_codec: Some(acodec),
+            frame_rate: None,
+            // EXT-X-MEDIA entries don't carry BANDWIDTH. 0 is a neutral
+            // placeholder; downstream size detection can estimate bitrate
+            // from segment sizes if needed.
+            bandwidth: 0,
+            average_bandwidth: None,
+            is_audio_only: true,
+            language: media.language.clone(),
+            audio_group_id: Some(media.group_id.clone()),
+            rendition_name: Some(media.name.clone()),
+            segment_count: 0,
+            total_duration: None,
+            is_live: false,
+            has_encryption: false,
+            segment_container: None,
+        });
+    }
+
+    variants
+}
+
 /// Infer muxed audio codec for HLS variants.
 ///
 /// Per the HLS spec, when a variant stream has a video codec declared in
@@ -242,37 +350,9 @@ impl HlsSizeDetector {
             url: Some(m3u8_url.to_string()),
         })?;
 
-        // Resolve all variant media playlist URLs and extract per-variant metadata.
-        // Skip I-frame-only variants (EXT-X-I-FRAME-STREAM-INF) — these are trick-play
-        // playlists whose segments are not downloadable as standalone media.
-        let mut variants: Vec<HlsVariantInfo> = Vec::with_capacity(master.variants.len());
-        for variant in master.variants.iter().filter(|v| !v.is_i_frame) {
-            let media_url = match base_url.join(&variant.uri) {
-                Ok(u) => u.to_string(),
-                Err(_) => continue,
-            };
-            let (video_codec, audio_codec) = variant
-                .codecs
-                .as_deref()
-                .map(rdlp_core::parse_hls_codecs)
-                .unwrap_or((None, None));
-            let audio_codec = infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
-
-            variants.push(HlsVariantInfo {
-                media_playlist_url: media_url,
-                resolution: variant.resolution.as_ref().map(|r| (r.width, r.height)),
-                video_codec: video_codec.map(String::from),
-                audio_codec: audio_codec.map(String::from),
-                frame_rate: variant.frame_rate,
-                bandwidth: variant.bandwidth,
-                average_bandwidth: variant.average_bandwidth,
-                // Shared fields filled below
-                segment_count: 0,
-                total_duration: None,
-                is_live: false,
-                has_encryption: false,
-                segment_container: None,
-            });
+        let mut variants = expand_master_variants(&master, &base_url);
+        if variants.is_empty() {
+            return Ok(Vec::new());
         }
 
         // Fetch shared media info from the best non-I-frame variant (highest bandwidth)

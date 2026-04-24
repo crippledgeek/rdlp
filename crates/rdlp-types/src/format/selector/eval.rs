@@ -27,9 +27,15 @@ pub(super) fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&
             select_one(sel, formats).into_iter().collect()
         }
         FormatSpec::Merge { video, audio } => {
-            let v = select_one(video, formats);
-            let a = select_one(audio, formats);
-            v.into_iter().chain(a).collect()
+            // A merge requires BOTH sides. If either side selects nothing,
+            // the whole merge fails (empty result), and the outer fallback
+            // chain (`.../best`) takes over. This mirrors yt-dlp's default
+            // `bestvideo*+bestaudio/best` semantics: on muxed-only sites the
+            // merge fails cleanly and the scalar `best` branch wins.
+            match (select_one(video, formats), select_one(audio, formats)) {
+                (Some(v), Some(a)) => vec![v, a],
+                _ => Vec::new(),
+            }
         }
         FormatSpec::Group { inner, filters } => {
             // This variant is currently unused by the parser (groups are represented

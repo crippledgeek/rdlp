@@ -8,6 +8,30 @@ use super::types::HlsStreamFlags;
 use crate::base::common::BaseExtractor;
 use log::debug;
 
+/// Slugify a rendition tag (`LANGUAGE` / `GROUP-ID` / `NAME`) into a
+/// format-id-safe token: lowercase ASCII alphanumerics with `-` for
+/// any other character, collapsed and trimmed. Keeps audio-only format
+/// ids predictable across re-extracts (e.g. `"English (5.1)"` → `english-5-1`).
+fn slugify_tag(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut prev_dash = true; // suppress leading dashes
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            for lc in c.to_lowercase() {
+                out.push(lc);
+            }
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
 /// Detect video or audio codec from a format ID string.
 ///
 /// Checks for common codec names embedded in format IDs like "hls-av1-url"
@@ -204,7 +228,15 @@ async fn detect_format_sizes_inner(
                     .await;
 
                     let variants = match result {
-                        Ok(Ok(v)) if v.len() > 1 => v,
+                        // Expand when the master produced multiple variants,
+                        // OR when any audio-only rendition is present (even
+                        // if there's only one video-only variant paired with
+                        // it — the XHamster AV1 case).
+                        Ok(Ok(v))
+                            if v.len() > 1 || v.iter().any(|x| x.is_audio_only) =>
+                        {
+                            v
+                        }
                         _ => {
                             // Not a master playlist or detection failed — fall back to
                             // single-format enrichment via detect_hls_metadata
@@ -221,12 +253,35 @@ async fn detect_format_sizes_inner(
                         }
                     };
 
-                    // Expand master playlist into one format per variant
+                    // Expand master playlist into one format per variant.
+                    // Video/muxed entries use the resolution-based naming and
+                    // inherit codec fallbacks from the parent `format`. Audio-
+                    // only entries (derived from EXT-X-MEDIA TYPE=AUDIO
+                    // rendition groups) are tagged with vcodec=`"none"` and
+                    // named from the rendition (e.g. `hls-audio-en`), so the
+                    // format selector can pair them with a video-only variant
+                    // via `bv+ba`.
                     let mut expanded = Vec::with_capacity(variants.len());
                     for variant in &variants {
                         let height = variant.resolution.map(|(_, h)| h as u32);
                         let width = variant.resolution.map(|(w, _)| w as u32);
-                        let format_id = if let Some(h) = height {
+                        let format_id = if variant.is_audio_only {
+                            // Prefer LANGUAGE, then GROUP-ID, then NAME; fall
+                            // back to a bare `audio` suffix. Keeps ids stable
+                            // across re-extracts.
+                            let tag = variant
+                                .language
+                                .as_deref()
+                                .or(variant.audio_group_id.as_deref())
+                                .or(variant.rendition_name.as_deref())
+                                .map(slugify_tag);
+                            match tag {
+                                Some(t) if !t.is_empty() => {
+                                    format!("{}-audio-{t}", format.format_id)
+                                }
+                                _ => format!("{}-audio", format.format_id),
+                            }
+                        } else if let Some(h) = height {
                             format!("{}-{h}p", format.format_id)
                         } else {
                             format!("{}-{}k", format.format_id, variant.bandwidth / 1000)
@@ -240,30 +295,60 @@ async fn detect_format_sizes_inner(
                         );
                         expanded_format.height = height;
                         expanded_format.width = width;
-                        expanded_format.vcodec = variant
-                            .video_codec
-                            .clone()
-                            .or_else(|| format.vcodec.clone())
-                            .or_else(|| detect_codec_from_id(&format.format_id, true));
-                        expanded_format.acodec = variant
-                            .audio_codec
-                            .clone()
-                            .or_else(|| format.acodec.clone())
-                            .or_else(|| detect_codec_from_id(&format.format_id, false));
+                        if variant.is_audio_only {
+                            // Explicit "none" marker matches yt-dlp convention
+                            // and is required for the selector's `ba` token to
+                            // treat this row as audio-only (`has_video() == false`).
+                            expanded_format.vcodec = Some("none".to_string());
+                            expanded_format.acodec = variant
+                                .audio_codec
+                                .clone()
+                                .or_else(|| Some("mp4a".to_string()));
+                        } else {
+                            expanded_format.vcodec = variant
+                                .video_codec
+                                .clone()
+                                .or_else(|| format.vcodec.clone())
+                                .or_else(|| detect_codec_from_id(&format.format_id, true));
+                            expanded_format.acodec = variant
+                                .audio_codec
+                                .clone()
+                                .or_else(|| format.acodec.clone())
+                                .or_else(|| detect_codec_from_id(&format.format_id, false));
+                        }
                         expanded_format.fps = variant.frame_rate;
-                        expanded_format.tbr = Some(variant.bandwidth as f64 / 1000.0);
+                        // EXT-X-MEDIA renditions carry no BANDWIDTH: leave
+                        // tbr/filesize_approx unset rather than write misleading
+                        // zeros.
+                        expanded_format.tbr = if variant.bandwidth > 0 {
+                            Some(variant.bandwidth as f64 / 1000.0)
+                        } else {
+                            None
+                        };
                         expanded_format.http_headers = format.http_headers.clone();
-                        expanded_format.language = format.language.clone();
+                        // Surface the rendition language on the Format so the
+                        // UI can label multi-language audio tracks. Fall back
+                        // to the parent format's language for video variants.
+                        expanded_format.language = variant
+                            .language
+                            .clone()
+                            .or_else(|| format.language.clone());
                         expanded_format.duration = variant.total_duration;
                         // Estimate size from bitrate × duration (bytes = bps × s / 8)
-                        expanded_format.filesize_approx = variant
-                            .total_duration
-                            .map(|dur| (variant.bandwidth as f64 * dur / 8.0) as u64);
+                        expanded_format.filesize_approx = match (variant.bandwidth, variant.total_duration) {
+                            (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
+                            _ => None,
+                        };
                         expanded_format.container = variant.segment_container.clone();
                         if variant.has_encryption {
                             expanded_format.has_drm = Some(true);
                         }
-                        if let Some(h) = height {
+                        if variant.is_audio_only {
+                            expanded_format.format_note = variant
+                                .rendition_name
+                                .clone()
+                                .or_else(|| Some("audio".to_string()));
+                        } else if let Some(h) = height {
                             expanded_format.format_note = Some(format!("{h}p"));
                             expanded_format.quality = Some((h / 100) as i32);
                         }
