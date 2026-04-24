@@ -5,7 +5,7 @@
 use super::template::{OutputTemplate, RenderContext};
 use super::{Orchestrator, Result};
 use anyhow::Context;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 impl Orchestrator {
     /// Generate output file path from the configured output template.
@@ -13,6 +13,11 @@ impl Orchestrator {
     /// Uses `%(field)s` template syntax to generate filenames from metadata.
     /// Templates containing `/` create subdirectories. Each path component
     /// is individually sanitized for filesystem safety.
+    ///
+    /// This function is pure — it does NOT create any directories. Callers in
+    /// async contexts must call [`Orchestrator::ensure_parent_dir`] on the
+    /// returned path before writing, so that the blocking `create_dir_all`
+    /// syscall is dispatched via `tokio::fs` rather than stalling the runtime.
     pub(super) fn generate_output_path(
         &self,
         info: &rdlp_types::InfoDict,
@@ -46,16 +51,24 @@ impl Orchestrator {
             self.config.output_directory.join(path)
         };
 
-        // Create parent directories if the template produced subdirectories
-        if let Some(parent) = full_path.parent()
-            && !parent.exists()
+        Ok(full_path)
+    }
+
+    /// Ensure the parent directory of `path` exists, creating it if necessary.
+    ///
+    /// Uses `tokio::fs::create_dir_all`, which internally dispatches to a
+    /// blocking worker — this keeps the caller's runtime thread responsive
+    /// even on slow or network filesystems.
+    pub(super) async fn ensure_parent_dir(path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent)
+                .await
                 .with_context(|| format!("failed to create output directory {}", parent.display()))
                 .map_err(super::OrchestratorError::Other)?;
         }
-
-        Ok(full_path)
+        Ok(())
     }
 
     /// Sanitize a rendered template path by sanitizing each component individually.

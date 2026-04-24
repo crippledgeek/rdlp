@@ -63,7 +63,13 @@ impl SubtitleStage {
     /// Find subtitle files alongside a media file using `original_stem` for discovery.
     ///
     /// Searches for `{original_stem}.{lang}.{ext}` patterns.
-    fn find_subtitle_files(media_file: &Path, original_stem: &str) -> Vec<(String, PathBuf)> {
+    ///
+    /// Uses `tokio::fs::read_dir` so the async runtime thread isn't stalled
+    /// by blocking directory-scan syscalls on slow / network filesystems.
+    async fn find_subtitle_files(
+        media_file: &Path,
+        original_stem: &str,
+    ) -> Vec<(String, PathBuf)> {
         let Some(parent) = media_file.parent() else {
             return Vec::new();
         };
@@ -80,19 +86,23 @@ impl SubtitleStage {
             vec![original_stem]
         };
 
+        // Read the directory once — entries are reused across candidate stems.
+        let mut entries = match tokio::fs::read_dir(parent).await {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        let mut dir_entries: Vec<PathBuf> = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                dir_entries.push(path);
+            }
+        }
+
         let mut result = Vec::new();
 
         for candidate in &candidates {
-            let Ok(entries) = std::fs::read_dir(parent) else {
-                continue;
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-
+            for path in &dir_entries {
                 let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                     continue;
                 };
@@ -106,7 +116,7 @@ impl SubtitleStage {
                     };
 
                     let Some(lang) = without_ext
-                        .strip_prefix(candidate)
+                        .strip_prefix(*candidate)
                         .and_then(|s| s.strip_prefix('.'))
                     else {
                         continue;
@@ -159,7 +169,7 @@ impl PipelineStage for SubtitleStage {
             return Ok(msg);
         }
 
-        let subtitle_files = Self::find_subtitle_files(&media_file, &msg.original_stem);
+        let subtitle_files = Self::find_subtitle_files(&media_file, &msg.original_stem).await;
 
         if subtitle_files.is_empty() {
             debug!(
@@ -298,12 +308,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn find_subtitle_files_returns_empty_for_missing() {
+    #[tokio::test]
+    async fn find_subtitle_files_returns_empty_for_missing() {
         let result = SubtitleStage::find_subtitle_files(
             &PathBuf::from("/nonexistent/path/video.mp4"),
             "video",
-        );
+        )
+        .await;
         assert!(result.is_empty());
     }
 

@@ -333,6 +333,10 @@ impl DownloadPhase {
                 }
 
                 let output_path = orchestrator.generate_output_path(&info, &format)?;
+                // Create the output parent directory via tokio::fs so the
+                // runtime thread isn't stalled by std::fs::create_dir_all on
+                // slow / network filesystems.
+                Orchestrator::ensure_parent_dir(&output_path).await?;
                 debug!(path:? = output_path.display(); "Downloading to");
 
                 // Resume detection only applies to Single downloads.

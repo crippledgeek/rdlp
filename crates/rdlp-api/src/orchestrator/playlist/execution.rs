@@ -116,7 +116,8 @@ impl Orchestrator {
                                     self.record_in_archive(
                                         &info_owned.extractor,
                                         &info_owned.id,
-                                    );
+                                    )
+                                    .await;
                                 }
                                 Ok(None) => {
                                     debug!(position, total; "Skipped by user");
@@ -257,7 +258,8 @@ impl Orchestrator {
                                         self.record_in_archive(
                                             &infos[idx].extractor,
                                             &infos[idx].id,
-                                        );
+                                        )
+                                        .await;
                                         retried_ok += 1;
                                     }
                                     Ok(None) => {
