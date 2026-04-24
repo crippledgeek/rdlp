@@ -177,56 +177,54 @@ pub async fn validate_format_expression(
     expression: String,
     formats: Vec<FormatData>,
 ) -> Result<Vec<String>, AppError> {
-    tokio::task::spawn_blocking(move || {
-        use rdlp_types::FormatSelector;
+    // Pure in-memory selector parse + map (~<100 µs per call). Below the
+    // `spawn_blocking` threshold per the TLS Phase 1 async audit
+    // (Finding 5.R1); panic isolation for this site is now provided by
+    // the global `std::panic::set_hook` installed in `run()`.
+    use rdlp_types::FormatSelector;
 
-        let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
-            field: "expression".to_owned(),
-            message: e.to_string(),
-        })?;
+    let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
+        field: "expression".to_owned(),
+        message: e.to_string(),
+    })?;
 
-        if formats.is_empty() {
-            return Ok(Vec::new());
-        }
+    if formats.is_empty() {
+        return Ok(Vec::new());
+    }
 
-        use rdlp_types::Format;
-        use rdlp_types::protocol::DownloadProtocol;
+    use rdlp_types::Format;
+    use rdlp_types::protocol::DownloadProtocol;
 
-        let format_list: Vec<Format> = formats
-            .iter()
-            .map(|fd| {
-                let protocol = fd
-                    .protocol
-                    .parse::<DownloadProtocol>()
-                    .unwrap_or(DownloadProtocol::Https);
-                let mut f = Format::new(
-                    &fd.format_id,
-                    format!("stub://{}", fd.format_id),
-                    &fd.ext,
-                    protocol,
-                );
-                f.width = fd.width;
-                f.height = fd.height;
-                f.fps = fd.fps;
-                f.tbr = fd.tbr;
-                f.vbr = fd.vbr;
-                f.abr = fd.abr;
-                f.asr = fd.asr;
-                f.filesize = fd.filesize;
-                f.vcodec = fd.vcodec.clone();
-                f.acodec = fd.acodec.clone();
-                f
-            })
-            .collect();
+    let format_list: Vec<Format> = formats
+        .iter()
+        .map(|fd| {
+            let protocol = fd
+                .protocol
+                .parse::<DownloadProtocol>()
+                .unwrap_or(DownloadProtocol::Https);
+            let mut f = Format::new(
+                &fd.format_id,
+                format!("stub://{}", fd.format_id),
+                &fd.ext,
+                protocol,
+            );
+            f.width = fd.width;
+            f.height = fd.height;
+            f.fps = fd.fps;
+            f.tbr = fd.tbr;
+            f.vbr = fd.vbr;
+            f.abr = fd.abr;
+            f.asr = fd.asr;
+            f.filesize = fd.filesize;
+            f.vcodec = fd.vcodec.clone();
+            f.acodec = fd.acodec.clone();
+            f
+        })
+        .collect();
 
-        let selected = selector.select(&format_list);
-        let matched: Vec<String> = selected.iter().map(|f| f.format_id.clone()).collect();
-        Ok(matched)
-    })
-    .await
-    .map_err(|e| AppError::Internal {
-        message: format!("Format validation task failed: {e}"),
-    })?
+    let selected = selector.select(&format_list);
+    let matched: Vec<String> = selected.iter().map(|f| f.format_id.clone()).collect();
+    Ok(matched)
 }
 
 #[cfg(test)]
@@ -454,6 +452,59 @@ mod tests {
         assert!(result.is_ok());
         let matches = result.unwrap();
         assert_eq!(matches, vec!["v720", "a128"]);
+    }
+
+    /// Regression guard for Finding 5.R1 (TLS Phase 1 async audit).
+    ///
+    /// On unpatched code the command wrapped its pure-sync body in
+    /// `tokio::task::spawn_blocking`. A current-thread runtime built
+    /// with `max_blocking_threads(1)` combined with a long-running
+    /// occupant on the blocking pool starves the validator. On patched
+    /// code the body is inline and runs on the caller's task, so the
+    /// blocking pool is irrelevant and the call completes promptly.
+    #[test]
+    fn test_validate_format_expression_runs_without_spawn_blocking() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .expect("build runtime");
+
+        runtime.block_on(async {
+            // Pin the single blocking worker with a long-running task so
+            // any `spawn_blocking` inside `validate_format_expression`
+            // would queue behind it and miss the timeout.
+            let hold = Arc::new(AtomicBool::new(true));
+            let hold_clone = Arc::clone(&hold);
+            let occupant = tokio::task::spawn_blocking(move || {
+                while hold_clone.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+
+            let formats = vec![make_format_data(
+                "137",
+                "mp4",
+                Some("h264"),
+                Some("aac"),
+                Some(1080),
+            )];
+
+            let call = super::validate_format_expression("bestvideo".to_owned(), formats);
+            let result = tokio::time::timeout(Duration::from_millis(500), call).await;
+
+            // Release the occupant before asserting so the runtime can
+            // shut down cleanly regardless of outcome.
+            hold.store(false, Ordering::SeqCst);
+            let _ = occupant.await;
+
+            let inner = result.expect("validate_format_expression timed out — blocking pool starvation indicates spawn_blocking is still in use");
+            assert!(inner.is_ok(), "validate_format_expression should accept 'bestvideo'");
+        });
     }
 
     #[tokio::test]

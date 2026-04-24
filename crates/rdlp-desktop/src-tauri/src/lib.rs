@@ -12,6 +12,8 @@ pub mod commands;
 pub mod error;
 /// Tauri event types for frontend notifications.
 pub mod events;
+/// Global panic hook installer.
+pub mod panic_hook;
 /// Application state managed by Tauri.
 pub mod state;
 
@@ -24,6 +26,11 @@ use tauri::Manager;
 /// Initialises plugins, registers managed state, binds all IPC
 /// command handlers, and starts the event loop.
 pub fn run() {
+    // Install the global panic hook before any Tauri or Tokio code
+    // runs so panics in async command handlers are captured to the log
+    // rather than dying silently. See `panic_hook` module docs.
+    panic_hook::install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
