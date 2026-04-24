@@ -267,10 +267,10 @@ pub(crate) fn merge_config(
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);
-    } else if let Ok(env_browser) = std::env::var("RDLP_BROWSER_EMULATION") {
-        if !env_browser.is_empty() {
-            config.browser_emulation = parse_browser_emulation(&env_browser);
-        }
+    } else if let Ok(env_browser) = std::env::var("RDLP_BROWSER_EMULATION")
+        && !env_browser.is_empty()
+    {
+        config.browser_emulation = parse_browser_emulation(&env_browser);
     }
     if let Some(ref rate_str) = args.limit_rate {
         let bps = rdlp_ratelimit::parse_rate_limit(rate_str)
