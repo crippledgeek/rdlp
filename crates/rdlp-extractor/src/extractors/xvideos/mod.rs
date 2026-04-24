@@ -266,8 +266,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
+        let client = wreq::Client::builder()
+            .redirect(wreq::redirect::Policy::none())
             .build()
             .unwrap();
         let ctx = ExtractionContext::new(

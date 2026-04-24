@@ -191,11 +191,11 @@ async fn detect_format_sizes_inner(
     // Propagate HTTP headers from formats (e.g., Referer) to the HLS detector.
     // Many CDNs (Megacloud/douvid.xyz) require a Referer to serve M3U8 content.
     if let Some(headers_map) = formats.iter().find_map(|f| f.http_headers.as_ref()) {
-        let mut header_map = reqwest::header::HeaderMap::new();
+        let mut header_map = wreq::header::HeaderMap::new();
         for (key, value) in headers_map {
             if let (Ok(name), Ok(val)) = (
-                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                reqwest::header::HeaderValue::from_str(value),
+                wreq::header::HeaderName::from_bytes(key.as_bytes()),
+                wreq::header::HeaderValue::from_str(value),
             ) {
                 header_map.insert(name, val);
             }

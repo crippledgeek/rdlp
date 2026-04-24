@@ -7377,6 +7377,7 @@ dependencies = [
  "schnellru",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "smallvec",
  "socket2",
  "sync_wrapper",

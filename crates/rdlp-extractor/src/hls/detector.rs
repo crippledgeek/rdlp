@@ -16,11 +16,11 @@ const DEFAULT_CONCURRENCY: usize = 8;
 /// HLS playlist size detector
 #[derive(Clone)]
 pub struct HlsSizeDetector {
-    pub(super) http_client: Arc<reqwest::Client>,
+    pub(super) http_client: Arc<wreq::Client>,
     pub(super) concurrent_requests: usize,
     pub(super) verbose: bool,
     /// Optional default headers applied to every M3U8 fetch (e.g., Referer).
-    default_headers: Option<reqwest::header::HeaderMap>,
+    default_headers: Option<wreq::header::HeaderMap>,
 }
 
 impl HlsSizeDetector {
@@ -30,7 +30,7 @@ impl HlsSizeDetector {
     /// * `http_client` - Shared HTTP client for making requests
     /// * `verbose` - Enable detailed logging
     #[must_use]
-    pub fn new(http_client: Arc<reqwest::Client>, verbose: bool) -> Self {
+    pub fn new(http_client: Arc<wreq::Client>, verbose: bool) -> Self {
         Self {
             http_client,
             concurrent_requests: DEFAULT_CONCURRENCY,
@@ -53,7 +53,7 @@ impl HlsSizeDetector {
     ///
     /// Useful for CDNs that require a `Referer` header to avoid challenges.
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_default_headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
+    pub fn with_default_headers(mut self, headers: wreq::header::HeaderMap) -> Self {
         self.default_headers = Some(headers);
         self
     }
@@ -76,7 +76,7 @@ impl HlsSizeDetector {
     /// ```no_run
     /// # async fn example() -> rdlp_core::Result<()> {
     /// # let detector = rdlp_extractor::hls::HlsSizeDetector::new(
-    /// #     std::sync::Arc::new(reqwest::Client::new()),
+    /// #     std::sync::Arc::new(wreq::Client::new()),
     /// #     false
     /// # );
     /// match detector.detect_size("https://example.com/playlist.m3u8").await {

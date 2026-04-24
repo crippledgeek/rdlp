@@ -336,7 +336,7 @@ impl BaseExtractor {
     /// ```
     pub(crate) async fn detect_file_size(
         url: &str,
-        http_client: &reqwest::Client,
+        http_client: &wreq::Client,
         log_prefix: Option<&str>,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
@@ -369,7 +369,7 @@ impl BaseExtractor {
     /// Parse total file size from a Content-Range header.
     ///
     /// Parses the format `bytes 0-0/123456` and returns the total size.
-    fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
         headers
             .get("content-range")?
             .to_str()

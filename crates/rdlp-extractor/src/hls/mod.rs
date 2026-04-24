@@ -24,7 +24,7 @@
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> rdlp_core::Result<()> {
-//! let http_client = Arc::new(reqwest::Client::new());
+//! let http_client = Arc::new(wreq::Client::new());
 //! let detector = HlsSizeDetector::new(http_client, false);
 //!
 //! let m3u8_url = "https://example.com/playlist.m3u8";
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn test_detector_creation() {
-        let client = Arc::new(reqwest::Client::new());
+        let client = Arc::new(wreq::Client::new());
         let detector = HlsSizeDetector::new(client.clone(), false);
 
         assert_eq!(detector.concurrent_requests, 8);
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn test_detector_with_concurrency() {
-        let client = Arc::new(reqwest::Client::new());
+        let client = Arc::new(wreq::Client::new());
         let detector = HlsSizeDetector::new(client, false).with_concurrency(16);
 
         assert_eq!(detector.concurrent_requests, 16);
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_detector_concurrency_minimum() {
-        let client = Arc::new(reqwest::Client::new());
+        let client = Arc::new(wreq::Client::new());
         let detector = HlsSizeDetector::new(client, false).with_concurrency(0);
 
         // Should be clamped to minimum of 1

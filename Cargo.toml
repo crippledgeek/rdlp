@@ -51,7 +51,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTTP and networking
-wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks"] }
+wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks", "form"] }
 wreq-util = "3.0.0-rc.10"
 url = "2.5"
 
