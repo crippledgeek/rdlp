@@ -69,6 +69,7 @@ fn default_args() -> Args {
         recode_audio: "copy".to_string(),
         fixup: "detect_or_warn".to_string(),
         match_filter: vec![],
+        browser: None,
     }
 }
 
@@ -479,4 +480,76 @@ fn test_merge_config_normal_output_not_stdout() {
 
     assert!(!config.output_to_stdout);
     assert_eq!(config.output_template, "%(title)s.%(ext)s");
+}
+
+// === Browser emulation tests ===
+
+#[test]
+fn test_merge_config_browser_default_is_chrome_latest() {
+    let args = default_args();
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+    assert!(matches!(
+        config.browser_emulation,
+        rdlp_api::BrowserEmulation::ChromeLatest
+    ));
+}
+
+#[test]
+fn test_merge_config_browser_cli_flag_firefox() {
+    let mut args = default_args();
+    args.browser = Some("firefox-latest".to_string());
+
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+    assert!(matches!(
+        config.browser_emulation,
+        rdlp_api::BrowserEmulation::FirefoxLatest
+    ));
+}
+
+#[test]
+fn test_merge_config_browser_cli_flag_pinned() {
+    let mut args = default_args();
+    args.browser = Some("chrome-137".to_string());
+
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+
+    match &config.browser_emulation {
+        rdlp_api::BrowserEmulation::Pinned(s) => assert_eq!(s, "chrome-137"),
+        other => panic!("expected Pinned, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_config_browser_env_fallback() {
+    // CLI flag absent; env var should drive the value.
+    // NOTE: this test mutates process-global env vars, so it must be
+    // serialised against any other test that reads RDLP_BROWSER_EMULATION.
+    // Guard with a local lock to avoid cross-test flakiness under
+    // `cargo test`'s default parallel runner.
+    use std::sync::Mutex;
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
+    let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+
+    // SAFETY: `cargo test` runs tests in threads; we serialise env mutation
+    // via the Mutex above, and the other test that reads this var takes
+    // the same guard.
+    unsafe {
+        std::env::set_var("RDLP_BROWSER_EMULATION", "safari-latest");
+    }
+    let args = default_args();
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+    unsafe {
+        std::env::remove_var("RDLP_BROWSER_EMULATION");
+    }
+
+    assert!(matches!(
+        config.browser_emulation,
+        rdlp_api::BrowserEmulation::SafariLatest
+    ));
 }
