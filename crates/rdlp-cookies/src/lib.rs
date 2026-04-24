@@ -56,37 +56,47 @@ impl Default for SimpleCookieJar {
 #[async_trait]
 impl CookieJar for SimpleCookieJar {
     async fn get_cookies(&self, url: &str) -> Result<Vec<String>> {
-        let Ok(parsed) = Url::parse(url) else {
+        // Validate as URL first (early-return on parse failure matches
+        // historical reqwest behaviour), then hand the string to wreq
+        // whose IntoUri is implemented for &str.
+        if Url::parse(url).is_err() {
+            return Ok(Vec::new());
+        }
+        let Ok(uri) = url.parse::<wreq::Uri>() else {
             return Ok(Vec::new());
         };
-        let Some(header_value) = self.jar.cookies(&parsed) else {
-            return Ok(Vec::new());
+        let cookies = self.jar.cookies(&uri);
+        let headers: Vec<&wreq::header::HeaderValue> = match &cookies {
+            wreq::cookie::Cookies::Compressed(hv) => vec![hv],
+            wreq::cookie::Cookies::Uncompressed(v) => v.iter().collect(),
+            wreq::cookie::Cookies::Empty => return Ok(Vec::new()),
+            _ => return Ok(Vec::new()),
         };
-        let cookie_str = match header_value.to_str() {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("Cookie header contains non-ASCII bytes: {e}");
-                return Ok(Vec::new());
+        let mut out = Vec::new();
+        for hv in headers {
+            let cookie_str = match hv.to_str() {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Cookie header contains non-ASCII bytes: {e}");
+                    continue;
+                }
+            };
+            for s in cookie_str.split("; ") {
+                if !s.is_empty() {
+                    out.push(s.to_string());
+                }
             }
-        };
-        Ok(cookie_str
-            .split("; ")
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect())
+        }
+        Ok(out)
     }
 
     async fn add_cookie(&self, url: &str, cookie: &str) -> Result<()> {
-        let parsed = match Url::parse(url) {
-            Ok(u) => u,
-            Err(e) => {
-                debug!("Invalid URL for cookie: {e}");
-                return Ok(());
-            }
-        };
-
+        if Url::parse(url).is_err() {
+            debug!("Invalid URL for cookie: {url}");
+            return Ok(());
+        }
         debug!(cookie, url; "Adding cookie");
-        self.jar.add_cookie_str(cookie, &parsed);
+        self.jar.add(cookie, url);
         Ok(())
     }
 
@@ -175,8 +185,7 @@ mod tests {
         let jar = SimpleCookieJar::new();
         let inner = jar.jar();
         // Verify it's the same jar by adding via inner and reading via trait
-        let url = Url::parse("https://example.com").unwrap();
-        inner.add_cookie_str("test=value", &url);
+        inner.add("test=value", "https://example.com");
 
         let cookies = jar.get_cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 1);

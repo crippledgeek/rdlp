@@ -121,10 +121,29 @@ fn insert_cookie(cookie: &NetscapeCookie, jar: &impl CookieStore) -> bool {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use url::Url;
+    use wreq::Uri;
 
     fn make_jar() -> Arc<wreq::cookie::Jar> {
         Arc::new(wreq::cookie::Jar::default())
+    }
+
+    /// Flatten a `Cookies` result to a single string for assertions.
+    fn cookies_string(cookies: wreq::cookie::Cookies) -> Option<String> {
+        let parts: Vec<&wreq::header::HeaderValue> = match &cookies {
+            wreq::cookie::Cookies::Compressed(hv) => vec![hv],
+            wreq::cookie::Cookies::Uncompressed(v) => v.iter().collect(),
+            wreq::cookie::Cookies::Empty => return None,
+            _ => return None,
+        };
+        let joined: Vec<String> = parts
+            .into_iter()
+            .filter_map(|hv| hv.to_str().ok().map(str::to_owned))
+            .collect();
+        if joined.is_empty() {
+            None
+        } else {
+            Some(joined.join("; "))
+        }
     }
 
     #[test]
@@ -134,11 +153,10 @@ mod tests {
         let count = load_cookie_string(content, &*jar);
         assert_eq!(count, 1);
 
-        let url = Url::parse("https://example.com/").unwrap();
-        let cookies = jar.cookies(&url);
-        assert!(cookies.is_some());
-        let cookie_str = cookies.unwrap();
-        assert!(cookie_str.to_str().unwrap().contains("session=abc123"));
+        let uri: Uri = "https://example.com/".parse().unwrap();
+        let cookies = jar.cookies(&uri);
+        let cookie_str = cookies_string(cookies).expect("cookies present");
+        assert!(cookie_str.contains("session=abc123"));
     }
 
     #[test]
@@ -184,15 +202,9 @@ mod tests {
         let count = load_cookie_string(content, &*jar);
         assert_eq!(count, 1);
 
-        let url = Url::parse("https://example.com/").unwrap();
-        let cookies = jar.cookies(&url);
-        assert!(cookies.is_some());
-        assert!(
-            cookies
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("httponly_cookie=secret")
-        );
+        let uri: Uri = "https://example.com/".parse().unwrap();
+        let cookies = jar.cookies(&uri);
+        let cookie_str = cookies_string(cookies).expect("cookies present");
+        assert!(cookie_str.contains("httponly_cookie=secret"));
     }
 }
