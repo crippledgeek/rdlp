@@ -26,7 +26,7 @@ const VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
 /// tracks with unreachable URLs and records reasons/diagnostics.
 pub(super) async fn validate_subtitle_urls(
     result: SubtitleResult,
-    client: &reqwest::Client,
+    client: &wreq::Client,
 ) -> SubtitleResult {
     let mut valid_tracks = Vec::new();
     let mut reasons = result.reasons;
@@ -88,7 +88,7 @@ enum UrlValidation {
     NetworkError(String),
 }
 
-async fn validate_single_url(url: &str, client: &reqwest::Client) -> UrlValidation {
+async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation {
     // Try HEAD first
     match client.head(url).timeout(VALIDATION_TIMEOUT).send().await {
         Ok(resp) if resp.status().is_success() => return UrlValidation::Reachable,

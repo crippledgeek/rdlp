@@ -196,7 +196,7 @@ async fn test_validate_urls_keeps_reachable() {
     t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder()
+    let client = wreq::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
@@ -225,7 +225,7 @@ async fn test_validate_urls_filters_unreachable() {
     t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder()
+    let client = wreq::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
@@ -259,7 +259,7 @@ async fn test_validate_urls_auth_reason_on_403() {
     t.url = base_url + "/en.vtt";
     let result = result_with(vec![t]);
 
-    let client = reqwest::Client::builder()
+    let client = wreq::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();

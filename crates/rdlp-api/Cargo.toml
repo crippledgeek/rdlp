@@ -31,6 +31,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 wreq = { workspace = true }
+url = { workspace = true }
 futures-util = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 
