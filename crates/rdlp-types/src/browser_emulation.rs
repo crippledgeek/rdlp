@@ -35,6 +35,7 @@ pub enum BrowserEmulation {
 impl BrowserEmulation {
     /// Resolve to the concrete `wreq_util::Emulation` value that `wreq::ClientBuilder::emulation`
     /// expects. Called at each `HttpClientFactory` build.
+    #[must_use]
     pub fn resolve(&self) -> Emulation {
         match self {
             // Update these bindings when wreq-util publishes newer profiles.
