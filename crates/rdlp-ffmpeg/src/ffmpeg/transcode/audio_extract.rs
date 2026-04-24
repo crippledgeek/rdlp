@@ -43,6 +43,8 @@ impl FFmpegRunner {
                 Self::extract_audio_sync(&effective_input, &output, &opts, progress_fn.as_deref());
 
             if let Some(ref temp) = salvage_temp {
+                // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                #[allow(clippy::disallowed_methods)]
                 let _ = std::fs::remove_file(temp);
             }
 

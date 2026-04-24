@@ -276,6 +276,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     info!("Salvage remux complete: {copied} packets copied, {skipped} skipped");
 
     if copied == 0 {
+        // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+        #[allow(clippy::disallowed_methods)]
         let _ = std::fs::remove_file(&salvage_path);
         return Err(PostProcessError::SalvageFailed {
             message: "no packets could be recovered from corrupt input".into(),

@@ -312,6 +312,8 @@ where
     }
 
     // Clean up potentially corrupt partial output before retry
+    // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(output);
     if output.exists() {
         warn!(
@@ -332,6 +334,8 @@ where
                         salvaged.display()
                     );
                 } else {
+                    // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                    #[allow(clippy::disallowed_methods)]
                     let _ = std::fs::remove_file(&salvaged);
                 }
                 return result;
@@ -346,6 +350,8 @@ where
                     salvaged.display()
                 );
             }
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
             let _ = std::fs::remove_file(output);
             if output.exists() {
                 warn!(

@@ -104,10 +104,20 @@ where
     let result = f(&temp_db);
 
     // Clean up all temp files
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(&temp_db);
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(&wal_dst);
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(&shm_dst);
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(&wal_dst2);
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let _ = std::fs::remove_file(&shm_dst2);
 
     result

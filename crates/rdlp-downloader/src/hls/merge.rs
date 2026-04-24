@@ -79,6 +79,8 @@ pub(crate) async fn download_segments_with_resume(
     // Verify completed segments actually exist on disk (handles corrupted/deleted files)
     let is_valid_on_disk = |idx: &usize| -> bool {
         let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
+        // Safe: HLS segment-merge path runs inside spawn_blocking; no async runtime active on this thread.
+        #[allow(clippy::disallowed_methods)]
         std::fs::metadata(&segment_path)
             .map(|meta| meta.len() > 0)
             .unwrap_or(false)

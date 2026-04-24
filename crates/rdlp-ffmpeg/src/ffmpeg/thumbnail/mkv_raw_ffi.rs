@@ -178,6 +178,8 @@ impl FFmpegRunner {
             }
 
             // Read raw thumbnail file bytes for attachment extradata
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
             let thumb_data = std::fs::read(thumbnail).map_err(|e| {
                 ffi::avformat_close_input(&mut media_ctx);
                 ffi::avformat_close_input(&mut thumb_ctx);

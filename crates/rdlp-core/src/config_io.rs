@@ -22,6 +22,9 @@ pub fn default_config_path() -> Option<PathBuf> {
 ///
 /// Missing fields use `Config::default()` values thanks to `#[serde(default)]`.
 pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Config> {
+    // Safe: sync public API invoked from CLI startup / tests before any async runtime.
+    // Callers in async contexts must wrap in spawn_blocking.
+    #[allow(clippy::disallowed_methods)]
     let content = std::fs::read_to_string(path.as_ref())?;
     let config: Config = toml::from_str(&content)
         .map_err(|e| RdlpError::Config(format!("Failed to parse TOML: {e}")))?;
@@ -58,6 +61,9 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<(Config, PathBuf)>> {
 pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
     let content = toml::to_string_pretty(config)
         .map_err(|e| RdlpError::Config(format!("Failed to serialize TOML: {e}")))?;
+    // Safe: sync public API invoked from CLI startup / tests before any async runtime.
+    // Callers in async contexts must wrap in spawn_blocking.
+    #[allow(clippy::disallowed_methods)]
     std::fs::write(path.as_ref(), content)?;
     Ok(())
 }

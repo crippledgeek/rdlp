@@ -350,6 +350,10 @@ pub struct BatchInput {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+// Safe: test fixtures — the single std::fs::write here is setup for an async test that
+// specifically exercises the spawn_blocking cleanup path; the write itself runs before
+// the pipeline starts and is not inside an .await-blocking critical section.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

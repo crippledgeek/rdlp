@@ -65,6 +65,8 @@ impl FFmpegRunner {
 
             // Clean up salvage temp file regardless of success/failure
             if let Some(ref temp) = salvage_temp {
+                // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                #[allow(clippy::disallowed_methods)]
                 let _ = std::fs::remove_file(temp);
             }
 

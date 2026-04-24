@@ -77,6 +77,8 @@ pub(super) unsafe fn validate_mux_header_state(
             ffmpeg_the_third::ffi::avio_flush(pb);
         }
     }
+    // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+    #[allow(clippy::disallowed_methods)]
     let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
     if file_size == 0 {
         return Err(PostProcessError::FFmpegLibraryError {
@@ -142,6 +144,8 @@ pub(crate) unsafe fn dump_io_state(
         let write_flag = (*pb).write_flag;
         let has_write_cb = (*pb).write_packet.is_some();
 
+        // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+        #[allow(clippy::disallowed_methods)]
         let file_size = std::fs::metadata(rust_output_path)
             .map(|m| m.len() as i64)
             .unwrap_or(-1);

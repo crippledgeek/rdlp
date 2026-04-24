@@ -124,6 +124,7 @@ tempfile = "3.14"
 must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
+disallowed_methods = "deny"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]

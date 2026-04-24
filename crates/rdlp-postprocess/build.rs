@@ -11,6 +11,9 @@
 //! 3. Chocolatey FFmpeg installation
 //! 4. Derive from `ffmpeg.exe` found in `PATH`
 
+// Safe: build.rs runs synchronously at compile time — no async runtime exists.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::{Path, PathBuf};
 
 fn main() {

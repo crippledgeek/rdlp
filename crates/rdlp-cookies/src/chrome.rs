@@ -110,6 +110,8 @@ fn chrome_user_data_dir() -> Result<PathBuf, std::io::Error> {
 
 /// Load and decrypt the AES encryption key from Local State.
 fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Error> {
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
     let content = std::fs::read_to_string(local_state_path)?;
     let json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

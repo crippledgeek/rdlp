@@ -81,6 +81,8 @@ impl FileTracker {
     ///
     /// Called on successful pipeline completion. On crash, the
     /// [`TempRegistry`] shutdown hook handles cleanup instead.
+    // Safe: invoked via tokio::task::spawn_blocking from pipeline/mod.rs:182.
+    #[allow(clippy::disallowed_methods)]
     pub fn cleanup(&mut self) {
         let to_delete: Vec<PathBuf> = self.temp_files.drain(..).collect();
         for path in to_delete {
@@ -121,6 +123,8 @@ impl FileTracker {
 }
 
 #[cfg(test)]
+// Safe: test fixtures — no async runtime in #[test] fns.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::fs;

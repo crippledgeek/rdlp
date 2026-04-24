@@ -57,6 +57,8 @@ impl TempRegistry {
     /// The set is drained under the lock; file deletion happens outside the
     /// lock to avoid holding the lock across I/O. Double-delete is impossible
     /// because the set is drained atomically.
+    // Safe: invoked from sync CLI/Tauri shutdown paths, not from an async runtime worker.
+    #[allow(clippy::disallowed_methods)]
     pub fn cleanup_all(&self) {
         let paths: Vec<PathBuf> = self
             .active
@@ -80,6 +82,8 @@ impl TempRegistry {
 
     /// Scan `dir` for stale `*.rdlp-tmp-*` files older than 1 hour and delete
     /// them. Called on app startup to remove files left by a prior crash.
+    // Safe: CLI invokes via spawn_blocking; Tauri invokes from sync startup/shutdown; no async runtime active on this thread.
+    #[allow(clippy::disallowed_methods)]
     pub fn cleanup_stale(dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -124,6 +128,8 @@ impl Default for TempRegistry {
 }
 
 impl Drop for TempRegistry {
+    // Safe: Drop runs synchronously on the thread that owns the value; no async runtime context.
+    #[allow(clippy::disallowed_methods)]
     fn drop(&mut self) {
         // Drain and delete all remaining tracked temps.
         let paths: Vec<PathBuf> = self
@@ -147,6 +153,8 @@ impl Drop for TempRegistry {
 }
 
 #[cfg(test)]
+// Safe: test fixtures — no async runtime in #[test] fns.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::fs;

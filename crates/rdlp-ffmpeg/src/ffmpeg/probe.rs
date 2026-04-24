@@ -121,7 +121,12 @@ impl FFmpegRunner {
         }
 
         // File size from metadata or filesystem
-        info.filesize = std::fs::metadata(path).ok().map(|m| m.len());
+        info.filesize = {
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
+            let m = std::fs::metadata(path);
+            m.ok().map(|m| m.len())
+        };
 
         // Format-level metadata
         for (key, value) in ictx.metadata().iter() {

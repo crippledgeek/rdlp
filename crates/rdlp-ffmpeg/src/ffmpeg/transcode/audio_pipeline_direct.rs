@@ -208,6 +208,8 @@ impl FFmpegRunner {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() { (*pb).pos } else { 0 }
                 };
+                // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                #[allow(clippy::disallowed_methods)]
                 let file_sz = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
                     .map(|m| m.len())
@@ -278,6 +280,8 @@ impl FFmpegRunner {
                     let pb = (*octx.as_mut_ptr()).pb;
                     if !pb.is_null() { (*pb).pos } else { 0 }
                 };
+                // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                #[allow(clippy::disallowed_methods)]
                 let file_sz = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
                     .map(|m| m.len())
@@ -314,6 +318,8 @@ impl FFmpegRunner {
                     if !pb.is_null() { (*pb).pos } else { 0 }
                 };
 
+                // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+                #[allow(clippy::disallowed_methods)]
                 let file_size = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
                     .map(|m| m.len() as i64)
