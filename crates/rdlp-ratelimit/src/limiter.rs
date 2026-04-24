@@ -1,7 +1,6 @@
 //! Token-bucket rate limiter implementation.
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::time::{Duration, Instant};
 
 /// Internal mutable state for the token bucket.
@@ -27,6 +26,9 @@ struct TokenBucketState {
 #[derive(Clone)]
 pub struct RateLimiter {
     bytes_per_second: f64,
+    // std::sync::Mutex is intentional: guards never cross an .await point.
+    // The critical section is pure arithmetic; the sleep is outside the guard.
+    // See docs/implementation/tls-impersonation/phase-1-report.md Finding 2.1.
     state: Arc<Mutex<TokenBucketState>>,
 }
 
@@ -50,7 +52,7 @@ impl RateLimiter {
     /// The mutex is released before sleeping so other tasks are not blocked.
     pub async fn acquire(&self, bytes: usize) {
         let sleep_duration = {
-            let mut state = self.state.lock().await;
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let now = Instant::now();
             let elapsed = now.duration_since(state.last_refill).as_secs_f64();
 
