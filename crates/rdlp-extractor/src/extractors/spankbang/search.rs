@@ -6,7 +6,7 @@
 //! - Spaces in the query become `+`
 //! - Cookie `country=US` matches the live extractor
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -66,6 +66,61 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
     format!("{SPANKBANG_BASE_URL}/s/{kw}/{path_page}{qs}")
 }
 
+/// Parse a SpankBang duration label (e.g. "3m", "1h23m", "45s") into seconds.
+/// Returns `None` if the label is empty or unparseable.
+pub(crate) fn parse_duration_label(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut total = 0u64;
+    let mut current = 0u64;
+    let mut consumed_any = false;
+    for ch in s.chars() {
+        match ch {
+            '0'..='9' => {
+                current = current.saturating_mul(10) + (ch as u64 - '0' as u64);
+                consumed_any = true;
+            }
+            'h' | 'H' => {
+                total = total.saturating_add(current.saturating_mul(3600));
+                current = 0;
+            }
+            'm' | 'M' => {
+                total = total.saturating_add(current.saturating_mul(60));
+                current = 0;
+            }
+            's' | 'S' => {
+                total = total.saturating_add(current);
+                current = 0;
+            }
+            _ => {}
+        }
+    }
+    // Bare digits with no unit aren't a known SpankBang shape — discard.
+    if !consumed_any || total == 0 {
+        return None;
+    }
+    Some(total as f64)
+}
+
+/// Per-card metadata harvested from the image-wrapper anchor: thumbnail URL
+/// + duration in seconds. Keyed by video ID for join with `SEARCH_RESULT`.
+fn collect_card_metadata(html: &str) -> HashMap<String, (Option<String>, Option<f64>)> {
+    let mut map = HashMap::new();
+    for caps in patterns::SEARCH_CARD_THUMB_DURATION.captures_iter(html) {
+        let id = caps.get(1).map(|m| m.as_str().to_string());
+        let thumb = caps.get(2).map(|m| m.as_str().to_string());
+        let dur = caps
+            .get(3)
+            .and_then(|m| parse_duration_label(m.as_str()));
+        if let Some(id) = id {
+            map.entry(id).or_insert((thumb, dur));
+        }
+    }
+    map
+}
+
 /// Extract search-result anchors from a SpankBang search-page HTML.
 ///
 /// Each video appears in two anchors per card (image wrapper + title link);
@@ -73,9 +128,15 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// already de-duplicates the image-wrapper form. We additionally de-duplicate
 /// by video ID across the whole page since some pages echo the same video in
 /// `recommended` / `editor's pick` rails alongside the main result grid.
+///
+/// Thumbnail and duration are joined in from the image-wrapper anchor via
+/// [`collect_card_metadata`]. SpankBang search pages do not surface uploader
+/// or view counts in the card markup; those remain `None` and require an
+/// individual video-page fetch to populate.
 pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut results = Vec::new();
+    let card_meta = collect_card_metadata(html);
 
     for caps in patterns::SEARCH_RESULT.captures_iter(html) {
         let id = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
@@ -89,12 +150,14 @@ pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
             continue;
         }
 
+        let (thumbnail_url, duration) = card_meta.get(id).cloned().unwrap_or((None, None));
+
         let video_url = format!("{SPANKBANG_BASE_URL}/{id}/video/{slug}");
         results.push(SearchResultPreview {
             video_url,
             title: title.to_string(),
-            thumbnail_url: None,
-            duration: None,
+            thumbnail_url,
+            duration,
             uploader: None,
             actors: Vec::new(),
             view_count: None,
@@ -331,6 +394,57 @@ mod tests {
                 .to_string();
             assert!(ids.insert(id.clone()), "duplicate id in results: {id}");
         }
+    }
+
+    #[test]
+    fn parses_thumbnail_and_duration_from_fixture() {
+        let results = parse_results(SEARCH_PAGE);
+        // Most cards in the SpankBang search grid expose both fields; require
+        // a strong majority rather than 100% (recommendation rails or
+        // ad-marked cards may render without the wrapper anchor we key off).
+        let with_thumb = results.iter().filter(|r| r.thumbnail_url.is_some()).count();
+        let with_dur = results.iter().filter(|r| r.duration.is_some()).count();
+        assert!(
+            with_thumb >= results.len() * 3 / 4,
+            "expected ≥75% of {} results to carry a thumbnail; got {with_thumb}",
+            results.len()
+        );
+        assert!(
+            with_dur >= results.len() * 3 / 4,
+            "expected ≥75% of {} results to carry a duration; got {with_dur}",
+            results.len()
+        );
+
+        // Spot-check: at least one result has an sb-cd.com thumbnail URL and a
+        // positive duration.
+        let sample = results
+            .iter()
+            .find(|r| r.thumbnail_url.is_some() && r.duration.is_some())
+            .expect("at least one result with both fields");
+        let thumb = sample.thumbnail_url.as_deref().unwrap();
+        assert!(
+            thumb.starts_with("https://") && thumb.contains("sb-cd.com"),
+            "unexpected thumbnail host: {thumb}"
+        );
+        assert!(
+            sample.duration.unwrap() > 0.0,
+            "duration must be positive"
+        );
+    }
+
+    #[test]
+    fn duration_label_parser_handles_known_shapes() {
+        assert_eq!(parse_duration_label("3m"), Some(180.0));
+        assert_eq!(parse_duration_label("10m"), Some(600.0));
+        assert_eq!(parse_duration_label("45s"), Some(45.0));
+        assert_eq!(parse_duration_label("1h23m"), Some(3600.0 + 23.0 * 60.0));
+        assert_eq!(parse_duration_label("2h"), Some(7200.0));
+        assert_eq!(parse_duration_label("1h2m3s"), Some(3600.0 + 120.0 + 3.0));
+        // Unparseable / empty / unitless → None
+        assert_eq!(parse_duration_label(""), None);
+        assert_eq!(parse_duration_label("   "), None);
+        assert_eq!(parse_duration_label("123"), None);
+        assert_eq!(parse_duration_label("nope"), None);
     }
 
     #[test]

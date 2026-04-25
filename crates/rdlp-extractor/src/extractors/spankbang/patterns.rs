@@ -109,6 +109,19 @@ pub(super) static SEARCH_RESULT: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SpankBang SEARCH_RESULT regex")
 });
 
+/// Search-result image-wrapper anchor: captures (id, thumbnail URL,
+/// duration label like "3m" or "1h23m"). The wrapper anchor's structure
+/// embeds an `<img>` tag and a `<div data-testid="video-item-length">DUR</div>`
+/// that the title-only `SEARCH_RESULT` regex skips.
+///
+/// Capture groups: (1) video id, (2) thumbnail URL, (3) duration text.
+pub(super) static SEARCH_CARD_THUMB_DURATION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)<a[^>]*\bhref="/([a-z0-9]+)/video/[^"]*"[^>]*class="relative[^"]*"[^>]*>.*?<img[^>]*\bsrc="([^"]+)"[^>]*>.*?data-testid="video-item-length"[^>]*>\s*([^<]+?)\s*<"#,
+    )
+    .expect("SpankBang SEARCH_CARD_THUMB_DURATION regex")
+});
+
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
 pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)
