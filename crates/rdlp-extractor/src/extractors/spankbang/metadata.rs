@@ -165,6 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_uploader_with_dotted_slug() {
+        // SpankBang allows `.` in profile slugs per RFC 3986 unreserved set.
+        // Captured 2026-04-26 from /6ydqv/video/jodi+bj — uploader slug is
+        // `coutinho.vasconcelos61` (dot + digits). Locks the regression
+        // where `[a-z0-9_-]+` rejected the period.
+        const DOTTED: &str =
+            include_str!("tests/spankbang_video_page_dotted_user.html");
+        let m = parse(DOTTED);
+        assert_eq!(
+            m.uploader_id.as_deref(),
+            Some("coutinho.vasconcelos61"),
+            "dotted slug must extract via UPLOADER_LINK_NAMED"
+        );
+        assert_eq!(m.uploader.as_deref(), Some("coutinho.vasconcelos61"));
+    }
+
+    #[test]
     fn parses_actors_and_tags_from_searches_bar() {
         let m = parse(PAGE);
 

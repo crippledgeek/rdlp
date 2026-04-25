@@ -94,8 +94,14 @@ pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
 /// differ from the slug in capitalisation, e.g. "GammaEntertainment" vs
 /// "gammaentertainment"). Fails on the icon-wrapped form (use
 /// [`UPLOADER_LINK_NAMED`] in addition).
+///
+/// Slug character class `[a-z0-9._-]+` matches the SpankBang server's
+/// case-folded form of the RFC 3986 unreserved set (ALPHA / DIGIT /
+/// "-" / "." / "_" / "~"); SpankBang lowercases all profile URLs, and
+/// the tilde is not observed in profile slugs. The period is required
+/// — usernames like `coutinho.vasconcelos61` are common.
 pub(super) static UPLOADER_LINK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<a[^>]*\bhref="/profile/([a-z0-9_-]+)"[^>]*>([^<]+)</a>"#)
+    Regex::new(r#"<a[^>]*\bhref="/profile/([a-z0-9._-]+)"[^>]*>([^<]+)</a>"#)
         .expect("SpankBang UPLOADER_LINK regex")
 });
 
@@ -106,9 +112,10 @@ pub(super) static UPLOADER_LINK: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// Capture group 1 = slug, group 2 = display name from the inner
 /// `<span class="name">`. Tolerant of arbitrary preceding nested tags.
+/// Same slug character class as [`UPLOADER_LINK`].
 pub(super) static UPLOADER_LINK_NAMED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?s)<a[^>]*\bhref="/profile/([a-z0-9_-]+)"[^>]*>.*?<span[^>]*\bclass="[^"]*\bname\b[^"]*"[^>]*>\s*([^<]+?)\s*</span>"#,
+        r#"(?s)<a[^>]*\bhref="/profile/([a-z0-9._-]+)"[^>]*>.*?<span[^>]*\bclass="[^"]*\bname\b[^"]*"[^>]*>\s*([^<]+?)\s*</span>"#,
     )
     .expect("SpankBang UPLOADER_LINK_NAMED regex")
 });
