@@ -15,8 +15,20 @@ mod patterns;
 mod formats;
 mod metadata;
 
-/// Public type to be implemented in Task 5. Kept here so the registry can
-/// reference it once Task 5 lands.
+use async_trait::async_trait;
+use log::{debug, warn};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
+use rdlp_types::{Format, InfoDict};
+use regex::Regex;
+use serde_json::Value;
+
+use crate::base::common::BaseExtractor;
+
+const SPANKBANG_NAME: &str = "SpankBang";
+const SPANKBANG_PRIORITY: i32 = 100;
+const FORMATS_API_URL: &str = "https://spankbang.com/api/videos/stream";
+
+/// SpankBang site extractor.
 #[derive(Default)]
 pub struct SpankBangExtractor;
 
@@ -25,5 +37,190 @@ impl SpankBangExtractor {
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+
+    /// Fetch the formats-API JSON when the inline `stream_data` is absent.
+    /// Caller passes the streamkey already extracted from the page HTML.
+    async fn fetch_formats_api(
+        ctx: &ExtractionContext,
+        streamkey: &str,
+        page_url: &str,
+    ) -> Result<Value> {
+        let body = format!("id={}&data=0", urlencoding_minimal(streamkey));
+        let resp = ctx
+            .http_client
+            .post(FORMATS_API_URL)
+            .header("Referer", page_url)
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Origin", "https://spankbang.com")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("SpankBang formats API request failed: {e}"),
+                url: Some(FORMATS_API_URL.to_string()),
+            })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(RdlpError::Http {
+                status: status.as_u16(),
+                reason: format!("SpankBang formats API returned {status}"),
+            });
+        }
+
+        resp.json::<Value>().await.map_err(|e| RdlpError::Extraction {
+            message: format!("SpankBang formats API JSON parse failed: {e}"),
+            url: Some(FORMATS_API_URL.to_string()),
+        })
+    }
+}
+
+/// Minimal application/x-www-form-urlencoded encoding for the streamkey
+/// (`A-Za-z0-9._-~` are kept verbatim per RFC 3986 unreserved; everything
+/// else gets percent-encoded). Avoids a workspace-level urlencoding dep.
+fn urlencoding_minimal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'~' => {
+                out.push(b as char);
+            }
+            other => {
+                out.push_str(&format!("%{other:02X}"));
+            }
+        }
+    }
+    out
+}
+
+#[async_trait]
+impl InfoExtractor for SpankBangExtractor {
+    fn name(&self) -> &str {
+        SPANKBANG_NAME
+    }
+
+    fn valid_url(&self) -> &Regex {
+        &patterns::VIDEO_URL
+    }
+
+    fn suitable(&self, url: &str) -> bool {
+        patterns::is_suitable(url)
+    }
+
+    fn priority(&self) -> i32 {
+        SPANKBANG_PRIORITY
+    }
+
+    async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
+        let video_id =
+            patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
+                message: format!("SpankBang: could not extract video ID from URL: {url}"),
+                url: Some(url.to_string()),
+            })?;
+
+        // yt-dlp parity: rewrite /<id>/embed → /<id>/video before fetching.
+        let canonical = url.replace(&format!("/{video_id}/embed"), &format!("/{video_id}/video"));
+        debug!("[spankbang] fetching video page id={video_id}");
+
+        // SpankBang gates some content by country; matches yt-dlp's default.
+        let webpage = BaseExtractor::fetch_webpage_with_headers(
+            &canonical,
+            &[("Cookie", "country=US")],
+            ctx,
+        )
+        .await?;
+
+        if metadata::is_removed(&webpage) {
+            return Err(RdlpError::Extraction {
+                message: format!("SpankBang: video {video_id} is not available"),
+                url: Some(url.to_string()),
+            });
+        }
+
+        // --- formats: inline stream_data first, API fallback second ---
+        let mut formats: Vec<Format> = Vec::new();
+        if let Some(data) = formats::parse_inline_stream_data(&webpage) {
+            formats = formats::build_formats(&data);
+            debug!("[spankbang] inline stream_data produced {} formats", formats.len());
+        }
+
+        if formats.is_empty() {
+            warn!("[spankbang] inline stream_data missing, falling back to formats API");
+            let key = formats::parse_streamkey(&webpage).ok_or_else(|| RdlpError::Extraction {
+                message: format!(
+                    "SpankBang: neither inline stream_data nor data-streamkey present \
+                     on page {url}"
+                ),
+                url: Some(url.to_string()),
+            })?;
+            let data = Self::fetch_formats_api(ctx, &key, &canonical).await?;
+            formats = formats::build_formats(&data);
+        }
+
+        if formats.is_empty() {
+            return Err(RdlpError::Extraction {
+                message: format!("SpankBang: no playable formats found for {url}"),
+                url: Some(url.to_string()),
+            });
+        }
+
+        // Validate every URL through the SSRF gate before returning.
+        for f in &formats {
+            BaseExtractor::validate_url_security(&f.url)?;
+        }
+
+        // --- metadata ---
+        let meta = metadata::parse(&webpage);
+        let title = meta.title.clone().unwrap_or_else(|| video_id.clone());
+
+        let mut info = InfoDict::new(&video_id, &title, SPANKBANG_NAME, url);
+        info.extractor = SPANKBANG_NAME.to_string();
+        info.description = meta.description;
+        info.thumbnail = meta.thumbnail;
+        info.uploader_id = meta.uploader_id;
+        info.duration = meta.duration_secs.map(|s| s as f64);
+        info.age_limit = Some(18);
+        info.actors = Vec::new();
+        info.formats = formats;
+        info.propagate_duration();
+
+        Ok(info)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_routing_smoke() {
+        let ext = SpankBangExtractor::new();
+        assert!(ext.suitable("https://spankbang.com/56b3d/video/x"));
+        assert!(ext.suitable("https://m.spankbang.com/3vvn/play"));
+        assert!(!ext.suitable("https://www.xnxx.com/video-14cco143/y"));
+    }
+
+    #[test]
+    fn priority_above_generic_below_explicit_default() {
+        let ext = SpankBangExtractor::new();
+        assert_eq!(ext.priority(), 100);
+    }
+
+    #[test]
+    fn name_matches_constant() {
+        let ext = SpankBangExtractor::new();
+        assert_eq!(ext.name(), "SpankBang");
+    }
+
+    #[test]
+    fn urlencoding_minimal_preserves_streamkey() {
+        // Live shape: base64ish + '.' + base64ish.
+        assert_eq!(
+            urlencoding_minimal("MTcwMDE4NDU.XTPJk92TYuF3gscEzR5UhXY4ttk"),
+            "MTcwMDE4NDU.XTPJk92TYuF3gscEzR5UhXY4ttk"
+        );
+        assert_eq!(urlencoding_minimal("a b/c"), "a%20b%2Fc");
     }
 }

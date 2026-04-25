@@ -42,8 +42,8 @@ pub mod utils;
 pub use extractors::{
     EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
-    RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor,
-    XTitsExtractor, XVideosExtractor,
+    RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
+    XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -120,6 +120,9 @@ impl ExtractorRegistry {
 
         // Register EPorner extractor
         registry.register(Arc::new(EPornerExtractor::new()));
+
+        // Register SpankBang extractor
+        registry.register(Arc::new(SpankBangExtractor::new()));
 
         // Register Generic fallback extractor (MUST be last — lowest priority)
         registry.register(Arc::new(GenericExtractor::new()));
