@@ -331,6 +331,7 @@ mod tests {
         assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
         assert!(extractors.contains(&"HQPorner"));
+        assert!(extractors.contains(&"SpankBang"));
     }
 
     #[test]
@@ -414,6 +415,11 @@ mod tests {
             registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
         assert!(hqporner.is_some());
         assert_eq!(hqporner.unwrap().name(), "HQPorner");
+
+        let spankbang =
+            registry.find_extractor("https://spankbang.com/56b3d/video/the+slut+maker");
+        assert!(spankbang.is_some());
+        assert_eq!(spankbang.unwrap().name(), "SpankBang");
 
         // Generic fallback extractor matches all HTTP URLs, so a YouTube URL
         // now returns the Generic extractor instead of None.

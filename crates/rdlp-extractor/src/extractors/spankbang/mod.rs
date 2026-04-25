@@ -176,7 +176,6 @@ impl InfoExtractor for SpankBangExtractor {
         let title = meta.title.clone().unwrap_or_else(|| video_id.clone());
 
         let mut info = InfoDict::new(&video_id, &title, SPANKBANG_NAME, url);
-        info.extractor = SPANKBANG_NAME.to_string();
         info.description = meta.description;
         info.thumbnail = meta.thumbnail;
         info.uploader_id = meta.uploader_id;
