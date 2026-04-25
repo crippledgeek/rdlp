@@ -1,6 +1,6 @@
 // TanStack Query options for search-related Rust commands.
 
-import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import type {
@@ -47,36 +47,44 @@ export function enrichSearchResultQueryOptions(
     preview: SearchResultPreview,
     enabled: boolean,
 ) {
-    const finalEnabled = enabled && site !== "" && preview.video_url !== "";
+    const ready = enabled && site !== "" && preview.video_url !== "";
+    // TanStack Query v5 documented lazy-query pattern: switch the queryFn
+    // between `skipToken` (disabled, type-safe) and a real function based on
+    // the gating condition. Toggling `enabled: false → true` on a
+    // queryOptions() factory has known propagation quirks under React 19;
+    // skipToken changes the query identity itself which TanStack always
+    // re-evaluates.
+    // https://tanstack.com/query/v5/docs/react/guides/disabling-queries
     return queryOptions({
         queryKey: queryKeys.search.enrichRow(site, preview.video_url),
-        queryFn: async () => {
-            // eslint-disable-next-line no-console
-            console.debug("[enrich] queryFn START:", preview.video_url);
-            try {
-                const result = await invokeTyped<SearchResultPreview>(
-                    "enrich_search_result",
-                    { site, preview },
-                );
-                // eslint-disable-next-line no-console
-                console.debug(
-                    "[enrich] queryFn DONE:",
-                    preview.video_url,
-                    "→ uploader =",
-                    result.uploader,
-                );
-                return result;
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.error(
-                    "[enrich] queryFn THREW:",
-                    preview.video_url,
-                    err,
-                );
-                throw err;
-            }
-        },
-        enabled: finalEnabled,
+        queryFn: ready
+            ? async () => {
+                  // eslint-disable-next-line no-console
+                  console.debug("[enrich] queryFn START:", preview.video_url);
+                  try {
+                      const result = await invokeTyped<SearchResultPreview>(
+                          "enrich_search_result",
+                          { site, preview },
+                      );
+                      // eslint-disable-next-line no-console
+                      console.debug(
+                          "[enrich] queryFn DONE:",
+                          preview.video_url,
+                          "→ uploader =",
+                          result.uploader,
+                      );
+                      return result;
+                  } catch (err) {
+                      // eslint-disable-next-line no-console
+                      console.error(
+                          "[enrich] queryFn THREW:",
+                          preview.video_url,
+                          err,
+                      );
+                      throw err;
+                  }
+              }
+            : skipToken,
         staleTime: 60 * 60 * 1000,
         gcTime: 60 * 60 * 1000,
         retry: 0,
