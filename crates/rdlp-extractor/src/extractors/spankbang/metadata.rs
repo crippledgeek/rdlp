@@ -11,6 +11,7 @@ pub(super) struct PageMetadata {
     pub(super) title: Option<String>,
     pub(super) description: Option<String>,
     pub(super) thumbnail: Option<String>,
+    pub(super) uploader: Option<String>,
     pub(super) duration_secs: Option<u64>,
     pub(super) uploader_id: Option<String>,
 }
@@ -41,15 +42,20 @@ pub(super) fn parse(html: &str) -> PageMetadata {
     let thumbnail = og.get("image").cloned();
     let duration_secs = og.get("video:duration").and_then(|s| s.parse().ok());
 
-    let uploader_id = patterns::UPLOADER_ID
+    let (uploader_id, uploader) = patterns::UPLOADER_LINK
         .captures(html)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string());
+        .map(|c| {
+            let slug = c.get(1).map(|m| m.as_str().to_string());
+            let name = c.get(2).map(|m| m.as_str().trim().to_string());
+            (slug, name)
+        })
+        .unwrap_or((None, None));
 
     PageMetadata {
         title,
         description,
         thumbnail,
+        uploader,
         duration_secs,
         uploader_id,
     }
@@ -78,6 +84,7 @@ mod tests {
         assert!(thumb.starts_with("https://"), "absolute thumbnail URL");
         assert_eq!(m.duration_secs, Some(910));
         assert_eq!(m.uploader_id.as_deref(), Some("gammaentertainment"));
+        assert_eq!(m.uploader.as_deref(), Some("GammaEntertainment"));
     }
 
     #[test]

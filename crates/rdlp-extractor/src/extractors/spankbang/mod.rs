@@ -46,7 +46,7 @@ impl SpankBangExtractor {
         streamkey: &str,
         page_url: &str,
     ) -> Result<Value> {
-        let body = format!("id={}&data=0", urlencoding_minimal(streamkey));
+        let body = format!("id={}&data=0", urlencoding::encode(streamkey));
         let resp = ctx
             .http_client
             .post(FORMATS_API_URL)
@@ -77,23 +77,6 @@ impl SpankBangExtractor {
     }
 }
 
-/// Minimal application/x-www-form-urlencoded encoding for the streamkey
-/// (`A-Za-z0-9._-~` are kept verbatim per RFC 3986 unreserved; everything
-/// else gets percent-encoded). Avoids a workspace-level urlencoding dep.
-fn urlencoding_minimal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'~' => {
-                out.push(b as char);
-            }
-            other => {
-                out.push_str(&format!("%{other:02X}"));
-            }
-        }
-    }
-    out
-}
 
 #[async_trait]
 impl InfoExtractor for SpankBangExtractor {
@@ -119,6 +102,16 @@ impl InfoExtractor for SpankBangExtractor {
                 message: format!("SpankBang: could not extract video ID from URL: {url}"),
                 url: Some(url.to_string()),
             })?;
+
+        // Playlist URLs match VIDEO_URL but require a different fetch path
+        // (anchor scrape, not stream_data parse). Surface a clear error
+        // until extract_playlist is implemented as a follow-up.
+        if url.contains("/playlist/") {
+            return Err(RdlpError::Extraction {
+                message: "SpankBang playlist extraction is not yet implemented".to_string(),
+                url: Some(url.to_string()),
+            });
+        }
 
         // yt-dlp parity: rewrite /<id>/embed → /<id>/video before fetching.
         let canonical = url.replace(&format!("/{video_id}/embed"), &format!("/{video_id}/video"));
@@ -178,10 +171,10 @@ impl InfoExtractor for SpankBangExtractor {
         let mut info = InfoDict::new(&video_id, &title, SPANKBANG_NAME, url);
         info.description = meta.description;
         info.thumbnail = meta.thumbnail;
+        info.uploader = meta.uploader;
         info.uploader_id = meta.uploader_id;
         info.duration = meta.duration_secs.map(|s| s as f64);
         info.age_limit = Some(18);
-        info.actors = Vec::new();
         info.formats = formats;
         info.propagate_duration();
 
@@ -213,13 +206,4 @@ mod tests {
         assert_eq!(ext.name(), "SpankBang");
     }
 
-    #[test]
-    fn urlencoding_minimal_preserves_streamkey() {
-        // Live shape: base64ish + '.' + base64ish.
-        assert_eq!(
-            urlencoding_minimal("MTcwMDE4NDU.XTPJk92TYuF3gscEzR5UhXY4ttk"),
-            "MTcwMDE4NDU.XTPJk92TYuF3gscEzR5UhXY4ttk"
-        );
-        assert_eq!(urlencoding_minimal("a b/c"), "a%20b%2Fc");
-    }
 }

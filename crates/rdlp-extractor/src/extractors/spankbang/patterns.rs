@@ -89,9 +89,13 @@ pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SpankBang OG_META regex")
 });
 
-/// `href="/profile/USERID"` — uploader profile slug.
-pub(super) static UPLOADER_ID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"href="/profile/([a-z0-9_-]+)""#).expect("SpankBang UPLOADER_ID regex")
+/// `<a href="/profile/SLUG">DISPLAY</a>` — uploader profile link.
+/// Capture group 1 = slug, capture group 2 = display name (may differ
+/// from the slug in capitalisation, e.g. "GammaEntertainment" vs
+/// "gammaentertainment").
+pub(super) static UPLOADER_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<a[^>]*\bhref="/profile/([a-z0-9_-]+)"[^>]*>([^<]+)</a>"#)
+        .expect("SpankBang UPLOADER_LINK regex")
 });
 
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
