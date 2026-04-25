@@ -168,6 +168,32 @@ pub trait SearchExtractor: Send + Sync {
             total_estimate: None,
         })
     }
+
+    /// Lazily enrich a previously-returned [`SearchResultPreview`] with
+    /// fields that the search-page card markup did not surface.
+    ///
+    /// Frontends call this on demand (e.g. when a row scrolls into view)
+    /// to fill the per-row metadata gaps the cheap search path cannot —
+    /// typically `uploader`, `view_count` or `upload_date`. Each call
+    /// fires at most one HTTP request to the underlying video page; the
+    /// implementation must skip any field already populated and must NOT
+    /// re-extract format URLs.
+    ///
+    /// # Default
+    /// Returns the input unchanged. Sites whose search-card markup is
+    /// already complete (e.g. XHamster's JSON `videoThumbProps`) need no
+    /// override.
+    ///
+    /// # Arguments
+    /// * `preview` — A preview previously returned by [`search`] / [`search_page`].
+    /// * `ctx` — Shared extraction context.
+    async fn enrich(
+        &self,
+        preview: SearchResultPreview,
+        _ctx: &ExtractionContext,
+    ) -> Result<SearchResultPreview> {
+        Ok(preview)
+    }
 }
 
 /// Context passed to extractors containing shared resources

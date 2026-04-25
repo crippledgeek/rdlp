@@ -18,7 +18,7 @@ use rdlp_types::{
 };
 
 use super::SpankBangExtractor;
-use super::patterns;
+use super::{metadata, patterns};
 use crate::base::common::BaseExtractor;
 
 const SPANKBANG_BASE_URL: &str = "https://spankbang.com";
@@ -333,6 +333,44 @@ impl SearchExtractor for SpankBangExtractor {
             page + 1
         );
         Ok(all_results)
+    }
+
+    async fn enrich(
+        &self,
+        mut preview: SearchResultPreview,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchResultPreview> {
+        // Fast-path: nothing more we can pull from a video page that the
+        // search card didn't already give us.
+        if preview.uploader.is_some() {
+            return Ok(preview);
+        }
+
+        let sanitized = rdlp_security::sanitize_for_logging(&preview.video_url);
+        debug!("[spankbang] enriching preview from video page: {sanitized}");
+
+        let webpage = match BaseExtractor::fetch_webpage_with_headers(
+            &preview.video_url,
+            &[("Cookie", "country=US")],
+            ctx,
+        )
+        .await
+        {
+            Ok(html) => html,
+            Err(e) => {
+                // Enrichment is best-effort; surface the original preview on
+                // failure rather than fail the whole search-row render.
+                debug!("[spankbang] enrich fetch failed: {e}");
+                return Ok(preview);
+            }
+        };
+
+        let meta = metadata::parse(&webpage);
+        if preview.uploader.is_none() {
+            preview.uploader = meta.uploader;
+        }
+
+        Ok(preview)
     }
 
     async fn search_page(

@@ -31,6 +31,8 @@ export const queryKeys = {
         site: (site: string) => ["search", site] as const,
         params: (query: string, site: string, filters: SearchFilter[]) =>
             ["search", site, query, serializeFilters(filters)] as const,
+        enrichRow: (site: string, videoUrl: string) =>
+            ["search-enrich", site, videoUrl] as const,
     },
     downloads: {
         list: () => ["downloads"] as const,

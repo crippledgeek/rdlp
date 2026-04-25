@@ -1,25 +1,116 @@
 // SearchResults: infinite scroll search results with TanStack Table sorting.
 // Columns: Thumbnail, Title (sortable), Duration (sortable), Views (sortable), Date (sortable).
+//
+// Lazy enrichment: rows that scroll into view (or within 200 px of view)
+// fire a `enrich_search_result` Tauri call to fill the uploader/etc. fields
+// the search-page card markup couldn't surface. Cached per-row at the
+// TanStack Query layer for an hour.
 
-import { useMemo } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import {
     flexRender,
     getCoreRowModel,
     getSortedRowModel,
     useReactTable,
+    type Row,
 } from "@tanstack/react-table";
 import type { SortingState } from "@tanstack/react-table";
-import { useState } from "react";
 import { searchStore } from "@/stores/searchStore";
-import { searchInfiniteQueryOptions } from "@/api/search";
+import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/api/search";
 import { setAnalyzeUrl } from "@/stores/uiStore";
 import { Thumbnail } from "@/components/Thumbnail";
 import { SearchFilterBar } from "./SearchFilterBar";
 import { searchResultColumns } from "./searchResultColumns";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import type { SearchResultPreview } from "@/types";
+
+/**
+ * Per-row lazy enrichment: when the row scrolls into view (with a
+ * 200 px pre-roll), kicks off `enrich_search_result` to backfill the
+ * uploader / actors / tags from the underlying video page. The enriched
+ * value, when present, overrides the original cell render for the
+ * `uploader` column.
+ */
+function SearchResultRow({
+    row,
+    site,
+}: {
+    row: Row<SearchResultPreview>;
+    site: string;
+}) {
+    const rowRef = useRef<HTMLTableRowElement>(null);
+    const [isVisible, setIsVisible] = useState(false);
+
+    useEffect(() => {
+        const node = rowRef.current;
+        if (!node) return;
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0]?.isIntersecting) setIsVisible(true);
+            },
+            { rootMargin: "200px" },
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, []);
+
+    const needsEnrichment = row.original.uploader == null;
+    const { data: enriched } = useQuery(
+        enrichSearchResultQueryOptions(site, row.original, isVisible && needsEnrichment),
+    );
+
+    const merged: SearchResultPreview = enriched ?? row.original;
+
+    return (
+        <tr
+            ref={rowRef}
+            className="border-b border-[#1a1a2e] hover:bg-[var(--surface-elevated)] cursor-pointer transition-colors"
+            onClick={() => setAnalyzeUrl(row.original.video_url)}
+        >
+            {/* Thumbnail */}
+            <td className="w-[72px] px-2 py-1.5">
+                <div className="w-16 h-9 rounded-[3px] overflow-hidden bg-[var(--surface-elevated)] relative">
+                    <Thumbnail
+                        src={row.original.thumbnail_url}
+                        alt=""
+                        className="w-full h-full object-cover"
+                    />
+                    {row.original.duration != null && (
+                        <span className="absolute bottom-0.5 right-0.5 bg-black/80 text-white text-[9px] px-1 rounded-[2px] font-mono">
+                            {Math.floor(row.original.duration / 60)}:{String(row.original.duration % 60).padStart(2, "0")}
+                        </span>
+                    )}
+                </div>
+            </td>
+            {/* Data columns — uploader cell uses the enriched value when present. */}
+            {row.getVisibleCells().map((cell) => {
+                if (cell.column.id === "uploader" && merged.uploader != null) {
+                    return (
+                        <td
+                            key={cell.id}
+                            className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
+                            style={{ width: cell.column.getSize() }}
+                        >
+                            {merged.uploader}
+                        </td>
+                    );
+                }
+                return (
+                    <td
+                        key={cell.id}
+                        className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
+                        style={{ width: cell.column.getSize() }}
+                    >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                );
+            })}
+        </tr>
+    );
+}
 
 interface SearchResultsProps {
     query: string;
@@ -170,37 +261,7 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                     </thead>
                     <tbody>
                         {table.getRowModel().rows.map((row) => (
-                            <tr
-                                key={row.id}
-                                className="border-b border-[#1a1a2e] hover:bg-[var(--surface-elevated)] cursor-pointer transition-colors"
-                                onClick={() => setAnalyzeUrl(row.original.video_url)}
-                            >
-                                {/* Thumbnail */}
-                                <td className="w-[72px] px-2 py-1.5">
-                                    <div className="w-16 h-9 rounded-[3px] overflow-hidden bg-[var(--surface-elevated)] relative">
-                                        <Thumbnail
-                                            src={row.original.thumbnail_url}
-                                            alt=""
-                                            className="w-full h-full object-cover"
-                                        />
-                                        {row.original.duration != null && (
-                                            <span className="absolute bottom-0.5 right-0.5 bg-black/80 text-white text-[9px] px-1 rounded-[2px] font-mono">
-                                                {Math.floor(row.original.duration / 60)}:{String(row.original.duration % 60).padStart(2, "0")}
-                                            </span>
-                                        )}
-                                    </div>
-                                </td>
-                                {/* Data columns */}
-                                {row.getVisibleCells().map((cell) => (
-                                    <td
-                                        key={cell.id}
-                                        className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
-                                        style={{ width: cell.column.getSize() }}
-                                    >
-                                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                    </td>
-                                ))}
-                            </tr>
+                            <SearchResultRow key={row.id} row={row} site={site} />
                         ))}
                     </tbody>
                 </table>

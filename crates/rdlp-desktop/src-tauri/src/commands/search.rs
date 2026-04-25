@@ -6,7 +6,8 @@
 use tauri::State;
 
 use rdlp_api::{
-    SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchSiteInfo,
+    SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
+    SearchSiteInfo,
 };
 
 use crate::error::AppError;
@@ -107,6 +108,38 @@ pub async fn search_content(
             total_estimate: None,
         })
     }
+}
+
+/// Lazily enrich a single previously-returned search result.
+///
+/// Frontend calls this on demand (e.g. when a row scrolls into view) to
+/// fill metadata gaps the cheap search path could not. Each call fires
+/// at most one HTTP request to the underlying video page; sites whose
+/// search-card markup is already complete return the preview unchanged.
+///
+/// # Arguments
+///
+/// * `site` - Site name (as returned by [`get_search_providers`]).
+/// * `preview` - The preview row to enrich.
+/// * `state` - Managed application state containing the API client.
+///
+/// # Errors
+///
+/// * [`AppError::SearchFailed`] if the upstream fetch / parse fails.
+#[tauri::command]
+pub async fn enrich_search_result(
+    site: String,
+    preview: SearchResultPreview,
+    state: State<'_, AppState>,
+) -> Result<SearchResultPreview, AppError> {
+    state
+        .client
+        .enrich_search_result(&site, preview)
+        .await
+        .map_err(|e| AppError::SearchFailed {
+            message: e.to_string(),
+            retryable: e.is_retryable(),
+        })
 }
 
 /// List all sites that support search.

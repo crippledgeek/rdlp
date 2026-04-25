@@ -39,6 +39,7 @@ pub fn run() {
             commands::codecs::get_available_codecs,
             commands::codecs::get_available_audio_codecs,
             commands::search::search_content,
+            commands::search::enrich_search_result,
             commands::search::get_search_providers,
             commands::search::get_search_filters,
             commands::download::start_download,

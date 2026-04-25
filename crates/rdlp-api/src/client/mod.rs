@@ -456,6 +456,31 @@ impl RdlpClient {
         self.search(site, query).await
     }
 
+    /// Lazily enrich a single previously-returned `SearchResultPreview`.
+    ///
+    /// Frontends call this on demand (e.g. when a row scrolls into view)
+    /// to fill metadata gaps the cheap search path could not — at most one
+    /// HTTP request to the underlying video page per call. Sites whose
+    /// search-card markup is already complete return the preview unchanged.
+    ///
+    /// # Errors
+    /// Returns error if site unknown, network fails, or the user cancels.
+    pub async fn enrich_search_result(
+        &self,
+        site: &str,
+        preview: rdlp_types::SearchResultPreview,
+    ) -> Result<rdlp_types::SearchResultPreview, RdlpApiError> {
+        let id = DownloadId::next();
+        let (tx, _rx) = mpsc::channel::<Event>(1);
+        let cancel_token = CancellationToken::new();
+
+        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        orchestrator
+            .enrich_search_result(site, preview)
+            .await
+            .map_err(Into::into)
+    }
+
     /// List available download protocols.
     #[must_use]
     pub fn list_downloaders(&self) -> Vec<String> {

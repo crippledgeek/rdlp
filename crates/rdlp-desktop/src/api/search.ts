@@ -7,6 +7,7 @@ import type {
     SearchFilter,
     SearchFilterDescriptor,
     SearchPageResponse,
+    SearchResultPreview,
     SearchSiteInfo,
 } from "../types";
 
@@ -26,6 +27,34 @@ export function filtersQueryOptions(site: string) {
         queryFn: () =>
             invokeTyped<SearchFilterDescriptor[]>("get_search_filters", { site }),
         enabled: site !== "",
+    });
+}
+
+/**
+ * Lazily enrich one search-result row with metadata the search-page card
+ * markup did not surface (typically the uploader display name on tag-only
+ * cards, plus actors / tags that only appear on the video page).
+ *
+ * Cached per `(site, video_url)` so a row that scrolls in/out/in only
+ * triggers one upstream fetch. `staleTime` is 1 hour — preview metadata
+ * for a given video URL is effectively immutable.
+ *
+ * `enabled` is gated by both the row being on-screen (caller passes the
+ * IntersectionObserver result) and the preview already being incomplete.
+ */
+export function enrichSearchResultQueryOptions(
+    site: string,
+    preview: SearchResultPreview,
+    enabled: boolean,
+) {
+    return queryOptions({
+        queryKey: queryKeys.search.enrichRow(site, preview.video_url),
+        queryFn: () =>
+            invokeTyped<SearchResultPreview>("enrich_search_result", { site, preview }),
+        enabled: enabled && site !== "" && preview.video_url !== "",
+        staleTime: 60 * 60 * 1000,
+        gcTime: 60 * 60 * 1000,
+        retry: 0,
     });
 }
 

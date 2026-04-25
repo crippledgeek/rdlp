@@ -243,6 +243,40 @@ impl Orchestrator {
         self.extractor_registry.list_search_extractors()
     }
 
+    /// Lazily enrich a single previously-returned `SearchResultPreview`.
+    ///
+    /// Frontends call this on demand (e.g. when a row scrolls into view)
+    /// to fill metadata gaps the cheap search path cannot — at most one
+    /// HTTP request to the underlying video page per call. Sites whose
+    /// search-card markup is already complete return the input unchanged.
+    pub async fn enrich_search_result(
+        &self,
+        extractor_name: &str,
+        preview: SearchResultPreview,
+    ) -> Result<SearchResultPreview> {
+        let extractor = self
+            .extractor_registry
+            .find_search_extractor(extractor_name)
+            .ok_or_else(|| {
+                let available = self.extractor_registry.list_search_extractors();
+                OrchestratorError::Configuration(format!(
+                    "Unknown search site: '{}'. Available: {}",
+                    extractor_name,
+                    available.join(", ")
+                ))
+            })?;
+
+        tokio::select! {
+            res = extractor.enrich(preview, &self.extraction_context) => {
+                res.map_err(OrchestratorError::ExtractionFailed)
+            }
+            () = self.cancel_token.cancelled() => {
+                debug!("Search-result enrichment cancelled by token");
+                Err(OrchestratorError::UserCancelled)
+            }
+        }
+    }
+
     /// Get filter descriptors for a search extractor.
     ///
     /// # Errors
