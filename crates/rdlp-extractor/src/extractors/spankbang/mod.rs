@@ -11,7 +11,7 @@
 //! Reference: yt-dlp `yt_dlp/extractor/spankbang.py` — uses `impersonate=True`
 //! for the equivalent calls.
 
-pub mod patterns;
+mod patterns;
 mod formats;
 
 /// Public type to be implemented in Task 5. Kept here so the registry can

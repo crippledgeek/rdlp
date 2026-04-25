@@ -82,6 +82,8 @@ pub(super) fn build_formats(data: &Value) -> Vec<Format> {
     }
 
     // Single-rendition HLS variants (one per resolution).
+    // 320p is intentionally omitted — SpankBang does not serve a stable
+    // m3u8_320p stream; matches yt-dlp's reference behaviour.
     for label in ["240p", "480p", "720p", "1080p", "4k"] {
         let key = format!("m3u8_{label}");
         if let Some(arr) = map.get(&key).and_then(Value::as_array)
@@ -119,8 +121,9 @@ mod tests {
     #[test]
     fn streamkey_extractable_from_fixture() {
         let key = parse_streamkey(PAGE).expect("data-streamkey must be present");
-        assert!(key.contains('.'), "streamkey shape: <base>.<sig>");
-        assert!(key.len() > 16);
+        // Exact value from the recorded fixture — deterministic, locks the
+        // shape <base>.<sig> contract.
+        assert_eq!(key, "MTcwMDE4NDU.XTPJk92TYuF3gscEzR5UhXY4ttk");
     }
 
     #[test]
@@ -142,6 +145,17 @@ mod tests {
             .find(|f| f.format_id == "hls")
             .expect("hls master row");
         assert_eq!(hls.ext, "m3u8");
+
+        // Empty arrays in the fixture (`'320p': []`, `'4k': []`) must NOT
+        // produce format rows.
+        assert!(
+            formats.iter().all(|f| f.format_id != "320p"),
+            "320p is empty in fixture; must not produce a row"
+        );
+        assert!(
+            formats.iter().all(|f| f.format_id != "4k"),
+            "4k is empty in fixture; must not produce a row"
+        );
     }
 
     #[test]

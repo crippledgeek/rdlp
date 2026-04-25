@@ -50,6 +50,10 @@ pub(super) static STREAMKEY: LazyLock<Regex> = LazyLock::new(|| {
 /// Replaces `'` with `"` while preserving backslash escapes, and rewrites
 /// bare `True/False/None` to JSON literals. Sufficient for SpankBang's
 /// `stream_data` shape; not a general-purpose Python literal parser.
+/// Safety bound: the `: True` / `: False` / `: None` rewrites are substring
+/// replacements; they are safe only because no observed SpankBang URL or
+/// string value contains those substrings. Re-validate if the upstream
+/// `stream_data` shape ever embeds free-form text.
 pub(super) fn pydict_to_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
