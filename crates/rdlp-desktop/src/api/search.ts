@@ -47,11 +47,36 @@ export function enrichSearchResultQueryOptions(
     preview: SearchResultPreview,
     enabled: boolean,
 ) {
+    const finalEnabled = enabled && site !== "" && preview.video_url !== "";
     return queryOptions({
         queryKey: queryKeys.search.enrichRow(site, preview.video_url),
-        queryFn: () =>
-            invokeTyped<SearchResultPreview>("enrich_search_result", { site, preview }),
-        enabled: enabled && site !== "" && preview.video_url !== "",
+        queryFn: async () => {
+            // eslint-disable-next-line no-console
+            console.debug("[enrich] queryFn START:", preview.video_url);
+            try {
+                const result = await invokeTyped<SearchResultPreview>(
+                    "enrich_search_result",
+                    { site, preview },
+                );
+                // eslint-disable-next-line no-console
+                console.debug(
+                    "[enrich] queryFn DONE:",
+                    preview.video_url,
+                    "→ uploader =",
+                    result.uploader,
+                );
+                return result;
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error(
+                    "[enrich] queryFn THREW:",
+                    preview.video_url,
+                    err,
+                );
+                throw err;
+            }
+        },
+        enabled: finalEnabled,
         staleTime: 60 * 60 * 1000,
         gcTime: 60 * 60 * 1000,
         retry: 0,
