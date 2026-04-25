@@ -50,10 +50,27 @@ export function SearchResults({ query, site }: SearchResultsProps) {
     );
     const totalEstimate = data?.pages[0]?.total_estimate;
 
+    // Hide columns whose underlying field is empty for every loaded row, so
+    // sites that don't surface a metadata axis (e.g. SpankBang search has no
+    // date) don't show a permanently-blank column. Recomputed only when the
+    // result set changes; column ids match the accessor keys / explicit ids
+    // declared in `searchResultColumns`.
+    const columnVisibility = useMemo<Record<string, boolean>>(() => {
+        if (allResults.length === 0) {
+            return { uploader: true, duration: true, views: true, age: true };
+        }
+        return {
+            uploader: allResults.some((r) => r.uploader != null),
+            duration: allResults.some((r) => r.duration != null),
+            views: allResults.some((r) => r.view_count != null),
+            age: allResults.some((r) => r.upload_date != null),
+        };
+    }, [allResults]);
+
     const table = useReactTable({
         data: allResults,
         columns: searchResultColumns,
-        state: { sorting },
+        state: { sorting, columnVisibility },
         onSortingChange: setSorting,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
