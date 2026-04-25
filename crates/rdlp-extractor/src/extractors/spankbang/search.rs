@@ -38,9 +38,15 @@ const PAGE_RATE_LIMIT_MS: u64 = 500;
 ///
 /// External page `0` → no path segment (page 1 of results).
 /// External page `1` → `/2/` (page 2), etc. — SpankBang's paths are 1-indexed.
+///
+/// SpankBang case-folds search URLs server-side: `/s/BLOND/` returns a
+/// 301 redirect to `/s/blond/`. The HTTP stack does not follow that
+/// redirect (it surfaces as a "Moved Permanently" error), so we lowercase
+/// the query here to match the canonical URL on the first request.
 pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
     let kw: String = query
         .query
+        .to_lowercase()
         .chars()
         .map(|c| if c == ' ' { '+' } else { c })
         .collect();
@@ -451,6 +457,19 @@ mod tests {
         let q = make_query("two words", vec![]);
         let url = build_search_url(&q, 0);
         assert_eq!(url, "https://spankbang.com/s/two+words/");
+    }
+
+    #[test]
+    fn url_composition_lowercases_query() {
+        // SpankBang server case-folds with a 301; we lowercase client-side
+        // so the first request hits the canonical URL.
+        let q = make_query("BLOND", vec![]);
+        let url = build_search_url(&q, 0);
+        assert_eq!(url, "https://spankbang.com/s/blond/");
+
+        let q2 = make_query("Mixed CaSe Query", vec![]);
+        let url2 = build_search_url(&q2, 0);
+        assert_eq!(url2, "https://spankbang.com/s/mixed+case+query/");
     }
 
     #[test]
