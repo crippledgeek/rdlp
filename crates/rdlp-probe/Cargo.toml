@@ -1,0 +1,24 @@
+[package]
+name = "rdlp-probe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Authoring toolkit for rdlp extractors. Fetches pages, runs JavaScript, applies extraction patterns — all through the same HTTP and JS stacks the production extractors use."
+
+[dependencies]
+rdlp-types = { path = "../rdlp-types" }
+rdlp-http = { path = "../rdlp-http" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-core = { path = "../rdlp-core" }
+wreq = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs", "io-std"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+scraper = { workspace = true }
+regex = { workspace = true }
+
+[lints]
+workspace = true

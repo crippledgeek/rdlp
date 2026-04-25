@@ -17,6 +17,7 @@ members = [
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
     "crates/rdlp-desktop/src-tauri",
+    "crates/rdlp-probe",
 ]
 default-members = [
     "crates/rdlp-types",

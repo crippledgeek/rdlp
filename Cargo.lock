@@ -4525,6 +4525,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdlp-probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rdlp-core",
+ "rdlp-http",
+ "rdlp-jsinterp",
+ "rdlp-types",
+ "regex",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wreq",
+]
+
+[[package]]
 name = "rdlp-ratelimit"
 version = "0.1.0"
 dependencies = [
