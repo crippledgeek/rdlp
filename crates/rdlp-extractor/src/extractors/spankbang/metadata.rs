@@ -50,8 +50,11 @@ pub(super) fn parse(html: &str) -> PageMetadata {
     let duration_secs = og.get("video:duration").and_then(|s| s.parse().ok());
 
     // Profile-link uploader (user uploads to a SpankBang profile page).
+    // Try the plain-text anchor form first; fall back to the modern
+    // icon-wrapped form (Subscribe-button chrome with `<span class="name">`).
     let (mut uploader_id, mut uploader) = patterns::UPLOADER_LINK
         .captures(html)
+        .or_else(|| patterns::UPLOADER_LINK_NAMED.captures(html))
         .map(|c| {
             let slug = c.get(1).map(|m| m.as_str().to_string());
             let name = c.get(2).map(|m| m.as_str().trim().to_string());
@@ -143,6 +146,22 @@ mod tests {
         assert_eq!(m.duration_secs, Some(910));
         assert_eq!(m.uploader_id.as_deref(), Some("gammaentertainment"));
         assert_eq!(m.uploader.as_deref(), Some("GammaEntertainment"));
+    }
+
+    #[test]
+    fn parses_uploader_from_icon_wrapped_profile_link() {
+        // Amateur uploads render the profile link with leading icon SVG +
+        // <span class="name"> + chevron SVG instead of plain text. Captured
+        // 2026-04-26 from /a4fcc/video/porn (uploader: shocker4).
+        const AMATEUR_PAGE: &str =
+            include_str!("tests/spankbang_video_page_amateur.html");
+        let m = parse(AMATEUR_PAGE);
+        assert_eq!(
+            m.uploader.as_deref(),
+            Some("shocker4"),
+            "icon-wrapped /profile/shocker4 link must extract via UPLOADER_LINK_NAMED"
+        );
+        assert_eq!(m.uploader_id.as_deref(), Some("shocker4"));
     }
 
     #[test]

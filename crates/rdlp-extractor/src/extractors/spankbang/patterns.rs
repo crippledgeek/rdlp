@@ -89,13 +89,28 @@ pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SpankBang OG_META regex")
 });
 
-/// `<a href="/profile/SLUG">DISPLAY</a>` — uploader profile link.
-/// Capture group 1 = slug, capture group 2 = display name (may differ
-/// from the slug in capitalisation, e.g. "GammaEntertainment" vs
-/// "gammaentertainment").
+/// `<a href="/profile/SLUG">DISPLAY</a>` — uploader profile link in the
+/// plain-text form. Capture group 1 = slug, group 2 = display name (may
+/// differ from the slug in capitalisation, e.g. "GammaEntertainment" vs
+/// "gammaentertainment"). Fails on the icon-wrapped form (use
+/// [`UPLOADER_LINK_NAMED`] in addition).
 pub(super) static UPLOADER_LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<a[^>]*\bhref="/profile/([a-z0-9_-]+)"[^>]*>([^<]+)</a>"#)
         .expect("SpankBang UPLOADER_LINK regex")
+});
+
+/// Modern SpankBang profile-link form where the anchor wraps an icon
+/// SVG, a `<span class="name">DISPLAY</span>`, and a chevron SVG —
+/// e.g. user-uploaded amateur videos rendered with the Subscribe-button
+/// chrome. The `[^<]+` inside `UPLOADER_LINK` rejects the leading SVG.
+///
+/// Capture group 1 = slug, group 2 = display name from the inner
+/// `<span class="name">`. Tolerant of arbitrary preceding nested tags.
+pub(super) static UPLOADER_LINK_NAMED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)<a[^>]*\bhref="/profile/([a-z0-9_-]+)"[^>]*>.*?<span[^>]*\bclass="[^"]*\bname\b[^"]*"[^>]*>\s*([^<]+?)\s*</span>"#,
+    )
+    .expect("SpankBang UPLOADER_LINK_NAMED regex")
 });
 
 /// `<a href="/<id>/video/<slug>" title="<title>">` — search result anchor.
