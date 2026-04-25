@@ -136,8 +136,8 @@ export function SearchResults({ query, site }: SearchResultsProps) {
             </div>
 
             {/* Table */}
-            <div className="flex-1 overflow-y-auto">
-                <table className="w-full" style={{ tableLayout: "fixed" }}>
+            <div className="flex-1 overflow-y-auto overflow-x-auto">
+                <table className="w-full min-w-[652px]" style={{ tableLayout: "fixed" }}>
                     <thead className="sticky top-0 bg-[var(--surface-deepest)] z-10">
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr key={headerGroup.id}>
