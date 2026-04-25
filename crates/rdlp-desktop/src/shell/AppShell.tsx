@@ -29,7 +29,10 @@ export function AppShell() {
 
     // Persist panel layouts to localStorage
     const outerLayout = useDefaultLayout({ id: "rdlp-outer", storage: localStorage });
-    const workspaceLayout = useDefaultLayout({ id: "rdlp-workspace", storage: localStorage });
+    // workspace bumped to v2 — invalidates stale persisted vertical splits
+    // that left the bottom drawer occupying more height than its chrome
+    // needs. Fresh sessions get the tighter defaultSize=5 below.
+    const workspaceLayout = useDefaultLayout({ id: "rdlp-workspace-v2", storage: localStorage });
     const contentLayout = useDefaultLayout({ id: "rdlp-content", storage: localStorage });
 
     return (
@@ -98,10 +101,13 @@ export function AppShell() {
 
                         <ResizableHandle className="bg-[#1a1a2e] h-px hover:bg-[#2a2a3e] transition-colors" />
 
-                        {/* Bottom drawer */}
+                        {/* Bottom drawer — sized to its chrome (tabs + filter
+                            toolbar ≈ 52px). Users resize it taller when they
+                            want to inspect logs/jobs; otherwise it stays as a
+                            slim status bar matching the sidebar's visual weight. */}
                         <ResizablePanel
                             id="drawer"
-                            defaultSize={7}
+                            defaultSize={5}
                             minSize={2}
                             collapsible
                             collapsedSize={2}
