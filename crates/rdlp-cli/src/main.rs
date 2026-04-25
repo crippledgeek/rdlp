@@ -230,6 +230,9 @@ async fn async_main() -> Result<()> {
                         if let Some(views) = r.view_count {
                             eprint!("  Views: {views}");
                         }
+                        if let Some(uploader) = &r.uploader {
+                            eprint!("  Uploader: {uploader}");
+                        }
                         eprintln!();
                     }
                 }

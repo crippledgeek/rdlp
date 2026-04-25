@@ -122,6 +122,31 @@ pub(super) static SEARCH_CARD_THUMB_DURATION: LazyLock<Regex> = LazyLock::new(||
     .expect("SpankBang SEARCH_CARD_THUMB_DURATION regex")
 });
 
+/// Per-card info block: captures the view count + the video id (joined via
+/// the title-link `href` inside the same block).
+///
+/// Capture groups: (1) view text (e.g. "940K"), (2) video id from the
+/// trailing title link.
+pub(super) static SEARCH_CARD_VIEWS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)<span\s+data-testid="views"[^>]*>.*?<span[^>]*>([^<]+)</span>.*?</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
+    )
+    .expect("SpankBang SEARCH_CARD_VIEWS regex")
+});
+
+/// Per-card uploader-channel block. The data-testid="title" link inside an
+/// info-with-badge container points to either a tag (`/s/<query>/`) or a
+/// channel (`/<prefix>/channel/<slug>/`); we capture only the channel form.
+///
+/// Capture groups: (1) channel slug, (2) channel display name, (3) video id
+/// from the trailing title link.
+pub(super) static SEARCH_CARD_CHANNEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)<a[^>]*data-testid="title"[^>]*\bhref="/[a-z0-9_-]+/channel/([a-z0-9_-]+)/?"[^>]*>\s*(?:<[^>]+>\s*)*<span[^>]*>([^<]+)</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
+    )
+    .expect("SpankBang SEARCH_CARD_CHANNEL regex")
+});
+
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
 pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)

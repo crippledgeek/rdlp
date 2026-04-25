@@ -104,20 +104,74 @@ pub(crate) fn parse_duration_label(s: &str) -> Option<f64> {
     Some(total as f64)
 }
 
-/// Per-card metadata harvested from the image-wrapper anchor: thumbnail URL
-/// + duration in seconds. Keyed by video ID for join with `SEARCH_RESULT`.
-fn collect_card_metadata(html: &str) -> HashMap<String, (Option<String>, Option<f64>)> {
-    let mut map = HashMap::new();
+/// Parse a SpankBang view-count label ("940K", "1.3K", "1.5M", "12") into
+/// an absolute count. Returns `None` for empty / unparseable input.
+pub(crate) fn parse_view_count(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_part, multiplier) = match s.chars().last() {
+        Some('K') | Some('k') => (&s[..s.len() - 1], 1_000.0_f64),
+        Some('M') | Some('m') => (&s[..s.len() - 1], 1_000_000.0_f64),
+        Some('B') | Some('b') => (&s[..s.len() - 1], 1_000_000_000.0_f64),
+        Some(c) if c.is_ascii_digit() => (s, 1.0_f64),
+        _ => return None,
+    };
+    let cleaned: String = num_part.chars().filter(|c| *c != ',').collect();
+    cleaned.parse::<f64>().ok().map(|n| (n * multiplier) as u64)
+}
+
+/// Aggregate per-card extras keyed by video ID: thumbnail, duration, view
+/// count, optional uploader (slug + display name).
+#[derive(Default, Clone)]
+struct CardExtras {
+    thumbnail: Option<String>,
+    duration: Option<f64>,
+    view_count: Option<u64>,
+    uploader_slug: Option<String>,
+    uploader_name: Option<String>,
+}
+
+fn collect_card_metadata(html: &str) -> HashMap<String, CardExtras> {
+    let mut map: HashMap<String, CardExtras> = HashMap::new();
+
     for caps in patterns::SEARCH_CARD_THUMB_DURATION.captures_iter(html) {
-        let id = caps.get(1).map(|m| m.as_str().to_string());
-        let thumb = caps.get(2).map(|m| m.as_str().to_string());
-        let dur = caps
-            .get(3)
-            .and_then(|m| parse_duration_label(m.as_str()));
-        if let Some(id) = id {
-            map.entry(id).or_insert((thumb, dur));
+        let Some(id) = caps.get(1).map(|m| m.as_str().to_string()) else {
+            continue;
+        };
+        let entry = map.entry(id).or_default();
+        if entry.thumbnail.is_none() {
+            entry.thumbnail = caps.get(2).map(|m| m.as_str().to_string());
+        }
+        if entry.duration.is_none() {
+            entry.duration = caps.get(3).and_then(|m| parse_duration_label(m.as_str()));
         }
     }
+
+    for caps in patterns::SEARCH_CARD_VIEWS.captures_iter(html) {
+        let Some(id) = caps.get(2).map(|m| m.as_str().to_string()) else {
+            continue;
+        };
+        let entry = map.entry(id).or_default();
+        if entry.view_count.is_none() {
+            entry.view_count = caps.get(1).and_then(|m| parse_view_count(m.as_str()));
+        }
+    }
+
+    for caps in patterns::SEARCH_CARD_CHANNEL.captures_iter(html) {
+        let Some(id) = caps.get(3).map(|m| m.as_str().to_string()) else {
+            continue;
+        };
+        let entry = map.entry(id).or_default();
+        if entry.uploader_slug.is_none() {
+            entry.uploader_slug = caps.get(1).map(|m| m.as_str().to_string());
+        }
+        if entry.uploader_name.is_none() {
+            entry.uploader_name = caps.get(2).map(|m| m.as_str().trim().to_string());
+        }
+    }
+
     map
 }
 
@@ -150,17 +204,17 @@ pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
             continue;
         }
 
-        let (thumbnail_url, duration) = card_meta.get(id).cloned().unwrap_or((None, None));
+        let extras = card_meta.get(id).cloned().unwrap_or_default();
 
         let video_url = format!("{SPANKBANG_BASE_URL}/{id}/video/{slug}");
         results.push(SearchResultPreview {
             video_url,
             title: title.to_string(),
-            thumbnail_url,
-            duration,
-            uploader: None,
+            thumbnail_url: extras.thumbnail,
+            duration: extras.duration,
+            uploader: extras.uploader_name,
             actors: Vec::new(),
-            view_count: None,
+            view_count: extras.view_count,
             upload_date: None,
         });
     }
@@ -430,6 +484,55 @@ mod tests {
             sample.duration.unwrap() > 0.0,
             "duration must be positive"
         );
+    }
+
+    #[test]
+    fn parses_view_count_and_uploader_when_present_in_fixture() {
+        let results = parse_results(SEARCH_PAGE);
+
+        // View count is rendered for every card in the live grid; require a
+        // strong majority (some recommendation rails / ad-tagged cards may
+        // skip the views span).
+        let with_views = results.iter().filter(|r| r.view_count.is_some()).count();
+        assert!(
+            with_views >= results.len() * 3 / 4,
+            "expected ≥75% of {} results to carry a view count; got {with_views}",
+            results.len()
+        );
+
+        // Uploader is only present on cards whose primary badge is a channel
+        // (vs a tag); not every card will have one. Just assert at least one
+        // card surfaces the uploader so the join path is exercised.
+        let with_uploader = results
+            .iter()
+            .filter(|r| r.uploader.is_some())
+            .count();
+        assert!(
+            with_uploader >= 1,
+            "expected at least one channel-tagged result to carry an uploader; got {with_uploader}"
+        );
+
+        // Spot-check a card that has all three enriched fields.
+        let sample = results
+            .iter()
+            .find(|r| r.view_count.is_some() && r.duration.is_some())
+            .expect("at least one result with view count + duration");
+        assert!(sample.view_count.unwrap() > 0);
+    }
+
+    #[test]
+    fn view_count_parser_handles_known_shapes() {
+        assert_eq!(parse_view_count("940K"), Some(940_000));
+        assert_eq!(parse_view_count("1.3K"), Some(1_300));
+        assert_eq!(parse_view_count("1.5M"), Some(1_500_000));
+        assert_eq!(parse_view_count("4K"), Some(4_000));
+        assert_eq!(parse_view_count("12"), Some(12));
+        assert_eq!(parse_view_count("1,234"), Some(1_234));
+        assert_eq!(parse_view_count("1.2B"), Some(1_200_000_000));
+        // Empty / unparseable
+        assert_eq!(parse_view_count(""), None);
+        assert_eq!(parse_view_count("   "), None);
+        assert_eq!(parse_view_count("nope"), None);
     }
 
     #[test]
