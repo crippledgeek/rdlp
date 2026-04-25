@@ -167,6 +167,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(EPornerExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(SpankBangExtractor::new()));
 
         registry
     }

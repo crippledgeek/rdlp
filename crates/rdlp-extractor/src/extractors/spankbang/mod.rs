@@ -14,6 +14,7 @@
 mod patterns;
 mod formats;
 mod metadata;
+mod search;
 
 use async_trait::async_trait;
 use log::{debug, warn};

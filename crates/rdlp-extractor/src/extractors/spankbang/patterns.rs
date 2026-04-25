@@ -98,6 +98,17 @@ pub(super) static UPLOADER_LINK: LazyLock<Regex> = LazyLock::new(|| {
         .expect("SpankBang UPLOADER_LINK regex")
 });
 
+/// `<a href="/<id>/video/<slug>" title="<title>">` — search result anchor.
+/// SpankBang renders each result twice per card (image wrapper + title link);
+/// the title-bearing form is the one with `title="..."`. Capture group 1 =
+/// video ID, group 2 = slug, group 3 = title text.
+pub(super) static SEARCH_RESULT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"<a[^>]*\bhref="/([a-z0-9]+)/video/([^"]+)"[^>]*\btitle="([^"]+)"[^>]*>"#,
+    )
+    .expect("SpankBang SEARCH_RESULT regex")
+});
+
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
 pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)
