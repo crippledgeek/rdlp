@@ -13,6 +13,7 @@
 
 mod patterns;
 mod formats;
+mod metadata;
 
 /// Public type to be implemented in Task 5. Kept here so the registry can
 /// reference it once Task 5 lands.

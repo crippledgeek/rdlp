@@ -74,6 +74,28 @@ pub(super) fn pydict_to_json(s: &str) -> String {
         .replace(": None", ": null")
 }
 
+/// `<h1 ... title="...">` — primary title source on video pages.
+pub(super) static TITLE_H1: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<h1[^>]+title="([^"]+)""#).expect("SpankBang TITLE_H1 regex")
+});
+
+/// `<meta property="og:KEY" content="VALUE">` — captures key + value.
+pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<meta\s+property="og:([^"]+)"\s+content="([^"]*)""#)
+        .expect("SpankBang OG_META regex")
+});
+
+/// `href="/profile/USERID"` — uploader profile slug.
+pub(super) static UPLOADER_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"href="/profile/([a-z0-9_-]+)""#).expect("SpankBang UPLOADER_ID regex")
+});
+
+/// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
+pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)
+        .expect("SpankBang VIDEO_REMOVED regex")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
