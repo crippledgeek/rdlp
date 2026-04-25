@@ -16,7 +16,7 @@ use rdlp_types::Config;
 const TEST_URL: &str = "https://spankbang.com/a4eph/video/dogfart+sexy+katalina+kyle+turns+a+messy+rental+inspection+into+wild+hardcore+sex";
 
 #[tokio::test]
-#[ignore]
+#[ignore = "live network; run with --ignored"]
 async fn spankbang_live_extraction_yields_formats() {
     let http = Arc::new(HttpClientFactory::default().build());
     let js = Arc::new(BoaJsEngine::new());
@@ -41,5 +41,12 @@ async fn spankbang_live_extraction_yields_formats() {
         "HLS master expected"
     );
     assert!(info.title.to_lowercase().contains("dogfart"));
-    assert_eq!(info.duration, Some(910.0));
+    // Duration tolerance ±2s: SpankBang may re-encode and shift the value
+    // by a frame or two; an exact `== 910.0` check is too brittle for a
+    // live test against a CDN-served asset.
+    assert!(
+        matches!(info.duration, Some(d) if (d - 910.0).abs() < 2.0),
+        "duration ~910s expected, got {:?}",
+        info.duration
+    );
 }
