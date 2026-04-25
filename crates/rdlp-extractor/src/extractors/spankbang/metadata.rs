@@ -6,6 +6,11 @@ use std::collections::HashMap;
 use super::patterns;
 
 /// Aggregate metadata pulled from a SpankBang video page.
+///
+/// `actors` and `tags` come from the horizontal `<div class="searches">`
+/// bar near the top of the page (studio channel + pornstars + tag-search
+/// links). Scoping the tag harvest to that container keeps recommendation
+/// rails and footer categories out of the result.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct PageMetadata {
     pub(super) title: Option<String>,
@@ -14,6 +19,8 @@ pub(super) struct PageMetadata {
     pub(super) uploader: Option<String>,
     pub(super) duration_secs: Option<u64>,
     pub(super) uploader_id: Option<String>,
+    pub(super) actors: Vec<String>,
+    pub(super) tags: Vec<String>,
 }
 
 /// `true` when the page renders the "video removed" sentinel.
@@ -42,7 +49,8 @@ pub(super) fn parse(html: &str) -> PageMetadata {
     let thumbnail = og.get("image").cloned();
     let duration_secs = og.get("video:duration").and_then(|s| s.parse().ok());
 
-    let (uploader_id, uploader) = patterns::UPLOADER_LINK
+    // Profile-link uploader (user uploads to a SpankBang profile page).
+    let (mut uploader_id, mut uploader) = patterns::UPLOADER_LINK
         .captures(html)
         .map(|c| {
             let slug = c.get(1).map(|m| m.as_str().to_string());
@@ -51,6 +59,54 @@ pub(super) fn parse(html: &str) -> PageMetadata {
         })
         .unwrap_or((None, None));
 
+    // Studio / pornstars / tags — all live inside the <div class="searches">
+    // tag bar near the page header. Scoping the parse there avoids picking
+    // up unrelated /s/<slug>/ anchors elsewhere on the page.
+    let mut actors: Vec<String> = Vec::new();
+    let mut tags: Vec<String> = Vec::new();
+    if let Some(bar) = patterns::SEARCHES_BAR.captures(html).and_then(|c| c.get(1)) {
+        let inner = bar.as_str();
+
+        // Studio / channel link in the bar overrides any blank profile-link
+        // uploader; if both exist, prefer the studio (matches the screenshot
+        // hierarchy where the badge nearest the title is the studio).
+        if let Some(c) = patterns::CHANNEL_LINK_BAR.captures(inner) {
+            let slug = c.get(1).map(|m| m.as_str().to_string());
+            let name = c.get(2).map(|m| m.as_str().trim().to_string());
+            if uploader.is_none() {
+                uploader = name;
+            }
+            if uploader_id.is_none() {
+                uploader_id = slug;
+            }
+        }
+
+        for c in patterns::PORNSTAR_LINK.captures_iter(inner) {
+            if let Some(name) = c.get(1) {
+                let n = name.as_str().trim();
+                if !n.is_empty() && !actors.iter().any(|x| x == n) {
+                    actors.push(n.to_string());
+                }
+            }
+        }
+
+        for c in patterns::TAG_LINK_BAR.captures_iter(inner) {
+            if let Some(name) = c.get(1) {
+                let n = name.as_str().trim();
+                // Skip badge-style entries that aren't real tags ("Exclusive"
+                // promo flag, empty captures from img-only anchors, etc.).
+                if n.is_empty()
+                    || n.eq_ignore_ascii_case("exclusive")
+                    || actors.iter().any(|a| a.eq_ignore_ascii_case(n))
+                    || tags.iter().any(|t| t.eq_ignore_ascii_case(n))
+                {
+                    continue;
+                }
+                tags.push(n.to_string());
+            }
+        }
+    }
+
     PageMetadata {
         title,
         description,
@@ -58,6 +114,8 @@ pub(super) fn parse(html: &str) -> PageMetadata {
         uploader,
         duration_secs,
         uploader_id,
+        actors,
+        tags,
     }
 }
 
@@ -85,6 +143,52 @@ mod tests {
         assert_eq!(m.duration_secs, Some(910));
         assert_eq!(m.uploader_id.as_deref(), Some("gammaentertainment"));
         assert_eq!(m.uploader.as_deref(), Some("GammaEntertainment"));
+    }
+
+    #[test]
+    fn parses_actors_and_tags_from_searches_bar() {
+        let m = parse(PAGE);
+
+        // Pornstars from /pornstar/<slug>/ links inside the searches bar.
+        // Fixture page is the Dogfart video → Slim Poke + Katalina Kyle.
+        assert!(
+            m.actors.iter().any(|a| a.eq_ignore_ascii_case("Slim Poke")),
+            "actors should include Slim Poke; got {:?}",
+            m.actors
+        );
+        assert!(
+            m.actors
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case("Katalina Kyle")),
+            "actors should include Katalina Kyle; got {:?}",
+            m.actors
+        );
+
+        // Tags from /s/<slug>/ links inside the searches bar; recommendation
+        // rails and footer categories must NOT bleed in.
+        let lc: Vec<String> = m.tags.iter().map(|t| t.to_lowercase()).collect();
+        for expected in ["interracial", "blowjob", "blonde"] {
+            assert!(
+                lc.iter().any(|t| t == expected),
+                "tags should include {expected}; got {:?}",
+                m.tags
+            );
+        }
+
+        // De-duplication: every tag appears at most once.
+        let mut sorted = lc.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), lc.len(), "tags must be deduped: {:?}", m.tags);
+
+        // No tag string should be empty or the "Exclusive" badge label.
+        assert!(m.tags.iter().all(|t| !t.is_empty()));
+        assert!(
+            m.tags
+                .iter()
+                .all(|t| !t.eq_ignore_ascii_case("exclusive")),
+            "Exclusive promo badge must be filtered out"
+        );
     }
 
     #[test]

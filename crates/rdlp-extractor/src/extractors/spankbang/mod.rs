@@ -176,6 +176,10 @@ impl InfoExtractor for SpankBangExtractor {
         info.uploader_id = meta.uploader_id;
         info.duration = meta.duration_secs.map(|s| s as f64);
         info.age_limit = Some(18);
+        info.actors = meta.actors;
+        if !meta.tags.is_empty() {
+            info.tags = Some(meta.tags);
+        }
         info.formats = formats;
         info.propagate_duration();
 

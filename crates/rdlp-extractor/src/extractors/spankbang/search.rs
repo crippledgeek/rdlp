@@ -340,9 +340,9 @@ impl SearchExtractor for SpankBangExtractor {
         mut preview: SearchResultPreview,
         ctx: &ExtractionContext,
     ) -> Result<SearchResultPreview> {
-        // Fast-path: nothing more we can pull from a video page that the
-        // search card didn't already give us.
-        if preview.uploader.is_some() {
+        // Fast-path: skip the round-trip when the search card already
+        // surfaced uploader AND actors.
+        if preview.uploader.is_some() && !preview.actors.is_empty() {
             return Ok(preview);
         }
 
@@ -368,6 +368,9 @@ impl SearchExtractor for SpankBangExtractor {
         let meta = metadata::parse(&webpage);
         if preview.uploader.is_none() {
             preview.uploader = meta.uploader;
+        }
+        if preview.actors.is_empty() && !meta.actors.is_empty() {
+            preview.actors = meta.actors;
         }
 
         Ok(preview)

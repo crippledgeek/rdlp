@@ -150,6 +150,41 @@ pub(super) static SEARCH_CARD_CHANNEL: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SpankBang SEARCH_CARD_CHANNEL regex")
 });
 
+/// The `<div class="searches ...">` container on the video page that holds
+/// the horizontal tag bar (studio channel, pornstars, plain tags). Captures
+/// the inner HTML (group 1) so a follow-up pass can extract per-link types
+/// without picking up unrelated `/s/<slug>/` anchors elsewhere on the page
+/// (recommendation rails, footer categories, etc.).
+pub(super) static SEARCHES_BAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)<div[^>]*\bclass="searches[^"]*"[^>]*>(.*?)</div>"#)
+        .expect("SpankBang SEARCHES_BAR regex")
+});
+
+/// `/<prefix>/channel/<slug>/` link inside the searches bar — the video's
+/// studio / channel attribution. May embed `<img>` before the text label
+/// (channel avatars), so the display-name capture skips through preceding
+/// tags. Group 1 = slug, group 2 = display name.
+pub(super) static CHANNEL_LINK_BAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)<a[^>]*\bhref="/[a-z0-9_+-]+/channel/([^/"]+)/?"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+?)\s*</a>"#,
+    )
+    .expect("SpankBang CHANNEL_LINK_BAR regex")
+});
+
+/// `/<prefix>/pornstar/<slug>/` link — captures the display name (group 1).
+pub(super) static PORNSTAR_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<a[^>]*\bhref="/[a-z0-9_+-]+/pornstar/[^/"]+/?"[^>]*>([^<]+)</a>"#)
+        .expect("SpankBang PORNSTAR_LINK regex")
+});
+
+/// `/s/<slug>/` plain-tag link — captures the tag display text (group 1).
+/// Run only against the SEARCHES_BAR inner HTML so it doesn't catch
+/// recommendation-rail or footer category links.
+pub(super) static TAG_LINK_BAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<a[^>]*\bhref="/s/[^/"]+/?"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+?)\s*</a>"#)
+        .expect("SpankBang TAG_LINK_BAR regex")
+});
+
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
 pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)
