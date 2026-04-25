@@ -142,7 +142,26 @@ function SearchResultRow({
                             </td>
                         );
                     }
-                    // Fall through to the column-defined cell ("—").
+                    // Enrichment resolved with no uploader — the video page
+                    // genuinely has no studio / pornstar / profile link.
+                    // Render a dimmer "—" so the user can distinguish
+                    // "we tried and the page has nothing" (this state) from
+                    // "still loading" (the pulse above) and from "we never
+                    // attempted" (default — when isVisible was never true).
+                    if (enriched && merged.uploader == null) {
+                        return (
+                            <td
+                                key={cell.id}
+                                className="px-2 py-1.5 text-[12px] text-[#555555] truncate italic"
+                                style={{ width: cell.column.getSize() }}
+                                title="Video page has no studio or creator attribution"
+                            >
+                                —
+                            </td>
+                        );
+                    }
+                    // Fall through to the column-defined cell ("—") — the
+                    // initial state before IntersectionObserver fires.
                 }
                 return (
                     <td
