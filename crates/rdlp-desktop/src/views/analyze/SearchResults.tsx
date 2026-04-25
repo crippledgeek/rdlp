@@ -58,8 +58,9 @@ function SearchResultRow({
     }, []);
 
     const needsEnrichment = row.original.uploader == null;
-    const { data: enriched } = useQuery(
-        enrichSearchResultQueryOptions(site, row.original, isVisible && needsEnrichment),
+    const enrichEnabled = isVisible && needsEnrichment;
+    const { data: enriched, isFetching: isEnriching } = useQuery(
+        enrichSearchResultQueryOptions(site, row.original, enrichEnabled),
     );
 
     const merged: SearchResultPreview = enriched ?? row.original;
@@ -85,18 +86,35 @@ function SearchResultRow({
                     )}
                 </div>
             </td>
-            {/* Data columns — uploader cell uses the enriched value when present. */}
+            {/* Data columns — uploader cell uses the enriched value when present.
+                While enrichment is in flight (isFetching=true and the row was
+                missing an uploader to begin with), the cell pulses so the
+                lazy-load behaviour is visible to the user. */}
             {row.getVisibleCells().map((cell) => {
-                if (cell.column.id === "uploader" && merged.uploader != null) {
-                    return (
-                        <td
-                            key={cell.id}
-                            className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
-                            style={{ width: cell.column.getSize() }}
-                        >
-                            {merged.uploader}
-                        </td>
-                    );
+                if (cell.column.id === "uploader") {
+                    if (merged.uploader != null) {
+                        return (
+                            <td
+                                key={cell.id}
+                                className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
+                                style={{ width: cell.column.getSize() }}
+                            >
+                                {merged.uploader}
+                            </td>
+                        );
+                    }
+                    if (isEnriching) {
+                        return (
+                            <td
+                                key={cell.id}
+                                className="px-2 py-1.5"
+                                style={{ width: cell.column.getSize() }}
+                            >
+                                <span className="inline-block h-3 w-20 rounded-[3px] bg-[var(--surface-elevated)] animate-pulse" />
+                            </td>
+                        );
+                    }
+                    // Fall through to the column-defined cell ("—").
                 }
                 return (
                     <td
