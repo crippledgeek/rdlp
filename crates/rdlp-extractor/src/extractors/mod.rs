@@ -11,6 +11,7 @@ pub mod koreanpornmovie;
 pub mod nine_anime;
 pub mod pornhub;
 pub mod redtube;
+pub mod spankbang;
 pub mod tnaflix;
 pub mod xhamster;
 pub mod xnxx;
@@ -24,6 +25,7 @@ pub use koreanpornmovie::KoreanPornMovieExtractor;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
 pub use redtube::RedTubeExtractor;
+pub use spankbang::SpankBangExtractor;
 pub use tnaflix::{
     EMPFlixSearchExtractor, MovieFapSearchExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
 };
