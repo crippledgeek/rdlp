@@ -33,6 +33,43 @@ pub(super) fn is_suitable(url: &str) -> bool {
     VIDEO_URL.is_match(url)
 }
 
+/// Inline `stream_data = { ... }` Python-dict-shaped object on the video page.
+/// Primary format source on current pages. Body is captured (curlies inclusive)
+/// for conversion to JSON via [`pydict_to_json`].
+pub(super) static STREAM_DATA_INLINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)stream_data\s*=\s*(\{.*?\});")
+        .expect("SpankBang STREAM_DATA_INLINE regex")
+});
+
+/// `data-streamkey="..."` — opaque token used by the formats-API fallback.
+pub(super) static STREAMKEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"data-streamkey\s*=\s*"([^"]+)""#).expect("SpankBang STREAMKEY regex")
+});
+
+/// Convert a Python-dict-shaped string (single-quoted keys/values) to JSON.
+/// Replaces `'` with `"` while preserving backslash escapes, and rewrites
+/// bare `True/False/None` to JSON literals. Sufficient for SpankBang's
+/// `stream_data` shape; not a general-purpose Python literal parser.
+pub(super) fn pydict_to_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => out.push('"'),
+            '\\' => {
+                out.push('\\');
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.replace(": True", ": true")
+        .replace(": False", ": false")
+        .replace(": None", ": null")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +111,15 @@ mod tests {
             extract_video_id("https://spankbang.com/abc-7ecbgu/playlist/x"),
             Some("7ecbgu".to_string())
         );
+    }
+
+    #[test]
+    fn pydict_to_json_quotes_and_literals() {
+        let py = "{'a': 'b', 'n': True, 'x': None}";
+        let j = pydict_to_json(py);
+        let parsed: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(parsed["a"], "b");
+        assert_eq!(parsed["n"], true);
+        assert!(parsed["x"].is_null());
     }
 }
