@@ -158,16 +158,17 @@ pub(super) static SEARCH_CARD_VIEWS: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Per-card uploader-or-creator block. The data-testid="title" link inside
 /// an info-with-badge container points to either a tag (`/s/<query>/`),
-/// a channel (`/<prefix>/channel/<slug>/`), or a pornstar
-/// (`/<prefix>/pornstar/<slug>/`). We capture both creator forms — channel
-/// and pornstar — and skip plain tags. Slugs use `+` for spaces, so the
-/// character class is permissive (`[^/"]+`).
+/// a channel (`/<prefix>/channel/<slug>/`), a creator
+/// (`/<prefix>/creator/<slug>/`), or a pornstar
+/// (`/<prefix>/pornstar/<slug>/`). We capture all three creator forms —
+/// channel, creator, pornstar — and skip plain tags. Slugs use `+` for
+/// spaces, so the character class is permissive (`[^/"]+`).
 ///
 /// Capture groups: (1) creator URL slug, (2) creator display name, (3) video
 /// id from the trailing title link.
 pub(super) static SEARCH_CARD_CHANNEL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?s)<a[^>]*data-testid="title"[^>]*\bhref="/[a-z0-9_+-]+/(?:channel|pornstar)/([^/"]+)/?"[^>]*>\s*(?:<[^>]+>\s*)*<span[^>]*>([^<]+)</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
+        r#"(?s)<a[^>]*data-testid="title"[^>]*\bhref="/[a-z0-9_+-]+/(?:channel|creator|pornstar)/([^/"]+)/?"[^>]*>\s*(?:<[^>]+>\s*)*<span[^>]*>([^<]+)</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
     )
     .expect("SpankBang SEARCH_CARD_CHANNEL regex")
 });
@@ -182,13 +183,19 @@ pub(super) static SEARCHES_BAR: LazyLock<Regex> = LazyLock::new(|| {
         .expect("SpankBang SEARCHES_BAR regex")
 });
 
-/// `/<prefix>/channel/<slug>/` link inside the searches bar — the video's
-/// studio / channel attribution. May embed `<img>` before the text label
-/// (channel avatars), so the display-name capture skips through preceding
-/// tags. Group 1 = slug, group 2 = display name.
+/// `/<prefix>/(channel|creator)/<slug>/` link inside the searches bar —
+/// the video's studio / channel / verified-creator attribution. SpankBang
+/// uses three namespaces:
+/// - `/channel/<slug>/` — branded studios (BRAZZERS, Dogfart Network, …)
+/// - `/creator/<slug>/` — verified creator accounts (Oopsfamily, …)
+/// - `/pornstar/<slug>/` — individual performers (matched separately)
+///
+/// May embed `<img>` (channel avatar) before the text label, so the
+/// display-name capture skips through preceding nested tags. Group 1 =
+/// slug, group 2 = display name.
 pub(super) static CHANNEL_LINK_BAR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?s)<a[^>]*\bhref="/[a-z0-9_+-]+/channel/([^/"]+)/?"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+?)\s*</a>"#,
+        r#"(?s)<a[^>]*\bhref="/[a-z0-9_+-]+/(?:channel|creator)/([^/"]+)/?"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+?)\s*</a>"#,
     )
     .expect("SpankBang CHANNEL_LINK_BAR regex")
 });

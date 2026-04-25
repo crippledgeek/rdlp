@@ -165,6 +165,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_uploader_from_creator_namespace() {
+        // SpankBang's "Verified Creators" use a fourth uploader namespace:
+        // /<prefix>/creator/<slug>/ — distinct from /channel/, /pornstar/,
+        // and /profile/. Captured 2026-04-26 from
+        // /a4eth/video/petite+with+shaved+pussy+and+stepdad+hardcore+xxx
+        // (creator: Oopsfamily, URL /knp9/creator/oopsfamily/).
+        const CREATOR: &str =
+            include_str!("tests/spankbang_video_page_creator.html");
+        let m = parse(CREATOR);
+        assert_eq!(
+            m.uploader.as_deref(),
+            Some("Oopsfamily"),
+            "creator-namespace link must resolve via CHANNEL_LINK_BAR"
+        );
+        assert_eq!(m.uploader_id.as_deref(), Some("oopsfamily"));
+    }
+
+    #[test]
     fn parses_uploader_with_dotted_slug() {
         // SpankBang allows `.` in profile slugs per RFC 3986 unreserved set.
         // Captured 2026-04-26 from /6ydqv/video/jodi+bj — uploader slug is
