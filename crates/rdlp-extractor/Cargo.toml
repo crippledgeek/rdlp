@@ -29,8 +29,10 @@ urlencoding = "2"
 
 [dev-dependencies]
 hex = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 mockito = { workspace = true }
+rdlp-http = { path = "../rdlp-http" }
+rdlp-cookies = { path = "../rdlp-cookies" }
 
 [lints]
 workspace = true
