@@ -8,11 +8,11 @@ use super::patterns;
 /// Aggregate metadata pulled from a SpankBang video page.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct PageMetadata {
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub thumbnail: Option<String>,
-    pub duration_secs: Option<u64>,
-    pub uploader_id: Option<String>,
+    pub(super) title: Option<String>,
+    pub(super) description: Option<String>,
+    pub(super) thumbnail: Option<String>,
+    pub(super) duration_secs: Option<u64>,
+    pub(super) uploader_id: Option<String>,
 }
 
 /// `true` when the page renders the "video removed" sentinel.
@@ -83,6 +83,8 @@ mod tests {
     #[test]
     fn description_present_from_og() {
         let m = parse(PAGE);
-        assert!(m.description.unwrap_or_default().len() > 10);
+        // Fixture's description is ~145 chars; threshold of 50 catches a
+        // truncation regression while staying robust to minor copy edits.
+        assert!(m.description.unwrap_or_default().len() > 50);
     }
 }

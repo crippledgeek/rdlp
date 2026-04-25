@@ -80,9 +80,13 @@ pub(super) static TITLE_H1: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `<meta property="og:KEY" content="VALUE">` — captures key + value.
+/// Tolerant of attribute order (`property` before `content` or vice versa)
+/// and of additional unrelated attributes inside the meta tag.
 pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<meta\s+property="og:([^"]+)"\s+content="([^"]*)""#)
-        .expect("SpankBang OG_META regex")
+    Regex::new(
+        r#"<meta\b[^>]*\bproperty="og:([^"]+)"[^>]*\bcontent="([^"]*)"[^>]*>"#,
+    )
+    .expect("SpankBang OG_META regex")
 });
 
 /// `href="/profile/USERID"` — uploader profile slug.
