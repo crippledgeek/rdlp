@@ -49,19 +49,47 @@ function SearchResultRow({
         if (!node) return;
         const observer = new IntersectionObserver(
             (entries) => {
-                if (entries[0]?.isIntersecting) setIsVisible(true);
+                if (entries[0]?.isIntersecting) {
+                    setIsVisible(true);
+                    if (row.original.uploader == null) {
+                        // eslint-disable-next-line no-console
+                        console.debug(
+                            "[enrich] visible:",
+                            row.original.video_url,
+                        );
+                    }
+                }
             },
             { rootMargin: "200px" },
         );
         observer.observe(node);
         return () => observer.disconnect();
-    }, []);
+    }, [row.original.uploader, row.original.video_url]);
 
     const needsEnrichment = row.original.uploader == null;
     const enrichEnabled = isVisible && needsEnrichment;
-    const { data: enriched, isFetching: isEnriching } = useQuery(
-        enrichSearchResultQueryOptions(site, row.original, enrichEnabled),
-    );
+    const { data: enriched, isFetching: isEnriching, error: enrichError } =
+        useQuery(enrichSearchResultQueryOptions(site, row.original, enrichEnabled));
+
+    useEffect(() => {
+        if (enriched && needsEnrichment) {
+            // eslint-disable-next-line no-console
+            console.debug(
+                "[enrich] resolved:",
+                row.original.video_url,
+                "→ uploader =",
+                enriched.uploader,
+            );
+        }
+        if (enrichError) {
+            // eslint-disable-next-line no-console
+            console.warn(
+                "[enrich] failed:",
+                row.original.video_url,
+                enrichError,
+            );
+        }
+    }, [enriched, enrichError, needsEnrichment, row.original.video_url]);
 
     const merged: SearchResultPreview = enriched ?? row.original;
 
