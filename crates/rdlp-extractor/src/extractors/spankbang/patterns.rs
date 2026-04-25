@@ -134,15 +134,18 @@ pub(super) static SEARCH_CARD_VIEWS: LazyLock<Regex> = LazyLock::new(|| {
     .expect("SpankBang SEARCH_CARD_VIEWS regex")
 });
 
-/// Per-card uploader-channel block. The data-testid="title" link inside an
-/// info-with-badge container points to either a tag (`/s/<query>/`) or a
-/// channel (`/<prefix>/channel/<slug>/`); we capture only the channel form.
+/// Per-card uploader-or-creator block. The data-testid="title" link inside
+/// an info-with-badge container points to either a tag (`/s/<query>/`),
+/// a channel (`/<prefix>/channel/<slug>/`), or a pornstar
+/// (`/<prefix>/pornstar/<slug>/`). We capture both creator forms — channel
+/// and pornstar — and skip plain tags. Slugs use `+` for spaces, so the
+/// character class is permissive (`[^/"]+`).
 ///
-/// Capture groups: (1) channel slug, (2) channel display name, (3) video id
-/// from the trailing title link.
+/// Capture groups: (1) creator URL slug, (2) creator display name, (3) video
+/// id from the trailing title link.
 pub(super) static SEARCH_CARD_CHANNEL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?s)<a[^>]*data-testid="title"[^>]*\bhref="/[a-z0-9_-]+/channel/([a-z0-9_-]+)/?"[^>]*>\s*(?:<[^>]+>\s*)*<span[^>]*>([^<]+)</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
+        r#"(?s)<a[^>]*data-testid="title"[^>]*\bhref="/[a-z0-9_+-]+/(?:channel|pornstar)/([^/"]+)/?"[^>]*>\s*(?:<[^>]+>\s*)*<span[^>]*>([^<]+)</span>.*?<a[^>]*\bhref="/([a-z0-9]+)/video/"#,
     )
     .expect("SpankBang SEARCH_CARD_CHANNEL regex")
 });

@@ -500,16 +500,20 @@ mod tests {
             results.len()
         );
 
-        // Uploader is only present on cards whose primary badge is a channel
-        // (vs a tag); not every card will have one. Just assert at least one
-        // card surfaces the uploader so the join path is exercised.
+        // Uploader is present on cards whose primary badge is a channel OR
+        // pornstar (NOT plain tag). The fixture has 50 channel + 3 pornstar
+        // badges across the page; we expect ≥30% of deduped results to
+        // carry an uploader. (Lower bound is intentionally below the badge
+        // count fraction because dedup, recommendation rails, and ad-cards
+        // all reduce the count.)
         let with_uploader = results
             .iter()
             .filter(|r| r.uploader.is_some())
             .count();
         assert!(
-            with_uploader >= 1,
-            "expected at least one channel-tagged result to carry an uploader; got {with_uploader}"
+            with_uploader * 100 / results.len() >= 30,
+            "expected ≥30% of {} results to carry a creator-badge uploader; got {with_uploader}",
+            results.len()
         );
 
         // Spot-check a card that has all three enriched fields.
