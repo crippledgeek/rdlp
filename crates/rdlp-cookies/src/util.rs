@@ -4,9 +4,9 @@ use std::path::Path;
 
 use log::debug;
 use url::Url;
+use wreq::Uri;
 use wreq::cookie::CookieStore;
 use wreq::header::HeaderValue;
-use wreq::Uri;
 
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.
 ///

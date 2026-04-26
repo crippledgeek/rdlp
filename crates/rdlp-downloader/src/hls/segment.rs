@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use wreq::header::HeaderMap;
 use std::time::Duration;
+use wreq::header::HeaderMap;
 
 use backon::Retryable;
 use futures::StreamExt;

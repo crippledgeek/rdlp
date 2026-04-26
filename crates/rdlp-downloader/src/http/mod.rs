@@ -20,13 +20,13 @@ use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
     check_http_response, is_retryable_error,
 };
-use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::chunking::ChunkSizeStrategy;
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
@@ -88,10 +88,9 @@ impl HttpDownloader {
         // profile (ChromeLatest) is applied — otherwise this constructor
         // would hand back a wreq client with no JA4 / JA4H emulation,
         // bypassing the Phase 2 fingerprint guarantee (spec §6.8).
-        let client = rdlp_http::HttpClientFactory::from_config(
-            &rdlp_http::HttpClientConfig::default(),
-        )
-        .build();
+        let client =
+            rdlp_http::HttpClientFactory::from_config(&rdlp_http::HttpClientConfig::default())
+                .build();
         Self::with_client(client)
     }
 

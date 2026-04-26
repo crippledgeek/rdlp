@@ -450,10 +450,9 @@ impl Orchestrator {
         };
         let extractor = extractor.to_owned();
         let id = id.to_owned();
-        let result = tokio::task::spawn_blocking(move || {
-            archive::record_in_archive(&path, &extractor, &id)
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || archive::record_in_archive(&path, &extractor, &id))
+                .await;
         match result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => warn!("Failed to write to download archive: {e}"),

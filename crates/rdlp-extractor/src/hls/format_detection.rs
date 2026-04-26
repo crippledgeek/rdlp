@@ -232,11 +232,7 @@ async fn detect_format_sizes_inner(
                         // OR when any audio-only rendition is present (even
                         // if there's only one video-only variant paired with
                         // it — the XHamster AV1 case).
-                        Ok(Ok(v))
-                            if v.len() > 1 || v.iter().any(|x| x.is_audio_only) =>
-                        {
-                            v
-                        }
+                        Ok(Ok(v)) if v.len() > 1 || v.iter().any(|x| x.is_audio_only) => v,
                         _ => {
                             // Not a master playlist or detection failed — fall back to
                             // single-format enrichment via detect_hls_metadata
@@ -329,10 +325,8 @@ async fn detect_format_sizes_inner(
                         // Surface the rendition language on the Format so the
                         // UI can label multi-language audio tracks. Fall back
                         // to the parent format's language for video variants.
-                        expanded_format.language = variant
-                            .language
-                            .clone()
-                            .or_else(|| format.language.clone());
+                        expanded_format.language =
+                            variant.language.clone().or_else(|| format.language.clone());
                         // Propagate the HLS audio-rendition group:
                         //   - video-only rows carry the AUDIO= reference (the
                         //     group their paired audio lives in)
@@ -342,10 +336,11 @@ async fn detect_format_sizes_inner(
                         expanded_format.audio_group_id = variant.audio_group_id.clone();
                         expanded_format.duration = variant.total_duration;
                         // Estimate size from bitrate × duration (bytes = bps × s / 8)
-                        expanded_format.filesize_approx = match (variant.bandwidth, variant.total_duration) {
-                            (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
-                            _ => None,
-                        };
+                        expanded_format.filesize_approx =
+                            match (variant.bandwidth, variant.total_duration) {
+                                (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
+                                _ => None,
+                            };
                         expanded_format.container = variant.segment_container.clone();
                         if variant.has_encryption {
                             expanded_format.has_drm = Some(true);

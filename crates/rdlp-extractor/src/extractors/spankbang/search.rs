@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
-    SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
-    SearchResultPreview,
+    SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 
 use super::SpankBangExtractor;
@@ -390,12 +389,9 @@ impl SearchExtractor for SpankBangExtractor {
         let page = query.page.unwrap_or(0);
         let page_url = build_search_url(query, page);
 
-        let webpage = BaseExtractor::fetch_webpage_with_headers(
-            &page_url,
-            &[("Cookie", "country=US")],
-            ctx,
-        )
-        .await?;
+        let webpage =
+            BaseExtractor::fetch_webpage_with_headers(&page_url, &[("Cookie", "country=US")], ctx)
+                .await?;
 
         let results = parse_results(&webpage);
         let more = has_more_pages(&webpage, query, page);
@@ -540,10 +536,7 @@ mod tests {
             thumb.starts_with("https://") && thumb.contains("sb-cd.com"),
             "unexpected thumbnail host: {thumb}"
         );
-        assert!(
-            sample.duration.unwrap() > 0.0,
-            "duration must be positive"
-        );
+        assert!(sample.duration.unwrap() > 0.0, "duration must be positive");
     }
 
     #[test]
@@ -566,10 +559,7 @@ mod tests {
         // carry an uploader. (Lower bound is intentionally below the badge
         // count fraction because dedup, recommendation rails, and ad-cards
         // all reduce the count.)
-        let with_uploader = results
-            .iter()
-            .filter(|r| r.uploader.is_some())
-            .count();
+        let with_uploader = results.iter().filter(|r| r.uploader.is_some()).count();
         assert!(
             with_uploader * 100 / results.len() >= 30,
             "expected ≥30% of {} results to carry a creator-badge uploader; got {with_uploader}",

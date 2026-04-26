@@ -87,8 +87,8 @@ fn extract_regex(input: &str, pattern: &str, first: bool) -> Result<()> {
 
 fn extract_css(input: &str, selector: &str, first: bool) -> Result<()> {
     let doc = Html::parse_document(input);
-    let sel = Selector::parse(selector)
-        .map_err(|e| anyhow::anyhow!("invalid CSS selector: {e:?}"))?;
+    let sel =
+        Selector::parse(selector).map_err(|e| anyhow::anyhow!("invalid CSS selector: {e:?}"))?;
     let mut iter = doc.select(&sel);
     if first {
         if let Some(el) = iter.next() {

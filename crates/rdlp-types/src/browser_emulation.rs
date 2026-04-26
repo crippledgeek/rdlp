@@ -125,7 +125,10 @@ mod tests {
     #[test]
     fn pinned_valid_resolves() {
         assert_eq!(
-            format!("{:?}", BrowserEmulation::Pinned("chrome-137".into()).resolve()),
+            format!(
+                "{:?}",
+                BrowserEmulation::Pinned("chrome-137".into()).resolve()
+            ),
             format!("{:?}", Emulation::Chrome137)
         );
     }
@@ -134,7 +137,10 @@ mod tests {
     fn pinned_invalid_falls_back() {
         // Unknown pin maps to Chrome139 (current *Latest target).
         assert_eq!(
-            format!("{:?}", BrowserEmulation::Pinned("nonsense".into()).resolve()),
+            format!(
+                "{:?}",
+                BrowserEmulation::Pinned("nonsense".into()).resolve()
+            ),
             format!("{:?}", Emulation::Chrome139)
         );
     }

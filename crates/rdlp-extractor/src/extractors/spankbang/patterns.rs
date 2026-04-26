@@ -37,8 +37,7 @@ pub(super) fn is_suitable(url: &str) -> bool {
 /// Primary format source on current pages. Body is captured (curlies inclusive)
 /// for conversion to JSON via [`pydict_to_json`].
 pub(super) static STREAM_DATA_INLINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)stream_data\s*=\s*(\{.*?\});")
-        .expect("SpankBang STREAM_DATA_INLINE regex")
+    Regex::new(r"(?s)stream_data\s*=\s*(\{.*?\});").expect("SpankBang STREAM_DATA_INLINE regex")
 });
 
 /// `data-streamkey="..."` — opaque token used by the formats-API fallback.
@@ -75,18 +74,15 @@ pub(super) fn pydict_to_json(s: &str) -> String {
 }
 
 /// `<h1 ... title="...">` — primary title source on video pages.
-pub(super) static TITLE_H1: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<h1[^>]+title="([^"]+)""#).expect("SpankBang TITLE_H1 regex")
-});
+pub(super) static TITLE_H1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<h1[^>]+title="([^"]+)""#).expect("SpankBang TITLE_H1 regex"));
 
 /// `<meta property="og:KEY" content="VALUE">` — captures key + value.
 /// Tolerant of attribute order (`property` before `content` or vice versa)
 /// and of additional unrelated attributes inside the meta tag.
 pub(super) static OG_META: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"<meta\b[^>]*\bproperty="og:([^"]+)"[^>]*\bcontent="([^"]*)"[^>]*>"#,
-    )
-    .expect("SpankBang OG_META regex")
+    Regex::new(r#"<meta\b[^>]*\bproperty="og:([^"]+)"[^>]*\bcontent="([^"]*)"[^>]*>"#)
+        .expect("SpankBang OG_META regex")
 });
 
 /// `<a href="/profile/SLUG">DISPLAY</a>` — uploader profile link in the
@@ -125,10 +121,8 @@ pub(super) static UPLOADER_LINK_NAMED: LazyLock<Regex> = LazyLock::new(|| {
 /// the title-bearing form is the one with `title="..."`. Capture group 1 =
 /// video ID, group 2 = slug, group 3 = title text.
 pub(super) static SEARCH_RESULT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"<a[^>]*\bhref="/([a-z0-9]+)/video/([^"]+)"[^>]*\btitle="([^"]+)"[^>]*>"#,
-    )
-    .expect("SpankBang SEARCH_RESULT regex")
+    Regex::new(r#"<a[^>]*\bhref="/([a-z0-9]+)/video/([^"]+)"[^>]*\btitle="([^"]+)"[^>]*>"#)
+        .expect("SpankBang SEARCH_RESULT regex")
 });
 
 /// Search-result image-wrapper anchor: captures (id, thumbnail URL,
@@ -216,8 +210,7 @@ pub(super) static TAG_LINK_BAR: LazyLock<Regex> = LazyLock::new(|| {
 
 /// `<id|class="video_removed">` — yt-dlp's removed-video sentinel.
 pub(super) static VIDEO_REMOVED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#)
-        .expect("SpankBang VIDEO_REMOVED regex")
+    Regex::new(r#"<[^>]+\b(?:id|class)=["']video_removed"#).expect("SpankBang VIDEO_REMOVED regex")
 });
 
 #[cfg(test)]

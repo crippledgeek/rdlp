@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
 use rdlp_types::BrowserType;
-use wreq::cookie::CookieStore;
 use std::path::Path;
 use std::sync::Arc;
 use url::Url;
+use wreq::cookie::CookieStore;
 
 /// Cookie jar backed by `wreq::cookie::Jar`.
 ///
