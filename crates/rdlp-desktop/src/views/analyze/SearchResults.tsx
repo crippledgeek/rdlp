@@ -20,7 +20,6 @@ import type { SortingState } from "@tanstack/react-table";
 import { searchStore } from "@/stores/searchStore";
 import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/api/search";
 import { setAnalyzeUrl } from "@/stores/uiStore";
-import { Thumbnail } from "@/components/Thumbnail";
 import { SearchFilterBar } from "./SearchFilterBar";
 import { searchResultColumns } from "./searchResultColumns";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,26 +72,23 @@ function SearchResultRow({
             className="border-b border-[#1a1a2e] hover:bg-[var(--surface-elevated)] cursor-pointer transition-colors"
             onClick={() => setAnalyzeUrl(row.original.video_url)}
         >
-            {/* Thumbnail */}
-            <td className="min-w-[72px] px-2 py-1.5">
-                <div className="w-16 h-9 rounded-[3px] overflow-hidden bg-[var(--surface-elevated)] relative">
-                    <Thumbnail
-                        src={row.original.thumbnail_url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                    />
-                    {row.original.duration != null && (
-                        <span className="absolute bottom-0.5 right-0.5 bg-black/80 text-white text-[9px] px-1 rounded-[2px] font-mono">
-                            {Math.floor(row.original.duration / 60)}:{String(row.original.duration % 60).padStart(2, "0")}
-                        </span>
-                    )}
-                </div>
-            </td>
-            {/* Data columns — uploader cell uses the enriched value when present.
-                While enrichment is in flight (isFetching=true and the row was
-                missing an uploader to begin with), the cell pulses so the
-                lazy-load behaviour is visible to the user. */}
+            {/* Data columns — the leftmost cell is the thumbnail (special-cased
+                to preserve its container styling). The uploader cell uses the
+                enriched value when present; while enrichment is in flight
+                (isFetching=true and the row was missing an uploader to begin
+                with), the cell pulses so the lazy-load behaviour is visible
+                to the user. */}
             {row.getVisibleCells().map((cell) => {
+                if (cell.column.id === "thumbnail") {
+                    return (
+                        <td
+                            key={cell.id}
+                            className="min-w-[72px] px-2 py-1.5"
+                        >
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                    );
+                }
                 if (cell.column.id === "uploader") {
                     if (merged.uploader != null) {
                         return (
@@ -203,20 +199,15 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         getSortedRowModel: getSortedRowModel(),
     });
 
-    // Compute percentage widths from visible columns' TanStack `size` totals,
-    // plus a virtual size for the always-present thumbnail column. Per
-    // CSS 2.2 §17.5.2.1, percentage widths on <col> under
+    // Compute percentage widths from visible columns' TanStack `size` totals.
+    // Per CSS 2.2 §17.5.2.1, percentage widths on <col> under
     // table-layout: fixed are interpreted relative to the table's outer
     // width, so columns scale to fill 100% while preserving the relative
-    // proportions declared in searchResultColumns.ts. The `|| 1` guard
+    // proportions declared in searchResultColumns.tsx. The `|| 1` guard
     // handles the zero-column edge case (e.g. before any data has loaded).
-    const THUMBNAIL_VIRTUAL_SIZE = 72;
     const visibleHeaders = table.getHeaderGroups()[0]?.headers ?? [];
-    const dataColumnsSize = visibleHeaders.reduce(
-        (sum, h) => sum + h.getSize(),
-        0,
-    );
-    const totalSize = THUMBNAIL_VIRTUAL_SIZE + dataColumnsSize || 1;
+    const totalSize =
+        visibleHeaders.reduce((sum, h) => sum + h.getSize(), 0) || 1;
 
     const filterBar = <SearchFilterBar />;
 
@@ -284,11 +275,6 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                     style={{ tableLayout: "fixed" }}
                 >
                     <colgroup>
-                        <col
-                            style={{
-                                width: `${(THUMBNAIL_VIRTUAL_SIZE / totalSize) * 100}%`,
-                            }}
-                        />
                         {visibleHeaders.map((h) => (
                             <col
                                 key={h.id}
@@ -301,24 +287,39 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                     <thead className="sticky top-0 bg-[var(--surface-deepest)] z-10">
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr key={headerGroup.id}>
-                                {/* Thumbnail column header (non-sortable) */}
-                                <th className="min-w-[72px] px-2 py-1.5" />
                                 {headerGroup.headers.map((header) => {
+                                    const canSort = header.column.getCanSort();
                                     const sorted = header.column.getIsSorted();
+                                    const isThumbnail = header.id === "thumbnail";
+                                    const baseClass =
+                                        "text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none transition-colors";
+                                    const className = [
+                                        baseClass,
+                                        isThumbnail ? "min-w-[72px]" : "",
+                                        canSort ? "cursor-pointer hover:text-[#888888]" : "",
+                                    ]
+                                        .filter(Boolean)
+                                        .join(" ");
                                     return (
                                         <th
                                             key={header.id}
-                                            className="text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none cursor-pointer hover:text-[#888888] transition-colors"
-                                            onClick={header.column.getToggleSortingHandler()}
+                                            className={className}
+                                            onClick={
+                                                canSort
+                                                    ? header.column.getToggleSortingHandler()
+                                                    : undefined
+                                            }
                                         >
                                             <span className="flex items-center gap-1">
                                                 {flexRender(header.column.columnDef.header, header.getContext())}
-                                                {sorted === "asc" ? (
-                                                    <ArrowUp className="w-3 h-3 text-[#4a9eff]" />
-                                                ) : sorted === "desc" ? (
-                                                    <ArrowDown className="w-3 h-3 text-[#4a9eff]" />
-                                                ) : (
-                                                    <ArrowUpDown className="w-3 h-3 opacity-30" />
+                                                {canSort && (
+                                                    sorted === "asc" ? (
+                                                        <ArrowUp className="w-3 h-3 text-[#4a9eff]" />
+                                                    ) : sorted === "desc" ? (
+                                                        <ArrowDown className="w-3 h-3 text-[#4a9eff]" />
+                                                    ) : (
+                                                        <ArrowUpDown className="w-3 h-3 opacity-30" />
+                                                    )
                                                 )}
                                             </span>
                                         </th>
