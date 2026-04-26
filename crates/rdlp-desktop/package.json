@@ -15,7 +15,6 @@
     "cypress:open": "cypress open"
   },
   "dependencies": {
-    "@radix-ui/react-icons": "^1.3.2",
     "@tailwindcss/vite": "^4.2.0",
     "@tanstack/react-form": "^1.28.5",
     "@tanstack/react-hotkeys": "^0.4.2",

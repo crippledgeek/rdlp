@@ -1,5 +1,7 @@
+"use client"
+
 import { cva } from "class-variance-authority"
-import { CaretSortIcon, CheckIcon } from "@radix-ui/react-icons"
+import { Check, ChevronsUpDown } from "lucide-react"
 import {
   Button as AriaButton,
   type ButtonProps as AriaButtonProps,
@@ -82,7 +84,7 @@ const ListBoxItem = <T extends object>({
         <>
           {renderProps.isSelected && (
             <span className="absolute right-2 flex size-4 items-center justify-center">
-              <CheckIcon className="size-4" />
+              <Check className="size-4" />
             </span>
           )}
           {children}
@@ -169,7 +171,7 @@ const SelectTrigger = ({ className, children, ...props }: AriaButtonProps) => (
     {composeRenderProps(children, (children) => (
       <>
         {children}
-        <CaretSortIcon aria-hidden="true" className="size-4 opacity-50" />
+        <ChevronsUpDown aria-hidden="true" className="size-4 opacity-50" />
       </>
     ))}
   </AriaButton>
@@ -199,7 +201,7 @@ const SelectListBox = <T extends object>({
   />
 )
 
-interface JollySelectProps<T extends object>
+interface PrismSelectProps<T extends object>
   extends Omit<AriaSelectProps<T>, "children"> {
   label?: string
   description?: string
@@ -208,7 +210,7 @@ interface JollySelectProps<T extends object>
   children: React.ReactNode | ((item: T) => React.ReactNode)
 }
 
-function JollySelect<T extends object>({
+function PrismSelect<T extends object>({
   label,
   description,
   errorMessage,
@@ -216,7 +218,7 @@ function JollySelect<T extends object>({
   className,
   items,
   ...props
-}: JollySelectProps<T>) {
+}: PrismSelectProps<T>) {
   return (
     <Select
       className={composeRenderProps(className, (className) =>
@@ -251,6 +253,6 @@ export {
   SelectListBox,
   SelectSection,
   SelectCollection,
-  JollySelect,
+  PrismSelect,
 }
-export type { JollySelectProps }
+export type { PrismSelectProps }
