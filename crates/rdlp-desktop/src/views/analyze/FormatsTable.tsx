@@ -169,6 +169,12 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                     </span>
                                 </th>
                             ))}
+                            {/* Phantom spacer column. With tableLayout: fixed every
+                                explicit-width column stays at its declared size; this
+                                width-less column absorbs all remaining pane width so
+                                hiding columns no longer leaves a blank gutter to the
+                                right of the table. */}
+                            <th aria-hidden="true" />
                         </tr>
                     ))}
                 </thead>
@@ -198,7 +204,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                         }}
                                     >
                                         <td
-                                            colSpan={7}
+                                            colSpan={8}
                                             className="py-1 px-3 bg-[var(--surface-deepest)] border-y border-[#1a1a2e]"
                                         >
                                             <span className="text-[10px] font-bold uppercase tracking-widest text-[#666666]">
