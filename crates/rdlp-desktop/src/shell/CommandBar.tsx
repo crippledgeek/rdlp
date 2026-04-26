@@ -166,6 +166,8 @@ export function CommandBar() {
                 {/* Clear button */}
                 {displayValue && (
                     <Button
+                        variant="ghost"
+                        size="icon"
                         type="button"
                         onPress={clearInput}
                         aria-label="Clear input"

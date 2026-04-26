@@ -49,8 +49,9 @@ export function OutputSection({ draft, onChange }: Props) {
                         </Label>
                         <TooltipTrigger delay={200}>
                             <Button
+                                variant="ghost"
                                 aria-label="Template variables help"
-                                className="text-xs text-muted-foreground cursor-help underline decoration-dotted bg-transparent shadow-none h-auto p-0"
+                                className="text-xs text-muted-foreground cursor-help underline decoration-dotted h-auto p-0"
                             >
                                 ?
                             </Button>

@@ -533,12 +533,13 @@ export function DownloadConfig() {
             {/* Download actions */}
             <section className="p-3 border-t border-[#1a1a2e]">
                 <Button
+                    variant="ghost"
                     type="submit"
                     isDisabled={!hasSelection || isSubmitting}
                     className={cn(
                         "w-full flex items-center justify-center gap-2 py-2 rounded-[6px] text-[13px] font-medium transition-colors",
                         hasSelection && !isSubmitting
-                            ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0]"
+                            ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0] data-[hovered]:bg-[#3a8ef0]"
                             : "bg-[#1a2a4a] text-[#444444] cursor-not-allowed",
                     )}
                 >
