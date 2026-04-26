@@ -43,7 +43,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["rdlp contributors"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Async runtime

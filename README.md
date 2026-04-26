@@ -86,14 +86,23 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODING_RULES.md](CODING_RULES.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Dual-licensed under either of:
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
 ### FFmpeg licensing note
 
 rdlp links against FFmpeg shared libraries at build time via
 [ffmpeg-the-third](https://crates.io/crates/ffmpeg-the-third). The Rust
-source code in this repository is MIT-licensed and does not contain any
-GPL or nonfree code.
+source code in this repository is dual MIT/Apache-2.0 licensed and does
+not contain any GPL or nonfree code.
 
 **Release binaries** are built against LGPL-only FFmpeg (system packages)
 and can be freely distributed.
