@@ -297,12 +297,16 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                                         </th>
                                     );
                                 })}
-                                {/* Phantom spacer column. With tableLayout: fixed
+                                {/* Phantom spacer cell. With tableLayout: fixed
                                     every explicit-width column stays at its declared
                                     size; this width-less column absorbs all remaining
                                     pane width so hiding optional columns no longer
-                                    leaves a blank gutter to the right of the table. */}
-                                <th aria-hidden="true" />
+                                    leaves a blank gutter to the right of the table.
+                                    Rendered as <td aria-hidden> rather than <th>
+                                    per WCAG 1.3.1 (empty <th> cells must carry a
+                                    descriptive label; <td> inside <thead> is valid
+                                    and carries no header semantics). */}
+                                <td aria-hidden="true" />
                             </tr>
                         ))}
                     </thead>
