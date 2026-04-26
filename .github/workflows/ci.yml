@@ -102,6 +102,16 @@ jobs:
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
 
+      - name: Set OpenSSL environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # openssl-sys (transitive via wreq's BoringSSL/OpenSSL coexistence
+          # setup) needs OPENSSL_DIR on Windows. Strawberry Perl bundles
+          # OpenSSL with headers + .lib files at C:\Strawberry\c — preinstalled
+          # on the windows-latest runner image.
+          echo "OPENSSL_DIR=C:\Strawberry\c" >> $env:GITHUB_ENV
+
       # --- Toolchain setup ---
 
       - uses: actions/setup-node@v5

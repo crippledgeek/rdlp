@@ -78,6 +78,13 @@ jobs:
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
 
+      - name: Set OpenSSL environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # See ci.yml for rationale.
+          echo "OPENSSL_DIR=C:\Strawberry\c" >> $env:GITHUB_ENV
+
       # --- Toolchain setup ---
 
       - uses: actions/setup-node@v5
