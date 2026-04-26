@@ -74,7 +74,7 @@ function SearchResultRow({
             onClick={() => setAnalyzeUrl(row.original.video_url)}
         >
             {/* Thumbnail */}
-            <td className="w-[72px] px-2 py-1.5">
+            <td className="min-w-[72px] px-2 py-1.5">
                 <div className="w-16 h-9 rounded-[3px] overflow-hidden bg-[var(--surface-elevated)] relative">
                     <Thumbnail
                         src={row.original.thumbnail_url}
@@ -99,7 +99,6 @@ function SearchResultRow({
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
-                                style={{ width: cell.column.getSize() }}
                             >
                                 {merged.uploader}
                             </td>
@@ -110,7 +109,6 @@ function SearchResultRow({
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5"
-                                style={{ width: cell.column.getSize() }}
                             >
                                 <span className="inline-block h-3 w-20 rounded-[3px] bg-[var(--surface-elevated)] animate-pulse" />
                             </td>
@@ -127,7 +125,6 @@ function SearchResultRow({
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5 text-[12px] text-[#555555] truncate italic"
-                                style={{ width: cell.column.getSize() }}
                                 title="Video page has no studio or creator attribution"
                             >
                                 —
@@ -267,19 +264,18 @@ export function SearchResults({ query, site }: SearchResultsProps) {
 
             {/* Table */}
             <div className="flex-1 overflow-y-auto overflow-x-auto">
-                <table className="w-full min-w-[652px]" style={{ tableLayout: "fixed" }}>
+                <table className="w-full min-w-[652px]">
                     <thead className="sticky top-0 bg-[var(--surface-deepest)] z-10">
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr key={headerGroup.id}>
                                 {/* Thumbnail column header (non-sortable) */}
-                                <th className="w-[72px] px-2 py-1.5" />
+                                <th className="min-w-[72px] px-2 py-1.5" />
                                 {headerGroup.headers.map((header) => {
                                     const sorted = header.column.getIsSorted();
                                     return (
                                         <th
                                             key={header.id}
                                             className="text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none cursor-pointer hover:text-[#888888] transition-colors"
-                                            style={{ width: header.getSize() }}
                                             onClick={header.column.getToggleSortingHandler()}
                                         >
                                             <span className="flex items-center gap-1">
