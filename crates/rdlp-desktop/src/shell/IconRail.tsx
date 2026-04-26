@@ -39,6 +39,7 @@ export function IconRail() {
                     <TooltipTrigger key={id} delay={600}>
                         <Button
                             variant="ghost"
+                            size="icon"
                             onPress={() => setView(id)}
                             aria-label={label}
                             aria-current={isActive ? "page" : undefined}

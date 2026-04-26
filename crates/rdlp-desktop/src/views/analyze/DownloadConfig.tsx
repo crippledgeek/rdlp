@@ -271,6 +271,7 @@ export function DownloadConfig() {
                             <Button
                                 type="button"
                                 variant="ghost"
+                                size="icon"
                                 onPress={async () => {
                                     const dir = await pickDirectory();
                                     if (dir) field.handleChange(dir);
