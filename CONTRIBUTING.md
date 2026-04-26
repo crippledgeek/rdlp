@@ -77,6 +77,13 @@ cargo fmt
 | `rdlp-cookies` | Browser cookie extraction |
 | `rdlp-plugin` | Plugin system architecture |
 | `rdlp-cli` | CLI application and download orchestrator |
+| `rdlp-api` | Frontend-agnostic API layer (`RdlpClient`, event model, download handles) for CLI/Tauri/Leptos consumers |
+| `rdlp-ffmpeg` | FFmpeg library bindings (probe, remux, merge, transcode, metadata, thumbnail) via `ffmpeg-the-third` |
+| `rdlp-ratelimit` | Async token-bucket rate limiter (per-extractor throttling) |
+| `rdlp-table` | Responsive CLI table renderer with column-budget algorithm |
+| `rdlp-crypto` | PRNG-based URL decryption (XHamster — retained for cross-validation tests) |
+| `rdlp-desktop` (`src-tauri`) | Tauri v2 desktop GUI (React/TypeScript frontend + Rust IPC backend) |
+| `rdlp-probe` | Optional CLI authoring toolkit for extractor contributors (excluded from `default-members`) |
 
 ### Three-Stage Pipeline
 
@@ -94,12 +101,7 @@ Tier 2: TnaFlixNetworkBase     (shared logic for site families)
 Tier 3: Site Extractors        (individual site implementations)
 ```
 
-**Currently supported extractors:**
-- TNAFlix (via `TNAFlixExtractor`)
-- EMPFlix (via `TNAFlixExtractor`)
-- MovieFap (via `TNAFlixExtractor`)
-- RedTube (`RedTubeExtractor`)
-- PornHub (`PornHubExtractor`) - includes playlist support
+**Currently supported extractors:** 13 site extractors + a Generic fallback. See [`crates/rdlp-extractor/src/extractors/`](crates/rdlp-extractor/src/extractors/) for the canonical list. Sites include TNAFlix family (TNAFlix/EMPFlix/MovieFap), RedTube, PornHub, SpankBang, XHamster, HQPorner, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, XTits.
 
 ## Development Workflow
 
@@ -154,6 +156,29 @@ git commit -m "docs: improve installation instructions"
 **Scope examples:** `extractor`, `downloader`, `cli`, `core`, `postprocess`
 
 ## Adding a New Extractor
+
+### Authoring Workflow with `rdlp-probe`
+
+Since the SpankBang extractor sprint, contributors author new extractors using the **`rdlp-probe`** CLI toolkit. It exposes the same HTTP / JS / cookie stack the production extractors use, so probes hit the same code paths as live extraction.
+
+```bash
+# Build the probe (excluded from default cargo build)
+cargo build -p rdlp-probe --release
+
+# Fetch a page through the production stack
+./target/release/rdlp-probe fetch "https://example.com/video/123"
+
+# Run JS through the in-tree boa engine
+./target/release/rdlp-probe eval --inline "Math.sqrt(144)"
+
+# Extract via regex / CSS / JSON path
+./target/release/rdlp-probe extract --mode css "video source[src]" --file page.html
+
+# Record a cassette for offline replay in tests
+./target/release/rdlp-probe record "https://example.com/video/123" -o tests/cassette.json
+```
+
+The `record` subcommand produces JSON cassettes that act as regression test fixtures. See `crates/rdlp-probe/README.md` for the full 6-step workflow.
 
 ### Legal Requirements
 
@@ -431,6 +456,10 @@ The `InfoDict` struct holds all extracted metadata. Required fields are set via 
 
 ## Code Style Guide
 
+> **For comprehensive coding standards**, see [`CODING_RULES.md`](CODING_RULES.md) (committed root) — covers naming, error handling, testing, module guidelines, and the pre-commit checklist.
+>
+> **For AI-assisted contributors** using Claude Code or similar tools, see [`CLAUDE.md`](CLAUDE.md) for project-specific guidance and architectural context the assistant will load automatically.
+
 ### General Principles
 
 - **Readability First**: Code is read more than written
@@ -495,6 +524,27 @@ let title = extract_title(&html);
 let formats = fetch_formats(ctx).await?; // compile error!
 ```
 
+## Branch Naming Convention
+
+All task branches MUST conform to the gitflow naming convention:
+
+| Branch type | Base branch | Example |
+|---|---|---|
+| `feature/*` | `develop` | `feature/youtube-extractor` |
+| `bugfix/*` | `develop` | `bugfix/hls-resume-stalls` |
+| `chore/*` | `develop` | `chore/upgrade-tokio` |
+| `spike/*` | `develop` | `spike/wasm-plugin-poc` |
+| `release/*` | `develop` | `release/v1.0.0` |
+| `hotfix/*` | `master` | `hotfix/cve-2026-1234` |
+
+Constraints:
+- Lowercase kebab-case after the prefix (`[a-z0-9]+(-[a-z0-9]+)*`)
+- Total length <= 72 characters
+- Descriptor must be specific (`feature/youtube-extractor`, NOT `feature/update`)
+- No uppercase, underscores, dots, or consecutive hyphens
+
+Direct commits to `master` or `develop` are not permitted; every change goes through a task branch.
+
 ## Pull Request Checklist
 
 Before submitting your PR, ensure:
@@ -508,4 +558,13 @@ Before submitting your PR, ensure:
 
 ## License
 
-By contributing to rdlp, you agree that your contributions will be licensed under the MIT License.
+This project is dual-licensed under either of:
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+This is the Rust ecosystem convention used by the Rust language itself, tokio, serde, wreq, hyper, and most major crates.
