@@ -59,7 +59,7 @@ impl SpankBangExtractor {
             .send()
             .await
             .map_err(|e| RdlpError::Network {
-                message: format!("SpankBang formats API request failed: {e}"),
+                message: format!("SpankBang formats API request failed: {e:#}"),
                 url: Some(FORMATS_API_URL.to_string()),
             })?;
 
@@ -72,7 +72,7 @@ impl SpankBangExtractor {
         }
 
         resp.json::<Value>().await.map_err(|e| RdlpError::Extraction {
-            message: format!("SpankBang formats API JSON parse failed: {e}"),
+            message: format!("SpankBang formats API JSON parse failed: {e:#}"),
             url: Some(FORMATS_API_URL.to_string()),
         })
     }

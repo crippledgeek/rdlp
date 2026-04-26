@@ -70,7 +70,16 @@ impl CookieJar for SimpleCookieJar {
             wreq::cookie::Cookies::Compressed(hv) => vec![hv],
             wreq::cookie::Cookies::Uncompressed(v) => v.iter().collect(),
             wreq::cookie::Cookies::Empty => return Ok(Vec::new()),
-            _ => return Ok(Vec::new()),
+            other => {
+                // wreq::cookie::Cookies is #[non_exhaustive]; a future variant
+                // would silently drop authenticated requests if we just
+                // returned Vec::new(). Surface it so a wreq update is noticed.
+                warn!(
+                    "Unknown wreq::cookie::Cookies variant encountered ({other:?}); \
+                     dropping cookies for this request"
+                );
+                return Ok(Vec::new());
+            }
         };
         let mut out = Vec::new();
         for hv in headers {

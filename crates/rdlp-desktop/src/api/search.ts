@@ -39,15 +39,16 @@ export function filtersQueryOptions(site: string) {
  * triggers one upstream fetch. `staleTime` is 1 hour — preview metadata
  * for a given video URL is effectively immutable.
  *
- * `enabled` is gated by both the row being on-screen (caller passes the
- * IntersectionObserver result) and the preview already being incomplete.
+ * `ready` is the gating signal from the caller (typically: row on-screen
+ * AND preview is missing the field we'd backfill). When false, the queryFn
+ * slot holds `skipToken` so TanStack never invokes it.
  */
 export function enrichSearchResultQueryOptions(
     site: string,
     preview: SearchResultPreview,
-    enabled: boolean,
+    ready: boolean,
 ) {
-    const ready = enabled && site !== "" && preview.video_url !== "";
+    const shouldFetch = ready && site !== "" && preview.video_url !== "";
     // TanStack Query v5 documented lazy-query pattern: switch the queryFn
     // between `skipToken` (disabled, type-safe) and a real function based on
     // the gating condition. Toggling `enabled: false → true` on a
@@ -57,33 +58,12 @@ export function enrichSearchResultQueryOptions(
     // https://tanstack.com/query/v5/docs/react/guides/disabling-queries
     return queryOptions({
         queryKey: queryKeys.search.enrichRow(site, preview.video_url),
-        queryFn: ready
-            ? async () => {
-                  // eslint-disable-next-line no-console
-                  console.debug("[enrich] queryFn START:", preview.video_url);
-                  try {
-                      const result = await invokeTyped<SearchResultPreview>(
-                          "enrich_search_result",
-                          { site, preview },
-                      );
-                      // eslint-disable-next-line no-console
-                      console.debug(
-                          "[enrich] queryFn DONE:",
-                          preview.video_url,
-                          "→ uploader =",
-                          result.uploader,
-                      );
-                      return result;
-                  } catch (err) {
-                      // eslint-disable-next-line no-console
-                      console.error(
-                          "[enrich] queryFn THREW:",
-                          preview.video_url,
-                          err,
-                      );
-                      throw err;
-                  }
-              }
+        queryFn: shouldFetch
+            ? () =>
+                  invokeTyped<SearchResultPreview>("enrich_search_result", {
+                      site,
+                      preview,
+                  })
             : skipToken,
         staleTime: 60 * 60 * 1000,
         gcTime: 60 * 60 * 1000,

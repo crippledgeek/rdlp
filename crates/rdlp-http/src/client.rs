@@ -86,13 +86,29 @@ impl HttpClientFactory {
         }
 
         if let Some(proxy_url) = &self.config.proxy {
-            match wreq::Proxy::all(proxy_url) {
-                Ok(proxy) => builder = builder.proxy(proxy),
-                Err(e) => tracing::debug!("Invalid proxy URL '{}': {}", proxy_url, e),
+            match rdlp_security::validate_proxy_url(proxy_url) {
+                Ok(()) => match wreq::Proxy::all(proxy_url) {
+                    Ok(proxy) => builder = builder.proxy(proxy),
+                    Err(e) => tracing::warn!(
+                        "Proxy URL accepted by validator but rejected by wreq; \
+                         continuing without proxy: {}",
+                        e
+                    ),
+                },
+                Err(e) => tracing::warn!(
+                    "Rejecting proxy URL (failed security validation): {}; \
+                     continuing without proxy",
+                    e
+                ),
             }
         }
 
-        builder.build().unwrap_or_else(|_| wreq::Client::new())
+        // Silent fallback to `wreq::Client::new()` would strip emulation, cookies,
+        // proxy and timeouts — a JA4 leak and an authentication failure waiting to
+        // happen. A misconfigured client at startup is fatal.
+        builder
+            .build()
+            .expect("HttpClientFactory: wreq client build failed (TLS/runtime config invalid)")
     }
 
     /// Build and wrap in Arc for sharing across async tasks
@@ -133,5 +149,24 @@ mod tests {
         let factory = HttpClientFactory::default();
         let client = factory.build_arc();
         assert_eq!(Arc::strong_count(&client), 1);
+    }
+
+    /// Regression guard for I-1: a proxy URL pointing at a private/internal
+    /// host (SSRF risk) MUST NOT be installed on the resulting client. Prior
+    /// behavior swallowed the URL via `wreq::Proxy::all` even though
+    /// rdlp_security::validate_proxy_url would have rejected it.
+    #[test]
+    fn private_host_proxy_is_rejected_silently_without_panicking() {
+        let config = HttpClientConfig::new().with_proxy("http://127.0.0.1:8080");
+        let factory = HttpClientFactory::from_config(&config);
+        // Build must succeed (validation failure → warn + skip, not panic).
+        let _client = factory.build();
+    }
+
+    #[test]
+    fn invalid_scheme_proxy_is_rejected_silently_without_panicking() {
+        let config = HttpClientConfig::new().with_proxy("ftp://proxy.example.com");
+        let factory = HttpClientFactory::from_config(&config);
+        let _client = factory.build();
     }
 }
