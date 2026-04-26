@@ -135,10 +135,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
 
     return (
         <div ref={parentRef} className="h-full overflow-y-auto">
-            <table
-                className="w-full border-collapse"
-                style={{ tableLayout: "fixed" }}
-            >
+            <table className="w-full border-collapse">
                 <thead className="sticky top-0 z-20 bg-[var(--surface-deepest)]">
                     {table.getHeaderGroups().map((hg) => (
                         <tr key={hg.id} className="border-b border-[#1a1a2e]">
@@ -146,7 +143,6 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                 <th
                                     key={header.id}
                                     onClick={header.column.getToggleSortingHandler()}
-                                    style={{ width: header.getSize() }}
                                     className={cn(
                                         "table-th text-left select-none",
                                         header.column.getCanSort() && "cursor-pointer hover:text-[#aaaaaa]",
