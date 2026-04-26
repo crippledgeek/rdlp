@@ -59,13 +59,15 @@ jobs:
         uses: actions/cache@v5
         with:
           path: C:\ffmpeg
-          key: ffmpeg-win64-shared-7
+          # Pinned — see ci.yml for the rationale.
+          key: ffmpeg-win64-shared-8.0
 
       - name: Download FFmpeg shared build (Windows)
         if: matrix.platform == 'windows-latest' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z" -OutFile ffmpeg.7z
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-full_build-shared.7z"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
           7z x ffmpeg.7z -oC:\ffmpeg
 
       - name: Set FFmpeg environment (Windows)
