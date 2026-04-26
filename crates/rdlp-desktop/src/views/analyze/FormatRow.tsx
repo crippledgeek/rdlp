@@ -134,8 +134,6 @@ export const FormatRow = memo(
                         </td>
                     );
                 })}
-                {/* Phantom spacer matching FormatsTable's trailing <th>. */}
-                <td aria-hidden="true" />
             </tr>
         );
     },

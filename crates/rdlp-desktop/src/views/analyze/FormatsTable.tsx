@@ -169,19 +169,6 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                     </span>
                                 </th>
                             ))}
-                            {/* Phantom spacer cell. With tableLayout: fixed every
-                                explicit-width column stays at its declared size; this
-                                width-less column absorbs all remaining pane width so
-                                hiding columns no longer leaves a blank gutter to the
-                                right of the table.
-
-                                Rendered as <td aria-hidden> rather than <th> per
-                                WCAG 1.3.1: empty <th> cells violate the "table
-                                headers must contain descriptive text" rule. <td>
-                                inside <thead> is valid HTML and carries no header
-                                semantics, which is exactly what we want for a
-                                pure layout filler. */}
-                            <td aria-hidden="true" />
                         </tr>
                     ))}
                 </thead>
@@ -211,7 +198,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                         }}
                                     >
                                         <td
-                                            colSpan={8}
+                                            colSpan={7}
                                             className="py-1 px-3 bg-[var(--surface-deepest)] border-y border-[#1a1a2e]"
                                         >
                                             <span className="text-[10px] font-bold uppercase tracking-widest text-[#666666]">
