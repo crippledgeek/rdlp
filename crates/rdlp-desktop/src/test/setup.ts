@@ -38,4 +38,3 @@ vi.mock("@tauri-apps/api/event", () => ({
 // state machines that cost ~40-80ms per render. The mocks preserve the ARIA
 // roles (combobox, option, radio) that tests query for.
 vi.mock("@/components/ui/select", async () => import("./radix-select-mock"));
-vi.mock("@/components/ui/radio-group", async () => import("./radix-radio-group-mock"));
