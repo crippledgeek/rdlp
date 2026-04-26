@@ -1,0 +1,7 @@
+# Code owners — auto-requested as reviewers on every PR.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+
+# Default owner for everything not matched below.
+*       @crippledgeek
+
+# (Add path-specific owners here as the maintainer team grows.)

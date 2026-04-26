@@ -1,0 +1,31 @@
+# Contributors
+
+People who have contributed to rdlp.
+Listed in order of first contribution.
+
+- @crippledgeek — Project author and primary maintainer
+
+---
+
+For the canonical, always-current list, see GitHub's contributor graph:
+https://github.com/crippledgeek/rdlp/graphs/contributors
+
+This file is updated periodically (and on release) from `git shortlog -sne --use-mailmap`.
+
+## How to be added
+
+You'll be added when your first PR is merged. If you'd like your name +
+handle (or pseudonym) listed differently than your git author metadata
+suggests, mention it in your PR description and a maintainer will adjust
+this file at merge time.
+
+If you'd prefer NOT to be listed by handle (e.g. you contribute under a
+pseudonym or want to remain unattributed), let us know in the PR — we'll
+respect that.
+
+## What counts as a contribution
+
+Code, documentation, bug reports with reproduction steps, test fixtures,
+extractor cassettes, accessibility audits, performance profiling, security
+disclosures, and design / UX feedback all count. Adding a single
+extractor counts; reviewing PRs counts; spotting a typo counts.

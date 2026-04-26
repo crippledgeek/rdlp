@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a new capability that isn't a new site extractor.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For new **site extractors**, please use the dedicated "New site extractor" template instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the user-facing situation, not a proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would the feature look like?
+      description: Sketch the CLI flag, API surface, or UI change. Include example invocations.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds exist today? What did you try first?
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and impact
+      description: Which crates would this touch? Are there breaking changes? Any new dependencies?
