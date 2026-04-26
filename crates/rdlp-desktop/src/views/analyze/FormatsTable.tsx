@@ -125,6 +125,15 @@ export function FormatsTable({ formats }: FormatsTableProps) {
 
     const useVirtual = formats.length > 50;
 
+    // Compute percentage widths from visible columns' TanStack `size` totals.
+    // Per CSS 2.2 §17.5.2.1, percentage widths on <col> under
+    // table-layout: fixed are interpreted relative to the table's outer
+    // width, so columns scale to fill 100% while preserving the relative
+    // proportions declared in formatColumns.ts.
+    const visibleHeaders = table.getHeaderGroups()[0]?.headers ?? [];
+    const totalSize =
+        visibleHeaders.reduce((sum, h) => sum + h.getSize(), 0) || 1;
+
     const virtualizer = useVirtualizer({
         count: items.length,
         getScrollElement: () => parentRef.current,
@@ -135,7 +144,18 @@ export function FormatsTable({ formats }: FormatsTableProps) {
 
     return (
         <div ref={parentRef} className="h-full overflow-y-auto">
-            <table className="w-full border-collapse">
+            <table
+                className="w-full border-collapse"
+                style={{ tableLayout: "fixed" }}
+            >
+                <colgroup>
+                    {visibleHeaders.map((h) => (
+                        <col
+                            key={h.id}
+                            style={{ width: `${(h.getSize() / totalSize) * 100}%` }}
+                        />
+                    ))}
+                </colgroup>
                 <thead className="sticky top-0 z-20 bg-[var(--surface-deepest)]">
                     {table.getHeaderGroups().map((hg) => (
                         <tr key={hg.id} className="border-b border-[#1a1a2e]">

@@ -203,6 +203,21 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         getSortedRowModel: getSortedRowModel(),
     });
 
+    // Compute percentage widths from visible columns' TanStack `size` totals,
+    // plus a virtual size for the always-present thumbnail column. Per
+    // CSS 2.2 §17.5.2.1, percentage widths on <col> under
+    // table-layout: fixed are interpreted relative to the table's outer
+    // width, so columns scale to fill 100% while preserving the relative
+    // proportions declared in searchResultColumns.ts. The `|| 1` guard
+    // handles the zero-column edge case (e.g. before any data has loaded).
+    const THUMBNAIL_VIRTUAL_SIZE = 72;
+    const visibleHeaders = table.getHeaderGroups()[0]?.headers ?? [];
+    const dataColumnsSize = visibleHeaders.reduce(
+        (sum, h) => sum + h.getSize(),
+        0,
+    );
+    const totalSize = THUMBNAIL_VIRTUAL_SIZE + dataColumnsSize || 1;
+
     const filterBar = <SearchFilterBar />;
 
     if (isLoading) {
@@ -264,7 +279,25 @@ export function SearchResults({ query, site }: SearchResultsProps) {
 
             {/* Table */}
             <div className="flex-1 overflow-y-auto overflow-x-auto">
-                <table className="w-full min-w-[652px]">
+                <table
+                    className="w-full min-w-[652px]"
+                    style={{ tableLayout: "fixed" }}
+                >
+                    <colgroup>
+                        <col
+                            style={{
+                                width: `${(THUMBNAIL_VIRTUAL_SIZE / totalSize) * 100}%`,
+                            }}
+                        />
+                        {visibleHeaders.map((h) => (
+                            <col
+                                key={h.id}
+                                style={{
+                                    width: `${(h.getSize() / totalSize) * 100}%`,
+                                }}
+                            />
+                        ))}
+                    </colgroup>
                     <thead className="sticky top-0 bg-[var(--surface-deepest)] z-10">
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr key={headerGroup.id}>
