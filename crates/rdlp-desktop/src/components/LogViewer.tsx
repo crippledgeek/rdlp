@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 // ─── Ring buffer ────────────────────────────────────────────────────────────
@@ -141,18 +142,18 @@ export function LogViewer() {
             <div className="flex items-center gap-2 px-2 py-1 border-b border-[#1a1a2e] shrink-0">
                 <div className="flex items-center gap-1">
                     {(["info", "warn", "error", "debug"] as SeverityFilter[]).map((level) => (
-                        <button
+                        <Button
                             key={level}
-                            onClick={() => toggleFilter(level)}
+                            onPress={() => toggleFilter(level)}
                             className={cn(
-                                "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors",
+                                "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors h-auto",
                                 activeFilters.has(level)
                                     ? LEVEL_BG[level]
                                     : "text-[#333333] bg-transparent hover:text-[#555555]",
                             )}
                         >
                             {level}
-                        </button>
+                        </Button>
                     ))}
                 </div>
 
@@ -162,23 +163,23 @@ export function LogViewer() {
 
                 <div className="flex items-center gap-1 ml-auto">
                     {!autoScroll && (
-                        <button
-                            onClick={() => {
+                        <Button
+                            onPress={() => {
                                 setAutoScroll(true);
                                 virtualizer.scrollToIndex(filtered.length - 1);
                             }}
-                            className="px-1.5 py-0.5 rounded-[3px] text-[9px] bg-[#1a2a4a] text-[#4a9eff] hover:bg-[#1f3050] transition-colors"
+                            className="px-1.5 py-0.5 rounded-[3px] text-[9px] bg-[#1a2a4a] text-[#4a9eff] hover:bg-[#1f3050] transition-colors h-auto"
                         >
                             ↓ Follow
-                        </button>
+                        </Button>
                     )}
-                    <button
-                        onClick={clearLogs}
+                    <Button
+                        onPress={clearLogs}
                         aria-label="Clear logs"
-                        className="p-1 rounded-[3px] text-[#333333] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors"
+                        className="p-1 rounded-[3px] text-[#333333] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors h-auto bg-transparent"
                     >
                         <X className="w-3 h-3" />
-                    </button>
+                    </Button>
                 </div>
             </div>
 

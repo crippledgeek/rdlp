@@ -48,12 +48,12 @@ export function OutputSection({ draft, onChange }: Props) {
                             Filename Template
                         </Label>
                         <TooltipTrigger delay={200}>
-                            <button
+                            <Button
                                 aria-label="Template variables help"
-                                className="text-xs text-muted-foreground cursor-help underline decoration-dotted"
+                                className="text-xs text-muted-foreground cursor-help underline decoration-dotted bg-transparent shadow-none h-auto p-0"
                             >
                                 ?
-                            </button>
+                            </Button>
                             <Tooltip>
                                 <div className="text-xs space-y-0.5">
                                     <p className="font-semibold mb-1">Common variables:</p>
