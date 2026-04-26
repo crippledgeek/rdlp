@@ -31,10 +31,16 @@ export function getQualityLabel(format: FormatInfo): string {
 }
 
 export const formatColumns = [
+    // Column widths are sized for the HEADER (uppercase label + sort chevron),
+    // not just the data values. The header label uses 10px font with 0.05em
+    // letter-spacing inside a `<th>` with 12px left + 12px right padding, so a
+    // column narrower than the header content bleeds the sort chevron into
+    // the next column's header text. Keep these values comfortably above
+    // ceil(label_width + 12 + 12 + chevron_12).
     helper.accessor((row) => getQualityLabel(row), {
         id: "quality",
         header: "Quality",
-        size: 80,
+        size: 90,
         enableSorting: true,
         sortingFn: (rowA, rowB) => {
             // Sort by height descending for quality
@@ -45,7 +51,7 @@ export const formatColumns = [
     }),
     helper.accessor("height", {
         header: "Resolution",
-        size: 80,
+        size: 110,
         enableSorting: true,
         sortingFn: (rowA, rowB) => {
             return nullsLastSort(rowA.original.height, rowB.original.height, false);
@@ -59,7 +65,7 @@ export const formatColumns = [
     }),
     helper.accessor("fps", {
         header: "FPS",
-        size: 45,
+        size: 60,
         enableSorting: true,
         sortingFn: (rowA, rowB) =>
             nullsLastSort(rowA.original.fps, rowB.original.fps, false),
@@ -67,7 +73,7 @@ export const formatColumns = [
     }),
     helper.accessor("vcodec", {
         header: "VCodec",
-        size: 60,
+        size: 85,
         enableSorting: true,
         cell: (info) => {
             const v = info.getValue();
@@ -77,10 +83,10 @@ export const formatColumns = [
     }),
     helper.accessor("acodec", {
         header: "Audio",
-        // Slightly wider than before to fit the optional HLS audio-group tag
-        // that FormatRow appends when a variant references an EXT-X-MEDIA
+        // Wide enough for the AUDIO header AND the optional HLS audio-group
+        // tag that FormatRow appends when a variant references an EXT-X-MEDIA
         // rendition. Falls back to "—" / "<codec>" on rows without a group.
-        size: 70,
+        size: 90,
         enableSorting: true,
         cell: (info) => {
             const a = info.getValue();
@@ -90,12 +96,12 @@ export const formatColumns = [
     }),
     helper.accessor("protocol", {
         header: "Protocol",
-        size: 55,
+        size: 100,
         enableSorting: true,
     }),
     helper.accessor("filesize", {
         header: "Size",
-        size: 65,
+        size: 75,
         enableSorting: true,
         sortingFn: (rowA, rowB) =>
             nullsLastSort(rowA.original.filesize, rowB.original.filesize, false),
