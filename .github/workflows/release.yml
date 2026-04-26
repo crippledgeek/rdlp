@@ -84,12 +84,8 @@ jobs:
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
 
-      - name: Set OpenSSL environment (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          # See ci.yml for rationale.
-          echo "OPENSSL_DIR=C:\Strawberry\c" >> $env:GITHUB_ENV
+      # See ci.yml — openssl-sys uses `vendored` feature on Windows
+      # (declared in crates/rdlp-http/Cargo.toml), so no OpenSSL env needed here.
 
       # --- Toolchain setup ---
 

@@ -112,16 +112,9 @@ jobs:
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
 
-      - name: Set OpenSSL environment (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          # openssl-sys appears transitively via wreq's deps even after our
-          # rdlp-http target.cfg trick (the dep tree pulls openssl-sys in
-          # through other paths on Windows). Strawberry Perl is preinstalled
-          # on the windows-latest runner image and bundles OpenSSL headers +
-          # .lib files at C:\Strawberry\c.
-          echo "OPENSSL_DIR=C:\Strawberry\c" >> $env:GITHUB_ENV
+      # No OpenSSL env var needed on Windows: openssl-sys is enabled with
+      # the `vendored` feature for windows targets in crates/rdlp-http/Cargo.toml,
+      # so it compiles OpenSSL from source instead of looking for system libs.
 
       # --- Toolchain setup ---
 
