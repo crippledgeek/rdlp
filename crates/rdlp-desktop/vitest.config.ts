@@ -14,7 +14,13 @@ export default defineConfig({
         environment: "happy-dom",
         setupFiles: ["./src/test/setup.ts"],
         include: ["src/**/*.{test,spec}.{ts,tsx}"],
+        exclude: ["**/node_modules/**", "**/dist/**", "**/*.test-d.{ts,tsx}"],
         pool: "threads",
+        typecheck: {
+            enabled: false,
+            include: ["src/**/*.test-d.{ts,tsx}"],
+            tsconfig: "./tsconfig.json",
+        },
         coverage: {
             provider: "v8",
             reporter: ["text", "json", "html"],

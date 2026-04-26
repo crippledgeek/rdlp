@@ -125,6 +125,15 @@ export function FormatsTable({ formats }: FormatsTableProps) {
 
     const useVirtual = formats.length > 50;
 
+    // Compute percentage widths from visible columns' TanStack `size` totals.
+    // Per CSS 2.2 §17.5.2.1, percentage widths on <col> under
+    // table-layout: fixed are interpreted relative to the table's outer
+    // width, so columns scale to fill 100% while preserving the relative
+    // proportions declared in formatColumns.ts.
+    const visibleHeaders = table.getHeaderGroups()[0]?.headers ?? [];
+    const totalSize =
+        visibleHeaders.reduce((sum, h) => sum + h.getSize(), 0) || 1;
+
     const virtualizer = useVirtualizer({
         count: items.length,
         getScrollElement: () => parentRef.current,
@@ -139,6 +148,14 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                 className="w-full border-collapse"
                 style={{ tableLayout: "fixed" }}
             >
+                <colgroup>
+                    {visibleHeaders.map((h) => (
+                        <col
+                            key={h.id}
+                            style={{ width: `${(h.getSize() / totalSize) * 100}%` }}
+                        />
+                    ))}
+                </colgroup>
                 <thead className="sticky top-0 z-20 bg-[var(--surface-deepest)]">
                     {table.getHeaderGroups().map((hg) => (
                         <tr key={hg.id} className="border-b border-[#1a1a2e]">
@@ -146,7 +163,6 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                 <th
                                     key={header.id}
                                     onClick={header.column.getToggleSortingHandler()}
-                                    style={{ width: header.getSize() }}
                                     className={cn(
                                         "table-th text-left select-none",
                                         header.column.getCanSort() && "cursor-pointer hover:text-[#aaaaaa]",
@@ -169,19 +185,6 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                     </span>
                                 </th>
                             ))}
-                            {/* Phantom spacer cell. With tableLayout: fixed every
-                                explicit-width column stays at its declared size; this
-                                width-less column absorbs all remaining pane width so
-                                hiding columns no longer leaves a blank gutter to the
-                                right of the table.
-
-                                Rendered as <td aria-hidden> rather than <th> per
-                                WCAG 1.3.1: empty <th> cells violate the "table
-                                headers must contain descriptive text" rule. <td>
-                                inside <thead> is valid HTML and carries no header
-                                semantics, which is exactly what we want for a
-                                pure layout filler. */}
-                            <td aria-hidden="true" />
                         </tr>
                     ))}
                 </thead>
@@ -211,7 +214,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                         }}
                                     >
                                         <td
-                                            colSpan={8}
+                                            colSpan={7}
                                             className="py-1 px-3 bg-[var(--surface-deepest)] border-y border-[#1a1a2e]"
                                         >
                                             <span className="text-[10px] font-bold uppercase tracking-widest text-[#666666]">

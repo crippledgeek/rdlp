@@ -5,6 +5,7 @@ import { useState, useCallback } from "react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronUp, ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabList, Tab, TabPanel } from "@/components/ui/tabs";
 import { uiStore, toggleBottomDrawer, setSelectedJob, setView } from "@/stores/uiStore";
 import { downloadsQueryOptions } from "@/api/downloads";
@@ -31,10 +32,11 @@ function JobsPanel({ jobs }: JobsPanelProps) {
     return (
         <div className="flex flex-col gap-1">
             {jobs.map((job) => (
-                <button
+                <Button
                     key={job.id}
-                    onClick={() => handleJobClick(job.id)}
-                    className="flex items-center gap-2 text-left w-full px-1 py-0.5 rounded-[3px] hover:bg-[#141428] transition-colors"
+                    variant="ghost"
+                    onPress={() => handleJobClick(job.id)}
+                    className="flex items-center gap-2 text-left w-full px-1 py-0.5 rounded-[3px] hover:bg-[#141428] transition-colors h-auto justify-start bg-transparent"
                 >
                     <span className="text-[11px] text-[#aaaaaa] truncate flex-1 min-w-0">
                         {job.playlist
@@ -47,7 +49,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                             {Math.round(job.progress)}%
                         </span>
                     )}
-                </button>
+                </Button>
             ))}
         </div>
     );
@@ -120,13 +122,15 @@ export function BottomDrawer() {
                 </div>
 
                 {/* Expand/collapse toggle */}
-                <button
-                    onClick={toggleBottomDrawer}
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onPress={toggleBottomDrawer}
                     aria-label={expanded ? "Collapse drawer" : "Expand drawer"}
-                    className="text-[#444444] hover:text-[#aaaaaa] transition-colors px-1"
+                    className="text-[#444444] hover:text-[#aaaaaa] transition-colors px-1 h-auto bg-transparent"
                 >
                     {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-                </button>
+                </Button>
             </div>
 
             {/* Panel content */}

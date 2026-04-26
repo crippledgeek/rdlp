@@ -1,11 +1,16 @@
 "use client"
 
-import { CheckIcon, MinusIcon } from "@radix-ui/react-icons"
+import { cva } from "class-variance-authority"
+import { Check, Minus } from "lucide-react"
 import {
   Checkbox as AriaCheckbox,
   CheckboxGroup as AriaCheckboxGroup,
-  CheckboxGroupProps as AriaCheckboxGroupProps,
-  ValidationResult as AriaValidationResult,
+  type CheckboxGroupProps as AriaCheckboxGroupProps,
+  FieldError as AriaFieldError,
+  type FieldErrorProps as AriaFieldErrorProps,
+  Label as AriaLabel,
+  type LabelProps as AriaLabelProps,
+  type ValidationResult as AriaValidationResult,
   composeRenderProps,
   Text,
   type CheckboxProps as AriaCheckboxProps,
@@ -13,7 +18,26 @@ import {
 
 import { cn } from "@/lib/utils"
 
-import { FieldError, Label, labelVariants } from "./field"
+const labelVariants = cva([
+  "text-sm font-medium leading-none",
+  /* Disabled */
+  "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-70",
+  /* Invalid */
+  "group-data-[invalid]:text-destructive",
+])
+
+const Label = ({ className, ...props }: AriaLabelProps) => (
+  <AriaLabel className={cn(labelVariants(), className)} {...props} />
+)
+
+function FieldError({ className, ...props }: AriaFieldErrorProps) {
+  return (
+    <AriaFieldError
+      className={cn("text-[0.8rem] font-medium text-destructive", className)}
+      {...props}
+    />
+  )
+}
 
 const CheckboxGroup = AriaCheckboxGroup
 
@@ -48,9 +72,9 @@ const Checkbox = ({ className, children, ...props }: AriaCheckboxProps) => (
           )}
         >
           {renderProps.isIndeterminate ? (
-            <MinusIcon className="size-4" />
+            <Minus className="size-4" />
           ) : renderProps.isSelected ? (
-            <CheckIcon className="size-4" />
+            <Check className="size-4" />
           ) : null}
         </div>
         {children}
@@ -59,20 +83,20 @@ const Checkbox = ({ className, children, ...props }: AriaCheckboxProps) => (
   </AriaCheckbox>
 )
 
-interface JollyCheckboxGroupProps extends AriaCheckboxGroupProps {
+interface PrismCheckboxGroupProps extends AriaCheckboxGroupProps {
   label?: string
   description?: string
   errorMessage?: string | ((validation: AriaValidationResult) => string)
 }
 
-function JollyCheckboxGroup({
+function PrismCheckboxGroup({
   label,
   description,
   errorMessage,
   className,
   children,
   ...props
-}: JollyCheckboxGroupProps) {
+}: PrismCheckboxGroupProps) {
   return (
     <CheckboxGroup
       className={composeRenderProps(className, (className) =>
@@ -96,5 +120,5 @@ function JollyCheckboxGroup({
   )
 }
 
-export { Checkbox, CheckboxGroup, JollyCheckboxGroup }
-export type { JollyCheckboxGroupProps }
+export { Checkbox, CheckboxGroup, PrismCheckboxGroup }
+export type { PrismCheckboxGroupProps }

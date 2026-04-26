@@ -1,16 +1,18 @@
+"use client"
+
 import * as React from "react"
-import { Cross2Icon } from "@radix-ui/react-icons"
+import { X } from "lucide-react"
 import { cva, type VariantProps } from "class-variance-authority"
 import {
   Button as AriaButton,
   Dialog as AriaDialog,
-  DialogProps as AriaDialogProps,
+  type DialogProps as AriaDialogProps,
   DialogTrigger as AriaDialogTrigger,
   Heading as AriaHeading,
-  HeadingProps as AriaHeadingProps,
+  type HeadingProps as AriaHeadingProps,
   Modal as AriaModal,
   ModalOverlay as AriaModalOverlay,
-  ModalOverlayProps as AriaModalOverlayProps,
+  type ModalOverlayProps as AriaModalOverlayProps,
   composeRenderProps,
 } from "react-aria-components"
 
@@ -102,7 +104,7 @@ const DialogContent = ({
               onPress={renderProps.close}
               className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity data-[disabled]:pointer-events-none data-[entering]:bg-accent data-[entering]:text-muted-foreground data-[hovered]:opacity-100 data-[focused]:outline-none data-[focused]:ring-2 data-[focused]:ring-ring data-[focused]:ring-offset-2"
             >
-              <Cross2Icon className="size-4" />
+              <X className="size-4" />
               <span className="sr-only">Close</span>
             </AriaButton>
           )}

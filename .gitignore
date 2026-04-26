@@ -68,3 +68,6 @@ crates/rdlp-desktop/dist/
 # Un-ignore TypeScript files in desktop frontend (*.ts above targets MPEG-TS video)
 !crates/rdlp-desktop/**/*.ts
 !crates/rdlp-desktop/**/*.tsx
+
+# superpowers brainstorm + plan scratch
+.superpowers/

@@ -20,7 +20,6 @@ import type { SortingState } from "@tanstack/react-table";
 import { searchStore } from "@/stores/searchStore";
 import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/api/search";
 import { setAnalyzeUrl } from "@/stores/uiStore";
-import { Thumbnail } from "@/components/Thumbnail";
 import { SearchFilterBar } from "./SearchFilterBar";
 import { searchResultColumns } from "./searchResultColumns";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,33 +72,29 @@ function SearchResultRow({
             className="border-b border-[#1a1a2e] hover:bg-[var(--surface-elevated)] cursor-pointer transition-colors"
             onClick={() => setAnalyzeUrl(row.original.video_url)}
         >
-            {/* Thumbnail */}
-            <td className="w-[72px] px-2 py-1.5">
-                <div className="w-16 h-9 rounded-[3px] overflow-hidden bg-[var(--surface-elevated)] relative">
-                    <Thumbnail
-                        src={row.original.thumbnail_url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                    />
-                    {row.original.duration != null && (
-                        <span className="absolute bottom-0.5 right-0.5 bg-black/80 text-white text-[9px] px-1 rounded-[2px] font-mono">
-                            {Math.floor(row.original.duration / 60)}:{String(row.original.duration % 60).padStart(2, "0")}
-                        </span>
-                    )}
-                </div>
-            </td>
-            {/* Data columns — uploader cell uses the enriched value when present.
-                While enrichment is in flight (isFetching=true and the row was
-                missing an uploader to begin with), the cell pulses so the
-                lazy-load behaviour is visible to the user. */}
+            {/* Data columns — the leftmost cell is the thumbnail (special-cased
+                to preserve its container styling). The uploader cell uses the
+                enriched value when present; while enrichment is in flight
+                (isFetching=true and the row was missing an uploader to begin
+                with), the cell pulses so the lazy-load behaviour is visible
+                to the user. */}
             {row.getVisibleCells().map((cell) => {
+                if (cell.column.id === "thumbnail") {
+                    return (
+                        <td
+                            key={cell.id}
+                            className="min-w-[72px] px-2 py-1.5"
+                        >
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                    );
+                }
                 if (cell.column.id === "uploader") {
                     if (merged.uploader != null) {
                         return (
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
-                                style={{ width: cell.column.getSize() }}
                             >
                                 {merged.uploader}
                             </td>
@@ -110,7 +105,6 @@ function SearchResultRow({
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5"
-                                style={{ width: cell.column.getSize() }}
                             >
                                 <span className="inline-block h-3 w-20 rounded-[3px] bg-[var(--surface-elevated)] animate-pulse" />
                             </td>
@@ -127,7 +121,6 @@ function SearchResultRow({
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5 text-[12px] text-[#555555] truncate italic"
-                                style={{ width: cell.column.getSize() }}
                                 title="Video page has no studio or creator attribution"
                             >
                                 —
@@ -147,8 +140,6 @@ function SearchResultRow({
                     </td>
                 );
             })}
-            {/* Phantom spacer matching SearchResults' trailing <th>. */}
-            <td aria-hidden="true" />
         </tr>
     );
 }
@@ -207,6 +198,16 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
     });
+
+    // Compute percentage widths from visible columns' TanStack `size` totals.
+    // Per CSS 2.2 §17.5.2.1, percentage widths on <col> under
+    // table-layout: fixed are interpreted relative to the table's outer
+    // width, so columns scale to fill 100% while preserving the relative
+    // proportions declared in searchResultColumns.tsx. The `|| 1` guard
+    // handles the zero-column edge case (e.g. before any data has loaded).
+    const visibleHeaders = table.getHeaderGroups()[0]?.headers ?? [];
+    const totalSize =
+        visibleHeaders.reduce((sum, h) => sum + h.getSize(), 0) || 1;
 
     const filterBar = <SearchFilterBar />;
 
@@ -269,44 +270,61 @@ export function SearchResults({ query, site }: SearchResultsProps) {
 
             {/* Table */}
             <div className="flex-1 overflow-y-auto overflow-x-auto">
-                <table className="w-full min-w-[652px]" style={{ tableLayout: "fixed" }}>
+                <table
+                    className="w-full min-w-[652px]"
+                    style={{ tableLayout: "fixed" }}
+                >
+                    <colgroup>
+                        {visibleHeaders.map((h) => (
+                            <col
+                                key={h.id}
+                                style={{
+                                    width: `${(h.getSize() / totalSize) * 100}%`,
+                                }}
+                            />
+                        ))}
+                    </colgroup>
                     <thead className="sticky top-0 bg-[var(--surface-deepest)] z-10">
                         {table.getHeaderGroups().map((headerGroup) => (
                             <tr key={headerGroup.id}>
-                                {/* Thumbnail column header (non-sortable) */}
-                                <th className="w-[72px] px-2 py-1.5" />
                                 {headerGroup.headers.map((header) => {
+                                    const canSort = header.column.getCanSort();
                                     const sorted = header.column.getIsSorted();
+                                    const isThumbnail = header.id === "thumbnail";
+                                    const baseClass =
+                                        "text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none transition-colors";
+                                    const className = [
+                                        baseClass,
+                                        isThumbnail ? "min-w-[72px]" : "",
+                                        canSort ? "cursor-pointer hover:text-[#888888]" : "",
+                                    ]
+                                        .filter(Boolean)
+                                        .join(" ");
                                     return (
                                         <th
                                             key={header.id}
-                                            className="text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none cursor-pointer hover:text-[#888888] transition-colors"
-                                            style={{ width: header.getSize() }}
-                                            onClick={header.column.getToggleSortingHandler()}
+                                            className={className}
+                                            onClick={
+                                                canSort
+                                                    ? header.column.getToggleSortingHandler()
+                                                    : undefined
+                                            }
                                         >
                                             <span className="flex items-center gap-1">
                                                 {flexRender(header.column.columnDef.header, header.getContext())}
-                                                {sorted === "asc" ? (
-                                                    <ArrowUp className="w-3 h-3 text-[#4a9eff]" />
-                                                ) : sorted === "desc" ? (
-                                                    <ArrowDown className="w-3 h-3 text-[#4a9eff]" />
-                                                ) : (
-                                                    <ArrowUpDown className="w-3 h-3 opacity-30" />
+                                                {canSort && (
+                                                    sorted === "asc" ? (
+                                                        <ArrowUp className="w-3 h-3 text-[#4a9eff]" />
+                                                    ) : sorted === "desc" ? (
+                                                        <ArrowDown className="w-3 h-3 text-[#4a9eff]" />
+                                                    ) : (
+                                                        <ArrowUpDown className="w-3 h-3 opacity-30" />
+                                                    )
                                                 )}
                                             </span>
                                         </th>
                                     );
                                 })}
-                                {/* Phantom spacer cell. With tableLayout: fixed
-                                    every explicit-width column stays at its declared
-                                    size; this width-less column absorbs all remaining
-                                    pane width so hiding optional columns no longer
-                                    leaves a blank gutter to the right of the table.
-                                    Rendered as <td aria-hidden> rather than <th>
-                                    per WCAG 1.3.1 (empty <th> cells must carry a
-                                    descriptive label; <td> inside <thead> is valid
-                                    and carries no header semantics). */}
-                                <td aria-hidden="true" />
                             </tr>
                         ))}
                     </thead>
