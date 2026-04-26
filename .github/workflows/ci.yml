@@ -61,9 +61,10 @@ jobs:
             libswresample-dev \
             cmake \
             perl \
-            pkg-config \
             libclang-dev \
             musl-tools
+        # Note: pkg-config dropped — runner's preinstalled pkgconf provides
+        # the same interface and Breaks pkg-config (>= 0.29-1) via apt.
 
       - name: Install NASM (Windows)
         if: matrix.platform == 'windows-latest'
@@ -79,13 +80,18 @@ jobs:
         uses: actions/cache@v5
         with:
           path: C:\ffmpeg
-          key: ffmpeg-win64-shared-7
+          # Pinned to a specific FFmpeg 8.0 build because ffmpeg-sys-the-third
+          # v4.1.0+ffmpeg-8.0 declares 8.0 bindings; FFmpeg 8.1 headers
+          # crash clang/bindgen on Windows (STATUS_ACCESS_VIOLATION).
+          # Bump key whenever the FFmpeg version below changes.
+          key: ffmpeg-win64-shared-8.0
 
       - name: Download FFmpeg shared build (Windows)
         if: matrix.platform == 'windows-latest' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z" -OutFile ffmpeg.7z
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-full_build-shared.7z"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
           7z x ffmpeg.7z -oC:\ffmpeg
 
       - name: Set FFmpeg environment (Windows)

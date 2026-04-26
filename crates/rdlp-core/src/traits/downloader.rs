@@ -231,11 +231,11 @@ impl DownloadProgress {
 
         let eta = if speed > 1.0 && total_segments > 0 {
             let remaining_segments = total_segments.saturating_sub(segments_downloaded);
-            let avg_segment_size = if segments_downloaded > 0 {
-                bytes_downloaded / segments_downloaded
-            } else {
-                2 * 1024 * 1024 // Default 2MB estimate
-            };
+            // Default 2MB estimate when no segments have completed yet.
+            // checked_div + unwrap_or matches clippy::manual_checked_ops (Rust 1.95+).
+            let avg_segment_size = bytes_downloaded
+                .checked_div(segments_downloaded)
+                .unwrap_or(2 * 1024 * 1024);
             let remaining_bytes = remaining_segments * avg_segment_size;
             let secs = remaining_bytes as f64 / speed;
             if secs <= 86_400.0 {
