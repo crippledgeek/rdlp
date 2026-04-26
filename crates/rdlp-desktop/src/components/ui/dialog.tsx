@@ -4,13 +4,13 @@ import { cva, type VariantProps } from "class-variance-authority"
 import {
   Button as AriaButton,
   Dialog as AriaDialog,
-  DialogProps as AriaDialogProps,
+  type DialogProps as AriaDialogProps,
   DialogTrigger as AriaDialogTrigger,
   Heading as AriaHeading,
-  HeadingProps as AriaHeadingProps,
+  type HeadingProps as AriaHeadingProps,
   Modal as AriaModal,
   ModalOverlay as AriaModalOverlay,
-  ModalOverlayProps as AriaModalOverlayProps,
+  type ModalOverlayProps as AriaModalOverlayProps,
   composeRenderProps,
 } from "react-aria-components"
 

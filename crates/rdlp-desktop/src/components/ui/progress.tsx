@@ -3,9 +3,9 @@
 import { cva } from "class-variance-authority"
 import {
   Label as AriaLabel,
-  LabelProps as AriaLabelProps,
+  type LabelProps as AriaLabelProps,
   ProgressBar as AriaProgressBar,
-  ProgressBarProps as AriaProgressBarProps,
+  type ProgressBarProps as AriaProgressBarProps,
   composeRenderProps,
 } from "react-aria-components"
 
