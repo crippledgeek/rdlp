@@ -3,5 +3,11 @@
 #
 # Format: <canonical name> <canonical email> <alias name> <alias email>
 # (alias name is optional; if omitted, only the email matches)
+#
+# Canonical identity uses the ID-prefixed @users.noreply.github.com format
+# (see https://docs.github.com/en/account-and-profile/reference/email-addresses-reference)
+# because it embeds the permanent GitHub user ID and survives username
+# renames. The legacy username-only format would orphan commits on rename.
 
-Mattias Carlsson <crippledgeek@users.noreply.github.com> <mattias.carlsson01@gmail.com>
+Mattias Carlsson <19933050+crippledgeek@users.noreply.github.com> <mattias.carlsson01@gmail.com>
+Mattias Carlsson <19933050+crippledgeek@users.noreply.github.com> <crippledgeek@users.noreply.github.com>
