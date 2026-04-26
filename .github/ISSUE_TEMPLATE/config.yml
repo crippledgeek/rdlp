@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / Discussion
+    url: https://github.com/crippledgeek/rdlp/discussions
+    about: For usage questions, design discussion, or anything not a bug or feature request.

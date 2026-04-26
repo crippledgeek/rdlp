@@ -1,0 +1,54 @@
+name: New site extractor
+description: Request support for a new video site.
+labels: ["extractor", "site-request", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding a new extractor is one of the most welcome contributions. Before requesting, please check:
+
+        - The site's Terms of Service permit programmatic access to the content you want.
+        - There's no jurisdiction-specific reason rdlp shouldn't support it.
+
+        If you're willing to **write the extractor yourself**, see [`CONTRIBUTING.md` → Authoring with `rdlp-probe`](../../CONTRIBUTING.md#authoring-workflow-with-rdlp-probe) for the canonical contributor workflow.
+  - type: input
+    id: site
+    attributes:
+      label: Site name
+      description: Name of the site as commonly known (e.g. "ExampleTube").
+    validations:
+      required: true
+  - type: input
+    id: example-url
+    attributes:
+      label: Example video URL
+      description: A URL pattern showing what content rdlp should be able to extract. Anonymise the path if needed.
+      placeholder: https://www.example.com/video/<id>/
+    validations:
+      required: true
+  - type: textarea
+    id: features
+    attributes:
+      label: What metadata / formats does the site expose?
+      description: Resolution range (240p–1080p?), DRM (Widevine?), HLS or DASH or progressive MP4, paywall, login required, age gate.
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Estimated difficulty
+      options:
+        - Easy (static HTML, no auth, no JS challenge)
+        - Medium (some JS execution, cookie handling)
+        - Hard (Cloudflare-fronted, JS challenge, paywall)
+        - Unknown
+  - type: textarea
+    id: prior-art
+    attributes:
+      label: Prior art
+      description: Does yt-dlp / streamlink / another tool support this site? Link to their extractor if so — useful reference.
+  - type: checkboxes
+    id: tos
+    attributes:
+      label: Legal acknowledgment
+      options:
+        - label: I have reviewed the site's Terms of Service and the requested extractor would not facilitate access to content the user isn't already authorised to view.
+          required: true

@@ -1,0 +1,65 @@
+name: Bug report
+description: Something isn't working as documented.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more detail you provide, the faster we can fix it.
+
+        **Before opening:** search [existing issues](https://github.com/crippledgeek/rdlp/issues?q=is%3Aissue) — your bug may already be tracked.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug. What did you expect? What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or actions. Include the URL pattern (you can anonymise the path) if a site extractor is involved.
+      placeholder: |
+        1. `rdlp --browser=chrome-latest "https://example.com/video/<id>"`
+        2. Observe error / wrong output
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Verbose log output
+      description: Run with `-v` (or set `RUST_LOG=debug`) and paste the relevant output.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: rdlp version
+      description: Output of `rdlp --version`, or the commit SHA if built from source.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust toolchain (if built from source)
+      description: Output of `rustc --version`. Skip if you're using a pre-built binary.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and this bug isn't already reported
+          required: true
+        - label: I'm using the latest release (or HEAD of `develop`)
+          required: true

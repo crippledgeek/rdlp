@@ -1,0 +1,7 @@
+# Map alternate email addresses to the canonical author identity.
+# See https://git-scm.com/docs/gitmailmap
+#
+# Format: <canonical name> <canonical email> <alias name> <alias email>
+# (alias name is optional; if omitted, only the email matches)
+
+Mattias Carlsson <crippledgeek@users.noreply.github.com> <mattias.carlsson01@gmail.com>
