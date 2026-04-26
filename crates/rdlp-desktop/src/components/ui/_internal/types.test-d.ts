@@ -12,7 +12,7 @@
  * this file.
  */
 import { describe, test, expectTypeOf, assertType } from "vitest"
-import type { Branded, LiteralUnion, Handlers } from "./types"
+import type { Branded, LiteralUnion, Handlers, WithUndefined } from "./types"
 
 type ToastKey = Branded<string, "PrismToast">
 
@@ -50,5 +50,21 @@ describe("Prism _internal type utilities", () => {
       onClose?: () => void
       onFocusOut?: () => void
     }>()
+  })
+
+  test("WithUndefined — widens selected optional keys to accept undefined explicitly", () => {
+    interface Strict { items?: string[]; textValue?: string; other?: number }
+    type Widened = WithUndefined<Strict, "items" | "textValue">
+
+    // Widened keys accept explicit undefined
+    assertType<Widened>({ items: undefined, textValue: undefined })
+    assertType<Widened>({ items: ["a"], textValue: "x" })
+    assertType<Widened>({})
+
+    // Non-widened keys keep their strict shape
+    expectTypeOf<Widened["other"]>().toEqualTypeOf<number | undefined>() // optional inherits | undefined from T[P]
+    // ^ note: under exactOptionalPropertyTypes, `other?: number` inferred via Omit<T, K>
+    //   keeps the original strict shape — assertType<Widened>({ other: undefined })
+    //   would still fail compile-time, which is the desired behavior.
   })
 })

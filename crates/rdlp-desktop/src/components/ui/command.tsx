@@ -35,7 +35,7 @@ function CommandInput({ placeholder, className }: { placeholder?: string; classN
     <AriaSearchField className="flex items-center border-b px-3" aria-label="Search">
       <Search aria-hidden="true" className="mr-2 size-4 shrink-0 opacity-50" />
       <AriaInput
-        placeholder={placeholder}
+        {...(placeholder !== undefined && { placeholder })}
         className={cn(
           "flex h-11 w-full bg-transparent py-3 text-sm outline-none",
           "placeholder:text-muted-foreground",

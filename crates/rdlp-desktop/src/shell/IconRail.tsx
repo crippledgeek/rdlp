@@ -2,6 +2,7 @@
 // Active icon has 2px blue left edge indicator + tinted background.
 
 import { Search, ArrowDownToLine, Clock, Settings } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { uiStore, setView } from "@/stores/uiStore";
@@ -12,7 +13,7 @@ import { TooltipTrigger } from "react-aria-components";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 
-const NAV_ITEMS: { id: AppView; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
+const NAV_ITEMS: { id: AppView; icon: LucideIcon; label: string }[] = [
     { id: "analyze", icon: Search, label: "Analyze (Ctrl+1)" },
     { id: "queue", icon: ArrowDownToLine, label: "Queue (Ctrl+2)" },
     { id: "history", icon: Clock, label: "History (Ctrl+3)" },
@@ -42,7 +43,7 @@ export function IconRail() {
                             size="icon"
                             onPress={() => setView(id)}
                             aria-label={label}
-                            aria-current={isActive ? "page" : undefined}
+                            {...(isActive && { "aria-current": "page" as const })}
                             className={cn(
                                 "relative flex items-center justify-center w-10 h-10 rounded-[6px] my-0.5 transition-colors",
                                 isActive

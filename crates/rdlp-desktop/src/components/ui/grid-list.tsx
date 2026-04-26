@@ -13,6 +13,8 @@ import {
 import { cn } from "@/lib/utils"
 import { Checkbox } from "@/components/ui/checkbox"
 
+import type { WithUndefined } from "./_internal/types"
+
 export function GridList<T extends object>({
   children,
   ...props
@@ -37,12 +39,14 @@ export function GridList<T extends object>({
 export function GridListItem({
   children,
   className,
+  textValue: textValueProp,
   ...props
-}: AriaGridListItemProps) {
-  let textValue = typeof children === "string" ? children : undefined
+}: WithUndefined<AriaGridListItemProps, "textValue">) {
+  let textValue =
+    textValueProp ?? (typeof children === "string" ? children : undefined)
   return (
     <AriaGridListItem
-      textValue={textValue}
+      {...(textValue !== undefined && { textValue })}
       className={composeRenderProps(className, (className) =>
         cn(
           "jolly-GridListItem relative flex w-full cursor-default select-none items-center gap-3 rounded-sm px-2 py-1.5 text-sm outline-none",
