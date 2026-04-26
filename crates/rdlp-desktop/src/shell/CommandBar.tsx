@@ -14,6 +14,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 
 const NONE_SENTINEL = "none";
 import { uiStore, setView, setAnalyzeUrl } from "@/stores/uiStore";
@@ -164,15 +165,15 @@ export function CommandBar() {
 
                 {/* Clear button */}
                 {displayValue && (
-                    <button
+                    <Button
                         type="button"
-                        onClick={clearInput}
+                        onPress={clearInput}
                         aria-label="Clear input"
-                        className="text-[#444444] hover:text-[#aaaaaa] transition-colors"
+                        className="text-[#444444] hover:text-[#aaaaaa] transition-colors h-auto bg-transparent p-0"
                         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
                     >
                         <X className="w-3.5 h-3.5" />
-                    </button>
+                    </Button>
                 )}
 
                 {/* Action hint */}

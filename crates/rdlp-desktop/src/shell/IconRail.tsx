@@ -9,6 +9,7 @@ import { downloadsQueryOptions } from "@/api/downloads";
 import { cn } from "@/lib/utils";
 import type { AppView } from "@/types";
 import { TooltipTrigger } from "react-aria-components";
+import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 
 const NAV_ITEMS: { id: AppView; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
@@ -36,8 +37,8 @@ export function IconRail() {
                 const isActive = activeView === id;
                 return (
                     <TooltipTrigger key={id} delay={600}>
-                        <button
-                            onClick={() => setView(id)}
+                        <Button
+                            onPress={() => setView(id)}
                             aria-label={label}
                             aria-current={isActive ? "page" : undefined}
                             className={cn(
@@ -58,7 +59,7 @@ export function IconRail() {
                                     {activeCount > 9 ? "9+" : activeCount}
                                 </span>
                             )}
-                        </button>
+                        </Button>
                         <Tooltip placement="right">{label.split(" (")[0]}</Tooltip>
                     </TooltipTrigger>
                 );

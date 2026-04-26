@@ -14,7 +14,9 @@ import { formatsQueryOptions } from "@/api/formats";
 import { settingsQueryOptions, pickDirectory } from "@/api/settings";
 import { startDownload } from "@/api/downloads";
 import { StreamBadge } from "@/components/StreamBadge";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
     Select,
     SelectItem,
@@ -258,7 +260,7 @@ export function DownloadConfig() {
                 <form.Field name="outputPath">
                     {(field) => (
                         <div className="flex items-center gap-1">
-                            <input
+                            <Input
                                 type="text"
                                 value={field.state.value || settings?.output_dir || ""}
                                 onBlur={field.handleBlur}
@@ -266,9 +268,10 @@ export function DownloadConfig() {
                                 placeholder="Default output directory"
                                 className="flex-1 min-w-0 px-2 py-1 rounded-[4px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[11px] text-[#aaaaaa] placeholder:text-[#444444] outline-none focus:border-[#4a9eff]"
                             />
-                            <button
+                            <Button
                                 type="button"
-                                onClick={async () => {
+                                variant="ghost"
+                                onPress={async () => {
                                     const dir = await pickDirectory();
                                     if (dir) field.handleChange(dir);
                                 }}
@@ -276,7 +279,7 @@ export function DownloadConfig() {
                                 aria-label="Browse for output directory"
                             >
                                 <FolderOpen className="w-3.5 h-3.5" />
-                            </button>
+                            </Button>
                         </div>
                     )}
                 </form.Field>
@@ -529,9 +532,9 @@ export function DownloadConfig() {
 
             {/* Download actions */}
             <section className="p-3 border-t border-[#1a1a2e]">
-                <button
+                <Button
                     type="submit"
-                    disabled={!hasSelection || isSubmitting}
+                    isDisabled={!hasSelection || isSubmitting}
                     className={cn(
                         "w-full flex items-center justify-center gap-2 py-2 rounded-[6px] text-[13px] font-medium transition-colors",
                         hasSelection && !isSubmitting
@@ -541,7 +544,7 @@ export function DownloadConfig() {
                 >
                     <Download className="w-4 h-4" />
                     {isSubmitting ? "Starting…" : "Download"}
-                </button>
+                </Button>
             </section>
         </form>
     );
