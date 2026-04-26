@@ -27,6 +27,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "erasableSyntaxOnly": true,
     "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
