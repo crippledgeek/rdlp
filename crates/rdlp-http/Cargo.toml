@@ -13,6 +13,14 @@ wreq-util = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+# `prefix-symbols` is documented Linux/Android-only by wreq upstream; on
+# macOS it emits a broken `build_script_main_*` mangling that breaks the
+# link. Only enable it (and the explicit openssl-sys dep that pairs with
+# it for the FFmpeg-OpenSSL coexistence story) where it actually works.
+[target.'cfg(target_os = "linux")'.dependencies]
+wreq = { workspace = true, features = ["prefix-symbols"] }
+openssl-sys = "0.9"
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

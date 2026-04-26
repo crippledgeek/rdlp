@@ -53,6 +53,12 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: brew install ffmpeg
 
+      - name: Activate MSVC dev environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        # See ci.yml for rationale. Required for ffmpeg-sys-the-third's
+        # bindgen build script on Windows.
+
       - name: Cache FFmpeg (Windows)
         if: matrix.platform == 'windows-latest'
         id: ffmpeg-cache
