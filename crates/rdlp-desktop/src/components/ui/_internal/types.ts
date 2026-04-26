@@ -46,3 +46,35 @@ export type LiteralUnion<T extends string> = T | (string & {})
 export type Handlers<Events extends string> = {
   [E in Events as `on${Capitalize<E>}`]?: () => void
 }
+
+/**
+ * Widens selected optional keys of T to also accept `undefined` explicitly,
+ * restoring pre-`exactOptionalPropertyTypes` semantics for those keys only.
+ *
+ * Mirrors the inverse of `type-fest`'s `SetNonNullable<T, K>`. Useful at
+ * Prism wrapper boundaries when forwarding to upstream `react-aria-components`
+ * primitives whose interfaces use `prop?: T` rather than `prop?: T | undefined`
+ * (see adobe/react-spectrum#8717 — Adobe has not committed to fixing upstream).
+ *
+ * Pair with conditional spread inside the wrapper to bridge the widened
+ * wrapper signature back to the strict RAC signature:
+ *
+ * @example
+ *   type PrismSelectProps<T extends object> = WithUndefined<
+ *     AriaSelectProps<T>,
+ *     "items" | "textValue"
+ *   >
+ *
+ *   function PrismSelect<T extends object>({ items, textValue, ...rest }: PrismSelectProps<T>) {
+ *     return (
+ *       <AriaSelect
+ *         {...rest}
+ *         {...(items !== undefined && { items })}
+ *         {...(textValue !== undefined && { textValue })}
+ *       />
+ *     )
+ *   }
+ */
+export type WithUndefined<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]?: T[P] | undefined
+}

@@ -26,8 +26,8 @@ export type ToastSeverity = LiteralUnion<"info" | "success" | "warning" | "error
 
 interface ToastContent {
   title: string
-  description?: string
-  severity?: ToastSeverity
+  description?: string | undefined
+  severity?: ToastSeverity | undefined
 }
 
 /** Singleton queue. Imported once at app root via <ToastRegion />. */
@@ -65,7 +65,7 @@ function ToastRegion() {
   )
 }
 
-function SeverityIcon({ severity }: { severity?: ToastSeverity }) {
+function SeverityIcon({ severity }: { severity?: ToastSeverity | undefined }) {
   switch (severity) {
     case "success":
       return <CircleCheck aria-hidden="true" className="size-5 text-green-500" />

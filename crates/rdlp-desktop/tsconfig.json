@@ -28,6 +28,7 @@
     "erasableSyntaxOnly": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,
+    "exactOptionalPropertyTypes": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]

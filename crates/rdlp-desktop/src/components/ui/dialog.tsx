@@ -68,9 +68,9 @@ const DialogOverlay = ({
 interface DialogContentProps
   extends Omit<React.ComponentProps<typeof AriaModal>, "children">,
     VariantProps<typeof sheetVariants> {
-  children?: AriaDialogProps["children"]
-  role?: AriaDialogProps["role"]
-  closeButton?: boolean
+  children?: AriaDialogProps["children"] | undefined
+  role?: AriaDialogProps["role"] | undefined
+  closeButton?: boolean | undefined
 }
 
 const DialogContent = ({
@@ -93,7 +93,7 @@ const DialogContent = ({
     {...props}
   >
     <AriaDialog
-      role={role}
+      {...(role !== undefined && { role })}
       className={cn(!side && "grid h-full gap-4", "h-full outline-none")}
     >
       {composeRenderProps(children, (children, renderProps) => (
