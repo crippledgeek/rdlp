@@ -2,65 +2,54 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
+import type { LiteralUnion } from "./_internal/types"
 
 const alertVariants = cva(
-  "relative w-full rounded-lg border px-4 py-3 text-sm grid has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] grid-cols-[0_1fr] has-[>svg]:gap-x-3 gap-y-0.5 items-start [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
+  [
+    "relative w-full rounded-lg border px-4 py-3 text-sm",
+    "[&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground",
+    "[&>svg~*]:pl-7",
+  ],
   {
     variants: {
       variant: {
-        default: "bg-card text-card-foreground",
-        destructive:
-          "text-destructive bg-card [&>svg]:text-current *:data-[slot=alert-description]:text-destructive/90",
+        default: "bg-background text-foreground",
+        destructive: "border-destructive/50 text-destructive [&>svg]:text-destructive",
+        warning: "border-yellow-500/50 text-yellow-600 [&>svg]:text-yellow-600",
+        success: "border-green-500/50 text-green-600 [&>svg]:text-green-600",
       },
     },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
+    defaultVariants: { variant: "default" },
+  },
 )
 
-function Alert({
-  className,
-  variant,
-  ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
+interface AlertProps
+  extends React.ComponentProps<"div">,
+    Omit<VariantProps<typeof alertVariants>, "variant"> {
+  variant?: LiteralUnion<"default" | "destructive" | "warning" | "success">
+}
+
+function Alert({ className, variant, ...props }: AlertProps) {
   return (
     <div
-      data-slot="alert"
       role="alert"
-      className={cn(alertVariants({ variant }), className)}
-      {...props}
-    />
-  )
-}
-
-function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-title"
+      aria-live={variant === "destructive" ? "assertive" : "polite"}
       className={cn(
-        "col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight",
-        className
+        alertVariants({ variant: variant as VariantProps<typeof alertVariants>["variant"] }),
+        className,
       )}
       {...props}
     />
   )
 }
 
-function AlertDescription({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="alert-description"
-      className={cn(
-        "text-muted-foreground col-start-2 grid justify-items-start gap-1 text-sm [&_p]:leading-relaxed",
-        className
-      )}
-      {...props}
-    />
-  )
+function AlertTitle({ className, ...props }: React.ComponentProps<"h5">) {
+  return <h5 className={cn("mb-1 font-medium leading-none tracking-tight", className)} {...props} />
 }
 
-export { Alert, AlertTitle, AlertDescription }
+function AlertDescription({ className, ...props }: React.ComponentProps<"div">) {
+  return <div className={cn("text-sm [&_p]:leading-relaxed", className)} {...props} />
+}
+
+export { Alert, AlertTitle, AlertDescription, alertVariants }
+export type { AlertProps }
