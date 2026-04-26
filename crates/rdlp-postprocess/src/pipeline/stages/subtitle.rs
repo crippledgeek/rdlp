@@ -66,10 +66,7 @@ impl SubtitleStage {
     ///
     /// Uses `tokio::fs::read_dir` so the async runtime thread isn't stalled
     /// by blocking directory-scan syscalls on slow / network filesystems.
-    async fn find_subtitle_files(
-        media_file: &Path,
-        original_stem: &str,
-    ) -> Vec<(String, PathBuf)> {
+    async fn find_subtitle_files(media_file: &Path, original_stem: &str) -> Vec<(String, PathBuf)> {
         let Some(parent) = media_file.parent() else {
             return Vec::new();
         };

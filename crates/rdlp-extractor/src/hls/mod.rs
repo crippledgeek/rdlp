@@ -252,10 +252,7 @@ mod tests {
         assert_eq!(a.audio_group_id.as_deref(), Some("aac"));
         assert_eq!(a.rendition_name.as_deref(), Some("Stereo"));
         assert!(a.resolution.is_none());
-        assert_eq!(
-            a.media_playlist_url,
-            "https://cdn.example.com/p/audio.m3u8"
-        );
+        assert_eq!(a.media_playlist_url, "https://cdn.example.com/p/audio.m3u8");
     }
 
     /// Masters without EXT-X-MEDIA (typical XVideos / XNXX / older

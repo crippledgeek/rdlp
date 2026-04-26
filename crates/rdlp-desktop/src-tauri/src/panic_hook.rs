@@ -33,9 +33,7 @@ pub fn install_panic_hook() {
             .unwrap_or_else(|| "<unknown>".into());
         let payload = panic_payload_str(info.payload());
 
-        log::error!(
-            "Tauri app panicked at {location}: {payload}\nbacktrace:\n{backtrace}"
-        );
+        log::error!("Tauri app panicked at {location}: {payload}\nbacktrace:\n{backtrace}");
 
         prev_hook(info);
     }));

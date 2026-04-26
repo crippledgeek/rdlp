@@ -153,8 +153,7 @@ mod tests {
         // Amateur uploads render the profile link with leading icon SVG +
         // <span class="name"> + chevron SVG instead of plain text. Captured
         // 2026-04-26 from /a4fcc/video/porn (uploader: shocker4).
-        const AMATEUR_PAGE: &str =
-            include_str!("tests/spankbang_video_page_amateur.html");
+        const AMATEUR_PAGE: &str = include_str!("tests/spankbang_video_page_amateur.html");
         let m = parse(AMATEUR_PAGE);
         assert_eq!(
             m.uploader.as_deref(),
@@ -171,8 +170,7 @@ mod tests {
         // and /profile/. Captured 2026-04-26 from
         // /a4eth/video/petite+with+shaved+pussy+and+stepdad+hardcore+xxx
         // (creator: Oopsfamily, URL /knp9/creator/oopsfamily/).
-        const CREATOR: &str =
-            include_str!("tests/spankbang_video_page_creator.html");
+        const CREATOR: &str = include_str!("tests/spankbang_video_page_creator.html");
         let m = parse(CREATOR);
         assert_eq!(
             m.uploader.as_deref(),
@@ -188,8 +186,7 @@ mod tests {
         // Captured 2026-04-26 from /6ydqv/video/jodi+bj — uploader slug is
         // `coutinho.vasconcelos61` (dot + digits). Locks the regression
         // where `[a-z0-9_-]+` rejected the period.
-        const DOTTED: &str =
-            include_str!("tests/spankbang_video_page_dotted_user.html");
+        const DOTTED: &str = include_str!("tests/spankbang_video_page_dotted_user.html");
         let m = parse(DOTTED);
         assert_eq!(
             m.uploader_id.as_deref(),
@@ -238,9 +235,7 @@ mod tests {
         // No tag string should be empty or the "Exclusive" badge label.
         assert!(m.tags.iter().all(|t| !t.is_empty()));
         assert!(
-            m.tags
-                .iter()
-                .all(|t| !t.eq_ignore_ascii_case("exclusive")),
+            m.tags.iter().all(|t| !t.eq_ignore_ascii_case("exclusive")),
             "Exclusive promo badge must be filtered out"
         );
     }

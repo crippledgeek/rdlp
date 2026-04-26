@@ -11,9 +11,9 @@
 //! Reference: yt-dlp `yt_dlp/extractor/spankbang.py` — uses `impersonate=True`
 //! for the equivalent calls.
 
-mod patterns;
 mod formats;
 mod metadata;
+mod patterns;
 mod search;
 
 use async_trait::async_trait;
@@ -71,13 +71,14 @@ impl SpankBangExtractor {
             });
         }
 
-        resp.json::<Value>().await.map_err(|e| RdlpError::Extraction {
-            message: format!("SpankBang formats API JSON parse failed: {e:#}"),
-            url: Some(FORMATS_API_URL.to_string()),
-        })
+        resp.json::<Value>()
+            .await
+            .map_err(|e| RdlpError::Extraction {
+                message: format!("SpankBang formats API JSON parse failed: {e:#}"),
+                url: Some(FORMATS_API_URL.to_string()),
+            })
     }
 }
-
 
 #[async_trait]
 impl InfoExtractor for SpankBangExtractor {
@@ -98,11 +99,10 @@ impl InfoExtractor for SpankBangExtractor {
     }
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
-        let video_id =
-            patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
-                message: format!("SpankBang: could not extract video ID from URL: {url}"),
-                url: Some(url.to_string()),
-            })?;
+        let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
+            message: format!("SpankBang: could not extract video ID from URL: {url}"),
+            url: Some(url.to_string()),
+        })?;
 
         // Playlist URLs match VIDEO_URL but require a different fetch path
         // (anchor scrape, not stream_data parse). Surface a clear error
@@ -119,12 +119,9 @@ impl InfoExtractor for SpankBangExtractor {
         debug!("[spankbang] fetching video page id={video_id}");
 
         // SpankBang gates some content by country; matches yt-dlp's default.
-        let webpage = BaseExtractor::fetch_webpage_with_headers(
-            &canonical,
-            &[("Cookie", "country=US")],
-            ctx,
-        )
-        .await?;
+        let webpage =
+            BaseExtractor::fetch_webpage_with_headers(&canonical, &[("Cookie", "country=US")], ctx)
+                .await?;
 
         if metadata::is_removed(&webpage) {
             return Err(RdlpError::Extraction {
@@ -137,7 +134,10 @@ impl InfoExtractor for SpankBangExtractor {
         let mut formats: Vec<Format> = Vec::new();
         if let Some(data) = formats::parse_inline_stream_data(&webpage) {
             formats = formats::build_formats(&data);
-            debug!("[spankbang] inline stream_data produced {} formats", formats.len());
+            debug!(
+                "[spankbang] inline stream_data produced {} formats",
+                formats.len()
+            );
         }
 
         if formats.is_empty() {
@@ -210,5 +210,4 @@ mod tests {
         let ext = SpankBangExtractor::new();
         assert_eq!(ext.name(), "SpankBang");
     }
-
 }

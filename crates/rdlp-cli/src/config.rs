@@ -6,8 +6,8 @@
 
 use anyhow::{Context, Result};
 use rdlp_api::{
-    AudioFormat, BrowserEmulation, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode,
-    SubtitleFormat, config_io,
+    AudioFormat, BrowserEmulation, BrowserType, Config, ContainerFormat, FixupPolicy,
+    RecodeAudioMode, SubtitleFormat, config_io,
 };
 
 use crate::args::Args;

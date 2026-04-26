@@ -376,8 +376,8 @@ fn test_parse_extension_webm() {
 #[test]
 fn test_parse_extension_prefix_collision_is_format_id() {
     for id in &["mp4-hd", "mp4-low", "mp4-high", "webm-720", "aac-128"] {
-        let sel = FormatSelector::parse(id)
-            .unwrap_or_else(|e| panic!("failed to parse `{id}`: {e:?}"));
+        let sel =
+            FormatSelector::parse(id).unwrap_or_else(|e| panic!("failed to parse `{id}`: {e:?}"));
         let spec = &sel.selectors[0].fallbacks[0];
         match spec {
             FormatSpec::Single(s) => assert!(
