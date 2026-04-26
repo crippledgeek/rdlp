@@ -147,6 +147,8 @@ function SearchResultRow({
                     </td>
                 );
             })}
+            {/* Phantom spacer matching SearchResults' trailing <th>. */}
+            <td aria-hidden="true" />
         </tr>
     );
 }
@@ -295,6 +297,12 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                                         </th>
                                     );
                                 })}
+                                {/* Phantom spacer column. With tableLayout: fixed
+                                    every explicit-width column stays at its declared
+                                    size; this width-less column absorbs all remaining
+                                    pane width so hiding optional columns no longer
+                                    leaves a blank gutter to the right of the table. */}
+                                <th aria-hidden="true" />
                             </tr>
                         ))}
                     </thead>
