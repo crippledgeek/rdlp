@@ -1,18 +1,26 @@
-import * as React from "react"
-import { Label as LabelPrimitive } from "radix-ui"
+"use client"
+
+import { Label as AriaLabel, type LabelProps as AriaLabelProps } from "react-aria-components"
 
 import { cn } from "@/lib/utils"
 
-function Label({
-  className,
-  ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+/**
+ * Standalone <Label> component.
+ *
+ * Backed by react-aria-components' Label primitive. Outside a TextField
+ * parent context this just renders a plain `<label>` element; the
+ * `htmlFor` association via standard HTML still works. Inside a Field /
+ * TextField context, RAC auto-wires the for/id binding via React Aria
+ * context — no `htmlFor` prop needed.
+ */
+function Label({ className, ...props }: AriaLabelProps) {
   return (
-    <LabelPrimitive.Root
-      data-slot="label"
+    <AriaLabel
       className={cn(
-        "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-        className
+        "text-sm font-medium leading-none",
+        /* Disabled — RAC sets data-disabled on the Label when inside a disabled Field */
+        "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-70",
+        className,
       )}
       {...props}
     />
@@ -20,3 +28,4 @@ function Label({
 }
 
 export { Label }
+export type { AriaLabelProps as LabelProps }
