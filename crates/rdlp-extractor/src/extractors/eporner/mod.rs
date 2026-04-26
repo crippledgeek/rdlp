@@ -248,11 +248,9 @@ fn extract_thumbnail(obj: &Value) -> Option<String> {
     let from_field = |v: &Value| -> Option<String> {
         match v {
             Value::String(s) if !s.is_empty() => Some(s.clone()),
-            Value::Array(arr) => arr.iter().find_map(|item| {
-                item.as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-            }),
+            Value::Array(arr) => arr
+                .iter()
+                .find_map(|item| item.as_str().filter(|s| !s.is_empty()).map(str::to_string)),
             _ => None,
         }
     };
