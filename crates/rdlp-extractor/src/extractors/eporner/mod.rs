@@ -176,15 +176,26 @@ pub(crate) fn parse_dload_formats(page_url: &str, html: &str) -> Vec<Format> {
 // JSON-LD metadata
 // ============================================================================
 
-/// Parse title, ISO 8601 duration, view count, and actors from the page's JSON-LD.
+/// Metadata extracted from the page's JSON-LD `VideoObject`.
+#[derive(Default, Debug)]
+pub(crate) struct JsonLdMeta {
+    pub title: Option<String>,
+    pub duration_iso: Option<String>,
+    pub views: Option<u64>,
+    pub actors: Vec<String>,
+    pub thumbnail: Option<String>,
+}
+
+/// Parse title, ISO 8601 duration, view count, actors, and thumbnail from the page's JSON-LD.
 ///
 /// Uses raw `serde_json::Value` parsing to be tolerant of EPorner's non-standard
 /// `interactionType` object (which breaks the shared typed deserializer).
 ///
-/// Returns `(title, duration_iso, views, actors)`.
-pub(crate) fn parse_json_ld(
-    html: &str,
-) -> (Option<String>, Option<String>, Option<u64>, Vec<String>) {
+/// `thumbnailUrl` may be a string or an array of strings (EPorner uses the array
+/// form to expose multiple resolutions). When an array, the first entry is taken
+/// as the canonical thumbnail. Falls back to the `image` field if `thumbnailUrl`
+/// is absent.
+pub(crate) fn parse_json_ld(html: &str) -> JsonLdMeta {
     use crate::base::common::JSONLD_SELECTOR;
 
     let document = Html::parse_document(html);
@@ -217,9 +228,35 @@ pub(crate) fn parse_json_ld(
             })
             .unwrap_or_default();
 
-        return (title, duration_iso, views, actors);
+        let thumbnail = extract_thumbnail(obj);
+
+        return JsonLdMeta {
+            title,
+            duration_iso,
+            views,
+            actors,
+            thumbnail,
+        };
     }
-    (None, None, None, vec![])
+    JsonLdMeta::default()
+}
+
+/// Extract a thumbnail URL from a JSON-LD `VideoObject`.
+///
+/// Prefers `thumbnailUrl` (string or array) and falls back to `image`.
+fn extract_thumbnail(obj: &Value) -> Option<String> {
+    let from_field = |v: &Value| -> Option<String> {
+        match v {
+            Value::String(s) if !s.is_empty() => Some(s.clone()),
+            Value::Array(arr) => arr
+                .iter()
+                .find_map(|item| item.as_str().filter(|s| !s.is_empty()).map(str::to_string)),
+            _ => None,
+        }
+    };
+    obj.get("thumbnailUrl")
+        .and_then(from_field)
+        .or_else(|| obj.get("image").and_then(from_field))
 }
 
 /// Find a `VideoObject` in a JSON-LD value (single or `@graph`).
@@ -282,7 +319,13 @@ async fn build_info(
     html: &str,
     ctx: &ExtractionContext,
 ) -> Result<InfoDict> {
-    let (title, duration_iso, views, actors) = parse_json_ld(html);
+    let JsonLdMeta {
+        title,
+        duration_iso,
+        views,
+        actors,
+        thumbnail,
+    } = parse_json_ld(html);
     let title = title.unwrap_or_else(|| "Untitled".to_string());
 
     // --- Primary path: XHR ---
@@ -342,6 +385,7 @@ async fn build_info(
         .and_then(BaseExtractor::parse_iso8601_duration);
     info.age_limit = Some(18);
     info.formats = formats;
+    info.thumbnail = thumbnail;
     info.propagate_duration();
 
     if !actors.is_empty() {
@@ -454,11 +498,30 @@ mod tests {
 
     #[test]
     fn parse_json_ld_exposes_actors() {
-        let (title, _duration, _views, actors) = parse_json_ld(PAGE_FIXTURE);
-        assert!(title.is_some(), "Expected a title from JSON-LD");
+        let meta = parse_json_ld(PAGE_FIXTURE);
+        assert!(meta.title.is_some(), "Expected a title from JSON-LD");
         assert!(
-            !actors.is_empty(),
+            !meta.actors.is_empty(),
             "Expected at least one actor from live JSON-LD fixture"
+        );
+    }
+
+    /// Regression guard for issue #207 — EPorner thumbnail rendered empty
+    /// in MediaHero because `parse_json_ld` never extracted `thumbnailUrl`
+    /// and `build_info` never set `InfoDict.thumbnail`.
+    #[test]
+    fn parse_json_ld_exposes_thumbnail() {
+        let meta = parse_json_ld(PAGE_FIXTURE);
+        let url = meta
+            .thumbnail
+            .expect("Expected a thumbnail URL from JSON-LD");
+        assert!(
+            url.starts_with("https://"),
+            "Thumbnail URL should be HTTPS, got: {url}"
+        );
+        assert!(
+            url.contains("eporner.com"),
+            "Thumbnail URL should be on an EPorner CDN, got: {url}"
         );
     }
 }
