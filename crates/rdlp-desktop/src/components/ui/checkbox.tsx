@@ -1,7 +1,7 @@
 "use client"
 
 import { cva } from "class-variance-authority"
-import { CheckIcon, MinusIcon } from "@radix-ui/react-icons"
+import { Check, Minus } from "lucide-react"
 import {
   Checkbox as AriaCheckbox,
   CheckboxGroup as AriaCheckboxGroup,
@@ -72,9 +72,9 @@ const Checkbox = ({ className, children, ...props }: AriaCheckboxProps) => (
           )}
         >
           {renderProps.isIndeterminate ? (
-            <MinusIcon className="size-4" />
+            <Minus className="size-4" />
           ) : renderProps.isSelected ? (
-            <CheckIcon className="size-4" />
+            <Check className="size-4" />
           ) : null}
         </div>
         {children}
@@ -83,20 +83,20 @@ const Checkbox = ({ className, children, ...props }: AriaCheckboxProps) => (
   </AriaCheckbox>
 )
 
-interface JollyCheckboxGroupProps extends AriaCheckboxGroupProps {
+interface PrismCheckboxGroupProps extends AriaCheckboxGroupProps {
   label?: string
   description?: string
   errorMessage?: string | ((validation: AriaValidationResult) => string)
 }
 
-function JollyCheckboxGroup({
+function PrismCheckboxGroup({
   label,
   description,
   errorMessage,
   className,
   children,
   ...props
-}: JollyCheckboxGroupProps) {
+}: PrismCheckboxGroupProps) {
   return (
     <CheckboxGroup
       className={composeRenderProps(className, (className) =>
@@ -120,5 +120,5 @@ function JollyCheckboxGroup({
   )
 }
 
-export { Checkbox, CheckboxGroup, JollyCheckboxGroup }
-export type { JollyCheckboxGroupProps }
+export { Checkbox, CheckboxGroup, PrismCheckboxGroup }
+export type { PrismCheckboxGroupProps }
