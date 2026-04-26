@@ -57,16 +57,17 @@ async-trait = "0.1"
 # - gzip, brotli, zstd: real browsers advertise all three; subset desyncs JA4H
 # - socks: preserves --proxy SOCKS5 support
 # - form: PornHub extractor needs x-www-form-urlencoded POST
-# - prefix-symbols: isolates BoringSSL symbols from system OpenSSL to coexist
-#   with OpenSSL-linked FFmpeg builds (matches upstream curl_cffi pattern).
-#   Paired with an explicit openssl-sys dep below to ensure -lssl -lcrypto
-#   lands on the linker command line after rlib archives.
-wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks", "form", "prefix-symbols"] }
+#
+# `prefix-symbols` (BoringSSL/OpenSSL coexistence) is enabled per-target in
+# crates/rdlp-http/Cargo.toml — Linux-only, since wreq's upstream README
+# explicitly documents the feature as "Linux and Android" only. On macOS it
+# emits a `build_script_main_*` symbol prefix that the runtime references
+# can't resolve, breaking the link.
+wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks", "form"] }
 wreq-util = "3.0.0-rc.10"
-# Explicit OpenSSL link — required because FFmpeg's libavformat.a references
-# OpenSSL symbols (DTLS_get_data_mtu, EVP_PKEY_Q_keygen, etc.) that BoringSSL
-# doesn't provide. openssl-sys's build.rs emits cargo:rustc-link-lib=ssl/crypto
-# which rustc appends after rlib archives, guaranteeing symbol resolution.
+# Explicit OpenSSL link — required on Linux because FFmpeg's libavformat.a
+# references OpenSSL symbols that BoringSSL doesn't provide. Same per-target
+# story as prefix-symbols above; declared in rdlp-http only on Linux.
 openssl-sys = "0.9"
 url = "2.5"
 

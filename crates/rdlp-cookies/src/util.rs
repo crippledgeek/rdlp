@@ -149,7 +149,13 @@ fn copy_db_file(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 /// Windows-only: open the source file with full sharing mode and copy
 /// its contents manually. This succeeds when Chrome holds a `LockFileEx`
 /// byte-range lock but opened the file with `FILE_SHARE_READ`.
+///
+/// The workspace-level `disallowed_methods` lint flags `std::fs::File::create`
+/// because it's blocking in async contexts. This function is fully synchronous
+/// (sync `Read`/`Write` throughout, called only from sync cookie-extraction
+/// paths) so the lint doesn't apply — explicitly allowed here.
 #[cfg(target_os = "windows")]
+#[allow(clippy::disallowed_methods)]
 fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     use std::io::{Read, Write};
     use std::os::windows::ffi::OsStrExt;

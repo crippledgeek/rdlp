@@ -53,6 +53,12 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: brew install ffmpeg
 
+      - name: Activate MSVC dev environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        # See ci.yml for rationale. Required for ffmpeg-sys-the-third's
+        # bindgen build script on Windows.
+
       - name: Cache FFmpeg (Windows)
         if: matrix.platform == 'windows-latest'
         id: ffmpeg-cache
@@ -77,6 +83,9 @@ jobs:
           $dir = (Get-ChildItem C:\ffmpeg -Directory)[0].FullName
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
+
+      # See ci.yml — openssl-sys uses `vendored` feature on Windows
+      # (declared in crates/rdlp-http/Cargo.toml), so no OpenSSL env needed here.
 
       # --- Toolchain setup ---
 

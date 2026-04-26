@@ -148,7 +148,7 @@ fn columnar_cipher(src: &[char], key: &str) -> Vec<char> {
 
     // Build sorted key-index map (sort by char code, preserving original index)
     let mut key_map: Vec<(char, usize)> = key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-    key_map.sort_by(|a, b| a.0.cmp(&b.0));
+    key_map.sort_by_key(|&(c, _)| c);
 
     // Fill grid column-by-column in sorted key order
     let mut src_idx = 0;
@@ -328,7 +328,7 @@ mod tests {
         // Build sorted key-index map
         let mut key_map: Vec<(char, usize)> =
             key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-        key_map.sort_by(|a, b| a.0.cmp(&b.0));
+        key_map.sort_by_key(|&(c, _)| c);
 
         // Read column by column in sorted key order
         let mut result = Vec::with_capacity(src.len());

@@ -70,6 +70,16 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: ilammy/setup-nasm@v1
 
+      - name: Activate MSVC dev environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        # Sets INCLUDE / LIB / PATH so clang (invoked by ffmpeg-sys-the-third's
+        # bindgen build script) can find the Windows SDK + STL headers.
+        # Without this, bindgen's clang invocation hits
+        # STATUS_ACCESS_VIOLATION (0xc0000005) parsing FFmpeg's transitive
+        # system headers — which is the root cause of upstream
+        # shssoichiro/ffmpeg-the-third#145.
+
       - name: Install FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'
         run: brew install ffmpeg
@@ -101,6 +111,10 @@ jobs:
           $dir = (Get-ChildItem C:\ffmpeg -Directory)[0].FullName
           echo "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
           echo "$dir\bin" >> $env:GITHUB_PATH
+
+      # No OpenSSL env var needed on Windows: openssl-sys is enabled with
+      # the `vendored` feature for windows targets in crates/rdlp-http/Cargo.toml,
+      # so it compiles OpenSSL from source instead of looking for system libs.
 
       # --- Toolchain setup ---
 

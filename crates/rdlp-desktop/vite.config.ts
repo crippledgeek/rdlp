@@ -44,9 +44,14 @@ export default defineConfig(async () => ({
   // Env variables starting with VITE_ or TAURI_ENV_* are exposed
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
-    // Tauri uses Chromium on Windows and WebKit on macOS/Linux
-    target:
-      process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
+    // Tauri uses WebView2 (Chromium) on Windows, WebKitGTK on Linux,
+    // and WebKit on macOS. All three webviews support modern syntax,
+    // so use `esnext` per Tauri 2 conventions. Earlier safari13 / safari14
+    // attempts failed esbuild transpile because Vite's optimizeDeps
+    // adds chrome87/edge88/es2019 overrides that combine into an LCD
+    // that can't transpile TanStack vendor destructuring patterns.
+    // `esnext` skips transpilation entirely — the webview handles it natively.
+    target: "esnext",
     // Don't minify for debug builds
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     // Produce sourcemaps for debug builds
