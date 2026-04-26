@@ -45,22 +45,22 @@ export function CommandPalette() {
                                 <CommandEmpty>No results found.</CommandEmpty>
 
                                 <CommandGroup heading="Navigation">
-                                    <CommandItem onSelect={() => navigate("analyze")}>
+                                    <CommandItem onAction={() => navigate("analyze")}>
                                         <Search className="w-4 h-4 mr-2 opacity-60" />
                                         <span>Analyze View</span>
                                         <span className="ml-auto kbd-chip">Ctrl+1</span>
                                     </CommandItem>
-                                    <CommandItem onSelect={() => navigate("queue")}>
+                                    <CommandItem onAction={() => navigate("queue")}>
                                         <ArrowDownToLine className="w-4 h-4 mr-2 opacity-60" />
                                         <span>Queue View</span>
                                         <span className="ml-auto kbd-chip">Ctrl+2</span>
                                     </CommandItem>
-                                    <CommandItem onSelect={() => navigate("history")}>
+                                    <CommandItem onAction={() => navigate("history")}>
                                         <Clock className="w-4 h-4 mr-2 opacity-60" />
                                         <span>History View</span>
                                         <span className="ml-auto kbd-chip">Ctrl+3</span>
                                     </CommandItem>
-                                    <CommandItem onSelect={() => navigate("settings")}>
+                                    <CommandItem onAction={() => navigate("settings")}>
                                         <Settings className="w-4 h-4 mr-2 opacity-60" />
                                         <span>Settings</span>
                                         <span className="ml-auto kbd-chip">Ctrl+4</span>
@@ -71,7 +71,7 @@ export function CommandPalette() {
 
                                 <CommandGroup heading="Actions">
                                     <CommandItem
-                                        onSelect={() => {
+                                        onAction={() => {
                                             toggleNavPanel();
                                             close();
                                         }}
@@ -81,7 +81,7 @@ export function CommandPalette() {
                                         <span className="ml-auto kbd-chip">Ctrl+B</span>
                                     </CommandItem>
                                     <CommandItem
-                                        onSelect={() => {
+                                        onAction={() => {
                                             toggleBottomDrawer();
                                             close();
                                         }}
@@ -91,7 +91,7 @@ export function CommandPalette() {
                                         <span className="ml-auto kbd-chip">Ctrl+J</span>
                                     </CommandItem>
                                     <CommandItem
-                                        onSelect={() => {
+                                        onAction={() => {
                                             window.dispatchEvent(new CustomEvent("rdlp-focus-search"));
                                             close();
                                         }}
