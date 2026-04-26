@@ -4,7 +4,7 @@
 //! duplication across the codebase. It offers:
 //!
 //! - `HttpClientConfig`: Configuration for HTTP client behavior
-//! - `HttpClientFactory`: Builder for creating configured reqwest clients
+//! - `HttpClientFactory`: Builder for creating configured wreq clients
 //!
 //! # Example
 //!

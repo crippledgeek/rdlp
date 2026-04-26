@@ -4479,6 +4479,7 @@ dependencies = [
 name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
+ "rdlp-security",
  "rdlp-types",
  "serde_json",
  "tokio",
