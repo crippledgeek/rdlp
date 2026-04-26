@@ -34,6 +34,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
             {jobs.map((job) => (
                 <Button
                     key={job.id}
+                    variant="ghost"
                     onPress={() => handleJobClick(job.id)}
                     className="flex items-center gap-2 text-left w-full px-1 py-0.5 rounded-[3px] hover:bg-[#141428] transition-colors h-auto justify-start bg-transparent"
                 >
@@ -122,6 +123,8 @@ export function BottomDrawer() {
 
                 {/* Expand/collapse toggle */}
                 <Button
+                    variant="ghost"
+                    size="icon"
                     onPress={toggleBottomDrawer}
                     aria-label={expanded ? "Collapse drawer" : "Expand drawer"}
                     className="text-[#444444] hover:text-[#aaaaaa] transition-colors px-1 h-auto bg-transparent"

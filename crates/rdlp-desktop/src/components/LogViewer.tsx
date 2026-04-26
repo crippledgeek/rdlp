@@ -144,6 +144,7 @@ export function LogViewer() {
                     {(["info", "warn", "error", "debug"] as SeverityFilter[]).map((level) => (
                         <Button
                             key={level}
+                            variant="ghost"
                             onPress={() => toggleFilter(level)}
                             className={cn(
                                 "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors h-auto",
@@ -164,6 +165,7 @@ export function LogViewer() {
                 <div className="flex items-center gap-1 ml-auto">
                     {!autoScroll && (
                         <Button
+                            variant="ghost"
                             onPress={() => {
                                 setAutoScroll(true);
                                 virtualizer.scrollToIndex(filtered.length - 1);
@@ -174,6 +176,8 @@ export function LogViewer() {
                         </Button>
                     )}
                     <Button
+                        variant="ghost"
+                        size="icon"
                         onPress={clearLogs}
                         aria-label="Clear logs"
                         className="p-1 rounded-[3px] text-[#333333] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors h-auto bg-transparent"
