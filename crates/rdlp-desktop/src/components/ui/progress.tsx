@@ -1,6 +1,9 @@
 "use client"
 
+import { cva } from "class-variance-authority"
 import {
+  Label as AriaLabel,
+  LabelProps as AriaLabelProps,
   ProgressBar as AriaProgressBar,
   ProgressBarProps as AriaProgressBarProps,
   composeRenderProps,
@@ -8,7 +11,17 @@ import {
 
 import { cn } from "@/lib/utils"
 
-import { Label, labelVariants } from "./field"
+const labelVariants = cva([
+  "text-sm font-medium leading-none",
+  /* Disabled */
+  "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-70",
+  /* Invalid */
+  "group-data-[invalid]:text-destructive",
+])
+
+const Label = ({ className, ...props }: AriaLabelProps) => (
+  <AriaLabel className={cn(labelVariants(), className)} {...props} />
+)
 
 interface ProgressProps extends AriaProgressBarProps {
   barClassName?: string

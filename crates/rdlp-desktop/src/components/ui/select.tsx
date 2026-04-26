@@ -1,10 +1,21 @@
-import { CaretSortIcon } from "@radix-ui/react-icons"
+import { cva } from "class-variance-authority"
+import { CaretSortIcon, CheckIcon } from "@radix-ui/react-icons"
 import {
   Button as AriaButton,
   ButtonProps as AriaButtonProps,
+  Collection as AriaCollection,
+  FieldError as AriaFieldError,
+  FieldErrorProps as AriaFieldErrorProps,
+  Header as AriaHeader,
+  Label as AriaLabel,
+  LabelProps as AriaLabelProps,
   ListBox as AriaListBox,
+  ListBoxItem as AriaListBoxItem,
+  ListBoxItemProps as AriaListBoxItemProps,
   ListBoxProps as AriaListBoxProps,
+  Popover as AriaPopover,
   PopoverProps as AriaPopoverProps,
+  Section as AriaSection,
   Select as AriaSelect,
   SelectProps as AriaSelectProps,
   SelectValue as AriaSelectValue,
@@ -16,14 +27,101 @@ import {
 
 import { cn } from "@/lib/utils"
 
-import { FieldError, Label } from "./field"
-import {
-  ListBoxCollection,
-  ListBoxHeader,
-  ListBoxItem,
-  ListBoxSection,
-} from "./list-box"
-import { Popover } from "./popover"
+const labelVariants = cva([
+  "text-sm font-medium leading-none",
+  /* Disabled */
+  "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-70",
+  /* Invalid */
+  "group-data-[invalid]:text-destructive",
+])
+
+const Label = ({ className, ...props }: AriaLabelProps) => (
+  <AriaLabel className={cn(labelVariants(), className)} {...props} />
+)
+
+function FieldError({ className, ...props }: AriaFieldErrorProps) {
+  return (
+    <AriaFieldError
+      className={cn("text-[0.8rem] font-medium text-destructive", className)}
+      {...props}
+    />
+  )
+}
+
+const ListBoxSection = AriaSection
+
+const ListBoxCollection = AriaCollection
+
+const ListBoxItem = <T extends object>({
+  className,
+  children,
+  ...props
+}: AriaListBoxItemProps<T>) => {
+  return (
+    <AriaListBoxItem
+      textValue={
+        props.textValue || (typeof children === "string" ? children : undefined)
+      }
+      className={composeRenderProps(className, (className) =>
+        cn(
+          "relative flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none",
+          /* Disabled */
+          "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+          /* Focused */
+          "data-[focused]:bg-accent data-[focused]:text-accent-foreground",
+          /* Hovered */
+          "data-[hovered]:bg-accent data-[hovered]:text-accent-foreground",
+          /* Selection */
+          "data-[selection-mode]:pr-8",
+          className
+        )
+      )}
+      {...props}
+    >
+      {composeRenderProps(children, (children, renderProps) => (
+        <>
+          {renderProps.isSelected && (
+            <span className="absolute right-2 flex size-4 items-center justify-center">
+              <CheckIcon className="size-4" />
+            </span>
+          )}
+          {children}
+        </>
+      ))}
+    </AriaListBoxItem>
+  )
+}
+
+function ListBoxHeader({
+  className,
+  ...props
+}: React.ComponentProps<typeof AriaHeader>) {
+  return (
+    <AriaHeader
+      className={cn("px-2 py-1.5 text-sm font-semibold", className)}
+      {...props}
+    />
+  )
+}
+
+const Popover = ({ className, offset = 4, ...props }: AriaPopoverProps) => (
+  <AriaPopover
+    offset={offset}
+    className={composeRenderProps(className, (className) =>
+      cn(
+        "z-50 rounded-md border bg-popover text-popover-foreground shadow-md outline-none",
+        /* Entering */
+        "data-[entering]:animate-in data-[entering]:fade-in-0 data-[entering]:zoom-in-95",
+        /* Exiting */
+        "data-[exiting]:animate-out data-[exiting]:fade-out-0 data-[exiting]:zoom-out-95",
+        /* Placement */
+        "data-[placement=bottom]:slide-in-from-top-2 data-[placement=left]:slide-in-from-right-2 data-[placement=right]:slide-in-from-left-2 data-[placement=top]:slide-in-from-bottom-2",
+        className
+      )
+    )}
+    {...props}
+  />
+)
 
 const Select = AriaSelect
 

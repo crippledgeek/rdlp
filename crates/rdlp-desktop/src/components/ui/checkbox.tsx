@@ -1,10 +1,15 @@
 "use client"
 
+import { cva } from "class-variance-authority"
 import { CheckIcon, MinusIcon } from "@radix-ui/react-icons"
 import {
   Checkbox as AriaCheckbox,
   CheckboxGroup as AriaCheckboxGroup,
   CheckboxGroupProps as AriaCheckboxGroupProps,
+  FieldError as AriaFieldError,
+  FieldErrorProps as AriaFieldErrorProps,
+  Label as AriaLabel,
+  LabelProps as AriaLabelProps,
   ValidationResult as AriaValidationResult,
   composeRenderProps,
   Text,
@@ -13,7 +18,26 @@ import {
 
 import { cn } from "@/lib/utils"
 
-import { FieldError, Label, labelVariants } from "./field"
+const labelVariants = cva([
+  "text-sm font-medium leading-none",
+  /* Disabled */
+  "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-70",
+  /* Invalid */
+  "group-data-[invalid]:text-destructive",
+])
+
+const Label = ({ className, ...props }: AriaLabelProps) => (
+  <AriaLabel className={cn(labelVariants(), className)} {...props} />
+)
+
+function FieldError({ className, ...props }: AriaFieldErrorProps) {
+  return (
+    <AriaFieldError
+      className={cn("text-[0.8rem] font-medium text-destructive", className)}
+      {...props}
+    />
+  )
+}
 
 const CheckboxGroup = AriaCheckboxGroup
 
