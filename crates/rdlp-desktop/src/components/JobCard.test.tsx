@@ -20,7 +20,6 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         options: null,
         playlist: null,
         statusMessage: null,
-        logMessages: undefined,
         ...overrides,
     };
 }
@@ -109,7 +108,7 @@ describe("JobCard", () => {
     });
 
     it("does not render log panel when logMessages is undefined", () => {
-        render(<JobCard job={makeJob({ logMessages: undefined })} onCancel={noop} onRemove={noop} onRetry={noop} />);
+        render(<JobCard job={makeJob()} onCancel={noop} onRemove={noop} onRetry={noop} />);
         expect(screen.queryByText(/^logs/i)).not.toBeInTheDocument();
     });
 

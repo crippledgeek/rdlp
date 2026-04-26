@@ -29,6 +29,8 @@ import {
 
 import { cn } from "@/lib/utils"
 
+import type { WithUndefined } from "./_internal/types"
+
 const labelVariants = cva([
   "text-sm font-medium leading-none",
   /* Disabled */
@@ -57,13 +59,14 @@ const ListBoxCollection = AriaCollection
 const ListBoxItem = <T extends object>({
   className,
   children,
+  textValue,
   ...props
-}: AriaListBoxItemProps<T>) => {
+}: WithUndefined<AriaListBoxItemProps<T>, "textValue">) => {
+  const resolvedTextValue =
+    textValue || (typeof children === "string" ? children : undefined)
   return (
     <AriaListBoxItem
-      textValue={
-        props.textValue || (typeof children === "string" ? children : undefined)
-      }
+      {...(resolvedTextValue !== undefined && { textValue: resolvedTextValue })}
       className={composeRenderProps(className, (className) =>
         cn(
           "relative flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none",
@@ -188,8 +191,9 @@ const SelectPopover = ({ className, ...props }: AriaPopoverProps) => (
 
 const SelectListBox = <T extends object>({
   className,
+  items,
   ...props
-}: AriaListBoxProps<T>) => (
+}: WithUndefined<AriaListBoxProps<T>, "items">) => (
   <AriaListBox
     className={composeRenderProps(className, (className) =>
       cn(
@@ -198,6 +202,7 @@ const SelectListBox = <T extends object>({
       )
     )}
     {...props}
+    {...(items !== undefined && { items })}
   />
 )
 
@@ -206,7 +211,7 @@ interface PrismSelectProps<T extends object>
   label?: string
   description?: string
   errorMessage?: string | ((validation: AriaValidationResult) => string)
-  items?: Iterable<T>
+  items?: Iterable<T> | undefined
   children: React.ReactNode | ((item: T) => React.ReactNode)
 }
 
@@ -237,7 +242,9 @@ function PrismSelect<T extends object>({
       )}
       <FieldError>{errorMessage}</FieldError>
       <SelectPopover>
-        <SelectListBox items={items}>{children}</SelectListBox>
+        <SelectListBox {...(items !== undefined && { items })}>
+          {children}
+        </SelectListBox>
       </SelectPopover>
     </Select>
   )

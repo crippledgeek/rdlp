@@ -17,10 +17,10 @@ import * as React from "react";
 
 interface SelectCtx {
     value: string;
-    onValueChange?: (v: string) => void;
+    onValueChange?: ((v: string) => void) | undefined;
     open: boolean;
     setOpen: (o: boolean) => void;
-    disabled?: boolean;
+    disabled?: boolean | undefined;
     items: Map<string, string>; // value → label text
 }
 
