@@ -1,25 +1,43 @@
+"use client"
+
 import * as React from "react"
+import {
+  Input as AriaInput,
+  type InputProps as AriaInputProps,
+} from "react-aria-components"
 
 import { cn } from "@/lib/utils"
 
-const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
-  ({ className, type, ...props }, ref) => {
-    return (
-      <input
-        type={type}
-        data-slot="input"
-        ref={ref}
-        className={cn(
-          "file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
-          "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-          "aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
-          className
-        )}
-        {...props}
-      />
-    )
-  }
+/**
+ * Standalone <Input> wrapper around react-aria-components' Input.
+ *
+ * Works without a parent TextField — accepts the standard React input
+ * event model (`value`, `onChange`, `type`, `placeholder`, etc.) so the
+ * 4 settings-section consumers don't change. When/if a section adopts
+ * RAC's TextField wrapper for native validation orchestration, this
+ * Input becomes the inner element of that TextField.
+ */
+const Input = React.forwardRef<HTMLInputElement, AriaInputProps>(
+  ({ className, ...props }, ref) => (
+    <AriaInput
+      ref={ref}
+      className={cn(
+        "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm",
+        "file:border-0 file:bg-transparent file:text-sm file:font-medium",
+        "placeholder:text-muted-foreground",
+        /* Focused */
+        "data-[focus-visible]:outline-none data-[focus-visible]:ring-1 data-[focus-visible]:ring-ring",
+        /* Disabled */
+        "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
+        /* Invalid */
+        "data-[invalid]:border-destructive data-[invalid]:ring-destructive",
+        className,
+      )}
+      {...props}
+    />
+  ),
 )
 Input.displayName = "Input"
 
 export { Input }
+export type { AriaInputProps as InputProps }
