@@ -17,6 +17,7 @@ members = [
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
     "crates/rdlp-desktop/src-tauri",
+    "crates/rdlp-probe",
 ]
 default-members = [
     "crates/rdlp-types",
@@ -40,6 +41,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["rdlp contributors"]
 license = "MIT"
 
@@ -50,7 +52,22 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTTP and networking
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "stream"] }
+# wreq features:
+# - cookies, json, stream: 1:1 with reqwest's feature set pre-migration
+# - gzip, brotli, zstd: real browsers advertise all three; subset desyncs JA4H
+# - socks: preserves --proxy SOCKS5 support
+# - form: PornHub extractor needs x-www-form-urlencoded POST
+# - prefix-symbols: isolates BoringSSL symbols from system OpenSSL to coexist
+#   with OpenSSL-linked FFmpeg builds (matches upstream curl_cffi pattern).
+#   Paired with an explicit openssl-sys dep below to ensure -lssl -lcrypto
+#   lands on the linker command line after rlib archives.
+wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "socks", "form", "prefix-symbols"] }
+wreq-util = "3.0.0-rc.10"
+# Explicit OpenSSL link — required because FFmpeg's libavformat.a references
+# OpenSSL symbols (DTLS_get_data_mtu, EVP_PKEY_Q_keygen, etc.) that BoringSSL
+# doesn't provide. openssl-sys's build.rs emits cargo:rustc-link-lib=ssl/crypto
+# which rustc appends after rlib archives, guaranteeing symbol resolution.
+openssl-sys = "0.9"
 url = "2.5"
 
 # HTML/JSON parsing

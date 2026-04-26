@@ -168,6 +168,32 @@ pub trait SearchExtractor: Send + Sync {
             total_estimate: None,
         })
     }
+
+    /// Lazily enrich a previously-returned [`SearchResultPreview`] with
+    /// fields that the search-page card markup did not surface.
+    ///
+    /// Frontends call this on demand (e.g. when a row scrolls into view)
+    /// to fill the per-row metadata gaps the cheap search path cannot —
+    /// typically `uploader`, `view_count` or `upload_date`. Each call
+    /// fires at most one HTTP request to the underlying video page; the
+    /// implementation must skip any field already populated and must NOT
+    /// re-extract format URLs.
+    ///
+    /// # Default
+    /// Returns the input unchanged. Sites whose search-card markup is
+    /// already complete (e.g. XHamster's JSON `videoThumbProps`) need no
+    /// override.
+    ///
+    /// # Arguments
+    /// * `preview` — A preview previously returned by [`search`] / [`search_page`].
+    /// * `ctx` — Shared extraction context.
+    async fn enrich(
+        &self,
+        preview: SearchResultPreview,
+        _ctx: &ExtractionContext,
+    ) -> Result<SearchResultPreview> {
+        Ok(preview)
+    }
 }
 
 /// Context passed to extractors containing shared resources
@@ -227,7 +253,7 @@ pub struct ExtractionContext {
     ///
     /// **Arc-wrapped** for sharing across multiple extraction tasks without cloning the
     /// underlying connection pool. Reqwest's Client already uses Arc internally.
-    pub http_client: Arc<reqwest::Client>,
+    pub http_client: Arc<wreq::Client>,
 
     /// JavaScript engine for executing site JavaScript (e.g., signature decryption)
     ///
@@ -251,7 +277,7 @@ pub struct ExtractionContext {
 impl ExtractionContext {
     /// Create a new extraction context
     pub fn new(
-        http_client: Arc<reqwest::Client>,
+        http_client: Arc<wreq::Client>,
         js_engine: Arc<dyn JsEngine>,
         cookie_jar: Arc<dyn CookieJar>,
         config: Arc<Config>,

@@ -20,7 +20,7 @@ use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
     check_http_response, is_retryable_error,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ use crate::chunking::ChunkSizeStrategy;
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
-/// Convert optional HashMap headers to reqwest HeaderMap
+/// Convert optional HashMap headers to wreq HeaderMap
 fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
     let Some(headers) = headers else {
         return HeaderMap::new();
@@ -74,7 +74,7 @@ where
 /// **Clone performance:** O(1) - both client and config use Arc internally
 #[derive(Clone)]
 pub struct HttpDownloader {
-    client: reqwest::Client,
+    client: wreq::Client,
     pub(crate) config: Arc<DownloaderConfig>,
     pub(crate) rate_limiter: Option<Arc<RateLimiter>>,
     extra_headers: HeaderMap,
@@ -84,12 +84,20 @@ impl HttpDownloader {
     /// Create a new HTTP downloader
     #[must_use]
     pub fn new() -> Self {
-        Self::with_client(reqwest::Client::new())
+        // Route through HttpClientFactory so the default browser emulation
+        // profile (ChromeLatest) is applied — otherwise this constructor
+        // would hand back a wreq client with no JA4 / JA4H emulation,
+        // bypassing the Phase 2 fingerprint guarantee (spec §6.8).
+        let client = rdlp_http::HttpClientFactory::from_config(
+            &rdlp_http::HttpClientConfig::default(),
+        )
+        .build();
+        Self::with_client(client)
     }
 
     /// Create with custom client
     #[must_use]
-    pub fn with_client(client: reqwest::Client) -> Self {
+    pub fn with_client(client: wreq::Client) -> Self {
         Self {
             client,
             config: Arc::new(DownloaderConfig::default()),
@@ -100,7 +108,7 @@ impl HttpDownloader {
 
     /// Get reference to the HTTP client
     #[must_use]
-    pub fn client(&self) -> &reqwest::Client {
+    pub fn client(&self) -> &wreq::Client {
         &self.client
     }
 

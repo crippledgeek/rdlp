@@ -491,7 +491,7 @@ fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPrevie
 }
 
 /// Extract X-WP-TotalPages from response headers.
-fn extract_total_pages(response: &reqwest::Response) -> u32 {
+fn extract_total_pages(response: &wreq::Response) -> u32 {
     response
         .headers()
         .get("x-wp-totalpages")
@@ -502,7 +502,7 @@ fn extract_total_pages(response: &reqwest::Response) -> u32 {
 
 /// Scrape durations from an HTML listing response (best-effort, non-fatal).
 async fn scrape_durations_from_html_response(
-    result: std::result::Result<reqwest::Response, reqwest::Error>,
+    result: std::result::Result<wreq::Response, wreq::Error>,
 ) -> std::collections::HashMap<String, f64> {
     let text = match result {
         Ok(resp) => resp.text().await.unwrap_or_default(),

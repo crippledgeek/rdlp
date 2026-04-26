@@ -234,6 +234,14 @@ pub(crate) struct Args {
     #[arg(long)]
     pub proxy: Option<String>,
 
+    /// Browser emulation profile for the TLS / HTTP stack
+    /// (chrome-latest, firefox-latest, safari-latest, or a pinned
+    /// identifier like chrome-137). Controls JA4 / JA4H fingerprint.
+    /// Falls back to the RDLP_BROWSER_EMULATION env var, then
+    /// ChromeLatest.
+    #[arg(long, value_name = "PROFILE")]
+    pub browser: Option<String>,
+
     /// Limit download speed (e.g., "1M", "500K", "10M", "2.5M")
     #[arg(long, short = 'r')]
     pub limit_rate: Option<String>,

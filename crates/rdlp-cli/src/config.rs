@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use rdlp_api::{
-    AudioFormat, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode,
+    AudioFormat, BrowserEmulation, BrowserType, Config, ContainerFormat, FixupPolicy, RecodeAudioMode,
     SubtitleFormat, config_io,
 };
 
@@ -26,6 +26,20 @@ pub(crate) struct ResolvedInteractiveValues {
 /// Resolve interactive CLI values (inquire prompts) before config merge.
 ///
 /// Returns `None` values for fields that weren't set to "interactive".
+/// Parse a `--browser` / `RDLP_BROWSER_EMULATION` value into a
+/// `BrowserEmulation`. Recognised shorthands: `chrome-latest`,
+/// `firefox-latest`, `safari-latest`. Anything else is treated as a
+/// pinned profile identifier; invalid pins fall back to Chrome-latest
+/// at resolve time.
+fn parse_browser_emulation(s: &str) -> BrowserEmulation {
+    match s {
+        "chrome-latest" => BrowserEmulation::ChromeLatest,
+        "firefox-latest" => BrowserEmulation::FirefoxLatest,
+        "safari-latest" => BrowserEmulation::SafariLatest,
+        other => BrowserEmulation::Pinned(other.to_string()),
+    }
+}
+
 fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> {
     let audio_format = match args.audio_format.as_deref() {
         Some("interactive") => {
@@ -249,6 +263,14 @@ pub(crate) fn merge_config(
     }
     if let Some(ref proxy) = args.proxy {
         config.proxy = Some(proxy.clone());
+    }
+    // Browser emulation: CLI flag > env var > default (ChromeLatest).
+    if let Some(ref cli_browser) = args.browser {
+        config.browser_emulation = parse_browser_emulation(cli_browser);
+    } else if let Ok(env_browser) = std::env::var("RDLP_BROWSER_EMULATION")
+        && !env_browser.is_empty()
+    {
+        config.browser_emulation = parse_browser_emulation(&env_browser);
     }
     if let Some(ref rate_str) = args.limit_rate {
         let bps = rdlp_ratelimit::parse_rate_limit(rate_str)

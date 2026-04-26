@@ -21,7 +21,8 @@ rdlp-types = { path = "../../rdlp-types" }
 rdlp-core = { path = "../../rdlp-core" }
 rdlp-postprocess = { path = "../../rdlp-postprocess" }
 rdlp-security = { path = "../../rdlp-security" }
-reqwest = { workspace = true }
+rdlp-http = { path = "../../rdlp-http" }
+wreq = { workspace = true }
 url = { workspace = true }
 
 tauri = { version = "2", features = [] }

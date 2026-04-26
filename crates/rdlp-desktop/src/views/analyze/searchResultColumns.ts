@@ -45,7 +45,12 @@ const ageSortFn = (rowA: Row<SearchResultPreview>, rowB: Row<SearchResultPreview
 export const searchResultColumns = [
     columnHelper.accessor("title", {
         header: "Title",
-        size: 400,
+        // Smaller fixed allocation so the row total (72 thumb + 280 + 140
+        // + 80 + 80 = 652) fits inside narrow content panes without the
+        // rightmost numeric columns getting clipped. Title text truncates
+        // via the `truncate` class on each `<td>`; the thumbnail beside
+        // each row provides the visual cue.
+        size: 280,
         sortingFn: "text",
     }),
     columnHelper.accessor("uploader", {

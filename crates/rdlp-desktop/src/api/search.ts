@@ -1,12 +1,13 @@
 // TanStack Query options for search-related Rust commands.
 
-import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import type {
     SearchFilter,
     SearchFilterDescriptor,
     SearchPageResponse,
+    SearchResultPreview,
     SearchSiteInfo,
 } from "../types";
 
@@ -26,6 +27,47 @@ export function filtersQueryOptions(site: string) {
         queryFn: () =>
             invokeTyped<SearchFilterDescriptor[]>("get_search_filters", { site }),
         enabled: site !== "",
+    });
+}
+
+/**
+ * Lazily enrich one search-result row with metadata the search-page card
+ * markup did not surface (typically the uploader display name on tag-only
+ * cards, plus actors / tags that only appear on the video page).
+ *
+ * Cached per `(site, video_url)` so a row that scrolls in/out/in only
+ * triggers one upstream fetch. `staleTime` is 1 hour — preview metadata
+ * for a given video URL is effectively immutable.
+ *
+ * `ready` is the gating signal from the caller (typically: row on-screen
+ * AND preview is missing the field we'd backfill). When false, the queryFn
+ * slot holds `skipToken` so TanStack never invokes it.
+ */
+export function enrichSearchResultQueryOptions(
+    site: string,
+    preview: SearchResultPreview,
+    ready: boolean,
+) {
+    const shouldFetch = ready && site !== "" && preview.video_url !== "";
+    // TanStack Query v5 documented lazy-query pattern: switch the queryFn
+    // between `skipToken` (disabled, type-safe) and a real function based on
+    // the gating condition. Toggling `enabled: false → true` on a
+    // queryOptions() factory has known propagation quirks under React 19;
+    // skipToken changes the query identity itself which TanStack always
+    // re-evaluates.
+    // https://tanstack.com/query/v5/docs/react/guides/disabling-queries
+    return queryOptions({
+        queryKey: queryKeys.search.enrichRow(site, preview.video_url),
+        queryFn: shouldFetch
+            ? () =>
+                  invokeTyped<SearchResultPreview>("enrich_search_result", {
+                      site,
+                      preview,
+                  })
+            : skipToken,
+        staleTime: 60 * 60 * 1000,
+        gcTime: 60 * 60 * 1000,
+        retry: 0,
     });
 }
 

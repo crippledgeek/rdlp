@@ -108,7 +108,7 @@ pub async fn decipher_url_via_boa(
 /// known decryption-related constants. Returns `None` if no suitable JS is found.
 pub async fn fetch_player_js(
     script_urls: &[String],
-    http_client: &reqwest::Client,
+    http_client: &wreq::Client,
     page_url: &str,
 ) -> Option<String> {
     for url in script_urls {

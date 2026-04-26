@@ -4,7 +4,7 @@
 //! duplication across the codebase. It offers:
 //!
 //! - `HttpClientConfig`: Configuration for HTTP client behavior
-//! - `HttpClientFactory`: Builder for creating configured reqwest clients
+//! - `HttpClientFactory`: Builder for creating configured wreq clients
 //!
 //! # Example
 //!
@@ -29,6 +29,10 @@ mod config;
 
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
+
+/// Re-export `wreq` for downstream crates so they can consume the HTTP
+/// client library via a single facade (`rdlp_http::wreq::Client`, etc).
+pub use wreq;
 
 /// Default user agent string for HTTP requests
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";

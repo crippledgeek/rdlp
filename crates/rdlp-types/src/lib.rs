@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 pub mod audio_format;
+pub mod browser_emulation;
 pub mod browser_type;
 pub mod config;
 pub mod container;
@@ -43,6 +44,7 @@ pub mod subtitle_track;
 
 // Re-export main types
 pub use audio_format::AudioFormat;
+pub use browser_emulation::BrowserEmulation;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;

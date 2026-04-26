@@ -18,6 +18,14 @@ serde = { workspace = true }
 # FFmpeg library bindings (FFmpeg 5-8)
 ffmpeg-the-third = "4.1"
 
+# Explicit OpenSSL link for FFmpeg's tls_openssl.o (libavformat.a).
+# FFmpeg static archives reference DTLS_get_data_mtu / EVP_PKEY_Q_keygen /
+# SSL_CTX_ctrl which must resolve to system OpenSSL, not to BoringSSL
+# (which wreq uses via prefix-symbols-isolated boring-sys). openssl-sys's
+# build.rs emits cargo:rustc-link-lib=ssl/crypto so rustc appends them to
+# the link line after rlib archives.
+openssl-sys = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

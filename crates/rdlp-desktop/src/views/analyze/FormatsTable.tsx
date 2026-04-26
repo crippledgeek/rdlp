@@ -44,10 +44,37 @@ export function FormatsTable({ formats }: FormatsTableProps) {
 
     const bestFormatId = useMemo(() => getBestFormatId(formats), [formats]);
 
+    // Hide columns whose data is empty across every loaded row. Quality and
+    // Protocol are always meaningful (Quality is computed; Protocol always
+    // set by the extractor) so they have no visibility predicate. For
+    // vcodec / acodec, the literal "none" is treated as "no value" — that's
+    // how rdlp encodes audio-only / video-only formats. Recomputed only when
+    // the input set changes.
+    const columnVisibility = useMemo<Record<string, boolean>>(() => {
+        if (formats.length === 0) {
+            return {
+                height: true,
+                fps: true,
+                vcodec: true,
+                acodec: true,
+                filesize: true,
+            };
+        }
+        const hasCodec = (v: string | null | undefined) =>
+            v != null && v !== "none";
+        return {
+            height: formats.some((f) => f.height != null),
+            fps: formats.some((f) => f.fps != null),
+            vcodec: formats.some((f) => hasCodec(f.vcodec)),
+            acodec: formats.some((f) => hasCodec(f.acodec)),
+            filesize: formats.some((f) => f.filesize != null),
+        };
+    }, [formats]);
+
     const table = useReactTable({
         data: formats,
         columns: formatColumns,
-        state: { sorting },
+        state: { sorting, columnVisibility },
         onSortingChange: setSorting,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
@@ -142,6 +169,19 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                     </span>
                                 </th>
                             ))}
+                            {/* Phantom spacer cell. With tableLayout: fixed every
+                                explicit-width column stays at its declared size; this
+                                width-less column absorbs all remaining pane width so
+                                hiding columns no longer leaves a blank gutter to the
+                                right of the table.
+
+                                Rendered as <td aria-hidden> rather than <th> per
+                                WCAG 1.3.1: empty <th> cells violate the "table
+                                headers must contain descriptive text" rule. <td>
+                                inside <thead> is valid HTML and carries no header
+                                semantics, which is exactly what we want for a
+                                pure layout filler. */}
+                            <td aria-hidden="true" />
                         </tr>
                     ))}
                 </thead>
@@ -171,7 +211,7 @@ export function FormatsTable({ formats }: FormatsTableProps) {
                                         }}
                                     >
                                         <td
-                                            colSpan={7}
+                                            colSpan={8}
                                             className="py-1 px-3 bg-[var(--surface-deepest)] border-y border-[#1a1a2e]"
                                         >
                                             <span className="text-[10px] font-bold uppercase tracking-widest text-[#666666]">

@@ -42,8 +42,8 @@ pub mod utils;
 pub use extractors::{
     EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
-    RedTubeExtractor, TNAFlixExtractor, TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor,
-    XTitsExtractor, XVideosExtractor,
+    RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
+    XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -121,6 +121,9 @@ impl ExtractorRegistry {
         // Register EPorner extractor
         registry.register(Arc::new(EPornerExtractor::new()));
 
+        // Register SpankBang extractor
+        registry.register(Arc::new(SpankBangExtractor::new()));
+
         // Register Generic fallback extractor (MUST be last — lowest priority)
         registry.register(Arc::new(GenericExtractor::new()));
 
@@ -164,6 +167,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(EPornerExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(SpankBangExtractor::new()));
 
         registry
     }
@@ -328,6 +334,7 @@ mod tests {
         assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
         assert!(extractors.contains(&"HQPorner"));
+        assert!(extractors.contains(&"SpankBang"));
     }
 
     #[test]
@@ -411,6 +418,11 @@ mod tests {
             registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
         assert!(hqporner.is_some());
         assert_eq!(hqporner.unwrap().name(), "HQPorner");
+
+        let spankbang =
+            registry.find_extractor("https://spankbang.com/56b3d/video/the+slut+maker");
+        assert!(spankbang.is_some());
+        assert_eq!(spankbang.unwrap().name(), "SpankBang");
 
         // Generic fallback extractor matches all HTTP URLs, so a YouTube URL
         // now returns the Generic extractor instead of None.

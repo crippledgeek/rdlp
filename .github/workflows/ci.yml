@@ -57,7 +57,16 @@ jobs:
             libavfilter-dev \
             libavdevice-dev \
             libswscale-dev \
-            libswresample-dev
+            libswresample-dev \
+            cmake \
+            perl \
+            pkg-config \
+            libclang-dev \
+            musl-tools
+
+      - name: Install NASM (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/setup-nasm@v1
 
       - name: Install FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'

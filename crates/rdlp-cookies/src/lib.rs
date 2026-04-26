@@ -18,17 +18,17 @@ use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
 use rdlp_types::BrowserType;
-use reqwest::cookie::CookieStore;
+use wreq::cookie::CookieStore;
 use std::path::Path;
 use std::sync::Arc;
 use url::Url;
 
-/// Cookie jar backed by `reqwest::cookie::Jar`.
+/// Cookie jar backed by `wreq::cookie::Jar`.
 ///
 /// Cookies added via `add_cookie()` are automatically sent by any
-/// `reqwest::Client` that was built with this jar's `cookie_provider()`.
+/// `wreq::Client` that was built with this jar's `cookie_provider()`.
 pub struct SimpleCookieJar {
-    jar: Arc<reqwest::cookie::Jar>,
+    jar: Arc<wreq::cookie::Jar>,
 }
 
 impl SimpleCookieJar {
@@ -36,13 +36,13 @@ impl SimpleCookieJar {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            jar: Arc::new(reqwest::cookie::Jar::default()),
+            jar: Arc::new(wreq::cookie::Jar::default()),
         }
     }
 
-    /// Get the underlying `reqwest::cookie::Jar` for use with `cookie_provider()`.
+    /// Get the underlying `wreq::cookie::Jar` for use with `cookie_provider()`.
     #[must_use]
-    pub fn jar(&self) -> Arc<reqwest::cookie::Jar> {
+    pub fn jar(&self) -> Arc<wreq::cookie::Jar> {
         Arc::clone(&self.jar)
     }
 }
@@ -56,37 +56,56 @@ impl Default for SimpleCookieJar {
 #[async_trait]
 impl CookieJar for SimpleCookieJar {
     async fn get_cookies(&self, url: &str) -> Result<Vec<String>> {
-        let Ok(parsed) = Url::parse(url) else {
+        // Validate as URL first (early-return on parse failure matches
+        // historical reqwest behaviour), then hand the string to wreq
+        // whose IntoUri is implemented for &str.
+        if Url::parse(url).is_err() {
+            return Ok(Vec::new());
+        }
+        let Ok(uri) = url.parse::<wreq::Uri>() else {
             return Ok(Vec::new());
         };
-        let Some(header_value) = self.jar.cookies(&parsed) else {
-            return Ok(Vec::new());
-        };
-        let cookie_str = match header_value.to_str() {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("Cookie header contains non-ASCII bytes: {e}");
+        let cookies = self.jar.cookies(&uri);
+        let headers: Vec<&wreq::header::HeaderValue> = match &cookies {
+            wreq::cookie::Cookies::Compressed(hv) => vec![hv],
+            wreq::cookie::Cookies::Uncompressed(v) => v.iter().collect(),
+            wreq::cookie::Cookies::Empty => return Ok(Vec::new()),
+            other => {
+                // wreq::cookie::Cookies is #[non_exhaustive]; a future variant
+                // would silently drop authenticated requests if we just
+                // returned Vec::new(). Surface it so a wreq update is noticed.
+                warn!(
+                    "Unknown wreq::cookie::Cookies variant encountered ({other:?}); \
+                     dropping cookies for this request"
+                );
                 return Ok(Vec::new());
             }
         };
-        Ok(cookie_str
-            .split("; ")
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect())
+        let mut out = Vec::new();
+        for hv in headers {
+            let cookie_str = match hv.to_str() {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Cookie header contains non-ASCII bytes: {e}");
+                    continue;
+                }
+            };
+            for s in cookie_str.split("; ") {
+                if !s.is_empty() {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        Ok(out)
     }
 
     async fn add_cookie(&self, url: &str, cookie: &str) -> Result<()> {
-        let parsed = match Url::parse(url) {
-            Ok(u) => u,
-            Err(e) => {
-                debug!("Invalid URL for cookie: {e}");
-                return Ok(());
-            }
-        };
-
+        if Url::parse(url).is_err() {
+            debug!("Invalid URL for cookie: {url}");
+            return Ok(());
+        }
         debug!(cookie, url; "Adding cookie");
-        self.jar.add_cookie_str(cookie, &parsed);
+        self.jar.add(cookie, url);
         Ok(())
     }
 
@@ -175,8 +194,7 @@ mod tests {
         let jar = SimpleCookieJar::new();
         let inner = jar.jar();
         // Verify it's the same jar by adding via inner and reading via trait
-        let url = Url::parse("https://example.com").unwrap();
-        inner.add_cookie_str("test=value", &url);
+        inner.add("test=value", "https://example.com");
 
         let cookies = jar.get_cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 1);

@@ -133,14 +133,14 @@ pub type Result<T> = std::result::Result<T, RdlpError>;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let client = reqwest::Client::new();
+///     let client = wreq::Client::new();
 ///     let url = "https://example.com";
 ///     let response = client.get(url).send().await?;
 ///     check_http_response(&response)?;
 ///     Ok(())
 /// }
 /// ```
-pub fn check_http_response(response: &reqwest::Response) -> Result<()> {
+pub fn check_http_response(response: &wreq::Response) -> Result<()> {
     let status = response.status();
     if !status.is_success() {
         return Err(RdlpError::Http {

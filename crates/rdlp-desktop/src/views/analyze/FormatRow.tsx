@@ -52,14 +52,14 @@ export const FormatRow = memo(
                         const codec = format.vcodec;
                         if (!codec || codec === "none") {
                             return (
-                                <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#444444] w-[60px]">
+                                <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#444444] w-[85px]">
                                     —
                                 </td>
                             );
                         }
                         const isModern = MODERN_CODECS.has(codec.toLowerCase());
                         return (
-                            <td key={cell.id} className="px-2 py-1.5 w-[60px]">
+                            <td key={cell.id} className="px-2 py-1.5 w-[85px]">
                                 <StreamBadge
                                     value={codec}
                                     category={isModern ? "codec" : "feature"}
@@ -77,7 +77,7 @@ export const FormatRow = memo(
                         // audio-only row (which renders the same group id).
                         if (!audio || audio === "none") {
                             return (
-                                <td key={cell.id} className="px-2 py-1.5 text-[11px] w-[60px]">
+                                <td key={cell.id} className="px-2 py-1.5 text-[11px] w-[90px]">
                                     {group ? (
                                         <span
                                             className="inline-flex items-center gap-0.5 px-1 rounded-[3px] text-[10px] font-mono text-[#7aa57a] bg-[#0f1a0f] border border-[#1f2f1f]"
@@ -93,7 +93,7 @@ export const FormatRow = memo(
                             );
                         }
                         return (
-                            <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#aaaaaa] w-[60px]">
+                            <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#aaaaaa] w-[90px]">
                                 <span className="mr-1">{audio}</span>
                                 {group && (
                                     <span
@@ -111,7 +111,7 @@ export const FormatRow = memo(
                         const proto = format.protocol;
                         const isHls = HLS_PROTOCOLS.has(proto.toLowerCase());
                         return (
-                            <td key={cell.id} className="px-2 py-1.5 w-[55px]">
+                            <td key={cell.id} className="px-2 py-1.5 w-[100px]">
                                 <StreamBadge
                                     value={proto.toUpperCase()}
                                     category={isHls ? "protocol" : "feature"}
@@ -122,7 +122,7 @@ export const FormatRow = memo(
 
                     if (colId === "filesize") {
                         return (
-                            <td key={cell.id} className="px-2 py-1.5 text-right text-[11px] text-[#aaaaaa] w-[65px]">
+                            <td key={cell.id} className="px-2 py-1.5 text-right text-[11px] text-[#aaaaaa] w-[75px]">
                                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </td>
                         );
@@ -134,6 +134,8 @@ export const FormatRow = memo(
                         </td>
                     );
                 })}
+                {/* Phantom spacer matching FormatsTable's trailing <th>. */}
+                <td aria-hidden="true" />
             </tr>
         );
     },

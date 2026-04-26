@@ -96,16 +96,17 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
 
     let referer = derive_referer(&url).unwrap_or_default();
 
-    let client = reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .build()
-        .map_err(|e| AppError::Internal {
-            message: format!("Failed to create HTTP client: {e}"),
-        })?;
+    // Route through HttpClientFactory so the default browser emulation
+    // profile is applied. Preserves the 10s read budget via
+    // HttpClientConfig::with_read_timeout_secs (spec §6.8, D2.2).
+    let http_config = rdlp_http::HttpClientConfig::default()
+        .with_read_timeout_secs(TIMEOUT.as_secs())
+        .with_connect_timeout_secs(TIMEOUT.as_secs());
+    let client = rdlp_http::HttpClientFactory::from_config(&http_config).build();
 
     let resp = client
         .get(&url)
-        .header(reqwest::header::REFERER, &referer)
+        .header(wreq::header::REFERER, &referer)
         .send()
         .await
         .map_err(|e| AppError::Internal {
@@ -243,10 +244,10 @@ mod tests {
 
         // mockito uses http://, so test inner logic directly (proxy_thumbnail requires https)
         let referer = derive_referer(&format!("{}/image.jpg", server.url())).unwrap_or_default();
-        let client = reqwest::Client::new();
+        let client = wreq::Client::new();
         let resp = client
             .get(format!("{}/image.jpg", server.url()))
-            .header(reqwest::header::REFERER, &referer)
+            .header(wreq::header::REFERER, &referer)
             .send()
             .await
             .expect("request should succeed");
@@ -266,7 +267,7 @@ mod tests {
             .await;
 
         // Test via inner HTTP logic (mockito uses http://)
-        let client = reqwest::Client::new();
+        let client = wreq::Client::new();
         let resp = client
             .get(format!("{}/forbidden.jpg", server.url()))
             .send()

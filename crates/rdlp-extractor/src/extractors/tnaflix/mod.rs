@@ -1009,8 +1009,8 @@ mod async_tests {
 
     /// Build a test `ExtractionContext` pointing at the mockito server.
     fn test_ctx(_server: &Server) -> ExtractionContext {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
+        let client = wreq::Client::builder()
+            .redirect(wreq::redirect::Policy::none())
             .build()
             .unwrap();
         let config = Config {
@@ -1310,7 +1310,7 @@ mod async_tests {
         // Use a port that's definitely not listening
         let config = Config::default();
         let ctx = ExtractionContext::new(
-            Arc::new(reqwest::Client::new()),
+            Arc::new(wreq::Client::new()),
             Arc::new(NoOpJsEngine),
             Arc::new(NoOpCookieJar),
             Arc::new(config),
@@ -1333,7 +1333,7 @@ mod async_tests {
     async fn test_fetch_url_too_long() {
         let config = Config::default();
         let ctx = ExtractionContext::new(
-            Arc::new(reqwest::Client::new()),
+            Arc::new(wreq::Client::new()),
             Arc::new(NoOpJsEngine),
             Arc::new(NoOpCookieJar),
             Arc::new(config),

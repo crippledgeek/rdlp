@@ -56,7 +56,7 @@ impl Orchestrator {
         let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
 
         // Build Referer from the thumbnail URL origin (CDNs often require this)
-        let referer = reqwest::Url::parse(thumbnail_url)
+        let referer = url::Url::parse(thumbnail_url)
             .ok()
             .map(|u| format!("{}://{}/", u.scheme(), u.host_str().unwrap_or("")));
 

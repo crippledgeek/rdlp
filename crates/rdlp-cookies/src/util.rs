@@ -3,9 +3,10 @@
 use std::path::Path;
 
 use log::debug;
-use reqwest::cookie::CookieStore;
-use reqwest::header::HeaderValue;
 use url::Url;
+use wreq::cookie::CookieStore;
+use wreq::header::HeaderValue;
+use wreq::Uri;
 
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.
 ///
@@ -23,8 +24,12 @@ pub(crate) fn insert_cookie_into_jar(
     let host = domain.trim_start_matches('.');
     let url_str = format!("{scheme}://{host}{path}");
 
-    let Ok(url) = Url::parse(&url_str) else {
+    if Url::parse(&url_str).is_err() {
         debug!("Invalid URL from cookie domain: {url_str}");
+        return false;
+    }
+    let Ok(uri) = url_str.parse::<Uri>() else {
+        debug!("Invalid Uri from cookie domain: {url_str}");
         return false;
     };
 
@@ -38,7 +43,7 @@ pub(crate) fn insert_cookie_into_jar(
 
     match HeaderValue::from_str(&set_cookie) {
         Ok(val) => {
-            jar.set_cookies(&mut std::iter::once(&val), &url);
+            jar.set_cookies(&mut std::iter::once(&val), &uri);
             true
         }
         Err(e) => {
