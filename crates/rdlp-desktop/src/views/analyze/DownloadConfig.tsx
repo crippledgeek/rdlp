@@ -4,7 +4,7 @@
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { FolderOpen, Download } from "lucide-react";
 import { z } from "zod";
 import { codecsQueryOptions } from "@/api/codecs";

@@ -4,7 +4,7 @@ import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { queryClient } from "./query/queryClient";
 import { registerDownloadEvents } from "./events/registerDownloadEvents";
 import { AppShell } from "./shell/AppShell";
-import { Toaster } from "./components/ui/sonner";
+import { ToastRegion } from "./components/ui/sonner";
 
 /** Inner component that uses hooks requiring QueryClientProvider. */
 function AppContent() {
@@ -22,7 +22,7 @@ function App() {
         <QueryClientProvider client={queryClient}>
             <HotkeysProvider>
                 <AppContent />
-                <Toaster />
+                <ToastRegion />
             </HotkeysProvider>
         </QueryClientProvider>
     );
