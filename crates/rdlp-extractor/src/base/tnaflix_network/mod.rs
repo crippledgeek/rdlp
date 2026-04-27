@@ -4,7 +4,6 @@
 //! which all use similar HTML structures and metadata patterns.
 
 mod formats;
-mod json_ld;
 
 #[cfg(test)]
 mod tests_basic;
@@ -21,9 +20,13 @@ use std::sync::LazyLock;
 // Re-export VideoMetadata type for crate-internal use
 pub(crate) use formats::VideoMetadata;
 
-// Re-export internal functions for testing
+// JSON-LD parsing lives in `base::common::json_ld`; bring it into local
+// scope so the body below keeps reading as `json_ld::extract_*`.
+use crate::base::common::json_ld;
+
+// Re-export internal functions for tests in the test_* submodules.
 #[cfg(test)]
-pub(crate) use json_ld::{
+pub(crate) use crate::base::common::json_ld::{
     extract_categories, extract_json_ld, extract_tags, extract_thumbnails, extract_view_count,
 };
 

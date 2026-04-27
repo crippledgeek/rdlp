@@ -1,13 +1,14 @@
 /**
- * Lightweight test mock for @/components/ui/select (Radix Select).
+ * Lightweight test mock for @/components/ui/select.
  *
- * Renders a native-like select with the same ARIA roles that tests query:
+ * The real implementation is a React Aria (Jolly UI) Select — there are
+ * no Radix interactive components in this project by policy. This mock
+ * renders a native-like select with the same ARIA roles that tests query:
  * - role="combobox" on the trigger (with text content from the selected item)
  * - role="option" on each item (visible only when open)
  *
- * This avoids the heavy Radix DOM tree (portals, scroll buttons, viewport
- * wrappers, pointer capture, ARIA state machines) that costs ~40-80ms per
- * render in tests.
+ * Avoids the heavy real DOM tree (portals, popover state, pointer capture,
+ * full ARIA wiring) that costs ~40-80ms per render in tests.
  */
 import * as React from "react";
 

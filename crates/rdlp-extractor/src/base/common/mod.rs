@@ -70,7 +70,10 @@ pub(crate) use rdlp_security::MAX_URL_LENGTH;
 /// // In your extractor's extract() method:
 /// let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 /// let id = BaseExtractor::extract_id_from_url(url, &MY_PATTERN, "id")
-///     .ok_or_else(|| RdlpError::Extraction("Could not extract video ID".into()))?;
+///     .ok_or_else(|| RdlpError::Extraction {
+///         message: "Could not extract video ID".to_string(),
+///         url: Some(url.to_string()),
+///     })?;
 /// ```
 pub struct BaseExtractor;
 
