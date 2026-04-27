@@ -24,7 +24,6 @@
 //! lookup endpoint is unavailable (e.g. the page exists but the JSON cache
 //! 404s, which the live site itself handles by retrying).
 
-mod decode;
 mod metadata;
 mod patterns;
 mod search;
@@ -37,9 +36,10 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::base::common::BaseExtractor;
+use crate::base::kvs::{api as kvs_api, file_formats as kvs_file_formats, url_obfuscation};
 
+pub(crate) const ABXXX_BASE_URL: &str = "https://abxxx.com";
 const ABXXX_NAME: &str = "ABXXX";
-const ABXXX_BASE_URL: &str = "https://abxxx.com";
 const ABXXX_PRIORITY: i32 = 50;
 /// Lifetime parameter (seconds) the site itself uses when calling videofile.php.
 const VIDEOFILE_LIFETIME: u32 = 86_400;
@@ -112,7 +112,7 @@ fn parse_query_metadata(query: &str) -> (Option<f64>, Option<u32>) {
 /// Convert one `videofile.php` JSON entry into a `Format`.
 fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> {
     let encoded = entry.get("video_url").and_then(|v| v.as_str())?;
-    let (path, query) = decode::decode_video_url(encoded)?;
+    let (path, query) = url_obfuscation::decode_video_url(encoded)?;
     let ext_dot = entry
         .get("format")
         .and_then(|v| v.as_str())
@@ -143,7 +143,7 @@ fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> 
 
 /// Apply file-format details from the slug-search enrichment to the single
 /// playable Format the videofile.php endpoint returned.
-fn apply_file_format_info(format: &mut Format, info: metadata::FileFormatInfo) {
+fn apply_file_format_info(format: &mut Format, info: kvs_file_formats::KvsFileFormatInfo) {
     if format.width.is_none() {
         format.width = info.width;
     }
@@ -213,7 +213,7 @@ impl InfoExtractor for AbxxxExtractor {
                 Some(f) => {
                     if duration_from_query.is_none()
                         && let Some(enc) = entry.get("video_url").and_then(|v| v.as_str())
-                        && let Some((_, Some(q))) = decode::decode_video_url(enc)
+                        && let Some((_, Some(q))) = url_obfuscation::decode_video_url(enc)
                     {
                         duration_from_query = parse_query_metadata(&q).0;
                     }
@@ -231,7 +231,9 @@ impl InfoExtractor for AbxxxExtractor {
         }
 
         // 2) Enrich with the per-video lookup endpoint (best-effort).
-        let lookup = if let Some(lookup_url) = metadata::lookup_endpoint(&video_id) {
+        let lookup = if let Some(lookup_url) =
+            kvs_api::video_lookup_endpoint(ABXXX_BASE_URL, &video_id)
+        {
             debug!("ABXXX: fetching lookup endpoint: {lookup_url}");
             match BaseExtractor::fetch_webpage_with_headers(
                 &lookup_url,
@@ -244,16 +246,16 @@ impl InfoExtractor for AbxxxExtractor {
             )
             .await
             {
-                Ok(body) => metadata::parse_lookup_response(&body).unwrap_or_default(),
+                Ok(body) => kvs_api::parse_video_lookup(&body).unwrap_or_default(),
                 Err(e) => {
                     debug!(
                         "ABXXX: lookup endpoint failed ({e}); falling back to slug-derived metadata"
                     );
-                    metadata::LookupMetadata::default()
+                    kvs_api::KvsVideoMetadata::default()
                 }
             }
         } else {
-            metadata::LookupMetadata::default()
+            kvs_api::KvsVideoMetadata::default()
         };
 
         // 3) Enrich format dimensions/filesize via slug-based search (best-effort).
@@ -272,7 +274,9 @@ impl InfoExtractor for AbxxxExtractor {
             .await
             {
                 Ok(body) => {
-                    if let Some(info) = metadata::parse_search_for_file_formats(&body, &video_id) {
+                    if let Some(info) =
+                        kvs_file_formats::parse_search_for_file_formats(&body, &video_id)
+                    {
                         for f in &mut formats {
                             apply_file_format_info(f, info);
                         }

@@ -1,6 +1,7 @@
-//! Decoder for ABXXX's obfuscated `video_url` field.
+//! Decoder for KVS's obfuscated `video_url` field.
 //!
-//! ABXXX (and several other KVS deployments) returns the playable URL from
+//! Many KVS deployments (ABXXX, AbJav and the rest of the "Ab*" network,
+//! plus several non-network sites) return the playable URL from
 //! `/api/videofile.php` in a lightly obfuscated form:
 //!
 //! 1. **Cyrillic homoglyph substitution.** Some Latin characters (`E`, `M`, `C`,
@@ -43,7 +44,7 @@ fn deobfuscate(input: &str) -> String {
 /// `query` is `None` when the input contains no `,` separator (older
 /// single-half encodings).
 #[must_use]
-pub fn decode_video_url(encoded: &str) -> Option<(String, Option<String>)> {
+pub(crate) fn decode_video_url(encoded: &str) -> Option<(String, Option<String>)> {
     let cleaned = deobfuscate(encoded);
     let (path_b64, query_b64) = match cleaned.split_once(',') {
         Some((p, q)) => (p, Some(q)),
