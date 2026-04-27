@@ -123,6 +123,9 @@ impl ExtractorRegistry {
 
         // Register ABXXX extractor (KVS site with JSON XHR player config)
         registry.register(Arc::new(AbxxxExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(AbxxxExtractor::new()));
 
         // Register SpankBang extractor
         registry.register(Arc::new(SpankBangExtractor::new()));
