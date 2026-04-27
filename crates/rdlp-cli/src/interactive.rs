@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use log::info;
 use rdlp_api::InteractiveCallback;
 use rdlp_api::{Format, InfoDict};
-use rdlp_table::{ColorMode, TableOpts, render_table_and_rows};
+use rdlp_table::{TableOpts, render_table_and_rows};
 
 /// CLI interactive callback backed by inquire.
 pub struct DialoguerCallback;
@@ -25,11 +25,7 @@ impl InteractiveCallback for DialoguerCallback {
             info!("LIVE stream detected — download may be incomplete");
         }
 
-        let opts = TableOpts {
-            width_override: None,
-            color: ColorMode::Auto,
-            compact: None,
-        };
+        let opts = TableOpts::default();
 
         let refs: Vec<&Format> = formats.iter().collect();
 

@@ -1,32 +1,11 @@
-//! Per-episode download logic for playlist downloads
+//! Per-episode download logic for playlist downloads.
 //!
-//! Contains `download_from_info` and `download_from_info_to_dir` which handle
-//! downloading individual episodes with lazy format resolution and CDN retry.
+//! Owns `download_from_info_to_dir`, which downloads an individual
+//! episode with lazy format resolution and CDN retry.
 
 use super::*;
 
 impl Orchestrator {
-    /// Download from pre-extracted InfoDict (internal helper)
-    ///
-    /// This method skips the extraction phase and starts from format selection.
-    /// Used by playlist downloads to avoid re-extracting already-fetched metadata.
-    #[allow(dead_code)]
-    pub(super) async fn download_from_info(
-        &self,
-        info: &rdlp_types::InfoDict,
-        interactive: bool,
-    ) -> Result<Option<PathBuf>> {
-        self.download_from_info_to_dir(
-            info,
-            interactive,
-            &self.config.output_directory,
-            &[],
-            None,
-            None,
-        )
-        .await
-    }
-
     /// Download from pre-extracted InfoDict to a specific directory
     ///
     /// This method is used by playlist downloads to save files to the playlist folder.

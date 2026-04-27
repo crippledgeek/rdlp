@@ -153,8 +153,4 @@ pub(in crate::orchestrator) enum TemplateError {
 
     #[error("Invalid format specifier '{specifier}'")]
     InvalidFormatSpecifier { specifier: String },
-
-    #[error("Required field '{field}' is missing and no default was provided")]
-    #[allow(dead_code)]
-    MissingField { field: String },
 }
