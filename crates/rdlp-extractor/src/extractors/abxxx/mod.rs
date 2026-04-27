@@ -24,7 +24,6 @@
 //! lookup endpoint is unavailable (e.g. the page exists but the JSON cache
 //! 404s, which the live site itself handles by retrying).
 
-mod metadata;
 mod patterns;
 mod search;
 
@@ -38,11 +37,13 @@ use serde_json::Value;
 use crate::base::common::BaseExtractor;
 use crate::base::kvs::{api as kvs_api, file_formats as kvs_file_formats, url_obfuscation};
 
-pub(crate) const ABXXX_BASE_URL: &str = "https://abxxx.com";
+const ABXXX_BASE_URL: &str = "https://abxxx.com";
 const ABXXX_NAME: &str = "ABXXX";
 const ABXXX_PRIORITY: i32 = 50;
 /// Lifetime parameter (seconds) the site itself uses when calling videofile.php.
 const VIDEOFILE_LIFETIME: u32 = 86_400;
+/// Per-page result count used by the slug-driven enrichment search.
+const SLUG_SEARCH_RESULTS_PER_PAGE: u32 = 60;
 
 /// ABXXX video extractor.
 #[derive(Default)]
@@ -59,6 +60,23 @@ impl AbxxxExtractor {
 /// Build the videofile.php endpoint URL for `video_id`.
 fn videofile_endpoint(video_id: &str) -> String {
     format!("{ABXXX_BASE_URL}/api/videofile.php?video_id={video_id}&lifetime={VIDEOFILE_LIFETIME}")
+}
+
+/// Build the slug-driven search URL used to look up file format details
+/// for a single video page.
+///
+/// The search query is the slug with hyphens replaced by spaces. The
+/// canonical row is then identified by matching `video_id` in the result
+/// set, not by relying on positional order — see
+/// [`crate::base::kvs::file_formats::parse_search_for_file_formats`].
+fn slug_search_endpoint(slug: &str) -> String {
+    let query = slug.replace('-', " ");
+    let q = urlencoding::encode(&query);
+    format!(
+        "{ABXXX_BASE_URL}/api/videos2.php?params=0/str/relevance/{count}/search..1.all..&s={q}",
+        count = SLUG_SEARCH_RESULTS_PER_PAGE,
+        q = q,
+    )
 }
 
 /// Build the conventional KVS preview thumbnail URL for `video_id`.
@@ -260,7 +278,7 @@ impl InfoExtractor for AbxxxExtractor {
 
         // 3) Enrich format dimensions/filesize via slug-based search (best-effort).
         if let Some(slug_str) = slug.as_deref() {
-            let search_url = metadata::slug_search_endpoint(slug_str);
+            let search_url = slug_search_endpoint(slug_str);
             debug!("ABXXX: enriching formats via slug search: {search_url}");
             match BaseExtractor::fetch_webpage_with_headers(
                 &search_url,
@@ -335,6 +353,13 @@ mod tests {
         assert!(e.suitable("https://abxxx.com/video/129452/excogi-katie-carmine-in-hd/"));
         assert!(e.suitable("https://www.abxxx.com/video/1/"));
         assert!(!e.suitable("https://example.com/video/1/title/"));
+    }
+
+    #[test]
+    fn slug_search_endpoint_replaces_hyphens_with_spaces() {
+        let url = slug_search_endpoint("excogi-katie-carmine-in-hd");
+        assert!(url.contains("&s=excogi%20katie%20carmine%20in%20hd"));
+        assert!(url.contains("/search..1.all.."));
     }
 
     #[test]
