@@ -13,16 +13,16 @@
 //! 2. `GET /api/json/video/{lifetime}/{e6}/{e3}/{id}.json` — rich per-video
 //!    metadata (real title, description, structured models + categories,
 //!    statistics, post date, full-resolution thumbnails). See
-//!    `metadata::lookup_endpoint`.
+//!    [`crate::base::kvs::api::video_lookup_endpoint`].
 //! 3. *Best-effort* `GET /api/videos2.php?…&s={slug-words}` — slug-based
 //!    search to pull the row with `file_dimensions` + `file_formats`,
 //!    which gives the playable variant's `width`/`height`/`filesize`.
 //!    A search miss is non-fatal: the extractor still ships a usable
 //!    Format without dimensions.
 //!
-//! Step 2 also shapes `humanize_slug` as a deterministic fallback when the
-//! lookup endpoint is unavailable (e.g. the page exists but the JSON cache
-//! 404s, which the live site itself handles by retrying).
+//! `humanize_slug` is the deterministic fallback title for the rare case
+//! where the lookup endpoint is unavailable (e.g. the page exists but the
+//! JSON cache 404s, which the live site itself handles by retrying).
 
 mod patterns;
 mod search;
@@ -37,13 +37,9 @@ use serde_json::Value;
 use crate::base::common::BaseExtractor;
 use crate::base::kvs::{api as kvs_api, file_formats as kvs_file_formats, url_obfuscation};
 
-const ABXXX_BASE_URL: &str = "https://abxxx.com";
+pub(crate) const ABXXX_BASE_URL: &str = "https://abxxx.com";
 const ABXXX_NAME: &str = "ABXXX";
 const ABXXX_PRIORITY: i32 = 50;
-/// Lifetime parameter (seconds) the site itself uses when calling videofile.php.
-const VIDEOFILE_LIFETIME: u32 = 86_400;
-/// Per-page result count used by the slug-driven enrichment search.
-const SLUG_SEARCH_RESULTS_PER_PAGE: u32 = 60;
 
 /// ABXXX video extractor.
 #[derive(Default)]
@@ -57,25 +53,19 @@ impl AbxxxExtractor {
     }
 }
 
-/// Build the videofile.php endpoint URL for `video_id`.
-fn videofile_endpoint(video_id: &str) -> String {
-    format!("{ABXXX_BASE_URL}/api/videofile.php?video_id={video_id}&lifetime={VIDEOFILE_LIFETIME}")
-}
-
-/// Build the slug-driven search URL used to look up file format details
-/// for a single video page.
+/// Build the slug-driven enrichment search URL.
 ///
-/// The search query is the slug with hyphens replaced by spaces. The
-/// canonical row is then identified by matching `video_id` in the result
-/// set, not by relying on positional order — see
-/// [`crate::base::kvs::file_formats::parse_search_for_file_formats`].
-fn slug_search_endpoint(slug: &str) -> String {
+/// Translates the URL slug to a search query (hyphens → spaces) so the
+/// canonical row — identified later by `video_id` match — surfaces in
+/// the first page of `/api/videos2.php` results.
+fn slug_search_url(slug: &str) -> String {
     let query = slug.replace('-', " ");
-    let q = urlencoding::encode(&query);
-    format!(
-        "{ABXXX_BASE_URL}/api/videos2.php?params=0/str/relevance/{count}/search..1.all..&s={q}",
-        count = SLUG_SEARCH_RESULTS_PER_PAGE,
-        q = q,
+    kvs_api::videos2_search_endpoint(
+        ABXXX_BASE_URL,
+        &query,
+        "relevance",
+        1,
+        kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
     )
 }
 
@@ -147,9 +137,10 @@ fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> 
     f.container = Some(ext.to_string());
     f.vcodec = Some("h264".to_string());
     f.acodec = Some("aac".to_string());
-    // The KVS API returns a single muxed stream representing the best variant
-    // available. Marking it explicitly avoids the UI rendering the QUALITY
-    // column as "Unknown".
+    // Placeholder: videofile.php returns one stream (the best). The slug-
+    // search enrichment overwrites this with the real `{height}p` label
+    // when it lands; if enrichment fails the GUI still has something
+    // better than the default "Unknown".
     f.format_note = Some("best".to_string());
 
     if let Some(q) = query.as_deref() {
@@ -161,6 +152,10 @@ fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> 
 
 /// Apply file-format details from the slug-search enrichment to the single
 /// playable Format the videofile.php endpoint returned.
+///
+/// Overwrites `format_note` with the real `{height}p` label when height is
+/// known; the placeholder set in `entry_to_format` survives only if
+/// enrichment failed.
 fn apply_file_format_info(format: &mut Format, info: kvs_file_formats::KvsFileFormatInfo) {
     if format.width.is_none() {
         format.width = info.width;
@@ -202,7 +197,8 @@ impl InfoExtractor for AbxxxExtractor {
         let slug = patterns::extract_slug(url);
 
         // 1) Fetch the playable URL via videofile.php (load-bearing).
-        let api_url = videofile_endpoint(&video_id);
+        let api_url =
+            kvs_api::videofile_endpoint(ABXXX_BASE_URL, &video_id, kvs_api::KVS_DEFAULT_LIFETIME);
         debug!("ABXXX: fetching videofile.php endpoint: {api_url}");
         let body = BaseExtractor::fetch_webpage_with_headers(
             &api_url,
@@ -250,7 +246,7 @@ impl InfoExtractor for AbxxxExtractor {
 
         // 2) Enrich with the per-video lookup endpoint (best-effort).
         let lookup = if let Some(lookup_url) =
-            kvs_api::video_lookup_endpoint(ABXXX_BASE_URL, &video_id)
+            kvs_api::video_lookup_endpoint(ABXXX_BASE_URL, &video_id, kvs_api::KVS_DEFAULT_LIFETIME)
         {
             debug!("ABXXX: fetching lookup endpoint: {lookup_url}");
             match BaseExtractor::fetch_webpage_with_headers(
@@ -278,7 +274,7 @@ impl InfoExtractor for AbxxxExtractor {
 
         // 3) Enrich format dimensions/filesize via slug-based search (best-effort).
         if let Some(slug_str) = slug.as_deref() {
-            let search_url = slug_search_endpoint(slug_str);
+            let search_url = slug_search_url(slug_str);
             debug!("ABXXX: enriching formats via slug search: {search_url}");
             match BaseExtractor::fetch_webpage_with_headers(
                 &search_url,
@@ -356,8 +352,8 @@ mod tests {
     }
 
     #[test]
-    fn slug_search_endpoint_replaces_hyphens_with_spaces() {
-        let url = slug_search_endpoint("excogi-katie-carmine-in-hd");
+    fn slug_search_url_replaces_hyphens_with_spaces() {
+        let url = slug_search_url("excogi-katie-carmine-in-hd");
         assert!(url.contains("&s=excogi%20katie%20carmine%20in%20hd"));
         assert!(url.contains("/search..1.all.."));
     }

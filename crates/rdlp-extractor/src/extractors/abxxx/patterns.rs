@@ -12,20 +12,20 @@ use std::sync::LazyLock;
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd/`
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd`
 /// - `https://www.abxxx.com/video/129452/`
-pub static ABXXX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static ABXXX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://(?:www\.)?abxxx\.com/video/(?P<id>\d+)(?:/(?P<slug>[^/?#]+))?/?")
         .expect("Valid ABXXX URL pattern")
 });
 
 /// Whether `url` is an ABXXX video page.
 #[must_use]
-pub fn is_suitable(url: &str) -> bool {
+pub(crate) fn is_suitable(url: &str) -> bool {
     ABXXX_URL_PATTERN.is_match(url)
 }
 
 /// Extract the numeric video id from the URL.
 #[must_use]
-pub fn extract_video_id(url: &str) -> Option<String> {
+pub(crate) fn extract_video_id(url: &str) -> Option<String> {
     ABXXX_URL_PATTERN
         .captures(url)
         .and_then(|c| c.name("id"))
@@ -34,7 +34,7 @@ pub fn extract_video_id(url: &str) -> Option<String> {
 
 /// Extract the slug (title segment) from the URL, if present.
 #[must_use]
-pub fn extract_slug(url: &str) -> Option<String> {
+pub(crate) fn extract_slug(url: &str) -> Option<String> {
     ABXXX_URL_PATTERN
         .captures(url)
         .and_then(|c| c.name("slug"))

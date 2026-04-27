@@ -22,12 +22,11 @@ use rdlp_types::{
 };
 use serde_json::Value;
 
-use super::AbxxxExtractor;
+use super::{ABXXX_BASE_URL, AbxxxExtractor};
 use crate::base::common::BaseExtractor;
+use crate::base::kvs::api as kvs_api;
 
-const ABXXX_BASE_URL: &str = "https://abxxx.com";
 const SEARCH_REFERER: &str = "https://abxxx.com/";
-const RESULTS_PER_PAGE: u32 = 60;
 const MAX_PLAYLIST_SIZE: usize = 500;
 
 /// Allowed values for the `sort` filter. Mirrors the sort modes the live site
@@ -38,18 +37,6 @@ const SORT_VALUES: &[(&str, &str)] = &[
     ("most-popular", "Most Popular"),
     ("top-rated", "Top Rated"),
 ];
-
-/// Build the search URL for one page.
-fn build_search_url(query: &str, sort: &str, page: u32) -> String {
-    let q = urlencoding::encode(query);
-    format!(
-        "{ABXXX_BASE_URL}/api/videos2.php?params=0/str/{sort}/{count}/search..{page}.all..&s={q}",
-        sort = sort,
-        count = RESULTS_PER_PAGE,
-        page = page,
-        q = q,
-    )
-}
 
 /// Read the `sort` filter from the query, validating against `SORT_VALUES`.
 fn resolved_sort(filters: &[SearchFilter]) -> &'static str {
@@ -63,17 +50,6 @@ fn resolved_sort(filters: &[SearchFilter]) -> &'static str {
         }
     }
     "relevance"
-}
-
-/// Parse a `MM:SS` or `HH:MM:SS` duration string into seconds.
-fn parse_duration(s: &str) -> Option<f64> {
-    let parts: Vec<u64> = s.split(':').filter_map(|p| p.trim().parse().ok()).collect();
-    match parts.as_slice() {
-        [s] => Some(*s as f64),
-        [m, s] => Some((m * 60 + s) as f64),
-        [h, m, s] => Some((h * 3600 + m * 60 + s) as f64),
-        _ => None,
-    }
 }
 
 /// Convert one `videos[]` JSON entry into a `SearchResultPreview`.
@@ -101,7 +77,7 @@ fn entry_to_preview(entry: &Value) -> Option<SearchResultPreview> {
     let duration = entry
         .get("duration")
         .and_then(|v| v.as_str())
-        .and_then(parse_duration);
+        .and_then(kvs_api::parse_kvs_duration);
 
     let actors: Vec<String> = entry
         .get("models")
@@ -151,23 +127,29 @@ fn entry_to_preview(entry: &Value) -> Option<SearchResultPreview> {
     })
 }
 
+/// Truncate a response body to the first N chars (not bytes) for safe
+/// inclusion in error messages — slicing on a byte boundary would panic
+/// on multi-byte UTF-8.
+fn truncate_chars(s: &str, n: usize) -> &str {
+    s.char_indices().nth(n).map(|(i, _)| &s[..i]).unwrap_or(s)
+}
+
 /// Parse the full JSON response into previews + pagination metadata.
 fn parse_response(body: &str) -> Result<(Vec<SearchResultPreview>, Option<u64>, u32)> {
     let parsed: Value =
         serde_json::from_str(body).map_err(|e| rdlp_core::RdlpError::Extraction {
             message: format!(
                 "ABXXX search returned non-JSON ({e}): {}",
-                &body[..body.len().min(200)]
+                truncate_chars(body, 200)
             ),
             url: None,
         })?;
 
-    let videos = parsed
+    let previews: Vec<SearchResultPreview> = parsed
         .get("videos")
         .and_then(|v| v.as_array())
-        .cloned()
+        .map(|videos| videos.iter().filter_map(entry_to_preview).collect())
         .unwrap_or_default();
-    let previews: Vec<SearchResultPreview> = videos.iter().filter_map(entry_to_preview).collect();
 
     let total: Option<u64> = parsed
         .get("total_count")
@@ -213,10 +195,15 @@ impl SearchExtractor for AbxxxExtractor {
         let sort = resolved_sort(&query.filters);
         let mut out: Vec<SearchResultPreview> = Vec::new();
         let mut page: u32 = 1;
-        let mut last_max_page: u32 = 1;
 
         while out.len() < cap {
-            let url = build_search_url(&query.query, sort, page);
+            let url = kvs_api::videos2_search_endpoint(
+                ABXXX_BASE_URL,
+                &query.query,
+                sort,
+                page,
+                kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
+            );
             debug!(
                 "[ABXXX] search page {page}: {}",
                 rdlp_security::sanitize_for_logging(&url)
@@ -233,7 +220,6 @@ impl SearchExtractor for AbxxxExtractor {
             .await?;
 
             let (mut previews, _total, max_page) = parse_response(&body)?;
-            last_max_page = max_page;
             if previews.is_empty() {
                 break;
             }
@@ -245,7 +231,6 @@ impl SearchExtractor for AbxxxExtractor {
         }
 
         out.truncate(cap);
-        let _ = last_max_page;
         Ok(out)
     }
 
@@ -256,7 +241,13 @@ impl SearchExtractor for AbxxxExtractor {
     ) -> Result<SearchPageResponse> {
         let page = query.page.unwrap_or(1).max(1);
         let sort = resolved_sort(&query.filters);
-        let url = build_search_url(&query.query, sort, page);
+        let url = kvs_api::videos2_search_endpoint(
+            ABXXX_BASE_URL,
+            &query.query,
+            sort,
+            page,
+            kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
+        );
         debug!(
             "[ABXXX] search_page page {page}: {}",
             rdlp_security::sanitize_for_logging(&url)
@@ -286,27 +277,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_url_encodes_query_and_page() {
-        let url = build_search_url("katie carmine", "relevance", 1);
-        assert_eq!(
-            url,
-            "https://abxxx.com/api/videos2.php?params=0/str/relevance/60/search..1.all..&s=katie%20carmine"
-        );
-    }
-
-    #[test]
-    fn build_url_paginates() {
-        let url = build_search_url("test", "latest-updates", 5);
-        assert!(url.contains("/latest-updates/"));
-        assert!(url.contains("search..5.all.."));
-    }
-
-    #[test]
-    fn parse_duration_handles_mm_ss_and_hh_mm_ss() {
-        assert_eq!(parse_duration("06:15"), Some(375.0));
-        assert_eq!(parse_duration("55:20"), Some(3320.0));
-        assert_eq!(parse_duration("1:05:42"), Some(3942.0));
-        assert_eq!(parse_duration(""), None);
+    fn truncate_chars_respects_utf8_boundaries() {
+        // Latin: byte-len equals char-len, ordinary truncation
+        assert_eq!(truncate_chars("hello world", 5), "hello");
+        // Multi-byte: each char is 2 bytes; truncating at 3 chars gives 6 bytes,
+        // which would have been a UTF-8-boundary panic with byte-index slicing.
+        assert_eq!(truncate_chars("ÅÄÖÅÄÖ", 3), "ÅÄÖ");
+        // n larger than length: returns the whole string
+        assert_eq!(truncate_chars("hi", 10), "hi");
     }
 
     #[test]

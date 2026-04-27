@@ -16,22 +16,32 @@
 
 use serde_json::Value;
 
-/// Default lifetime parameter (seconds) — matches the value the live JS
-/// uses for cache-warming the per-video endpoint.
-const DEFAULT_LOOKUP_LIFETIME: u32 = 86_400;
+/// Canonical KVS lifetime parameter (seconds). The same value backs every
+/// stock KVS endpoint that accepts a `lifetime` slot — `videofile.php`,
+/// `/api/json/video/...`, and `/api/videos2.php` — and matches the value
+/// the live JS uses for cache warming.
+pub(crate) const KVS_DEFAULT_LIFETIME: u32 = 86_400;
+
+/// Default per-page result count for `/api/videos2.php` listings — matches
+/// the live JS default and is honoured by every KVS deployment.
+pub(crate) const KVS_VIDEOS2_DEFAULT_PAGE_SIZE: u32 = 60;
+
+/// Build the playable-URL endpoint (`/api/videofile.php`).
+///
+/// `base_url` should NOT have a trailing slash (e.g. `https://abxxx.com`).
+#[must_use]
+pub(crate) fn videofile_endpoint(base_url: &str, video_id: &str, lifetime: u32) -> String {
+    format!("{base_url}/api/videofile.php?video_id={video_id}&lifetime={lifetime}")
+}
 
 /// Build the per-video lookup endpoint URL.
 ///
-/// `base_url` should NOT have a trailing slash (e.g. `https://abxxx.com`).
-/// Returns `None` when `video_id` isn't a positive integer.
+/// Mirrors the upstream KVS `video()` helper in `app.js`: the path embeds
+/// `floor(id/1e6)*1e6` and `floor(id/1e3)*1e3` bucket prefixes for cache
+/// sharding. `base_url` should NOT have a trailing slash. Returns `None`
+/// when `video_id` isn't a positive integer.
 #[must_use]
-pub(crate) fn video_lookup_endpoint(base_url: &str, video_id: &str) -> Option<String> {
-    video_lookup_endpoint_with_lifetime(base_url, video_id, DEFAULT_LOOKUP_LIFETIME)
-}
-
-/// Variant of [`video_lookup_endpoint`] that accepts an explicit lifetime.
-#[must_use]
-pub(crate) fn video_lookup_endpoint_with_lifetime(
+pub(crate) fn video_lookup_endpoint(
     base_url: &str,
     video_id: &str,
     lifetime: u32,
@@ -42,6 +52,26 @@ pub(crate) fn video_lookup_endpoint_with_lifetime(
     Some(format!(
         "{base_url}/api/json/video/{lifetime}/{e6}/{e3}/{id}.json"
     ))
+}
+
+/// Build the canonical KVS search URL (`/api/videos2.php` with
+/// `section=search`).
+///
+/// Mirrors the upstream `videos()` helper in `app.js`. The fixed slots
+/// (`lifetime=0` for jsond, `gender=str`, empty `object_id`/`type`/
+/// `duration`/`date`) match KVS defaults. Sibling deployments that need
+/// a different gender (e.g. `gay`, `tranny`) should adopt a wrapper that
+/// fills in the gender slot — most current consumers use the default.
+#[must_use]
+pub(crate) fn videos2_search_endpoint(
+    base_url: &str,
+    query: &str,
+    sort: &str,
+    page: u32,
+    count: u32,
+) -> String {
+    let q = urlencoding::encode(query);
+    format!("{base_url}/api/videos2.php?params=0/str/{sort}/{count}/search..{page}.all..&s={q}")
 }
 
 /// Per-video metadata extracted from the KVS lookup endpoint.
@@ -64,9 +94,13 @@ pub(crate) struct KvsVideoMetadata {
     pub actors: Vec<String>,
 }
 
-/// Parse `MM:SS` or `HH:MM:SS` into seconds. Returns `None` for any
-/// other shape.
-fn parse_kvs_duration(s: &str) -> Option<f64> {
+/// Parse a KVS duration string into seconds.
+///
+/// Accepts `MM:SS`, `HH:MM:SS`, and bare seconds (`SS`). Returns `None`
+/// for any other shape (e.g. the empty string, ISO 8601, or anything
+/// containing non-numeric segments).
+#[must_use]
+pub(crate) fn parse_kvs_duration(s: &str) -> Option<f64> {
     let parts: Vec<u64> = s.split(':').filter_map(|p| p.trim().parse().ok()).collect();
     match parts.as_slice() {
         [s] => Some(*s as f64),
@@ -179,22 +213,69 @@ mod tests {
     #[test]
     fn lookup_endpoint_uses_million_and_thousand_buckets() {
         assert_eq!(
-            video_lookup_endpoint("https://abxxx.com", "129452").as_deref(),
+            video_lookup_endpoint("https://abxxx.com", "129452", KVS_DEFAULT_LIFETIME).as_deref(),
             Some("https://abxxx.com/api/json/video/86400/0/129000/129452.json")
         );
         assert_eq!(
-            video_lookup_endpoint("https://example.com", "2500123").as_deref(),
+            video_lookup_endpoint("https://example.com", "2500123", KVS_DEFAULT_LIFETIME)
+                .as_deref(),
             Some("https://example.com/api/json/video/86400/2000000/2500000/2500123.json")
         );
-        assert!(video_lookup_endpoint("https://abxxx.com", "not-numeric").is_none());
+        assert!(video_lookup_endpoint("https://abxxx.com", "not-numeric", 0).is_none());
     }
 
     #[test]
-    fn lookup_endpoint_with_explicit_lifetime() {
+    fn lookup_endpoint_threads_explicit_lifetime() {
         assert_eq!(
-            video_lookup_endpoint_with_lifetime("https://abxxx.com", "1", 14400).as_deref(),
+            video_lookup_endpoint("https://abxxx.com", "1", 14400).as_deref(),
             Some("https://abxxx.com/api/json/video/14400/0/0/1.json")
         );
+    }
+
+    #[test]
+    fn videofile_endpoint_builds_expected_url() {
+        assert_eq!(
+            videofile_endpoint("https://abxxx.com", "129452", KVS_DEFAULT_LIFETIME),
+            "https://abxxx.com/api/videofile.php?video_id=129452&lifetime=86400"
+        );
+    }
+
+    #[test]
+    fn videos2_search_endpoint_encodes_query_and_threads_sort_and_page() {
+        let url = videos2_search_endpoint(
+            "https://abxxx.com",
+            "katie carmine",
+            "relevance",
+            1,
+            KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
+        );
+        assert_eq!(
+            url,
+            "https://abxxx.com/api/videos2.php?params=0/str/relevance/60/search..1.all..&s=katie%20carmine"
+        );
+    }
+
+    #[test]
+    fn videos2_search_endpoint_paginates() {
+        let url = videos2_search_endpoint(
+            "https://abxxx.com",
+            "x",
+            "latest-updates",
+            5,
+            KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
+        );
+        assert!(url.contains("/latest-updates/"));
+        assert!(url.contains("search..5.all.."));
+    }
+
+    #[test]
+    fn parse_kvs_duration_handles_all_three_shapes() {
+        assert_eq!(parse_kvs_duration("06:15"), Some(375.0));
+        assert_eq!(parse_kvs_duration("55:20"), Some(3320.0));
+        assert_eq!(parse_kvs_duration("1:05:42"), Some(3942.0));
+        assert_eq!(parse_kvs_duration("90"), Some(90.0));
+        assert_eq!(parse_kvs_duration(""), None);
+        assert_eq!(parse_kvs_duration("garbage"), None);
     }
 
     #[test]
