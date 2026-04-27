@@ -1,22 +1,31 @@
 //! ABXXX extractor.
 //!
 //! ABXXX is a KVS (Kernel Video Sharing) tube site that delivers its player
-//! configuration via a JSON XHR endpoint instead of inline `flashvars`.
+//! configuration via JSON XHR endpoints instead of inline `flashvars`.
 //!
 //! ## Extraction flow
-//! 1. `GET /video/{id}/{slug}/` to assert the page exists (and capture a Referer).
-//! 2. `GET /api/videofile.php?video_id={id}&lifetime=86400` returns a JSON array
-//!    of `{format, video_url, ...}` entries.
-//! 3. Each `video_url` is obfuscated (Cyrillic homoglyphs + comma-split base64);
-//!    `decode::decode_video_url` recovers `(path, query)`.
-//! 4. The canonical playable URL is `https://abxxx.com{path}?{query}`. The CDN
-//!    edge issues a 302 to a signed `https://ahcdn.abxxx.com/key=…` URL that the
-//!    downloader follows transparently.
+//! 1. `GET /api/videofile.php?video_id={id}&lifetime=86400` — JSON array of
+//!    `{format, video_url, ...}`. Each `video_url` is obfuscated (Cyrillic
+//!    homoglyphs + comma-split base64); `decode::decode_video_url` recovers
+//!    `(path, query)`. The canonical playable URL is
+//!    `https://abxxx.com{path}?{query}`; the CDN edge 302s to a signed
+//!    `https://ahcdn.abxxx.com/key=…` URL the downloader follows.
+//! 2. `GET /api/json/video/{lifetime}/{e6}/{e3}/{id}.json` — rich per-video
+//!    metadata (real title, description, structured models + categories,
+//!    statistics, post date, full-resolution thumbnails). See
+//!    `metadata::lookup_endpoint`.
+//! 3. *Best-effort* `GET /api/videos2.php?…&s={slug-words}` — slug-based
+//!    search to pull the row with `file_dimensions` + `file_formats`,
+//!    which gives the playable variant's `width`/`height`/`filesize`.
+//!    A search miss is non-fatal: the extractor still ships a usable
+//!    Format without dimensions.
 //!
-//! Title and thumbnail come from the URL slug + KVS screenshot convention because
-//! the page itself is rendered client-side and serves no SSR metadata.
+//! Step 2 also shapes `humanize_slug` as a deterministic fallback when the
+//! lookup endpoint is unavailable (e.g. the page exists but the JSON cache
+//! 404s, which the live site itself handles by retrying).
 
 mod decode;
+mod metadata;
 mod patterns;
 mod search;
 
@@ -120,12 +129,33 @@ fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> 
     f.container = Some(ext.to_string());
     f.vcodec = Some("h264".to_string());
     f.acodec = Some("aac".to_string());
+    // The KVS API returns a single muxed stream representing the best variant
+    // available. Marking it explicitly avoids the UI rendering the QUALITY
+    // column as "Unknown".
+    f.format_note = Some("best".to_string());
 
     if let Some(q) = query.as_deref() {
         let (_d, br) = parse_query_metadata(q);
         f.tbr = br.map(f64::from);
     }
     Some(f)
+}
+
+/// Apply file-format details from the slug-search enrichment to the single
+/// playable Format the videofile.php endpoint returned.
+fn apply_file_format_info(format: &mut Format, info: metadata::FileFormatInfo) {
+    if format.width.is_none() {
+        format.width = info.width;
+    }
+    if format.height.is_none() {
+        format.height = info.height;
+    }
+    if format.filesize.is_none() {
+        format.filesize = info.filesize;
+    }
+    if let Some(h) = info.height {
+        format.format_note = Some(format!("{h}p"));
+    }
 }
 
 #[async_trait]
@@ -153,9 +183,7 @@ impl InfoExtractor for AbxxxExtractor {
         })?;
         let slug = patterns::extract_slug(url);
 
-        // Touch the page to fail fast on 404 and prime any cookies the API needs.
-        let _ = BaseExtractor::fetch_webpage(url, ctx).await?;
-
+        // 1) Fetch the playable URL via videofile.php (load-bearing).
         let api_url = videofile_endpoint(&video_id);
         debug!("ABXXX: fetching videofile.php endpoint: {api_url}");
         let body = BaseExtractor::fetch_webpage_with_headers(
@@ -179,15 +207,15 @@ impl InfoExtractor for AbxxxExtractor {
         })?;
 
         let mut formats = Vec::with_capacity(entries.len());
-        let mut duration: Option<f64> = None;
+        let mut duration_from_query: Option<f64> = None;
         for (idx, entry) in entries.iter().enumerate() {
             match entry_to_format(&video_id, idx, entry) {
                 Some(f) => {
-                    if duration.is_none()
+                    if duration_from_query.is_none()
                         && let Some(enc) = entry.get("video_url").and_then(|v| v.as_str())
                         && let Some((_, Some(q))) = decode::decode_video_url(enc)
                     {
-                        duration = parse_query_metadata(&q).0;
+                        duration_from_query = parse_query_metadata(&q).0;
                     }
                     formats.push(f);
                 }
@@ -202,16 +230,83 @@ impl InfoExtractor for AbxxxExtractor {
             });
         }
 
-        let title = slug
-            .as_deref()
-            .map(humanize_slug)
-            .filter(|s| !s.is_empty())
+        // 2) Enrich with the per-video lookup endpoint (best-effort).
+        let lookup = if let Some(lookup_url) = metadata::lookup_endpoint(&video_id) {
+            debug!("ABXXX: fetching lookup endpoint: {lookup_url}");
+            match BaseExtractor::fetch_webpage_with_headers(
+                &lookup_url,
+                &[
+                    ("Referer", url),
+                    ("Accept", "application/json, text/plain, */*"),
+                    ("X-Requested-With", "XMLHttpRequest"),
+                ],
+                ctx,
+            )
+            .await
+            {
+                Ok(body) => metadata::parse_lookup_response(&body).unwrap_or_default(),
+                Err(e) => {
+                    debug!(
+                        "ABXXX: lookup endpoint failed ({e}); falling back to slug-derived metadata"
+                    );
+                    metadata::LookupMetadata::default()
+                }
+            }
+        } else {
+            metadata::LookupMetadata::default()
+        };
+
+        // 3) Enrich format dimensions/filesize via slug-based search (best-effort).
+        if let Some(slug_str) = slug.as_deref() {
+            let search_url = metadata::slug_search_endpoint(slug_str);
+            debug!("ABXXX: enriching formats via slug search: {search_url}");
+            match BaseExtractor::fetch_webpage_with_headers(
+                &search_url,
+                &[
+                    ("Referer", url),
+                    ("Accept", "application/json, text/plain, */*"),
+                    ("X-Requested-With", "XMLHttpRequest"),
+                ],
+                ctx,
+            )
+            .await
+            {
+                Ok(body) => {
+                    if let Some(info) = metadata::parse_search_for_file_formats(&body, &video_id) {
+                        for f in &mut formats {
+                            apply_file_format_info(f, info);
+                        }
+                    }
+                }
+                Err(e) => debug!(
+                    "ABXXX: slug-search enrichment failed ({e}); shipping without dimensions"
+                ),
+            }
+        }
+
+        // 4) Compose the final InfoDict, preferring lookup-derived fields.
+        let title = lookup
+            .title
+            .clone()
+            .or_else(|| slug.as_deref().map(humanize_slug).filter(|s| !s.is_empty()))
             .unwrap_or_else(|| format!("ABXXX video {video_id}"));
 
         let mut info = InfoDict::new(video_id.clone(), title, ABXXX_NAME, url);
         info.formats = formats;
-        info.duration = duration;
-        info.thumbnail = thumbnail_url(&video_id);
+        info.duration = lookup.duration.or(duration_from_query);
+        info.description = lookup.description;
+        info.thumbnail = lookup.thumbnail.or_else(|| thumbnail_url(&video_id));
+        info.upload_date = lookup.upload_date;
+        info.view_count = lookup.view_count;
+        info.average_rating = lookup.average_rating;
+        info.uploader = lookup.uploader;
+        info.uploader_id = lookup.uploader_id;
+        if !lookup.actors.is_empty() {
+            info.actors = lookup.actors;
+        }
+        if !lookup.categories.is_empty() {
+            info.categories = Some(lookup.categories);
+        }
         info.age_limit = Some(18);
         info.propagate_duration();
 
