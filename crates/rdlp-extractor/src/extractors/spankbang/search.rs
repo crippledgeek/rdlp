@@ -116,12 +116,16 @@ pub(crate) fn parse_view_count(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let (num_part, multiplier) = match s.chars().last() {
-        Some('K') | Some('k') => (&s[..s.len() - 1], 1_000.0_f64),
-        Some('M') | Some('m') => (&s[..s.len() - 1], 1_000_000.0_f64),
-        Some('B') | Some('b') => (&s[..s.len() - 1], 1_000_000_000.0_f64),
-        Some(c) if c.is_ascii_digit() => (s, 1.0_f64),
-        _ => return None,
+    let (num_part, multiplier) = if let Some(rest) = s.strip_suffix(['K', 'k']) {
+        (rest, 1_000.0_f64)
+    } else if let Some(rest) = s.strip_suffix(['M', 'm']) {
+        (rest, 1_000_000.0_f64)
+    } else if let Some(rest) = s.strip_suffix(['B', 'b']) {
+        (rest, 1_000_000_000.0_f64)
+    } else if s.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+        (s, 1.0_f64)
+    } else {
+        return None;
     };
     let cleaned: String = num_part.chars().filter(|c| *c != ',').collect();
     cleaned.parse::<f64>().ok().map(|n| (n * multiplier) as u64)

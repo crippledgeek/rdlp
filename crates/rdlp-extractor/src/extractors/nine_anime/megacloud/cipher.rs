@@ -199,8 +199,14 @@ fn keygen(megacloud_key: &str, client_key: &str) -> String {
         .map(|c| (c as u32) ^ KEYGEN_XOR_VAL)
         .collect();
 
-    // Circular shift (operates on char-code indices, not byte indices)
+    // Circular shift (operates on char-code indices, not byte indices). An
+    // empty `temp_codes` would divide-by-zero on the modulo below — that
+    // shouldn't happen with a well-formed megacloud payload, but external
+    // input is never trusted.
     let len = temp_codes.len();
+    if len == 0 {
+        return String::new();
+    }
     let pivot = ((l_hash % len) + KEYGEN_SHIFT_VAL) % len;
     let shifted: Vec<u32> = temp_codes[pivot..]
         .iter()
