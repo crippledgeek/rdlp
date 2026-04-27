@@ -18,7 +18,7 @@ post-processes with FFmpeg library bindings. Inspired by
 
 ## Supported Sites
 
-PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, plus a generic fallback extractor.
+PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, ABXXX, plus a generic fallback extractor.
 
 See `rdlp --list-extractors` for the current list.
 
@@ -82,7 +82,7 @@ Run `rdlp --help` for the full option list.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODING_RULES.md](CODING_RULES.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODING_RULES.md](CODING_RULES.md). For adding a new site extractor, start at [EXTRACTORS.md](EXTRACTORS.md).
 
 ## License
 

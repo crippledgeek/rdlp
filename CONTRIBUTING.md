@@ -22,7 +22,7 @@ Have an idea? Open an issue with:
 
 ### Add Site Extractors
 
-One of the best ways to contribute is adding support for new sites. See [Adding a New Extractor](#adding-a-new-extractor) below.
+One of the best ways to contribute is adding support for new sites. See **[EXTRACTORS.md](EXTRACTORS.md)** for the end-to-end guide (probing the site with `rdlp-probe`, picking the right extractor shape, registering, and testing). The summary in [Adding a New Extractor](#adding-a-new-extractor) below covers conventions and reference patterns.
 
 ### Write Tests
 
@@ -156,6 +156,8 @@ git commit -m "docs: improve installation instructions"
 **Scope examples:** `extractor`, `downloader`, `cli`, `core`, `postprocess`
 
 ## Adding a New Extractor
+
+> **Start here:** [EXTRACTORS.md](EXTRACTORS.md) is the canonical, up-to-date guide for writing a new extractor end-to-end. The sections below remain as a conventions reference, but if anything conflicts the EXTRACTORS.md version wins.
 
 ### Authoring Workflow with `rdlp-probe`
 
