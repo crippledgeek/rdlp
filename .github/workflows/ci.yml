@@ -127,6 +127,12 @@ jobs:
           components: clippy
 
       - uses: swatinem/rust-cache@v2
+        with:
+          # Share one cache pool per platform across all branches/PRs so
+          # cold-cache rebuilds of boring-sys (multi-minute C++ build) and
+          # the workspace tree don't repeat on every PR. Cache is keyed by
+          # platform + Cargo.lock + rustc version under the hood.
+          shared-key: rust-${{ matrix.platform }}
 
       # --- Fast linker (rust-lld bundled with Rust, lld via apt) ---
 
@@ -144,15 +150,8 @@ jobs:
           mkdir -p .cargo
           printf '[target.x86_64-pc-windows-msvc]\nlinker = "rust-lld"\n' >> .cargo/config.toml
 
-      # --- Workspace lint & test (default members: libs + CLI) ---
-
-      - name: Clippy (workspace)
-        run: cargo clippy -- -D warnings
-
-      - name: Test (workspace)
-        run: cargo test
-
-      # --- Desktop frontend (must build before Rust desktop checks) ---
+      # --- Desktop frontend (must build before any Rust pass, because
+      #     rdlp-desktop's tauri build script reads dist/ via tauri.conf.json) ---
 
       - name: Install frontend dependencies
         working-directory: crates/rdlp-desktop
@@ -168,10 +167,12 @@ jobs:
           npx tsc --noEmit
           npm test
 
-      # --- Desktop Rust backend (requires frontend dist/) ---
+      # --- Single workspace lint & test pass (covers libs + CLI + desktop +
+      #     probe; eliminates the prior double-compile of the shared dep tree
+      #     that happened when desktop was a second pass). ---
 
-      - name: Clippy (desktop)
-        run: cargo clippy -p rdlp-desktop -- -D warnings
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test (desktop)
-        run: cargo test -p rdlp-desktop
+      - name: Test (workspace)
+        run: cargo test --workspace
