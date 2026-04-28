@@ -93,7 +93,12 @@ export function BottomDrawer() {
                 </TabList>
 
                 {/* Active job status — right side */}
-                <div className="flex-1 min-w-0 flex items-center justify-end gap-2 px-2">
+                <div
+                    data-testid="drawer-status"
+                    role="status"
+                    aria-live="polite"
+                    className="flex-1 min-w-0 flex items-center justify-end gap-2 px-2"
+                >
                     {activeJob ? (
                         <>
                             <span className="w-1.5 h-1.5 rounded-full bg-[#e8a838] animate-pulse shrink-0" />

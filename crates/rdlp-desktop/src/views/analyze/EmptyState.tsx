@@ -5,7 +5,10 @@ import { Link2 } from "lucide-react";
 
 export function EmptyState() {
     return (
-        <div className="flex flex-col items-center justify-center h-full gap-6 p-8 select-none">
+        <div
+            aria-live="polite"
+            className="flex flex-col items-center justify-center h-full gap-6 p-8 select-none"
+        >
             <div className="flex flex-col items-center gap-3 text-center">
                 <div className="w-12 h-12 rounded-full bg-[#0e0e1e] border border-[#1a1a2e] flex items-center justify-center">
                     <Link2 className="w-5 h-5 text-[#4a9eff]" />

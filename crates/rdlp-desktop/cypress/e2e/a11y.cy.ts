@@ -79,4 +79,22 @@ describe("a11y: WCAG 2.1 AA regression", () => {
         cy.contains("button", /^debug$/i)
             .should("have.attr", "aria-pressed", "false");
     });
+
+    it("status pill and empty states use live regions", () => {
+        // Drawer status row announces job state.
+        cy.get('[data-testid="drawer-status"]').should(
+            "have.attr",
+            "aria-live",
+            "polite",
+        );
+        // Analyze empty state lives inside a polite live region.
+        cy.goToSearch();
+        cy.contains("Paste a URL to begin")
+            .closest('[aria-live="polite"]')
+            .should("exist");
+        // StatusBadge defaults to role=status (polite). The 'failed' variant
+        // upgrades to role=alert.
+        cy.goToQueue();
+        cy.get('[role="status"], [role="alert"]').should("exist");
+    });
 });

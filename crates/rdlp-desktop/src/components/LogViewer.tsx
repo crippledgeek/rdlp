@@ -193,7 +193,7 @@ export function LogViewer() {
 
             {/* Virtual list */}
             {filtered.length === 0 ? (
-                <div className="flex items-center justify-center flex-1">
+                <div aria-live="polite" className="flex items-center justify-center flex-1">
                     <p className="text-[10px] text-[var(--text-muted)] font-mono">No log entries</p>
                 </div>
             ) : (
