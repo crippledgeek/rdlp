@@ -161,3 +161,59 @@ fn invalid(reason: &str) -> Result<(), PluginError> {
         reason: reason.to_string(),
     })
 }
+
+/// Produce the canonical byte form of a manifest for signing.
+///
+/// Properties:
+/// - keys sorted lexicographically at the top level
+/// - list contents sorted lexicographically
+/// - `signature` block excluded (the signature signs everything except itself)
+/// - LF line endings, single space around `=`
+/// - optional fields included only when present
+///
+/// Reference implementation in another language must produce identical bytes
+/// for an equivalent manifest. Test fixtures live in
+/// `crates/rdlp-plugin/tests/manifest_canonical.rs`.
+#[must_use]
+pub fn canonical_bytes(m: &Manifest) -> Vec<u8> {
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+
+    let mut top: BTreeMap<&str, String> = BTreeMap::new();
+    top.insert("capabilities", string_list(&m.capabilities));
+    top.insert("claims_override", string_list(&m.claims_override));
+    top.insert("matches", string_list(&m.matches));
+    top.insert("name", quote_str(&m.name));
+    top.insert("priority", m.priority.to_string());
+    top.insert("supports_search", m.supports_search.to_string());
+    top.insert("version", quote_str(&m.version));
+    top.insert("wit_version", quote_str(&m.wit_version));
+    if let Some(rx) = &m.url_regex {
+        top.insert("url_regex", quote_str(rx));
+    }
+
+    let mut out = String::new();
+    for (k, v) in &top {
+        let _ = writeln!(out, "{k} = {v}");
+    }
+    out.into_bytes()
+}
+
+fn quote_str(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+fn string_list(v: &[String]) -> String {
+    let mut s = String::from("[");
+    let mut sorted = v.to_vec();
+    sorted.sort();
+    for (i, item) in sorted.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(&quote_str(item));
+    }
+    s.push(']');
+    s
+}
