@@ -49,6 +49,12 @@ static DURATION_SELECTOR: LazyLock<Selector> =
 static VIEWS_ICON_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("i.icon-eye").expect("Valid views icon selector"));
 
+/// Uploader: `<a class="badge ..." href="/profile/{user}">` inside each
+/// card. The first matching anchor's trimmed text is the display name.
+static UPLOADER_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"a.badge[href*="/profile/"]"#).expect("Valid TNAFlix uploader selector")
+});
+
 /// Pagination links: Bootstrap `.pagination .page-link` anchors.
 static PAGE_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(".pagination a.page-link").expect("Valid TNAFlix pagination selector")
@@ -131,12 +137,19 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .map(|el| el.text().collect::<String>())
             .and_then(|s| crate::base::common::BaseExtractor::parse_human_count(s.trim()));
 
+        // Uploader: first /profile/ link inside the card.
+        let uploader = item
+            .select(&UPLOADER_SELECTOR)
+            .next()
+            .map(|a| a.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
+
         results.push(SearchResultPreview {
             video_url,
             title,
             thumbnail_url,
             duration,
-            uploader: None,
+            uploader,
             actors: vec![],
             view_count,
             upload_date: None,
@@ -266,6 +279,31 @@ mod tests {
                 </div>
             </div>"#
         )
+    }
+
+    /// Regression: prior to this fix every result had `uploader = None`
+    /// because the card-level `/profile/` link was not extracted. The
+    /// live fixture (captured 2026-04-28 from `/search.php?what=teen`)
+    /// has 60 cards, most carrying a `<a class="badge..." href="/profile/...">`
+    /// link.
+    #[test]
+    fn parse_search_results_extracts_uploader_from_live_fixture() {
+        const LIVE: &str = include_str!("tests/tnaflix_search_live.html");
+        let results = parse_search_results(LIVE);
+        assert!(!results.is_empty(), "live fixture should yield results");
+
+        let with_uploader = results.iter().filter(|r| r.uploader.is_some()).count();
+        assert!(
+            with_uploader >= results.len() / 2,
+            "expected most rows to carry uploader; got {with_uploader}/{}",
+            results.len()
+        );
+
+        // Sanity: uploader text must not contain HTML or whitespace artefacts.
+        for u in results.iter().filter_map(|r| r.uploader.as_deref()) {
+            assert!(!u.contains('<'), "uploader contains HTML: {u:?}");
+            assert_eq!(u, u.trim(), "uploader has unstripped whitespace: {u:?}");
+        }
     }
 
     #[test]
