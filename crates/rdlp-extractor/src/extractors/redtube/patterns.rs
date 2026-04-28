@@ -44,6 +44,13 @@ pub static HTML_VIDEO_CARD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     .expect("Valid HTML video card pattern")
 });
 
+/// Per-card uploader marker. RedTube emits `data-uploader-name="…"` on
+/// the outer `<li>` of every search result; the Nth match pairs with the
+/// Nth `HTML_VIDEO_CARD_PATTERN` hit by document order.
+pub static HTML_UPLOADER_NAME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"data-uploader-name="(?P<name>[^"]+)""#).expect("Valid uploader-name pattern")
+});
+
 /// Number of results per API page.
 pub(crate) const API_RESULTS_PER_PAGE: u32 = 20;
 
