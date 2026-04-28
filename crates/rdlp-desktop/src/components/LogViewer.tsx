@@ -68,14 +68,14 @@ const LEVEL_COLORS: Record<SeverityFilter, string> = {
     info: "text-[#aaaaaa]",
     warn: "text-[#e8a838]",
     error: "text-[#e85858]",
-    debug: "text-[#555555]",
+    debug: "text-[var(--text-muted)]",
 };
 
 const LEVEL_BG: Record<SeverityFilter, string> = {
     info: "bg-[#1a2a4a] text-[#4a9eff]",
     warn: "bg-[#2a1f0a] text-[#e8a838]",
     error: "bg-[#2a0a0a] text-[#e85858]",
-    debug: "bg-[#141414] text-[#555555]",
+    debug: "bg-[#141414] text-[var(--text-muted)]",
 };
 
 function formatTime(ts: number): string {
@@ -150,7 +150,7 @@ export function LogViewer() {
                                 "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors h-auto",
                                 activeFilters.has(level)
                                     ? LEVEL_BG[level]
-                                    : "text-[#333333] bg-transparent hover:text-[#555555]",
+                                    : "text-[var(--text-muted)] bg-transparent hover:text-[#aaaaaa]",
                             )}
                         >
                             {level}
@@ -158,7 +158,7 @@ export function LogViewer() {
                     ))}
                 </div>
 
-                <span className="text-[10px] text-[#333333] font-mono ml-1">
+                <span className="text-[10px] text-[var(--text-muted)] font-mono ml-1">
                     {filtered.length}/{allEntries.length}
                 </span>
 
@@ -180,7 +180,7 @@ export function LogViewer() {
                         size="icon"
                         onPress={clearLogs}
                         aria-label="Clear logs"
-                        className="p-1 rounded-[3px] text-[#333333] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors h-auto bg-transparent"
+                        className="p-1 rounded-[3px] text-[var(--text-muted)] hover:text-[#aaaaaa] hover:bg-[#1a1a2e] transition-colors h-auto bg-transparent"
                     >
                         <X className="w-3 h-3" />
                     </Button>
@@ -190,7 +190,7 @@ export function LogViewer() {
             {/* Virtual list */}
             {filtered.length === 0 ? (
                 <div className="flex items-center justify-center flex-1">
-                    <p className="text-[10px] text-[#333333] font-mono">No log entries</p>
+                    <p className="text-[10px] text-[var(--text-muted)] font-mono">No log entries</p>
                 </div>
             ) : (
                 <div
@@ -223,7 +223,7 @@ export function LogViewer() {
                                     }}
                                     className="flex items-start gap-2 px-2 py-px hover:bg-[#0e0e1e]"
                                 >
-                                    <span className="text-[10px] font-mono text-[#333333] shrink-0 select-none">
+                                    <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0 select-none">
                                         {formatTime(entry.timestamp)}
                                     </span>
                                     <span

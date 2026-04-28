@@ -12,13 +12,13 @@ export function EmptyState() {
                 </div>
                 <div>
                     <p className="text-[15px] font-medium text-[#eeeeee] mb-1">Paste a URL to begin</p>
-                    <p className="text-[12px] text-[#666666]">
+                    <p className="text-[12px] text-[var(--text-muted)]">
                         Supports video sites with HLS, HTTP, and DASH streams
                     </p>
                 </div>
             </div>
 
-            <div className="flex items-center gap-2 text-[11px] text-[#444444]">
+            <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
                 <span className="kbd-chip">Ctrl+K</span>
                 <span>to focus the command bar</span>
             </div>

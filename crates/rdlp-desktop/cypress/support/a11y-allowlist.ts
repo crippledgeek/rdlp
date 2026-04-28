@@ -28,33 +28,14 @@ export interface AllowlistEntry {
 }
 
 const ENTRIES: Record<PageId, AllowlistEntry[]> = {
-    "search-empty": [
-        {
-            rule: "color-contrast",
-            reason: "Empty-state hint and kbd chip use sub-AA colors. Tracked.",
-            issue: "https://github.com/crippledgeek/rdlp/issues/204",
-        },
-    ],
+    "search-empty": [],
     "search-results": [],
-    "queue-empty": [
-        {
-            rule: "color-contrast",
-            reason: "Empty-state hint uses sub-AA color. Tracked.",
-            issue: "https://github.com/crippledgeek/rdlp/issues/204",
-        },
-    ],
+    "queue-empty": [],
     "queue-active": [],
     "history": [],
     "settings": [],
     "format-dialog": [],
-    "logs-expanded": [
-        {
-            rule: "color-contrast",
-            reason:
-                "Inactive log filter chips, no-entries placeholder, counter, and timestamps use sub-AA colors. Tracked.",
-            issue: "https://github.com/crippledgeek/rdlp/issues/204",
-        },
-    ],
+    "logs-expanded": [],
 };
 
 /**

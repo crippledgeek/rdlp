@@ -47,8 +47,8 @@
         /* Text tokens */
         --text-primary: #eeeeee;
         --text-secondary: #aaaaaa;
-        --text-muted: #666666;
-        --text-disabled: #444444;
+        --text-muted: #7a7a8a;     /* ~4.6:1 on #0a0a1a — WCAG AA */
+        --text-disabled: #6a6a78;  /* ~3.7:1 — WCAG 1.4.3 inactive-UI exempt */
         /* Semantic tokens */
         --success: #4a9e4a;
         --warning: #e8a838;
