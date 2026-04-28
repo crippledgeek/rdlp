@@ -64,4 +64,19 @@ describe("a11y: WCAG 2.1 AA regression", () => {
             .should("have.attr", "aria-expanded", "true")
             .and("have.attr", "aria-controls", "bottom-drawer-panel");
     });
+
+    it("log severity chips toggle aria-pressed", () => {
+        cy.get('[aria-label="Expand drawer"], [aria-label="Collapse drawer"]')
+            .first()
+            .click();
+        // All four chips start pressed (default filter set is full).
+        ["info", "warn", "error", "debug"].forEach((level) => {
+            cy.contains("button", new RegExp(`^${level}$`, "i"))
+                .should("have.attr", "aria-pressed", "true");
+        });
+        // Toggle "debug" off and re-check.
+        cy.contains("button", /^debug$/i).click();
+        cy.contains("button", /^debug$/i)
+            .should("have.attr", "aria-pressed", "false");
+    });
 });

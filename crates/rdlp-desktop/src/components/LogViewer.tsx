@@ -141,21 +141,25 @@ export function LogViewer() {
             {/* Toolbar */}
             <div className="flex items-center gap-2 px-2 py-1 border-b border-[#1a1a2e] shrink-0">
                 <div className="flex items-center gap-1">
-                    {(["info", "warn", "error", "debug"] as SeverityFilter[]).map((level) => (
-                        <Button
-                            key={level}
-                            variant="ghost"
-                            onPress={() => toggleFilter(level)}
-                            className={cn(
-                                "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors h-auto",
-                                activeFilters.has(level)
-                                    ? LEVEL_BG[level]
-                                    : "text-[var(--text-muted)] bg-transparent hover:text-[#aaaaaa]",
-                            )}
-                        >
-                            {level}
-                        </Button>
-                    ))}
+                    {(["info", "warn", "error", "debug"] as SeverityFilter[]).map((level) => {
+                        const isActive = activeFilters.has(level);
+                        return (
+                            <Button
+                                key={level}
+                                variant="ghost"
+                                aria-pressed={isActive}
+                                onPress={() => toggleFilter(level)}
+                                className={cn(
+                                    "px-1.5 py-0.5 rounded-[3px] text-[9px] font-medium uppercase tracking-wide transition-colors h-auto",
+                                    isActive
+                                        ? cn(LEVEL_BG[level], "ring-1 ring-inset ring-current")
+                                        : "text-[var(--text-muted)] bg-transparent hover:text-[#aaaaaa]",
+                                )}
+                            >
+                                {level}
+                            </Button>
+                        );
+                    })}
                 </div>
 
                 <span className="text-[10px] text-[var(--text-muted)] font-mono ml-1">
