@@ -49,6 +49,7 @@ url = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
+rand = "0.8.5"
 
 [lints]
 workspace = true
