@@ -22,6 +22,7 @@ import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/ap
 import { setAnalyzeUrl } from "@/stores/uiStore";
 import { SearchFilterBar } from "./SearchFilterBar";
 import { searchResultColumns } from "./searchResultColumns";
+import { uploaderCellState } from "./uploaderCellContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import type { SearchResultPreview } from "@/types";
@@ -90,17 +91,22 @@ function SearchResultRow({
                     );
                 }
                 if (cell.column.id === "uploader") {
-                    if (merged.uploader != null) {
+                    const state = uploaderCellState({
+                        uploader: merged.uploader,
+                        isEnriching,
+                        enrichmentResolved: enriched != null,
+                    });
+                    if (state.kind === "loaded") {
                         return (
                             <td
                                 key={cell.id}
                                 className="px-2 py-1.5 text-[12px] text-[#aaaaaa] truncate"
                             >
-                                {merged.uploader}
+                                {state.content}
                             </td>
                         );
                     }
-                    if (isEnriching) {
+                    if (state.kind === "loading") {
                         return (
                             <td
                                 key={cell.id}
@@ -110,14 +116,7 @@ function SearchResultRow({
                             </td>
                         );
                     }
-                    // Enrichment resolved with no uploader — the video page
-                    // genuinely has no studio / pornstar / profile link.
-                    // Render an italic "Unavailable" so the user can
-                    // distinguish "we tried and the page has nothing" (this
-                    // state) from "still loading" (the pulse above) and from
-                    // "we never attempted" (default — when isVisible was
-                    // never true).
-                    if (enriched && merged.uploader == null) {
+                    if (state.kind === "unavailable") {
                         return (
                             <td
                                 key={cell.id}
@@ -128,8 +127,9 @@ function SearchResultRow({
                             </td>
                         );
                     }
-                    // Fall through to the column-defined cell ("—") — the
-                    // initial state before IntersectionObserver fires.
+                    // state.kind === "fallthrough" — let the column-defined
+                    // cell render (initial state before IntersectionObserver
+                    // fires).
                 }
                 return (
                     <td
