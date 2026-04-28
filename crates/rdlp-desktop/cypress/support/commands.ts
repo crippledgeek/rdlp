@@ -39,4 +39,8 @@ Cypress.Commands.add("goToSearch", () => {
     cy.contains("nav button", "Search").click();
 });
 
+// cypress-axe registers cy.injectAxe() and cy.checkA11y() globally via its
+// import in cypress/support/e2e.ts. Types ship with the package; no extra
+// declaration needed here.
+
 export {};
