@@ -13,7 +13,14 @@ import { allowlistFor } from "../support/a11y-allowlist";
 
 const WCAG_AA_TAGS = ["wcag2a", "wcag2aa", "wcag21aa"];
 
-function logViolations(violations: { id: string; impact?: string; description: string; nodes: { target: unknown[] }[] }[]) {
+type AxeResult = {
+    id: string;
+    impact?: string | null;
+    description: string;
+    nodes: { target: unknown[] }[];
+};
+
+function logViolations(violations: AxeResult[]) {
     if (violations.length === 0) return;
     const data = violations.map((v) => ({
         rule: v.id,
