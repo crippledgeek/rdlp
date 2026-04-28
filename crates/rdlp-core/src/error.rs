@@ -116,6 +116,16 @@ impl RdlpError {
             url: Some(url.to_string()),
         }
     }
+
+    /// Create a `Download` error with a URL — symmetry with `extraction`
+    /// and `network`. Avoids `RdlpError::Download { … }` struct-literal
+    /// noise at the dozen-or-so call sites that hit this variant.
+    pub fn download(message: impl Into<String>, url: &str) -> Self {
+        Self::Download {
+            message: message.into(),
+            url: Some(url.to_string()),
+        }
+    }
 }
 
 /// Result type alias for rdlp operations

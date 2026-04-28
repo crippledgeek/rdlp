@@ -331,28 +331,6 @@ pub(crate) fn extract_categories(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
     })
 }
 
-/// Parse ISO 8601 duration (e.g., "PT1H2M3S") to seconds.
-pub(crate) fn parse_iso8601_duration(duration: &str) -> Option<f64> {
-    use super::selectors::ISO8601_DURATION_PATTERN;
-
-    let caps = ISO8601_DURATION_PATTERN.captures(duration)?;
-    let hours: f64 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-    let minutes: f64 = caps
-        .get(2)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-    let seconds: f64 = caps
-        .get(3)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-
-    let total = hours * 3600.0 + minutes * 60.0 + seconds;
-    if total > 0.0 { Some(total) } else { None }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,14 +389,6 @@ mod tests {
     fn thumbnail_empty_rejected() {
         let thumb = JsonLdThumbnail::Single(String::new());
         assert_eq!(thumb.first_url(), None);
-    }
-
-    #[test]
-    fn iso8601_duration() {
-        assert_eq!(parse_iso8601_duration("PT1H2M3S"), Some(3723.0));
-        assert_eq!(parse_iso8601_duration("PT30S"), Some(30.0));
-        assert_eq!(parse_iso8601_duration("PT1.5S"), Some(1.5));
-        assert_eq!(parse_iso8601_duration("invalid"), None);
     }
 
     #[test]

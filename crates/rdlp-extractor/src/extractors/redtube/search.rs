@@ -126,7 +126,10 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         .and_then(parse_duration_string)
         .map(|s| s as f64);
 
-    let view_count = video.views.as_deref().and_then(parse_view_count);
+    let view_count = video
+        .views
+        .as_deref()
+        .and_then(crate::base::common::BaseExtractor::parse_human_count);
 
     Some(SearchResultPreview {
         video_url: video.url,
@@ -163,12 +166,6 @@ pub(crate) fn parse_duration_string(duration: &str) -> Option<u64> {
         }
         _ => None,
     }
-}
-
-/// Parse a view count string that may contain commas (e.g. "1,234,567").
-pub(crate) fn parse_view_count(views: &str) -> Option<u64> {
-    let cleaned: String = views.chars().filter(|c| c.is_ascii_digit()).collect();
-    cleaned.parse::<u64>().ok()
 }
 
 /// Parse HTML search results as a fallback when the JSON API fails.
@@ -367,13 +364,8 @@ mod tests {
         assert_eq!(parse_duration_string("ab:cd"), None);
     }
 
-    #[test]
-    fn test_parse_view_count() {
-        assert_eq!(parse_view_count("1,234,567"), Some(1234567));
-        assert_eq!(parse_view_count("0"), Some(0));
-        assert_eq!(parse_view_count("42"), Some(42));
-        assert_eq!(parse_view_count(""), None);
-    }
+    // View-count parsing is covered by the canonical
+    // `BaseExtractor::parse_human_count` tests in `base::common::tests`.
 
     #[test]
     fn test_parse_api_search_results_numeric_views() {

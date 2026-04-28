@@ -11,24 +11,21 @@ impl BaseExtractor {
     // Date/Time Parsing
     // ========================================================================
 
-    /// Parse ISO 8601 duration to seconds
+    /// Parse ISO 8601 duration to seconds.
     ///
-    /// Supports formats like:
-    /// - PT30S (30 seconds)
-    /// - PT5M (5 minutes)
-    /// - PT1H (1 hour)
-    /// - PT1H30M45S (1 hour, 30 minutes, 45 seconds)
+    /// Supports both stock `PT…` and the day-prefixed `P{N}DT…` form some
+    /// sites emit. Day count is consumed but discarded — see the regex
+    /// docstring in `selectors::ISO8601_DURATION_PATTERN`.
     ///
-    /// # Arguments
-    /// * `duration_str` - ISO 8601 duration string
+    /// Examples:
+    /// - `PT30S` → 30
+    /// - `PT5M` → 300
+    /// - `PT1H` → 3600
+    /// - `PT1H30M45S` → 5445
+    /// - `P0DT1H1M14S` → 3674
     ///
-    /// # Returns
-    /// Duration in seconds, `None` if parsing fails
+    /// Returns `None` for any other shape.
     pub(crate) fn parse_iso8601_duration(duration_str: &str) -> Option<f64> {
-        if !duration_str.starts_with("PT") {
-            return None;
-        }
-
         let caps = ISO8601_DURATION_PATTERN.captures(duration_str)?;
 
         let hours: f64 = caps
@@ -58,7 +55,6 @@ impl BaseExtractor {
     ///
     /// # Returns
     /// Date in YYYYMMDD format, `None` if parsing fails
-    #[allow(dead_code)]
     pub(crate) fn parse_iso8601_date(date_str: &str) -> Option<String> {
         let caps = ISO8601_DATE_PATTERN.captures(date_str)?;
 
@@ -185,5 +181,38 @@ impl BaseExtractor {
         } else {
             None
         }
+    }
+
+    /// Parse a human-readable view/like count.
+    ///
+    /// Accepts:
+    /// - Bare digits with optional thousands separators: `1,234,567` → 1234567
+    /// - SI suffixes (case-insensitive): `1.5K` → 1500, `1.2M` → 1200000,
+    ///   `3B` → 3000000000
+    /// - Trailing labels: `"1,234 views"` is normalised the same way
+    ///
+    /// Returns `None` for empty or unparseable input.
+    #[must_use]
+    pub(crate) fn parse_human_count(s: &str) -> Option<u64> {
+        let cleaned: String = s
+            .trim()
+            .to_ascii_lowercase()
+            .replace([',', ' ', '\u{a0}'], "")
+            .replace("views", "");
+        let cleaned = cleaned.trim();
+        if cleaned.is_empty() {
+            return None;
+        }
+        let (num_str, multiplier) = if let Some(rest) = cleaned.strip_suffix('k') {
+            (rest, 1_000.0_f64)
+        } else if let Some(rest) = cleaned.strip_suffix('m') {
+            (rest, 1_000_000.0_f64)
+        } else if let Some(rest) = cleaned.strip_suffix('b') {
+            (rest, 1_000_000_000.0_f64)
+        } else {
+            (cleaned, 1.0_f64)
+        };
+        let n: f64 = num_str.parse().ok()?;
+        Some((n * multiplier) as u64)
     }
 }

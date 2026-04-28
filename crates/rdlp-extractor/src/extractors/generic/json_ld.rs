@@ -38,7 +38,7 @@ impl JsonLdStrategy {
             let duration_seconds = video
                 .duration
                 .as_deref()
-                .and_then(shared::parse_iso8601_duration);
+                .and_then(crate::base::common::BaseExtractor::parse_iso8601_duration);
             JsonLdMetadata {
                 title: video.name,
                 description: video.description,

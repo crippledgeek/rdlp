@@ -56,41 +56,6 @@ pub(super) struct ResumeDetection {
 pub(super) use helpers::extract_cdn_host;
 
 impl Orchestrator {
-    /// Download all videos from a playlist
-    ///
-    /// This method provides explicit playlist download functionality with:
-    /// - User confirmation prompt (interactive mode)
-    /// - Progress tracking per video
-    /// - Graceful degradation (skip failed videos)
-    /// - Summary report at end
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(paths))` - All or some downloads completed (graceful degradation)
-    /// - `Ok(None)` - User cancelled operation
-    /// - `Err` - Fatal error (no videos downloaded)
-    #[allow(dead_code)]
-    pub async fn download_playlist(
-        &self,
-        url: &str,
-        interactive: bool,
-    ) -> Result<Option<Vec<PathBuf>>> {
-        // Extract playlist
-        let infos = self.extract_playlist_info(url).await?;
-
-        // If single video, delegate to single download
-        if infos.len() == 1 {
-            return self
-                .download(url, interactive)
-                .await
-                .map(|opt| opt.map(|path| vec![path]));
-        }
-
-        let archive = self.load_archive_if_configured().await;
-        self.download_playlist_internal(infos, interactive, archive)
-            .await
-    }
-
     /// Internal playlist download logic
     ///
     /// Separated from public method to allow reuse by auto-detection in `download()`

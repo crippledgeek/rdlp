@@ -17,11 +17,6 @@ use crate::base::common::BaseExtractor;
 
 use super::patterns;
 
-/// Extract height from a quality string like "720p", "1080P", etc.
-fn get_height(s: &str) -> Option<u32> {
-    BaseExtractor::parse_quality_height(s)
-}
-
 /// Detect vcodec from URL by checking for `.av1.` or `.h264.` in the path.
 fn detect_vcodec(url: &str) -> Option<&'static str> {
     [(".av1.", "av1"), (".h264.", "h264")]
@@ -286,7 +281,7 @@ pub fn extract_from_legacy(webpage: &str) -> Vec<Format> {
             if !seen_urls.insert(url.to_string()) {
                 continue;
             }
-            let height = get_height(format_id);
+            let height = BaseExtractor::parse_quality_height(format_id);
             formats.push(BaseExtractor::build_format(
                 format_id.clone(),
                 url.to_string(),
@@ -352,13 +347,8 @@ fn referer_headers(page_url: &str) -> HashMap<String, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_get_height() {
-        assert_eq!(get_height("720p"), Some(720));
-        assert_eq!(get_height("1080P"), Some(1080));
-        assert_eq!(get_height("480"), Some(480));
-        assert_eq!(get_height("hd"), None);
-    }
+    // Quality-height parsing is covered by `BaseExtractor::parse_quality_height`
+    // tests in `base::common::tests`.
 
     #[test]
     fn test_detect_vcodec() {

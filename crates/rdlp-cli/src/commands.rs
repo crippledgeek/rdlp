@@ -4,9 +4,9 @@
 //! and the error exit helper.
 
 use anyhow::{Context, Result};
+use log::{error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
-use tracing::error;
 
 /// Print all supported codecs
 pub(crate) fn print_codecs() {
@@ -58,7 +58,9 @@ pub(crate) fn print_codecs() {
 /// Print specific fields from an InfoDict
 pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
     let value = serde_json::to_value(info).context("failed to serialize InfoDict to JSON value")?;
-    let map = value.as_object().expect("InfoDict serializes to object");
+    let map = value
+        .as_object()
+        .context("InfoDict did not serialize to a JSON object")?;
 
     for field in fields.split(',') {
         let field = field.trim();
@@ -70,7 +72,7 @@ pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
             Some(serde_json::Value::Null) => println!("{field}:"),
             Some(v) => println!("{field}: {v}"),
             None => {
-                tracing::warn!("Unknown field: {field}");
+                warn!("Unknown field: {field}");
                 eprintln!("Warning: unknown field '{field}'");
             }
         }

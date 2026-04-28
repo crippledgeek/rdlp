@@ -127,7 +127,7 @@ fn parse_api_video_response_impl(json: &str) -> anyhow::Result<ApiVideoMetadata>
     let view_count = video
         .views
         .as_deref()
-        .and_then(super::search::parse_view_count);
+        .and_then(crate::base::common::BaseExtractor::parse_human_count);
 
     let tags = if video.tags.is_empty() {
         None

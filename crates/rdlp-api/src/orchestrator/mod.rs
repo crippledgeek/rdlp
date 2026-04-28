@@ -216,49 +216,6 @@ impl Orchestrator {
         Some(Arc::new(Pipeline::new(stages, temp_registry, 2)))
     }
 
-    /// Create a new orchestrator with custom registries (for testing)
-    ///
-    /// This method is primarily used for integration tests to inject mock registries.
-    /// It's public to allow integration tests to use it, but should not be used in
-    /// production code.
-    #[doc(hidden)]
-    #[allow(dead_code)]
-    pub fn with_registries(
-        config: Arc<Config>,
-        extractor_registry: Arc<dyn ExtractorRegistryTrait>,
-        downloader_registry: Arc<dyn DownloaderRegistryTrait>,
-        event_tx: mpsc::Sender<Event>,
-        download_id: DownloadId,
-        cancel_token: CancellationToken,
-        interactive: Option<Arc<dyn InteractiveCallback>>,
-    ) -> Self {
-        let cookie_jar = Arc::new(SimpleCookieJar::new());
-        let http_client =
-            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(cookie_jar.jar());
-        let js_engine = Arc::new(BoaJsEngine::new());
-
-        let extraction_context = Arc::new(ExtractionContext::new(
-            http_client,
-            js_engine,
-            cookie_jar,
-            Arc::clone(&config),
-        ));
-
-        let pipeline = Self::create_pipeline(&config, Arc::new(TempRegistry::new()));
-
-        Self {
-            extractor_registry,
-            downloader_registry,
-            pipeline,
-            extraction_context,
-            config,
-            event_tx,
-            download_id,
-            cancel_token,
-            interactive,
-        }
-    }
-
     /// Emit an event to the event channel, ignoring send failures.
     ///
     /// Uses `try_send` to avoid blocking on a full channel.

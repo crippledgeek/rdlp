@@ -50,14 +50,26 @@ impl AudioExtractStage {
                     opts.bitrate_kbps = Some(q_num.clamp(min, max));
                 }
             } else if let Some((worst, best)) = codec_config.quality_scale {
-                let scale = if q.eq_ignore_ascii_case("best") || q == "0" {
-                    best
+                // `q` is a free-text user input. Recognise the named
+                // shortcuts; if the value is anything else, log a warning
+                // and skip the override rather than silently inserting the
+                // mid-quality default — that masked typos in --audio-quality.
+                let scale: Option<u8> = if q.eq_ignore_ascii_case("best") || q == "0" {
+                    Some(best)
                 } else if q.eq_ignore_ascii_case("worst") || q == "9" || q == "10" {
-                    worst
+                    Some(worst)
+                } else if let Ok(parsed) = q.parse::<u8>() {
+                    Some(parsed)
                 } else {
-                    q.parse().unwrap_or((worst + best) / 2)
+                    log::warn!(
+                        "AudioExtractStage: unrecognised --audio-quality value {q:?}; \
+                         skipping quality override and using codec defaults"
+                    );
+                    None
                 };
-                opts.quality_scale = Some(scale as i32);
+                if let Some(s) = scale {
+                    opts.quality_scale = Some(s as i32);
+                }
             }
         }
 
