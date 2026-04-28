@@ -4553,6 +4553,7 @@ dependencies = [
 name = "rdlp-ratelimit"
 version = "0.1.0"
 dependencies = [
+ "thiserror 2.0.18",
  "tokio",
 ]
 

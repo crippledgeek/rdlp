@@ -360,7 +360,11 @@ pub struct Fragment {
     pub filesize: Option<u64>,
 }
 
-/// Format bytes as human-readable string
+/// Format bytes as a human-readable string using base-1024 (binary)
+/// math with the colloquial "KB"/"MB"/"GB"/"TB" labels — matches the
+/// convention every other downloader (yt-dlp, curl, browsers) uses for
+/// terminal output, and matches the `Format::size_text` helper that
+/// renders the same value in the CLI table.
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
 
@@ -369,10 +373,9 @@ fn format_bytes(bytes: u64) -> String {
     }
 
     let bytes_f = bytes as f64;
-    let exponent = (bytes_f.log10() / 3.0).floor() as usize;
-    let exponent = exponent.min(UNITS.len() - 1);
-
-    let value = bytes_f / 1000_f64.powi(exponent as i32);
+    // log2 / 10 == log_1024
+    let exponent = ((bytes_f.log2() / 10.0).floor() as usize).min(UNITS.len() - 1);
+    let value = bytes_f / 1024_f64.powi(exponent as i32);
     let unit = UNITS[exponent];
 
     format!("{value:.1} {unit}")

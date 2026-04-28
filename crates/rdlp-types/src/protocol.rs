@@ -7,8 +7,13 @@ use std::str::FromStr;
 /// Download protocol for a format stream.
 ///
 /// Determines which downloader handles the stream.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// **Wire format:** every variant serialises and deserialises as a bare
+/// JSON string via the manual `Serialize`/`Deserialize` impls below.
+/// The `Other(s)` variant serialises as `s` itself (not a tagged map),
+/// so JSON consumers see the same shape whether the protocol is
+/// recognised or not, and the round-trip matches `Display` / `FromStr`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DownloadProtocol {
     /// Plain HTTP
     Http,
@@ -22,6 +27,19 @@ pub enum DownloadProtocol {
     HttpDashSegments,
     /// Other/unknown protocol
     Other(String),
+}
+
+impl Serialize for DownloadProtocol {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DownloadProtocol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        Ok(raw.into())
+    }
 }
 
 impl DownloadProtocol {
@@ -78,21 +96,13 @@ impl FromStr for DownloadProtocol {
     }
 }
 
+// `From<String>` and `From<&str>` both delegate to the (infallible)
+// `FromStr` impl. Owning the String saves a clone in the `Other` arm but
+// the savings are negligible at this hot-path frequency, so the
+// implementations stay collapsed.
 impl From<String> for DownloadProtocol {
     fn from(s: String) -> Self {
-        if s.eq_ignore_ascii_case("http") {
-            Self::Http
-        } else if s.eq_ignore_ascii_case("https") {
-            Self::Https
-        } else if s.eq_ignore_ascii_case("m3u8") {
-            Self::M3u8
-        } else if s.eq_ignore_ascii_case("m3u8_native") {
-            Self::M3u8Native
-        } else if s.eq_ignore_ascii_case("http_dash_segments") {
-            Self::HttpDashSegments
-        } else {
-            Self::Other(s)
-        }
+        s.parse().expect("DownloadProtocol::from_str is infallible")
     }
 }
 
@@ -147,6 +157,18 @@ mod tests {
         let proto = DownloadProtocol::M3u8Native;
         let json = serde_json::to_string(&proto).unwrap();
         assert_eq!(json, "\"m3u8_native\"");
+        let parsed: DownloadProtocol = serde_json::from_str(&json).unwrap();
+        assert_eq!(proto, parsed);
+    }
+
+    #[test]
+    fn test_serde_other_is_bare_string() {
+        // `Other` serialises and deserialises as a bare JSON string,
+        // matching the Display/FromStr round-trip — JSON consumers see
+        // the same shape whether the protocol is recognised or not.
+        let proto = DownloadProtocol::Other("rtmp".to_string());
+        let json = serde_json::to_string(&proto).unwrap();
+        assert_eq!(json, "\"rtmp\"");
         let parsed: DownloadProtocol = serde_json::from_str(&json).unwrap();
         assert_eq!(proto, parsed);
     }

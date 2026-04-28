@@ -274,7 +274,6 @@ pub(crate) fn merge_config(
     }
     if let Some(ref rate_str) = args.limit_rate {
         let bps = rdlp_ratelimit::parse_rate_limit(rate_str)
-            .map_err(|e| anyhow::anyhow!(e))
             .with_context(|| format!("invalid rate limit '{rate_str}'"))?;
         config.rate_limit = Some(bps);
     }
