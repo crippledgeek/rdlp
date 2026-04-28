@@ -54,6 +54,19 @@ fn parse_duration_text(text: &str) -> Option<f64> {
     None
 }
 
+/// Extract a view count from concatenated `p.metadata` text.
+///
+/// Looks for a number (with optional `K`/`M`/`B` suffix) immediately
+/// preceding the literal token `Views`. Returns `None` if the marker
+/// isn't found or the number won't parse.
+fn extract_view_count(metadata_text: &str) -> Option<u64> {
+    let lower = metadata_text.to_ascii_lowercase();
+    let views_idx = lower.find("views")?;
+    let before = metadata_text[..views_idx].trim_end();
+    let token = before.split_whitespace().next_back()?;
+    BaseExtractor::parse_human_count(token)
+}
+
 /// Check whether the HTML contains a link to the next page.
 fn has_next_page(html: &str, next_page: u32) -> bool {
     // Next page link would contain `p={next_page}` in the URL
@@ -70,6 +83,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let title_sel = Selector::parse("p.title a").expect("static selector");
     let img_sel = Selector::parse("div.thumb-inside img").expect("static selector");
     let dur_sel = Selector::parse(".duration, span.duration").expect("static selector");
+    let metadata_sel = Selector::parse("p.metadata").expect("static selector");
     // Uploader link inside p.metadata. XVideos uses many href shapes for
     // uploaders — `/profiles/<user>`, `/channels/<slug>`, `/amateur-channels/…`,
     // `/pornstar-channels/…`, AND bare vanity URLs like `/young-libertines` or
@@ -141,6 +155,15 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .map(|el| el.text().collect::<String>().trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // View count from the bare text node next to "Views" inside p.metadata.
+        // Shape is: `<span class="sprfluous"> - </span> 7.5M <span ...>Views</span>`
+        // — concatenate all text under p.metadata and pull out `<num>[KMB]?` immediately
+        // before the literal `Views` token.
+        let view_count = block
+            .select(&metadata_sel)
+            .next()
+            .and_then(|m| extract_view_count(&m.text().collect::<String>()));
+
         results.push(SearchResultPreview {
             video_url,
             title,
@@ -148,7 +171,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             duration,
             uploader,
             actors: vec![],
-            view_count: None,
+            view_count,
             upload_date: None,
         });
     }
@@ -385,6 +408,45 @@ mod tests {
         assert_eq!(results[0].uploader.as_deref(), Some("Tommycabrio"));
         assert_eq!(results[1].uploader.as_deref(), Some("Skinnyboba"));
         assert_eq!(results[2].uploader.as_deref(), Some("Young Libertines"));
+    }
+
+    /// Regression: prior to this fix every result had `view_count = None`
+    /// because `parse_search_results` hardcoded the field. The live
+    /// fixture (captured 2026-04-28 from `/?k=teen`) has a `Views` token
+    /// in every metadata block, so most rows must populate `view_count`.
+    #[test]
+    fn parse_results_extracts_view_count() {
+        const LIVE: &str = include_str!("tests/xvideos_search_live.html");
+        let results = parse_search_results(LIVE);
+        assert!(!results.is_empty(), "live fixture should yield results");
+
+        let with_views = results.iter().filter(|r| r.view_count.is_some()).count();
+        assert!(
+            with_views >= results.len() / 2,
+            "expected most rows to carry view_count; got {with_views}/{}",
+            results.len()
+        );
+
+        // Spot-check: every parsed view count must be > 0
+        for v in results.iter().filter_map(|r| r.view_count) {
+            assert!(v > 0, "view_count of zero should be None, not Some(0)");
+        }
+    }
+
+    #[test]
+    fn extract_view_count_handles_known_shapes() {
+        // The text concatenation inside p.metadata typically looks like:
+        //   "6 min Smack My Bitch -  7.5M Views  - "
+        assert_eq!(
+            extract_view_count("6 min Smack My Bitch -  7.5M Views  - "),
+            Some(7_500_000)
+        );
+        assert_eq!(
+            extract_view_count("11 min Channel - 174.8k Views"),
+            Some(174_800)
+        );
+        assert_eq!(extract_view_count("11 min - 1,234 Views"), Some(1_234));
+        assert_eq!(extract_view_count("no views token here"), None);
     }
 
     /// The `src` attribute always holds the lazy-load placeholder

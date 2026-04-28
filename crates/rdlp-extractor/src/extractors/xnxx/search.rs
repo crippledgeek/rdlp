@@ -60,7 +60,23 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 ///
 /// Iterates over `div.thumb-block` containers.  Each container holds:
 /// - `div.thumb-inside a[href^="/video-"] img[data-src]` — image thumb
-/// - `div.thumb-under p a[href^="/video-"][title]`       — title + url
+/// - `div.uploader span.name`                           — uploader name (optional)
+/// - `div.thumb-under p a[href^="/video-"][title]`      — title + url
+/// - `div.thumb-under p.metadata`                       — duration + view count
+///
+/// The metadata block has the shape:
+///
+/// ```html
+/// <p class="metadata">
+///   <span class="right">1.2M <span class="icon-f icf-eye"/><span class="superfluous">98%</span></span>
+///   17min
+///   <span class="video-hd"><span class="superfluous"> - </span>1080p</span>
+/// </p>
+/// ```
+///
+/// Duration is the bare text node after `span.right`; view count is the
+/// leading number inside `span.right`. Both are best-effort and the parser
+/// accepts cards with the metadata block missing or partially populated.
 pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     let doc = Html::parse_document(html);
 
@@ -76,6 +92,18 @@ pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     };
     // Title link in the text-under section
     let title_link_sel = match Selector::parse(r#"div.thumb-under a[href^="/video-"]"#) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let uploader_sel = match Selector::parse("div.uploader span.name") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let metadata_sel = match Selector::parse("div.thumb-under p.metadata") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let metadata_right_sel = match Selector::parse("span.right") {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -113,14 +141,52 @@ pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
             .and_then(|img| img.value().attr("data-src"))
             .map(str::to_string);
 
+        let uploader = block
+            .select(&uploader_sel)
+            .next()
+            .map(|n| n.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let (duration, view_count) =
+            block
+                .select(&metadata_sel)
+                .next()
+                .map_or((None, None), |meta| {
+                    let view_count = meta
+                        .select(&metadata_right_sel)
+                        .next()
+                        .and_then(|r| r.text().next())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .and_then(BaseExtractor::parse_human_count);
+
+                    // Duration is a bare text node directly under p.metadata
+                    // (e.g. "17min"). Walk the children, skip span.right and
+                    // span.video-hd, and take the first non-empty text node.
+                    let duration_text =
+                        meta.text()
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty())
+                            .find(|t| {
+                                // Skip the leading view-count text from span.right
+                                // (already captured above) and the trailing
+                                // "1080p" from span.video-hd.
+                                BaseExtractor::parse_text_duration(t).is_some()
+                            });
+                    let duration = duration_text
+                        .and_then(|t| BaseExtractor::parse_duration(t.trim_end_matches(',')));
+
+                    (duration, view_count)
+                });
+
         results.push(SearchResultPreview {
             video_url,
             title,
             thumbnail_url,
-            duration: None,
-            uploader: None,
+            duration,
+            uploader,
             actors: vec![],
-            view_count: None,
+            view_count,
             upload_date: None,
         });
     }
@@ -297,6 +363,45 @@ mod tests {
                 r.video_url
             );
             assert!(!r.title.is_empty(), "title must not be empty");
+        }
+    }
+
+    /// Regression guard: prior to this fix, every search result had
+    /// `duration = None`, `uploader = None`, `view_count = None` because
+    /// `parse_results` hardcoded those fields. The fixture page is dense
+    /// with `p.metadata` blocks and `div.uploader span.name` markers, so
+    /// at least one row must populate each.
+    #[test]
+    fn parse_results_extracts_metadata_fields() {
+        const FIXTURE: &str = include_str!("tests/xnxx_search_page.html");
+        let results = parse_results(FIXTURE);
+        assert!(!results.is_empty(), "fixture should yield results");
+
+        let with_duration = results.iter().filter(|r| r.duration.is_some()).count();
+        let with_uploader = results.iter().filter(|r| r.uploader.is_some()).count();
+        let with_views = results.iter().filter(|r| r.view_count.is_some()).count();
+
+        assert!(
+            with_duration >= results.len() / 2,
+            "expected most rows to carry duration; got {with_duration}/{} \
+             — verify p.metadata text-node parsing still works",
+            results.len()
+        );
+        assert!(
+            with_uploader > 0,
+            "expected at least one row with uploader (the fixture has \
+             21+ uploader spans)"
+        );
+        assert!(
+            with_views >= results.len() / 2,
+            "expected most rows to carry view_count; got {with_views}/{} \
+             — verify span.right text node still parses",
+            results.len()
+        );
+
+        // Spot-check: durations must be plausible (>= 1s, <= 4h).
+        for r in results.iter().filter_map(|r| r.duration) {
+            assert!((1.0..=14_400.0).contains(&r), "implausible duration {r}");
         }
     }
 
