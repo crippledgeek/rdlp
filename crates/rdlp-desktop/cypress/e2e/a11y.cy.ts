@@ -52,4 +52,16 @@ describe("a11y: WCAG 2.1 AA regression", () => {
             .click();
         injectAndCheck("logs-expanded");
     });
+
+    it("drawer toggle exposes aria-expanded and aria-controls", () => {
+        cy.get('[aria-label="Expand drawer"]').as("toggle");
+        cy.get("@toggle")
+            .should("have.attr", "aria-expanded", "false")
+            .and("have.attr", "aria-controls", "bottom-drawer-panel");
+        cy.get("#bottom-drawer-panel").should("exist");
+        cy.get("@toggle").click();
+        cy.get('[aria-label="Collapse drawer"]')
+            .should("have.attr", "aria-expanded", "true")
+            .and("have.attr", "aria-controls", "bottom-drawer-panel");
+    });
 });

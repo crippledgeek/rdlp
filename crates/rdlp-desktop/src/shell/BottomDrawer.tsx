@@ -127,6 +127,8 @@ export function BottomDrawer() {
                     size="icon"
                     onPress={toggleBottomDrawer}
                     aria-label={expanded ? "Collapse drawer" : "Expand drawer"}
+                    aria-expanded={expanded}
+                    aria-controls="bottom-drawer-panel"
                     className="text-[var(--text-muted)] hover:text-[#aaaaaa] transition-colors px-1 h-auto bg-transparent"
                 >
                     {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
@@ -134,7 +136,7 @@ export function BottomDrawer() {
             </div>
 
             {/* Panel content */}
-            <div className="flex-1 overflow-hidden min-h-0">
+            <div id="bottom-drawer-panel" className="flex-1 overflow-hidden min-h-0">
                 <TabPanel id="logs" className="h-full overflow-hidden mt-0">
                     <LogViewer />
                 </TabPanel>
