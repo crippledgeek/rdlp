@@ -35,7 +35,7 @@ export function JobMiniCard({ job, className }: JobMiniCardProps) {
                     <span className="text-[10px] text-[#aaaaaa] shrink-0 font-mono">{Math.round(progress)}%</span>
                 )}
                 {isPending && (
-                    <span className="text-[10px] text-[#666666] shrink-0">Queued</span>
+                    <span className="text-[10px] text-[var(--text-muted)] shrink-0">Queued</span>
                 )}
             </div>
             {isRunning && (
@@ -47,7 +47,7 @@ export function JobMiniCard({ job, className }: JobMiniCardProps) {
                 </div>
             )}
             {job.speed && (
-                <span className="text-[10px] text-[#666666] font-mono">{job.speed}</span>
+                <span className="text-[10px] text-[var(--text-muted)] font-mono">{job.speed}</span>
             )}
         </button>
     );

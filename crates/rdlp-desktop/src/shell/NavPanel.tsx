@@ -32,7 +32,7 @@ function AnalyzeNav() {
             <section>
                 <h2 className="section-heading px-2">Recent</h2>
                 <div className="flex flex-col gap-0.5">
-                    <p className="text-[11px] text-[#444444] px-2 py-1">No recent URLs</p>
+                    <p className="text-[11px] text-[var(--text-muted)] px-2 py-1">No recent URLs</p>
                 </div>
             </section>
         </div>

@@ -58,7 +58,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                         "px-3 py-1 text-xs rounded-[4px] border transition-colors",
                                         !draft.loudnorm
                                             ? "bg-[#1a2a4a] border-[#4a9eff] text-[#4a9eff]"
-                                            : "bg-transparent border-[#2a2a3e] text-[#666666] hover:text-[#aaaaaa]",
+                                            : "bg-transparent border-[#2a2a3e] text-[var(--text-muted)] hover:text-[#aaaaaa]",
                                     )}
                                 >
                                     Peak
@@ -70,7 +70,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                         "px-3 py-1 text-xs rounded-[4px] border transition-colors",
                                         draft.loudnorm
                                             ? "bg-[#1a2a4a] border-[#4a9eff] text-[#4a9eff]"
-                                            : "bg-transparent border-[#2a2a3e] text-[#666666] hover:text-[#aaaaaa]",
+                                            : "bg-transparent border-[#2a2a3e] text-[var(--text-muted)] hover:text-[#aaaaaa]",
                                     )}
                                 >
                                     EBU R128 Loudnorm

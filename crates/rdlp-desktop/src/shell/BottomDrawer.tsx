@@ -27,7 +27,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
     }, []);
 
     if (jobs.length === 0) {
-        return <p className="text-[11px] text-[#444444]">No jobs</p>;
+        return <p className="text-[11px] text-[var(--text-muted)]">No jobs</p>;
     }
     return (
         <div className="flex flex-col gap-1">
@@ -45,7 +45,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                     </span>
                     <StatusBadge status={job.status} className="shrink-0" />
                     {(job.status === "running" || job.status === "pending") && job.progress !== null && (
-                        <span className="text-[10px] text-[#666666] font-mono shrink-0">
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
                             {Math.round(job.progress)}%
                         </span>
                     )}
@@ -75,13 +75,13 @@ export function BottomDrawer() {
                 <TabList aria-label="Panel tabs" className="flex items-center gap-0 h-7 rounded-none justify-start">
                     <Tab
                         id="logs"
-                        className="h-7 rounded-none px-3 py-0 text-[11px] border-b-2 border-transparent data-[selected]:border-[#4a9eff] data-[selected]:text-[#4a9eff] text-[#666666] hover:text-[#aaaaaa] transition-colors"
+                        className="h-7 rounded-none px-3 py-0 text-[11px] border-b-2 border-transparent data-[selected]:border-[#4a9eff] data-[selected]:text-[#4a9eff] text-[var(--text-muted)] hover:text-[#aaaaaa] transition-colors"
                     >
                         Logs
                     </Tab>
                     <Tab
                         id="jobs"
-                        className="h-7 rounded-none px-3 py-0 text-[11px] border-b-2 border-transparent data-[selected]:border-[#4a9eff] data-[selected]:text-[#4a9eff] text-[#666666] hover:text-[#aaaaaa] transition-colors flex items-center gap-1"
+                        className="h-7 rounded-none px-3 py-0 text-[11px] border-b-2 border-transparent data-[selected]:border-[#4a9eff] data-[selected]:text-[#4a9eff] text-[var(--text-muted)] hover:text-[#aaaaaa] transition-colors flex items-center gap-1"
                     >
                         Jobs
                         {activeCount > 0 && (
@@ -93,11 +93,16 @@ export function BottomDrawer() {
                 </TabList>
 
                 {/* Active job status — right side */}
-                <div className="flex-1 min-w-0 flex items-center justify-end gap-2 px-2">
+                <div
+                    data-testid="drawer-status"
+                    role="status"
+                    aria-live="polite"
+                    className="flex-1 min-w-0 flex items-center justify-end gap-2 px-2"
+                >
                     {activeJob ? (
                         <>
                             <span className="w-1.5 h-1.5 rounded-full bg-[#e8a838] animate-pulse shrink-0" />
-                            <span className="text-[10px] text-[#666666] truncate">
+                            <span className="text-[10px] text-[var(--text-muted)] truncate">
                                 {activeJob.playlist
                                     ? `${activeJob.playlist.playlistTitle} ${activeJob.playlist.playlistIndex}/${activeJob.playlist.playlistCount} \u2014 ${activeJob.title ?? "Untitled"}`
                                     : (activeJob.title ?? activeJob.url)}
@@ -108,7 +113,7 @@ export function BottomDrawer() {
                                 </span>
                             )}
                             {activeJob.speed && (
-                                <span className="text-[10px] text-[#555555] font-mono shrink-0">
+                                <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
                                     {activeJob.speed}
                                 </span>
                             )}
@@ -116,7 +121,7 @@ export function BottomDrawer() {
                     ) : (
                         <>
                             <span className="w-1.5 h-1.5 rounded-full bg-[#4a9e4a] shrink-0" />
-                            <span className="text-[10px] text-[#555555]">Ready</span>
+                            <span className="text-[10px] text-[var(--text-muted)]">Ready</span>
                         </>
                     )}
                 </div>
@@ -127,14 +132,16 @@ export function BottomDrawer() {
                     size="icon"
                     onPress={toggleBottomDrawer}
                     aria-label={expanded ? "Collapse drawer" : "Expand drawer"}
-                    className="text-[#444444] hover:text-[#aaaaaa] transition-colors px-1 h-auto bg-transparent"
+                    aria-expanded={expanded}
+                    aria-controls="bottom-drawer-panel"
+                    className="text-[var(--text-muted)] hover:text-[#aaaaaa] transition-colors px-1 h-auto bg-transparent"
                 >
                     {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
                 </Button>
             </div>
 
             {/* Panel content */}
-            <div className="flex-1 overflow-hidden min-h-0">
+            <div id="bottom-drawer-panel" className="flex-1 overflow-hidden min-h-0">
                 <TabPanel id="logs" className="h-full overflow-hidden mt-0">
                     <LogViewer />
                 </TabPanel>

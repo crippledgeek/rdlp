@@ -153,7 +153,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
 
                     <div className="flex-1" />
 
-                    <span className="text-[11px] text-[#666666] tabular-nums" aria-live="polite">
+                    <span className="text-[11px] text-[var(--text-muted)] tabular-nums" aria-live="polite">
                         {selectedCount > 0
                             ? `${selectedCount} of ${episodes.length} selected`
                             : `${episodes.length} episodes`}
@@ -166,7 +166,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
                             "flex items-center gap-1.5 px-3 py-1 rounded-[6px] text-[12px] font-medium transition-colors cursor-pointer",
                             selectedCount > 0
                                 ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0]"
-                                : "bg-[#1a1a2e] text-[#444444] cursor-not-allowed pointer-events-none",
+                                : "bg-[#1a1a2e] text-[var(--text-disabled)] cursor-not-allowed pointer-events-none",
                         )}
                     >
                         <Download className="w-3 h-3" />

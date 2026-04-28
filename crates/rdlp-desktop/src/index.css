@@ -17,7 +17,7 @@
         --secondary: 237 40% 11%;
         --secondary-foreground: 0 0% 93%;
         --muted: 237 40% 11%;
-        --muted-foreground: 0 0% 40%;
+        --muted-foreground: 240 7% 53%; /* matches --text-muted; ~5:1 on base, 4.9:1 on elevated */
         --accent: 237 40% 14%;
         --accent-foreground: 0 0% 93%;
         --destructive: 0 75% 63%;
@@ -47,8 +47,8 @@
         /* Text tokens */
         --text-primary: #eeeeee;
         --text-secondary: #aaaaaa;
-        --text-muted: #666666;
-        --text-disabled: #444444;
+        --text-muted: #83838f;     /* ~5.3:1 on base, 4.9:1 on elevated — WCAG AA */
+        --text-disabled: #6a6a78;  /* ~3.7:1 — WCAG 1.4.3 inactive-UI exempt */
         /* Semantic tokens */
         --success: #4a9e4a;
         --warning: #e8a838;
@@ -284,7 +284,9 @@
     border: 1px solid rgb(255 255 255 / 0.06);
     font-family: var(--font-mono);
     font-size: 10px;
-    color: var(--color-muted-foreground);
+    /* Use text-secondary; the 4% white overlay reduces effective contrast,
+       so the muted-foreground token would dip below WCAG AA on this bg. */
+    color: var(--text-secondary);
 }
 
 /* Table header cell base styling. */

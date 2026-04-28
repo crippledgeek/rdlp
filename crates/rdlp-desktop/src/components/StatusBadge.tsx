@@ -27,14 +27,17 @@ const statusConfig: Record<JobStatus, { label: string; className: string }> = {
     },
     cancelled: {
         label: "Cancelled",
-        className: "text-[#666666] bg-[#141414] border border-[#1e1e1e]",
+        className: "text-[var(--text-muted)] bg-[#141414] border border-[#1e1e1e]",
     },
 };
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {
     const config = statusConfig[status] ?? statusConfig.pending;
+    // 'failed' is the only assertive transition; everything else is polite.
+    const role = status === "failed" ? "alert" : "status";
     return (
         <span
+            role={role}
             className={cn(
                 "inline-flex items-center px-[6px] py-[2px] rounded-[3px] text-[10px] font-medium",
                 config.className,

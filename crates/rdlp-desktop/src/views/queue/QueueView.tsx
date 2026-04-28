@@ -170,8 +170,8 @@ export function QueueView() {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-3">
                 <Download className="w-10 h-10 text-[#1a1a2e]" />
-                <p className="text-[13px] text-[#444444]">No downloads yet</p>
-                <p className="text-[11px] text-[#333333]">Paste a URL in the command bar to start</p>
+                <p className="text-[13px] text-[var(--text-muted)]">No downloads yet</p>
+                <p className="text-[11px] text-[var(--text-muted)]">Paste a URL in the command bar to start</p>
             </div>
         );
     }
@@ -179,7 +179,7 @@ export function QueueView() {
     if (flatItems.length === 0) {
         return (
             <div className="flex items-center justify-center h-full">
-                <p className="text-[13px] text-[#444444]">No jobs match this filter</p>
+                <p className="text-[13px] text-[var(--text-muted)]">No jobs match this filter</p>
             </div>
         );
     }

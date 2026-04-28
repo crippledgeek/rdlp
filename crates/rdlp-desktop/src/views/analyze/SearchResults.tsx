@@ -120,7 +120,7 @@ function SearchResultRow({
                         return (
                             <td
                                 key={cell.id}
-                                className="px-2 py-1.5 text-[12px] text-[#555555] truncate italic"
+                                className="px-2 py-1.5 text-[12px] text-[var(--text-muted)] truncate italic"
                                 title="Video page has no studio or creator attribution"
                             >
                                 Unavailable
@@ -247,8 +247,8 @@ export function SearchResults({ query, site }: SearchResultsProps) {
             <div className="flex flex-col h-full">
                 {filterBar}
                 <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8">
-                    <Search className="w-8 h-8 text-[#444444]" />
-                    <p className="text-[13px] text-[#666666]">
+                    <Search className="w-8 h-8 text-[var(--text-muted)]" />
+                    <p className="text-[13px] text-[var(--text-muted)]">
                         {query.trim() ? "No results found" : "Type to search"}
                     </p>
                 </div>
@@ -262,7 +262,7 @@ export function SearchResults({ query, site }: SearchResultsProps) {
 
             {/* Results count */}
             <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#1a1a2e] shrink-0">
-                <span className="text-[11px] text-[#666666]">
+                <span className="text-[11px] text-[var(--text-muted)]">
                     {allResults.length}
                     {totalEstimate != null ? ` of ~${totalEstimate}` : ""}
                     {" "}results
@@ -293,7 +293,7 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                                     const sorted = header.column.getIsSorted();
                                     const isThumbnail = header.id === "thumbnail";
                                     const baseClass =
-                                        "text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[#555555] font-normal select-none transition-colors";
+                                        "text-left px-2 py-1.5 text-[10px] uppercase tracking-[0.5px] text-[var(--text-muted)] font-normal select-none transition-colors";
                                     const className = [
                                         baseClass,
                                         isThumbnail ? "min-w-[72px]" : "",
@@ -348,7 +348,7 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                 )}
 
                 {!hasNextPage && allResults.length > 0 && (
-                    <p className="text-center text-[11px] text-[#444444] py-2 mt-1">
+                    <p className="text-center text-[11px] text-[var(--text-muted)] py-2 mt-1">
                         All results loaded
                     </p>
                 )}

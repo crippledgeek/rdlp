@@ -27,13 +27,13 @@ export function HistoryNav() {
             <section>
                 <h2 className="section-heading px-2 mb-1">Search</h2>
                 <div className="relative mx-1">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#444444] pointer-events-none" />
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--text-muted)] pointer-events-none" />
                     <input
                         type="text"
                         value={search}
                         onChange={(e) => setHistorySearch(e.target.value)}
                         placeholder="Filter history…"
-                        className="w-full pl-7 pr-2 py-1 rounded-[4px] text-[12px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[#aaaaaa] placeholder:text-[#444444] outline-none focus:border-[#4a9eff]/50 transition-colors"
+                        className="w-full pl-7 pr-2 py-1 rounded-[4px] text-[12px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[#aaaaaa] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]/50 transition-colors"
                     />
                 </div>
             </section>
@@ -64,10 +64,10 @@ export function HistoryNav() {
                 <h2 className="section-heading px-2 mb-1">Stats</h2>
                 <div className="px-3 text-[11px]">
                     <div className="flex justify-between">
-                        <span className="text-[#666666]">Total</span>
+                        <span className="text-[var(--text-muted)]">Total</span>
                         <span className="text-[#aaaaaa] font-mono">{completedCount}</span>
                     </div>
-                    <p className="text-[10px] text-[#333333] mt-1">Session only — no persistence yet</p>
+                    <p className="text-[10px] text-[var(--text-muted)] mt-1">Session only — no persistence yet</p>
                 </div>
             </section>
         </div>

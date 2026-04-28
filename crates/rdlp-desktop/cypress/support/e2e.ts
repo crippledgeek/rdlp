@@ -4,6 +4,7 @@
 // resolve with fixture data during Cypress-driven browser tests.
 
 import "./commands";
+import "cypress-axe";
 
 // ---------------------------------------------------------------------------
 // Tauri IPC mock

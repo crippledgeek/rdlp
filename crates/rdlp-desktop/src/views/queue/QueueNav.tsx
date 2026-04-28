@@ -58,7 +58,7 @@ export function QueueNav() {
                                     <span
                                         className={cn(
                                             "text-[10px] font-mono",
-                                            isActive ? "text-[#4a9eff]" : "text-[#444444]",
+                                            isActive ? "text-[#4a9eff]" : "text-[var(--text-muted)]",
                                         )}
                                     >
                                         {count}
@@ -75,19 +75,19 @@ export function QueueNav() {
                 <h2 className="section-heading px-2 mb-1">Stats</h2>
                 <div className="px-3 space-y-1">
                     <div className="flex justify-between text-[11px]">
-                        <span className="text-[#666666]">Total</span>
+                        <span className="text-[var(--text-muted)]">Total</span>
                         <span className="text-[#aaaaaa] font-mono">{jobs.length}</span>
                     </div>
                     <div className="flex justify-between text-[11px]">
-                        <span className="text-[#666666]">Active</span>
+                        <span className="text-[var(--text-muted)]">Active</span>
                         <span className="text-[#e8a838] font-mono">{counts.active}</span>
                     </div>
                     <div className="flex justify-between text-[11px]">
-                        <span className="text-[#666666]">Completed</span>
+                        <span className="text-[var(--text-muted)]">Completed</span>
                         <span className="text-[#4a9e4a] font-mono">{counts.completed}</span>
                     </div>
                     <div className="flex justify-between text-[11px]">
-                        <span className="text-[#666666]">Failed</span>
+                        <span className="text-[var(--text-muted)]">Failed</span>
                         <span className="text-[#e85858] font-mono">{counts.failed}</span>
                     </div>
                 </div>
@@ -98,7 +98,7 @@ export function QueueNav() {
                 <section className="mt-auto pb-1">
                     <button
                         onClick={handleClearCompleted}
-                        className="flex items-center gap-2 w-full px-3 py-1.5 rounded-[4px] text-[12px] text-[#666666] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
+                        className="flex items-center gap-2 w-full px-3 py-1.5 rounded-[4px] text-[12px] text-[var(--text-muted)] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
                     >
                         <Trash2 className="w-3 h-3" />
                         Clear Completed
