@@ -22,6 +22,16 @@ declare global {
              * Navigate to the Search tab in the sidebar.
              */
             goToSearch(): Chainable<void>;
+
+            /**
+             * Navigate to the Queue tab in the sidebar.
+             */
+            goToQueue(): Chainable<void>;
+
+            /**
+             * Navigate to the History tab in the sidebar.
+             */
+            goToHistory(): Chainable<void>;
         }
     }
 }
@@ -37,6 +47,14 @@ Cypress.Commands.add("goToSettings", () => {
 
 Cypress.Commands.add("goToSearch", () => {
     cy.contains("nav button", "Search").click();
+});
+
+Cypress.Commands.add("goToQueue", () => {
+    cy.contains("nav button", "Queue").click();
+});
+
+Cypress.Commands.add("goToHistory", () => {
+    cy.contains("nav button", "History").click();
 });
 
 // cypress-axe registers cy.injectAxe() and cy.checkA11y() globally via its

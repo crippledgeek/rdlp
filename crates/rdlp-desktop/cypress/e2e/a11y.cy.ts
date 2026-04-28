@@ -4,9 +4,10 @@
 // violations are allowlisted in cypress/support/a11y-allowlist.ts and shrink
 // commit-by-commit during the a11y sprint.
 //
-// Targeted ARIA attribute assertions live alongside axe checks because
-// missing aria-expanded / aria-pressed / aria-live semantics are not
-// reliably surfaced by axe-core's default rule set.
+// Targeted ARIA attribute assertions will be added by subsequent commits in
+// this sprint alongside axe checks because missing aria-expanded /
+// aria-pressed / aria-live semantics are not reliably surfaced by axe-core's
+// default rule set.
 
 import { allowlistFor } from "../support/a11y-allowlist";
 
@@ -31,12 +32,12 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("Queue view (empty)", () => {
-        cy.contains("nav button", "Queue").click();
+        cy.goToQueue();
         injectAndCheck("queue-empty");
     });
 
     it("History view", () => {
-        cy.contains("nav button", "History").click();
+        cy.goToHistory();
         injectAndCheck("history");
     });
 
