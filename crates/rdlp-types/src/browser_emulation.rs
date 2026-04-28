@@ -3,6 +3,8 @@
 //! See docs/superpowers/specs/2026-04-24-tls-impersonation-design.md §6.5.
 
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::str::FromStr;
 use wreq_util::Emulation;
 
 /// Browser fingerprint profile for the HTTP stack.
@@ -66,6 +68,22 @@ impl BrowserEmulation {
             "safari-26.2" => Some(Emulation::Safari26_2),
             _ => None,
         }
+    }
+}
+
+/// Parses CLI-friendly aliases (`chrome`, `chrome-latest`, `firefox-latest`,
+/// `safari-latest`) into the matching `*Latest` variant; everything else is
+/// kept as a `Pinned` value (validated lazily by `resolve()`).
+impl FromStr for BrowserEmulation {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "chrome" | "chrome-latest" => BrowserEmulation::ChromeLatest,
+            "firefox" | "firefox-latest" => BrowserEmulation::FirefoxLatest,
+            "safari" | "safari-latest" => BrowserEmulation::SafariLatest,
+            other => BrowserEmulation::Pinned(other.to_string()),
+        })
     }
 }
 
@@ -142,6 +160,38 @@ mod tests {
                 BrowserEmulation::Pinned("nonsense".into()).resolve()
             ),
             format!("{:?}", Emulation::Chrome139)
+        );
+    }
+
+    #[test]
+    fn from_str_aliases_resolve_to_latest_variants() {
+        assert_eq!(
+            "chrome".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::ChromeLatest
+        );
+        assert_eq!(
+            "Chrome-Latest".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::ChromeLatest
+        );
+        assert_eq!(
+            "firefox".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::FirefoxLatest
+        );
+        assert_eq!(
+            "safari-latest".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::SafariLatest
+        );
+    }
+
+    #[test]
+    fn from_str_unknown_string_becomes_pinned_lowercased() {
+        assert_eq!(
+            "Chrome-137".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::Pinned("chrome-137".to_string())
+        );
+        assert_eq!(
+            "nonsense".parse::<BrowserEmulation>().unwrap(),
+            BrowserEmulation::Pinned("nonsense".to_string())
         );
     }
 }

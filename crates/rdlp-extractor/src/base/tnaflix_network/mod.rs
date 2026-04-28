@@ -277,13 +277,13 @@ impl TnaFlixNetworkBase {
             metadata.duration = json_ld
                 .duration
                 .as_ref()
-                .and_then(|d| self.parse_iso8601_duration(d));
+                .and_then(|d| crate::base::common::BaseExtractor::parse_iso8601_duration(d));
 
             // Upload date
             metadata.upload_date = json_ld
                 .upload_date
                 .as_ref()
-                .and_then(|d| self.parse_iso8601_date(d));
+                .and_then(|d| crate::base::common::BaseExtractor::parse_iso8601_date(d));
 
             // Interaction stats
             metadata.view_count = json_ld::extract_view_count(json_ld);
@@ -305,95 +305,6 @@ impl TnaFlixNetworkBase {
         }
 
         Ok(metadata)
-    }
-
-    // ========================================================================
-    // ISO 8601 Parsing
-    // ========================================================================
-
-    /// Parse ISO 8601 duration string to seconds
-    ///
-    /// # Examples
-    /// ```rust,ignore
-    /// # use rdlp_extractor::base::tnaflix_network::TnaFlixNetworkBase;
-    /// let base = TnaFlixNetworkBase::new();
-    /// assert_eq!(base.parse_iso8601_duration("PT1H2M3S"), Some(3723.0));
-    /// assert_eq!(base.parse_iso8601_duration("PT30M"), Some(1800.0));
-    /// assert_eq!(base.parse_iso8601_duration("PT45S"), Some(45.0));
-    /// ```
-    #[must_use]
-    pub fn parse_iso8601_duration(&self, duration_str: &str) -> Option<f64> {
-        if !duration_str.starts_with("PT") {
-            return None;
-        }
-
-        let duration_part = &duration_str[2..];
-        let mut hours = 0.0;
-        let mut minutes = 0.0;
-        let mut seconds = 0.0;
-
-        let mut current_num = String::new();
-        for ch in duration_part.chars() {
-            match ch {
-                '0'..='9' | '.' => current_num.push(ch),
-                'H' => {
-                    if let Ok(h) = current_num.parse::<f64>() {
-                        hours = h;
-                    }
-                    current_num.clear();
-                }
-                'M' => {
-                    if let Ok(m) = current_num.parse::<f64>() {
-                        minutes = m;
-                    }
-                    current_num.clear();
-                }
-                'S' => {
-                    if let Ok(s) = current_num.parse::<f64>() {
-                        seconds = s;
-                    }
-                    current_num.clear();
-                }
-                _ => return None,
-            }
-        }
-
-        Some(hours * 3600.0 + minutes * 60.0 + seconds)
-    }
-
-    /// Parse ISO 8601 date/datetime string to YYYYMMDD format
-    ///
-    /// # Examples
-    /// ```rust,ignore
-    /// # use rdlp_extractor::base::tnaflix_network::TnaFlixNetworkBase;
-    /// let base = TnaFlixNetworkBase::new();
-    /// assert_eq!(base.parse_iso8601_date("2024-01-15"), Some("20240115".to_string()));
-    /// assert_eq!(base.parse_iso8601_date("2024-01-15T10:30:00Z"), Some("20240115".to_string()));
-    /// ```
-    #[must_use]
-    pub fn parse_iso8601_date(&self, date_str: &str) -> Option<String> {
-        let date_part = date_str.split('T').next().unwrap_or(date_str);
-        let parts: Vec<&str> = date_part.split('-').collect();
-        if parts.len() != 3 {
-            return None;
-        }
-
-        let year = parts[0];
-        let month = parts[1];
-        let day = parts[2];
-
-        if year.len() != 4 || month.len() != 2 || day.len() != 2 {
-            return None;
-        }
-
-        if !year.chars().all(|c| c.is_ascii_digit())
-            || !month.chars().all(|c| c.is_ascii_digit())
-            || !day.chars().all(|c| c.is_ascii_digit())
-        {
-            return None;
-        }
-
-        Some(format!("{year}{month}{day}"))
     }
 
     // ========================================================================

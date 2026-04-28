@@ -3,7 +3,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use super::{apply_headers_and_body, build_client, parse_emulation, parse_method};
+use rdlp_types::BrowserEmulation;
+
+use super::{apply_headers_and_body, build_client, parse_method};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -33,7 +35,10 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> Result<()> {
-    let client = build_client(parse_emulation(&args.browser));
+    // BrowserEmulation::FromStr is infallible — unknown identifiers become
+    // `Pinned(_)` and are validated lazily at resolve() time.
+    let emulation: BrowserEmulation = args.browser.parse().expect("infallible");
+    let client = build_client(emulation);
     let req = client.request(parse_method(&args.method), &args.url);
     let req = apply_headers_and_body(req, &args.header, args.data.as_deref())?;
 

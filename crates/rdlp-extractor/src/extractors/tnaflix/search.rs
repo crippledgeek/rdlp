@@ -129,7 +129,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .and_then(|icon| icon.parent())
             .and_then(scraper::ElementRef::wrap)
             .map(|el| el.text().collect::<String>())
-            .and_then(|s| parse_view_count(s.trim()));
+            .and_then(|s| crate::base::common::BaseExtractor::parse_human_count(s.trim()));
 
         results.push(SearchResultPreview {
             video_url,
@@ -221,34 +221,6 @@ fn parse_duration_secs(s: &str) -> Option<f64> {
     };
 
     Some(secs as f64)
-}
-
-/// Parse a human-readable view count like `"1,234"` or `"5.6K"` into a raw number.
-fn parse_view_count(s: &str) -> Option<u64> {
-    let s = s
-        .trim()
-        .to_ascii_lowercase()
-        .replace(',', "")
-        .replace("views", "")
-        .trim()
-        .to_string();
-
-    if let Some(rest) = s.strip_suffix('k') {
-        return rest
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|n| (n * 1_000.0) as u64);
-    }
-    if let Some(rest) = s.strip_suffix('m') {
-        return rest
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|n| (n * 1_000_000.0) as u64);
-    }
-
-    s.trim().parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -468,35 +440,8 @@ mod tests {
         assert_eq!(parse_duration_secs("not-a-duration"), None);
     }
 
-    #[test]
-    fn test_parse_view_count_plain() {
-        assert_eq!(parse_view_count("1234"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_with_commas() {
-        assert_eq!(parse_view_count("1,234"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_k_suffix() {
-        assert_eq!(parse_view_count("5.6K"), Some(5600));
-    }
-
-    #[test]
-    fn test_parse_view_count_m_suffix() {
-        assert_eq!(parse_view_count("2M"), Some(2_000_000));
-    }
-
-    #[test]
-    fn test_parse_view_count_with_views_text() {
-        assert_eq!(parse_view_count("1,234 views"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_invalid() {
-        assert_eq!(parse_view_count("N/A"), None);
-    }
+    // View-count parsing is covered by the canonical
+    // `BaseExtractor::parse_human_count` tests in `base::common::tests`.
 
     #[test]
     fn test_validate_search_filters_valid_category() {
@@ -689,16 +634,6 @@ mod tests {
         assert!(validate_search_filters(&filters).is_err());
     }
 
-    #[test]
-    fn test_parse_view_count_empty() {
-        assert_eq!(parse_view_count(""), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_whitespace_only() {
-        assert_eq!(parse_view_count("   "), None);
-    }
-
     // ---- Additional negative tests (round 2) ----
 
     #[test]
@@ -720,34 +655,6 @@ mod tests {
     #[test]
     fn test_parse_duration_leading_zeros() {
         assert_eq!(parse_duration_secs("01:02:03"), Some(3723.0));
-    }
-
-    #[test]
-    fn test_parse_view_count_k_suffix_invalid_number() {
-        // "abc.defK" → strip 'k' → "abc.def" can't parse → None
-        assert_eq!(parse_view_count("abc.defK"), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_m_suffix_invalid_number() {
-        assert_eq!(parse_view_count("xyzM"), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_uppercase_k() {
-        // "5K" → lowercase to "5k" → strip 'k' → 5000
-        assert_eq!(parse_view_count("5K"), Some(5000));
-    }
-
-    #[test]
-    fn test_parse_view_count_uppercase_m() {
-        assert_eq!(parse_view_count("2M"), Some(2_000_000));
-    }
-
-    #[test]
-    fn test_parse_view_count_double_suffix() {
-        // "5K5K" → lowercase "5k5k" → strip trailing 'k' → "5k5" → parse fails → None
-        assert_eq!(parse_view_count("5K5K"), None);
     }
 
     #[test]

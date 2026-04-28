@@ -109,28 +109,6 @@ pub(crate) fn parse_duration_label(s: &str) -> Option<f64> {
     Some(total as f64)
 }
 
-/// Parse a SpankBang view-count label ("940K", "1.3K", "1.5M", "12") into
-/// an absolute count. Returns `None` for empty / unparseable input.
-pub(crate) fn parse_view_count(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let (num_part, multiplier) = if let Some(rest) = s.strip_suffix(['K', 'k']) {
-        (rest, 1_000.0_f64)
-    } else if let Some(rest) = s.strip_suffix(['M', 'm']) {
-        (rest, 1_000_000.0_f64)
-    } else if let Some(rest) = s.strip_suffix(['B', 'b']) {
-        (rest, 1_000_000_000.0_f64)
-    } else if s.chars().last().is_some_and(|c| c.is_ascii_digit()) {
-        (s, 1.0_f64)
-    } else {
-        return None;
-    };
-    let cleaned: String = num_part.chars().filter(|c| *c != ',').collect();
-    cleaned.parse::<f64>().ok().map(|n| (n * multiplier) as u64)
-}
-
 /// Aggregate per-card extras keyed by video ID: thumbnail, duration, view
 /// count, optional uploader (slug + display name).
 #[derive(Default, Clone)]
@@ -164,7 +142,9 @@ fn collect_card_metadata(html: &str) -> HashMap<String, CardExtras> {
         };
         let entry = map.entry(id).or_default();
         if entry.view_count.is_none() {
-            entry.view_count = caps.get(1).and_then(|m| parse_view_count(m.as_str()));
+            entry.view_count = caps
+                .get(1)
+                .and_then(|m| crate::base::common::BaseExtractor::parse_human_count(m.as_str()));
         }
     }
 
@@ -578,20 +558,8 @@ mod tests {
         assert!(sample.view_count.unwrap() > 0);
     }
 
-    #[test]
-    fn view_count_parser_handles_known_shapes() {
-        assert_eq!(parse_view_count("940K"), Some(940_000));
-        assert_eq!(parse_view_count("1.3K"), Some(1_300));
-        assert_eq!(parse_view_count("1.5M"), Some(1_500_000));
-        assert_eq!(parse_view_count("4K"), Some(4_000));
-        assert_eq!(parse_view_count("12"), Some(12));
-        assert_eq!(parse_view_count("1,234"), Some(1_234));
-        assert_eq!(parse_view_count("1.2B"), Some(1_200_000_000));
-        // Empty / unparseable
-        assert_eq!(parse_view_count(""), None);
-        assert_eq!(parse_view_count("   "), None);
-        assert_eq!(parse_view_count("nope"), None);
-    }
+    // View-count parsing is covered by `BaseExtractor::parse_human_count`
+    // tests in `base::common::tests`.
 
     #[test]
     fn duration_label_parser_handles_known_shapes() {

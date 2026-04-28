@@ -196,7 +196,18 @@ fn test_parse_iso8601_duration() {
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT45S"), Some(45.0));
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT2H"), Some(7200.0));
     assert_eq!(BaseExtractor::parse_iso8601_duration("PT30.5S"), Some(30.5));
+    // Day-prefixed form (e.g. KoreanPornMovie's `P0DT1H1M14S`).
+    assert_eq!(
+        BaseExtractor::parse_iso8601_duration("P0DT1H1M14S"),
+        Some(3674.0)
+    );
+    assert_eq!(
+        BaseExtractor::parse_iso8601_duration("P0DT0H1M57S"),
+        Some(117.0)
+    );
+    // Reject malformed shapes.
     assert_eq!(BaseExtractor::parse_iso8601_duration("1H2M3S"), None); // Missing PT
+    assert_eq!(BaseExtractor::parse_iso8601_duration("invalid"), None);
 }
 
 #[test]
@@ -210,6 +221,43 @@ fn test_parse_iso8601_date() {
         Some("20240115".to_string())
     );
     assert_eq!(BaseExtractor::parse_iso8601_date("invalid"), None);
+}
+
+#[test]
+fn test_parse_human_count() {
+    // Bare digits + thousands separators
+    assert_eq!(BaseExtractor::parse_human_count("0"), Some(0));
+    assert_eq!(BaseExtractor::parse_human_count("42"), Some(42));
+    assert_eq!(BaseExtractor::parse_human_count("1234"), Some(1234));
+    assert_eq!(BaseExtractor::parse_human_count("1,234"), Some(1234));
+    assert_eq!(
+        BaseExtractor::parse_human_count("1,234,567"),
+        Some(1_234_567)
+    );
+
+    // SI suffixes (case-insensitive)
+    assert_eq!(BaseExtractor::parse_human_count("5K"), Some(5_000));
+    assert_eq!(BaseExtractor::parse_human_count("5k"), Some(5_000));
+    assert_eq!(BaseExtractor::parse_human_count("1.5M"), Some(1_500_000));
+    assert_eq!(
+        BaseExtractor::parse_human_count("1.2B"),
+        Some(1_200_000_000)
+    );
+    assert_eq!(BaseExtractor::parse_human_count("940K"), Some(940_000));
+
+    // Trailing labels and extra whitespace
+    assert_eq!(BaseExtractor::parse_human_count("1,234 views"), Some(1234));
+    assert_eq!(BaseExtractor::parse_human_count("  5.6K  "), Some(5_600));
+
+    // Unparseable / empty
+    assert_eq!(BaseExtractor::parse_human_count(""), None);
+    assert_eq!(BaseExtractor::parse_human_count("   "), None);
+    assert_eq!(BaseExtractor::parse_human_count("nope"), None);
+    assert_eq!(BaseExtractor::parse_human_count("N/A"), None);
+    assert_eq!(BaseExtractor::parse_human_count("abc.defK"), None);
+    assert_eq!(BaseExtractor::parse_human_count("xyzM"), None);
+    // Stripping only the trailing suffix once → "5k5k" → "5k5" → fails
+    assert_eq!(BaseExtractor::parse_human_count("5K5K"), None);
 }
 
 // ========================================================================
