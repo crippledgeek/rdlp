@@ -112,10 +112,11 @@ function SearchResultRow({
                     }
                     // Enrichment resolved with no uploader — the video page
                     // genuinely has no studio / pornstar / profile link.
-                    // Render a dimmer "—" so the user can distinguish
-                    // "we tried and the page has nothing" (this state) from
-                    // "still loading" (the pulse above) and from "we never
-                    // attempted" (default — when isVisible was never true).
+                    // Render an italic "Unavailable" so the user can
+                    // distinguish "we tried and the page has nothing" (this
+                    // state) from "still loading" (the pulse above) and from
+                    // "we never attempted" (default — when isVisible was
+                    // never true).
                     if (enriched && merged.uploader == null) {
                         return (
                             <td
@@ -123,7 +124,7 @@ function SearchResultRow({
                                 className="px-2 py-1.5 text-[12px] text-[#555555] truncate italic"
                                 title="Video page has no studio or creator attribution"
                             >
-                                —
+                                Unavailable
                             </td>
                         );
                     }
