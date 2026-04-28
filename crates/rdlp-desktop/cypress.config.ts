@@ -9,5 +9,14 @@ export default defineConfig({
         viewportHeight: 720,
         video: false,
         screenshotOnRunFailure: false,
+        setupNodeEvents(on) {
+            on("task", {
+                log(message: string) {
+                    // eslint-disable-next-line no-console
+                    console.log(message);
+                    return null;
+                },
+            });
+        },
     },
 });

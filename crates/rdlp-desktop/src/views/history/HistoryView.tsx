@@ -85,7 +85,7 @@ export function HistoryView() {
                 <Clock className="w-10 h-10 text-[#1a1a2e]" />
                 <p className="text-[13px] text-[var(--text-muted)]">No download history</p>
                 <p className="text-[11px] text-[var(--text-muted)]">Completed downloads will appear here</p>
-                <p className="text-[10px] text-[#2a2a3a]">History is available for this session only</p>
+                <p className="text-[10px] text-[var(--text-muted)]">History is available for this session only</p>
             </div>
         );
     }

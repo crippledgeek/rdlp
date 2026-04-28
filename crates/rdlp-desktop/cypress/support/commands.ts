@@ -41,20 +41,23 @@ Cypress.Commands.add("search", (query: string) => {
     cy.get('button[aria-label="Search"]').click();
 });
 
+// IconRail nav buttons are icon-only with aria-label "<View> (Ctrl+N)";
+// match by label prefix so the keybinding suffix can change without
+// breaking these helpers.
 Cypress.Commands.add("goToSettings", () => {
-    cy.contains("nav button", "Settings").click();
+    cy.get('[aria-label^="Settings"]').first().click();
 });
 
 Cypress.Commands.add("goToSearch", () => {
-    cy.contains("nav button", "Search").click();
+    cy.get('[aria-label^="Analyze"]').first().click();
 });
 
 Cypress.Commands.add("goToQueue", () => {
-    cy.contains("nav button", "Queue").click();
+    cy.get('[aria-label^="Queue"]').first().click();
 });
 
 Cypress.Commands.add("goToHistory", () => {
-    cy.contains("nav button", "History").click();
+    cy.get('[aria-label^="History"]').first().click();
 });
 
 // cypress-axe registers cy.injectAxe() and cy.checkA11y() globally via its

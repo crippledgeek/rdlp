@@ -13,18 +13,36 @@ import { allowlistFor } from "../support/a11y-allowlist";
 
 const WCAG_AA_TAGS = ["wcag2a", "wcag2aa", "wcag21aa"];
 
+function logViolations(violations: { id: string; impact?: string; description: string; nodes: { target: unknown[] }[] }[]) {
+    if (violations.length === 0) return;
+    const data = violations.map((v) => ({
+        rule: v.id,
+        impact: v.impact ?? "n/a",
+        nodes: v.nodes.length,
+        firstSelector: JSON.stringify(v.nodes[0]?.target),
+        description: v.description.slice(0, 100),
+    }));
+    // eslint-disable-next-line no-console
+    console.table(data);
+    cy.task("log", JSON.stringify(data, null, 2)).then(() => {});
+}
+
 function injectAndCheck(page: Parameters<typeof allowlistFor>[0]) {
     cy.injectAxe();
-    cy.checkA11y(undefined, {
-        runOnly: { type: "tag", values: WCAG_AA_TAGS },
-        rules: allowlistFor(page),
-    });
+    cy.checkA11y(
+        undefined,
+        {
+            runOnly: { type: "tag", values: WCAG_AA_TAGS },
+            rules: allowlistFor(page),
+        },
+        logViolations,
+    );
 }
 
 describe("a11y: WCAG 2.1 AA regression", () => {
-    beforeEach(() => {
-        cy.visit("/");
-    });
+    // Page-load + Tauri IPC mock is set up by the global beforeEach in
+    // cypress/support/e2e.ts. Do not call cy.visit() here — it would
+    // re-visit without the onBeforeLoad mock injection.
 
     it("Search view (empty)", () => {
         cy.goToSearch();
@@ -47,9 +65,12 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("Logs drawer expanded", () => {
-        cy.get('[aria-label="Expand drawer"], [aria-label="Collapse drawer"]')
-            .first()
-            .click();
+        // Ensure drawer is expanded regardless of state inherited from prior tests.
+        cy.get("body").then(($body) => {
+            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
+                cy.get('[aria-label="Expand drawer"]').click();
+            }
+        });
         injectAndCheck("logs-expanded");
     });
 
@@ -66,16 +87,21 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("log severity chips toggle aria-pressed", () => {
-        cy.get('[aria-label="Expand drawer"], [aria-label="Collapse drawer"]')
-            .first()
-            .click();
+        // Ensure drawer is expanded regardless of state inherited from prior tests.
+        cy.get("body").then(($body) => {
+            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
+                cy.get('[aria-label="Expand drawer"]').click();
+            }
+        });
         // All four chips start pressed (default filter set is full).
         ["info", "warn", "error", "debug"].forEach((level) => {
             cy.contains("button", new RegExp(`^${level}$`, "i"))
                 .should("have.attr", "aria-pressed", "true");
         });
-        // Toggle "debug" off and re-check.
-        cy.contains("button", /^debug$/i).click();
+        // Toggle "debug" off and re-check. The chip is sometimes occluded by
+        // the focus-ring overlay in headless runs; force the click since we
+        // only care about the aria-pressed state flip.
+        cy.contains("button", /^debug$/i).click({ force: true });
         cy.contains("button", /^debug$/i)
             .should("have.attr", "aria-pressed", "false");
     });

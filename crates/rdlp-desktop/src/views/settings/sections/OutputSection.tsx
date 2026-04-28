@@ -29,9 +29,10 @@ export function OutputSection({ draft, onChange }: Props) {
             </h3>
             <div className="space-y-3">
                 <div>
-                    <Label className="settings-label">Output Directory</Label>
+                    <Label htmlFor="output-dir" className="settings-label">Output Directory</Label>
                     <div className="flex gap-1.5">
                         <Input
+                            id="output-dir"
                             type="text"
                             value={draft.output_dir}
                             readOnly
