@@ -19,3 +19,22 @@ pub mod signature;
 pub mod trust_store;
 
 pub use error::PluginError;
+
+/// Generated Rust bindings from the `extractor-plugin` WIT world.
+///
+/// This module is regenerated at compile time by `wasmtime::component::bindgen!`.
+/// It exposes:
+/// - `bindings::ExtractorPlugin` — the generated host-side instance type
+/// - `bindings::types::*` — record/variant types from `wit/types.wit`
+/// - `bindings::host_*::Host` traits — one per imported interface, implemented
+///   by the host on `PluginStoreData` (Task 11+).
+///
+/// Async support is enabled (matching the engine's `async_support(true)`).
+#[allow(clippy::all, missing_docs)]
+pub mod bindings {
+    wasmtime::component::bindgen!({
+        path: "wit",
+        world: "extractor-plugin",
+        async: true,
+    });
+}
