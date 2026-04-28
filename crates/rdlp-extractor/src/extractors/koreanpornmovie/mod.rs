@@ -526,7 +526,7 @@ fn scrape_durations_from_html(html_text: &str) -> std::collections::HashMap<Stri
             .select(&SEARCH_DURATION_SELECTOR)
             .next()
             .map(|d| d.text().collect::<String>())
-            .and_then(|d| parse_hms_duration(d.trim()));
+            .and_then(|d| BaseExtractor::parse_duration(d.trim()));
 
         if let (Some(url), Some(dur)) = (url, duration) {
             map.insert(url.to_string(), dur);
@@ -741,25 +741,6 @@ fn meta_content(html: &Html, selector: &Selector) -> Option<String> {
         .and_then(|el| el.value().attr("content"))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-/// Parse "HH:MM:SS" or "MM:SS" duration string to seconds.
-fn parse_hms_duration(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.len() {
-        3 => {
-            let h: f64 = parts[0].parse().ok()?;
-            let m: f64 = parts[1].parse().ok()?;
-            let s: f64 = parts[2].parse().ok()?;
-            Some(h * 3600.0 + m * 60.0 + s)
-        }
-        2 => {
-            let m: f64 = parts[0].parse().ok()?;
-            let s: f64 = parts[1].parse().ok()?;
-            Some(m * 60.0 + s)
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

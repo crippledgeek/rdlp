@@ -63,18 +63,11 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
         });
     }
 
-    dedup_format_ids(&mut all_formats);
+    BaseExtractor::dedup_format_ids(&mut all_formats);
 
     debug!(count = all_formats.len(); "[PornHub] Total unique formats");
 
     Ok(all_formats)
-}
-
-/// Ensure format_ids are unique by appending "-2", "-3", etc. for duplicates.
-///
-/// Delegates to [`BaseExtractor::dedup_format_ids`].
-fn dedup_format_ids(formats: &mut [Format]) {
-    BaseExtractor::dedup_format_ids(formats);
 }
 
 /// Extract formats from flashvars JavaScript object
@@ -344,7 +337,7 @@ mod tests {
             build_format("https://cdn3.example.com/720.mp4", Some(720), 4),
         ];
 
-        dedup_format_ids(&mut formats);
+        BaseExtractor::dedup_format_ids(&mut formats);
 
         assert_eq!(formats[0].format_id, "1080p");
         assert_eq!(formats[1].format_id, "1080p-2");
