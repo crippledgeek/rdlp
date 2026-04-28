@@ -53,7 +53,10 @@ impl Engine {
     /// Construct a new engine with the given configuration.
     ///
     /// Spawns a background thread that ticks the engine's epoch every
-    /// `cfg.tick_period`. The thread is joined when the `Engine` is dropped.
+    /// `cfg.tick_period`. On drop, the shutdown flag is set; the thread
+    /// exits within one tick period when the loop next polls the flag.
+    /// `Drop` does not join — it returns immediately to avoid blocking
+    /// callers for up to `tick_period` ms.
     pub fn new(cfg: EngineConfig) -> Result<Self, PluginError> {
         let mut config = wasmtime::Config::new();
         config
