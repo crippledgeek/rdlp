@@ -140,9 +140,14 @@ fn validate(m: &Manifest) -> Result<(), PluginError> {
         ));
     }
     let has_tld_wildcard = m.matches.iter().any(|p| {
-        p.starts_with("https://*/")
-            || p.starts_with("http://*/")
-            || p.starts_with("*://*/")
+        // Detect any pattern whose host component is a bare `*` — i.e. there's
+        // a `://*` followed by either '/' (path-bearing form) or end-of-string
+        // (bare form). Both require the claim-all-urls capability.
+        if let Some(after_scheme) = p.split_once("://").map(|(_, rest)| rest) {
+            after_scheme == "*" || after_scheme.starts_with("*/")
+        } else {
+            false
+        }
     });
     if has_tld_wildcard && !m.capabilities.iter().any(|c| c == "claim-all-urls") {
         return invalid("TLD-wildcard match pattern requires 'claim-all-urls' capability");

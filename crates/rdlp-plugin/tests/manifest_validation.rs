@@ -92,3 +92,33 @@ fn tld_wildcard_accepted_with_claim_all_urls_capability() {
     let m = parse_manifest_str(&toml).expect("should accept");
     assert!(m.capabilities.contains(&"claim-all-urls".to_string()));
 }
+
+#[test]
+fn bare_tld_wildcard_https_requires_claim_all_urls() {
+    let toml = VALID_TOML.replace(
+        r#"matches = ["https://*.youtube.com/*"]"#,
+        r#"matches = ["https://*"]"#,
+    );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("claim-all-urls"));
+}
+
+#[test]
+fn bare_tld_wildcard_http_requires_claim_all_urls() {
+    let toml = VALID_TOML.replace(
+        r#"matches = ["https://*.youtube.com/*"]"#,
+        r#"matches = ["http://*"]"#,
+    );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("claim-all-urls"));
+}
+
+#[test]
+fn bare_any_scheme_wildcard_requires_claim_all_urls() {
+    let toml = VALID_TOML.replace(
+        r#"matches = ["https://*.youtube.com/*"]"#,
+        r#"matches = ["*://*"]"#,
+    );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("claim-all-urls"));
+}
