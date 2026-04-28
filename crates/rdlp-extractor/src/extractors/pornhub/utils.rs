@@ -208,24 +208,9 @@ pub fn extract_channel_url(html: &Html) -> Option<String> {
 /// Extract view count from HTML
 pub fn extract_view_count(html: &Html) -> Option<u64> {
     [".count", ".views"].iter().find_map(|sel| {
-        BaseExtractor::extract_element_text_str(html, sel).and_then(|t| parse_view_count(&t))
+        BaseExtractor::extract_element_text_str(html, sel)
+            .and_then(|t| BaseExtractor::parse_human_count(&t))
     })
-}
-
-/// Parse view count string (handles "1.5M", "500K", etc.)
-fn parse_view_count(text: &str) -> Option<u64> {
-    let text = text.trim().to_uppercase();
-    let text = text.replace([',', ' '], "");
-
-    let (suffix_multiplier, num_str) = match text.as_bytes().last()? {
-        b'K' => (1_000.0, &text[..text.len() - 1]),
-        b'M' => (1_000_000.0, &text[..text.len() - 1]),
-        b'B' => (1_000_000_000.0, &text[..text.len() - 1]),
-        _ => return text.parse().ok(),
-    };
-
-    let num: f64 = num_str.parse().ok()?;
-    Some((num * suffix_multiplier) as u64)
 }
 
 /// Extract rating percentage from HTML

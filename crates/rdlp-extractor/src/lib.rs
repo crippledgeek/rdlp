@@ -40,7 +40,7 @@ pub mod utils;
 
 // Re-export extractors
 pub use extractors::{
-    EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
+    AbxxxExtractor, EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
     RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
     XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
@@ -120,6 +120,12 @@ impl ExtractorRegistry {
 
         // Register EPorner extractor
         registry.register(Arc::new(EPornerExtractor::new()));
+
+        // Register ABXXX extractor (KVS site with JSON XHR player config)
+        registry.register(Arc::new(AbxxxExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(AbxxxExtractor::new()));
 
         // Register SpankBang extractor
         registry.register(Arc::new(SpankBangExtractor::new()));

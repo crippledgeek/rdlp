@@ -49,6 +49,12 @@ static DURATION_SELECTOR: LazyLock<Selector> =
 static VIEWS_ICON_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("i.icon-eye").expect("Valid views icon selector"));
 
+/// Uploader: `<a class="badge ..." href="/profile/{user}">` inside each
+/// card. The first matching anchor's trimmed text is the display name.
+static UPLOADER_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(r#"a.badge[href*="/profile/"]"#).expect("Valid TNAFlix uploader selector")
+});
+
 /// Pagination links: Bootstrap `.pagination .page-link` anchors.
 static PAGE_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(".pagination a.page-link").expect("Valid TNAFlix pagination selector")
@@ -129,14 +135,21 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .and_then(|icon| icon.parent())
             .and_then(scraper::ElementRef::wrap)
             .map(|el| el.text().collect::<String>())
-            .and_then(|s| parse_view_count(s.trim()));
+            .and_then(|s| crate::base::common::BaseExtractor::parse_human_count(s.trim()));
+
+        // Uploader: first /profile/ link inside the card.
+        let uploader = item
+            .select(&UPLOADER_SELECTOR)
+            .next()
+            .map(|a| a.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty());
 
         results.push(SearchResultPreview {
             video_url,
             title,
             thumbnail_url,
             duration,
-            uploader: None,
+            uploader,
             actors: vec![],
             view_count,
             upload_date: None,
@@ -223,34 +236,6 @@ fn parse_duration_secs(s: &str) -> Option<f64> {
     Some(secs as f64)
 }
 
-/// Parse a human-readable view count like `"1,234"` or `"5.6K"` into a raw number.
-fn parse_view_count(s: &str) -> Option<u64> {
-    let s = s
-        .trim()
-        .to_ascii_lowercase()
-        .replace(',', "")
-        .replace("views", "")
-        .trim()
-        .to_string();
-
-    if let Some(rest) = s.strip_suffix('k') {
-        return rest
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|n| (n * 1_000.0) as u64);
-    }
-    if let Some(rest) = s.strip_suffix('m') {
-        return rest
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|n| (n * 1_000_000.0) as u64);
-    }
-
-    s.trim().parse::<u64>().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +279,31 @@ mod tests {
                 </div>
             </div>"#
         )
+    }
+
+    /// Regression: prior to this fix every result had `uploader = None`
+    /// because the card-level `/profile/` link was not extracted. The
+    /// live fixture (captured 2026-04-28 from `/search.php?what=teen`)
+    /// has 60 cards, most carrying a `<a class="badge..." href="/profile/...">`
+    /// link.
+    #[test]
+    fn parse_search_results_extracts_uploader_from_live_fixture() {
+        const LIVE: &str = include_str!("tests/tnaflix_search_live.html");
+        let results = parse_search_results(LIVE);
+        assert!(!results.is_empty(), "live fixture should yield results");
+
+        let with_uploader = results.iter().filter(|r| r.uploader.is_some()).count();
+        assert!(
+            with_uploader >= results.len() / 2,
+            "expected most rows to carry uploader; got {with_uploader}/{}",
+            results.len()
+        );
+
+        // Sanity: uploader text must not contain HTML or whitespace artefacts.
+        for u in results.iter().filter_map(|r| r.uploader.as_deref()) {
+            assert!(!u.contains('<'), "uploader contains HTML: {u:?}");
+            assert_eq!(u, u.trim(), "uploader has unstripped whitespace: {u:?}");
+        }
     }
 
     #[test]
@@ -468,35 +478,8 @@ mod tests {
         assert_eq!(parse_duration_secs("not-a-duration"), None);
     }
 
-    #[test]
-    fn test_parse_view_count_plain() {
-        assert_eq!(parse_view_count("1234"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_with_commas() {
-        assert_eq!(parse_view_count("1,234"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_k_suffix() {
-        assert_eq!(parse_view_count("5.6K"), Some(5600));
-    }
-
-    #[test]
-    fn test_parse_view_count_m_suffix() {
-        assert_eq!(parse_view_count("2M"), Some(2_000_000));
-    }
-
-    #[test]
-    fn test_parse_view_count_with_views_text() {
-        assert_eq!(parse_view_count("1,234 views"), Some(1234));
-    }
-
-    #[test]
-    fn test_parse_view_count_invalid() {
-        assert_eq!(parse_view_count("N/A"), None);
-    }
+    // View-count parsing is covered by the canonical
+    // `BaseExtractor::parse_human_count` tests in `base::common::tests`.
 
     #[test]
     fn test_validate_search_filters_valid_category() {
@@ -689,16 +672,6 @@ mod tests {
         assert!(validate_search_filters(&filters).is_err());
     }
 
-    #[test]
-    fn test_parse_view_count_empty() {
-        assert_eq!(parse_view_count(""), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_whitespace_only() {
-        assert_eq!(parse_view_count("   "), None);
-    }
-
     // ---- Additional negative tests (round 2) ----
 
     #[test]
@@ -720,34 +693,6 @@ mod tests {
     #[test]
     fn test_parse_duration_leading_zeros() {
         assert_eq!(parse_duration_secs("01:02:03"), Some(3723.0));
-    }
-
-    #[test]
-    fn test_parse_view_count_k_suffix_invalid_number() {
-        // "abc.defK" → strip 'k' → "abc.def" can't parse → None
-        assert_eq!(parse_view_count("abc.defK"), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_m_suffix_invalid_number() {
-        assert_eq!(parse_view_count("xyzM"), None);
-    }
-
-    #[test]
-    fn test_parse_view_count_uppercase_k() {
-        // "5K" → lowercase to "5k" → strip 'k' → 5000
-        assert_eq!(parse_view_count("5K"), Some(5000));
-    }
-
-    #[test]
-    fn test_parse_view_count_uppercase_m() {
-        assert_eq!(parse_view_count("2M"), Some(2_000_000));
-    }
-
-    #[test]
-    fn test_parse_view_count_double_suffix() {
-        // "5K5K" → lowercase "5k5k" → strip trailing 'k' → "5k5" → parse fails → None
-        assert_eq!(parse_view_count("5K5K"), None);
     }
 
     #[test]

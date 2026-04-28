@@ -33,8 +33,8 @@ vi.mock("@tauri-apps/api/event", () => ({
     emit: mockEmit,
 }));
 
-// Replace heavy Radix UI primitives with lightweight test stubs.
-// Radix Select creates portals, scroll buttons, viewport wrappers, and ARIA
-// state machines that cost ~40-80ms per render. The mocks preserve the ARIA
-// roles (combobox, option, radio) that tests query for.
-vi.mock("@/components/ui/select", async () => import("./radix-select-mock"));
+// Replace the React Aria (Jolly UI) Select with a lightweight test stub.
+// The real component uses portals, popover state, and full ARIA wiring
+// that costs ~40-80ms per render. The mock preserves the ARIA roles
+// (combobox, option, radio) that tests query for.
+vi.mock("@/components/ui/select", async () => import("./select-mock"));

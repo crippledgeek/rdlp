@@ -126,7 +126,10 @@ fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
         .and_then(parse_duration_string)
         .map(|s| s as f64);
 
-    let view_count = video.views.as_deref().and_then(parse_view_count);
+    let view_count = video
+        .views
+        .as_deref()
+        .and_then(crate::base::common::BaseExtractor::parse_human_count);
 
     Some(SearchResultPreview {
         video_url: video.url,
@@ -165,19 +168,24 @@ pub(crate) fn parse_duration_string(duration: &str) -> Option<u64> {
     }
 }
 
-/// Parse a view count string that may contain commas (e.g. "1,234,567").
-pub(crate) fn parse_view_count(views: &str) -> Option<u64> {
-    let cleaned: String = views.chars().filter(|c| c.is_ascii_digit()).collect();
-    cleaned.parse::<u64>().ok()
-}
-
 /// Parse HTML search results as a fallback when the JSON API fails.
 ///
 /// Scrapes `<li class="video-item">` elements from the search page HTML.
 pub(crate) fn parse_html_search_results(html: &str) -> Result<Vec<SearchResultPreview>> {
     let mut results = Vec::new();
 
-    for caps in patterns::HTML_VIDEO_CARD_PATTERN.captures_iter(html) {
+    // Pre-collect uploader names — RedTube emits `data-uploader-name="…"`
+    // on each card's `<li>` in DOM order, so the Nth match pairs with the
+    // Nth card from `HTML_VIDEO_CARD_PATTERN`.
+    let uploaders: Vec<String> = patterns::HTML_UPLOADER_NAME_PATTERN
+        .captures_iter(html)
+        .filter_map(|c| c.name("name").map(|m| m.as_str().to_string()))
+        .collect();
+
+    for (idx, caps) in patterns::HTML_VIDEO_CARD_PATTERN
+        .captures_iter(html)
+        .enumerate()
+    {
         let url = match caps.name("url") {
             Some(m) => m.as_str().to_string(),
             None => continue,
@@ -191,13 +199,14 @@ pub(crate) fn parse_html_search_results(html: &str) -> Result<Vec<SearchResultPr
             .name("duration")
             .and_then(|m| parse_duration_string(m.as_str()))
             .map(|s| s as f64);
+        let uploader = uploaders.get(idx).cloned();
 
         results.push(SearchResultPreview {
             video_url: url,
             title,
             thumbnail_url: thumb,
             duration,
-            uploader: None,
+            uploader,
             actors: vec![],
             view_count: None,
             upload_date: None,
@@ -367,13 +376,8 @@ mod tests {
         assert_eq!(parse_duration_string("ab:cd"), None);
     }
 
-    #[test]
-    fn test_parse_view_count() {
-        assert_eq!(parse_view_count("1,234,567"), Some(1234567));
-        assert_eq!(parse_view_count("0"), Some(0));
-        assert_eq!(parse_view_count("42"), Some(42));
-        assert_eq!(parse_view_count(""), None);
-    }
+    // View-count parsing is covered by the canonical
+    // `BaseExtractor::parse_human_count` tests in `base::common::tests`.
 
     #[test]
     fn test_parse_api_search_results_numeric_views() {
@@ -415,6 +419,33 @@ mod tests {
         // this tests that parsing doesn't panic on real-ish HTML
         // and returns an empty vec for non-matching patterns.
         assert!(results.is_empty() || results[0].title == "HTML Video One");
+    }
+
+    /// Regression: when the JSON API path is rate-limited or unavailable,
+    /// the HTML fallback parser MUST extract uploader from the
+    /// `data-uploader-name` attribute that RedTube emits on every card's
+    /// outer `<li>`. Prior to this fix every fallback-path result had
+    /// `uploader = None`.
+    #[test]
+    fn html_fallback_extracts_uploader_from_data_attribute() {
+        let html = r#"
+            <li id="tags_videos_1" data-uploader-name="Lisa Sack">
+              <a href="https://www.redtube.com/111" title="One">
+                <img src="https://t/1.jpg"/>
+                <span class="duration">5:30</span>
+              </a>
+            </li>
+            <li id="tags_videos_2" data-uploader-name="John Doe">
+              <a href="https://www.redtube.com/222" title="Two">
+                <img src="https://t/2.jpg"/>
+                <span class="duration">7:42</span>
+              </a>
+            </li>
+        "#;
+        let results = parse_html_search_results(html).unwrap();
+        assert_eq!(results.len(), 2, "both cards should parse");
+        assert_eq!(results[0].uploader.as_deref(), Some("Lisa Sack"));
+        assert_eq!(results[1].uploader.as_deref(), Some("John Doe"));
     }
 
     #[test]

@@ -7,11 +7,7 @@
 #![warn(missing_docs)]
 
 pub mod column;
-mod constants;
 pub mod truncate;
-
-// Re-export legacy constants at crate root for backward compatibility.
-pub use constants::*;
 
 pub use column::{Align, ColumnBudget, ColumnDef, all_columns, border_overhead, compute_budget};
 
@@ -22,39 +18,12 @@ use tabled::{
 };
 
 /// Options controlling table rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TableOpts {
     /// Override terminal width. `None` = auto-detect, fallback 120.
     pub width_override: Option<usize>,
-    /// ANSI color output mode.
-    pub color: ColorMode,
     /// Force compact mode. `None` = auto (compact when width < 80).
     pub compact: Option<bool>,
-}
-
-impl Default for TableOpts {
-    fn default() -> Self {
-        Self {
-            width_override: None,
-            color: ColorMode::Auto,
-            compact: None,
-        }
-    }
-}
-
-/// ANSI color output mode.
-///
-/// Reserved for future use. Currently the table renderer does not emit ANSI
-/// codes, but this field is plumbed through `TableOpts` so callers can
-/// declare intent for when color support is added.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorMode {
-    /// Detect from terminal capabilities and `NO_COLOR` env var.
-    Auto,
-    /// Always emit ANSI codes.
-    Always,
-    /// Never emit ANSI codes.
-    Never,
 }
 
 /// Detect terminal width, falling back to 120 if unavailable.
@@ -72,7 +41,7 @@ fn detect_width() -> usize {
 ///
 /// # Arguments
 /// * `formats` - Format references to display
-/// * `opts` - Rendering options (width, color, compact)
+/// * `opts` - Rendering options (width, compact)
 ///
 /// # Returns
 /// A `String` containing the complete table, ready for printing.
@@ -190,7 +159,7 @@ pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> 
 ///
 /// # Arguments
 /// * `formats` - Format references to display
-/// * `opts` - Rendering options (width, color, compact)
+/// * `opts` - Rendering options (width, compact)
 ///
 /// # Returns
 /// A tuple of (header string, row strings). Both are empty if `formats` is empty.
@@ -296,7 +265,6 @@ mod tests {
         let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(160),
-            color: ColorMode::Never,
             compact: None,
         };
         let output = render_formats_table(&refs, &opts);
@@ -314,7 +282,6 @@ mod tests {
         let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(60),
-            color: ColorMode::Never,
             compact: Some(true),
         };
         let output = render_formats_table(&refs, &opts);
@@ -331,7 +298,6 @@ mod tests {
         for width in [60, 80, 100, 120] {
             let opts = TableOpts {
                 width_override: Some(width),
-                color: ColorMode::Never,
                 compact: None,
             };
             let output = render_formats_table(&refs, &opts);
@@ -351,7 +317,6 @@ mod tests {
         let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(120),
-            color: ColorMode::Never,
             compact: None,
         };
         let output = render_formats_table(&refs, &opts);
@@ -362,7 +327,6 @@ mod tests {
     fn test_empty_formats() {
         let opts = TableOpts {
             width_override: Some(80),
-            color: ColorMode::Never,
             compact: None,
         };
         let output = render_formats_table(&[], &opts);
@@ -375,7 +339,6 @@ mod tests {
         let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(60),
-            color: ColorMode::Never,
             compact: Some(true),
         };
         let output = render_formats_table(&refs, &opts);
@@ -390,7 +353,6 @@ mod tests {
         let refs: Vec<&Format> = formats.iter().collect();
         let opts = TableOpts {
             width_override: Some(120),
-            color: ColorMode::Never,
             compact: Some(false),
         };
         let output = render_formats_table(&refs, &opts);

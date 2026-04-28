@@ -10,11 +10,8 @@ use rdlp_security::validate_url_security;
 use rdlp_types::Format;
 use std::path::Path;
 
-/// Result of a successful download with CDN fallback
+/// Result of a successful download with CDN fallback.
 pub(super) struct DownloadOutcome {
-    /// Download statistics from the successful attempt
-    #[allow(dead_code)]
-    pub stats: DownloadStats,
     /// Whether HLS was detected for this format
     pub is_hls: bool,
 }
@@ -131,11 +128,10 @@ impl Orchestrator {
             return Err(e);
         }
         let stats = stats.expect("stats is Some when no error occurred");
-
         debug!("Downloaded successfully: {}", output_path.display());
         debug!("   Stats: {stats:?}");
 
-        Ok(Some(DownloadOutcome { stats, is_hls }))
+        Ok(Some(DownloadOutcome { is_hls }))
     }
 
     /// Execute a download to stdout with token validation (no CDN fallback).

@@ -9,15 +9,6 @@ use rdlp_types::BrowserEmulation;
 use wreq::header::HeaderName;
 use wreq::{Client, Method, RequestBuilder};
 
-pub fn parse_emulation(s: &str) -> BrowserEmulation {
-    match s.to_ascii_lowercase().as_str() {
-        "chrome" | "chrome-latest" => BrowserEmulation::ChromeLatest,
-        "firefox" | "firefox-latest" => BrowserEmulation::FirefoxLatest,
-        "safari" | "safari-latest" => BrowserEmulation::SafariLatest,
-        other => BrowserEmulation::Pinned(other.to_string()),
-    }
-}
-
 pub fn build_client(emulation: BrowserEmulation) -> Client {
     let config = HttpClientConfig::default().with_emulation(emulation);
     HttpClientFactory::from_config(&config).build()

@@ -10,17 +10,14 @@ name = "rdlp"
 path = "src/main.rs"
 
 [dependencies]
+# CLAUDE.md: rdlp-cli depends on rdlp-api as its primary facade. The
+# remaining direct deps cover utilities that don't fit the facade —
+# CLI-side table rendering, the codec-listing helper from rdlp-ffmpeg,
+# and the rate-limit value parser.
 rdlp-api = { path = "../rdlp-api" }
 rdlp-table = { path = "../rdlp-table" }
-rdlp-http = { path = "../rdlp-http" }
-rdlp-extractor = { path = "../rdlp-extractor" }
-rdlp-downloader = { path = "../rdlp-downloader" }
-rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
-rdlp-cookies = { path = "../rdlp-cookies" }
-rdlp-plugin = { path = "../rdlp-plugin" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
-rdlp-security = { path = "../rdlp-security" }
 async-trait = { workspace = true }
 
 serde = { workspace = true }

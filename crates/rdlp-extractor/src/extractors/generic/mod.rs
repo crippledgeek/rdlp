@@ -103,14 +103,21 @@ impl InfoExtractor for GenericExtractor {
         // === Phase 2: Fetch full page ===
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
-        // Truncate oversized pages
+        // Truncate oversized pages — must walk back to a UTF-8 char boundary
+        // because Generic runs against arbitrary unknown sites (highest input
+        // variance in the workspace) and a multi-byte character at byte
+        // MAX_PAGE_SIZE would panic the bare slice.
         let webpage = if webpage.len() > MAX_PAGE_SIZE {
             log::warn!(
                 "Page exceeds size limit ({} bytes, max {}), truncating",
                 webpage.len(),
                 MAX_PAGE_SIZE
             );
-            webpage[..MAX_PAGE_SIZE].to_string()
+            let mut end = MAX_PAGE_SIZE;
+            while end > 0 && !webpage.is_char_boundary(end) {
+                end -= 1;
+            }
+            webpage[..end].to_string()
         } else {
             webpage
         };

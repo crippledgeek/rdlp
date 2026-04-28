@@ -136,7 +136,8 @@ impl InfoExtractor for KoreanPornMovieExtractor {
 
             let upload_date = meta_content(&html, &META_UPLOAD_DATE_SELECTOR);
             let duration = meta_content(&html, &META_DURATION_SELECTOR)
-                .and_then(|d| parse_iso8601_duration(&d));
+                .as_deref()
+                .and_then(BaseExtractor::parse_iso8601_duration);
 
             let actors: Vec<String> = html
                 .select(&ACTOR_LINK_SELECTOR)
@@ -525,7 +526,7 @@ fn scrape_durations_from_html(html_text: &str) -> std::collections::HashMap<Stri
             .select(&SEARCH_DURATION_SELECTOR)
             .next()
             .map(|d| d.text().collect::<String>())
-            .and_then(|d| parse_hms_duration(d.trim()));
+            .and_then(|d| BaseExtractor::parse_duration(d.trim()));
 
         if let (Some(url), Some(dur)) = (url, duration) {
             map.insert(url.to_string(), dur);
@@ -742,51 +743,6 @@ fn meta_content(html: &Html, selector: &Selector) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Parse ISO 8601 duration (e.g., "P0DT1H2M3S") to seconds.
-fn parse_iso8601_duration(duration: &str) -> Option<f64> {
-    // Extended format: P0DT1H2M3S
-    static DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?")
-            .expect("valid duration pattern")
-    });
-
-    let caps = DURATION_PATTERN.captures(duration)?;
-    let hours: f64 = caps
-        .get(1)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-    let minutes: f64 = caps
-        .get(2)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-    let seconds: f64 = caps
-        .get(3)
-        .and_then(|m| m.as_str().parse().ok())
-        .unwrap_or(0.0);
-
-    let total = hours * 3600.0 + minutes * 60.0 + seconds;
-    if total > 0.0 { Some(total) } else { None }
-}
-
-/// Parse "HH:MM:SS" or "MM:SS" duration string to seconds.
-fn parse_hms_duration(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.len() {
-        3 => {
-            let h: f64 = parts[0].parse().ok()?;
-            let m: f64 = parts[1].parse().ok()?;
-            let s: f64 = parts[2].parse().ok()?;
-            Some(h * 3600.0 + m * 60.0 + s)
-        }
-        2 => {
-            let m: f64 = parts[0].parse().ok()?;
-            let s: f64 = parts[1].parse().ok()?;
-            Some(m * 60.0 + s)
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,13 +802,6 @@ mod tests {
         let tag = r#"<iframe src="https://www.pornhub.com/embed/ph123"></iframe>"#;
         let urls = extract_urls_from_decoded_tag(tag);
         assert!(urls.is_empty()); // PornHub embed is not a direct media URL
-    }
-
-    #[test]
-    fn parse_duration_full() {
-        assert_eq!(parse_iso8601_duration("P0DT1H1M14S"), Some(3674.0));
-        assert_eq!(parse_iso8601_duration("P0DT0H1M57S"), Some(117.0));
-        assert_eq!(parse_iso8601_duration("PT30S"), Some(30.0));
     }
 
     #[test]

@@ -21,4 +21,4 @@ mod limiter;
 mod parse;
 
 pub use limiter::RateLimiter;
-pub use parse::parse_rate_limit;
+pub use parse::{RateLimitParseError, parse_rate_limit};

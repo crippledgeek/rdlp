@@ -89,9 +89,13 @@ pub static QUALITY_FROM_URL_PATTERN: LazyLock<Regex> =
 pub static BITRATE_FROM_URL_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern"));
 
-/// Pattern for ISO 8601 duration (e.g., "PT1H2M3S")
+/// Pattern for ISO 8601 duration. Accepts both `PT…` and the day-prefixed
+/// `P{N}DT…` form some sites emit (e.g. KoreanPornMovie's `P0DT1H1M14S`).
+/// The day count is consumed but discarded — observed values are always 0
+/// in practice and a per-day conversion would surface a misleading total
+/// when the day slot was actually used as a placeholder.
 pub static ISO8601_DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$")
+    Regex::new(r"^P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$")
         .expect("Valid ISO8601 duration pattern")
 });
 

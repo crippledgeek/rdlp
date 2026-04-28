@@ -72,8 +72,13 @@ impl HttpClientFactory {
         // NOTE: Do NOT call `.user_agent(...)` here — the emulation profile
         // owns User-Agent. Overriding it desyncs the JA4H fingerprint.
         // (spec §6.4)
+        //
+        // wreq disables redirect-following by default (unlike reqwest). Many
+        // CDN-backed extractors (e.g. ABXXX `get_file` → signed CDN) depend
+        // on 302 redirects, so install the limited(10) policy as a baseline.
         let mut builder = wreq::Client::builder()
             .emulation(self.config.emulation.resolve())
+            .redirect(wreq::redirect::Policy::limited(10))
             .pool_max_idle_per_host(self.config.pool_max_idle_per_host)
             .pool_idle_timeout(Duration::from_secs(self.config.pool_idle_timeout_secs))
             .tcp_keepalive(Duration::from_secs(self.config.tcp_keepalive_secs))
@@ -168,5 +173,41 @@ mod tests {
         let config = HttpClientConfig::new().with_proxy("ftp://proxy.example.com");
         let factory = HttpClientFactory::from_config(&config);
         let _client = factory.build();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn factory_built_client_follows_302_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{addr}");
+
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf);
+                let response = if req.contains("GET /redir") {
+                    "HTTP/1.1 302 Found\r\nLocation: /dest\r\nContent-Length: 0\r\n\r\n".to_string()
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nfollowed!".to_string()
+                };
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let client = HttpClientFactory::default().build();
+        let resp = client
+            .get(format!("{base}/redir"))
+            .send()
+            .await
+            .expect("request must succeed");
+        assert_eq!(resp.status().as_u16(), 200, "redirect was not followed");
+        let body = resp.text().await.unwrap();
+        assert_eq!(body, "followed!");
     }
 }

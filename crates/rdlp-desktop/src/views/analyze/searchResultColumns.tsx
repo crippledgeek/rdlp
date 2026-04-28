@@ -82,7 +82,13 @@ export const searchResultColumns = [
         size: 140,
         sortingFn: "text",
         sortUndefined: "last",
-        cell: ({ getValue }) => getValue() ?? "—",
+        cell: ({ getValue }) => {
+            const v = getValue();
+            if (v) return v;
+            return (
+                <span className="italic text-[var(--text-tertiary)]">Unavailable</span>
+            );
+        },
     }),
     columnHelper.accessor("duration", {
         header: "Duration",
