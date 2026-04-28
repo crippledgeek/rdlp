@@ -88,12 +88,19 @@ impl TrustStore {
     }
 
     /// Record (or replace) a trust entry, persisting to disk.
+    ///
+    /// If `persist()` fails the in-memory state is still mutated. This is
+    /// safe because the store is rebuilt from disk on the next `open()` —
+    /// any partial in-memory drift is transient and never observed across
+    /// process boundaries.
     pub fn record(&mut self, entry: TrustEntry) -> Result<(), PluginError> {
         self.file.entries.insert(entry.name.clone(), entry);
         self.persist()
     }
 
     /// Forget the entry for `name`, persisting to disk.
+    ///
+    /// Same in-memory/disk consistency contract as [`Self::record`].
     pub fn forget(&mut self, name: &str) -> Result<(), PluginError> {
         self.file.entries.remove(name);
         self.persist()
@@ -136,6 +143,10 @@ impl TrustStore {
         }
     }
 
+    /// Atomically persist the trust file: write to a sibling temp path and
+    /// rename over the destination. POSIX `rename` guarantees that readers
+    /// either see the old content or the fully-written new content, never a
+    /// truncated intermediate. Prevents trust-file corruption on crash or kill.
     fn persist(&self) -> Result<(), PluginError> {
         let s = toml::to_string_pretty(&self.file)
             .map_err(|e| PluginError::Internal(format!("trust store serialize: {e}")))?;
@@ -143,8 +154,19 @@ impl TrustStore {
             #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
             std::fs::create_dir_all(parent)?;
         }
+
+        // Write to <path>.tmp in the same directory, then atomic rename. The
+        // tempfile lives next to the destination so the rename stays on the
+        // same filesystem (cross-fs rename is not atomic).
+        let mut tmp_path = self.path.clone();
+        let mut file_name = self.path.file_name().unwrap_or_default().to_os_string();
+        file_name.push(".tmp");
+        tmp_path.set_file_name(file_name);
+
         #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
-        std::fs::write(&self.path, s)?;
+        std::fs::write(&tmp_path, s)?;
+        #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
+        std::fs::rename(&tmp_path, &self.path)?;
         Ok(())
     }
 }
