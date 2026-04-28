@@ -174,6 +174,14 @@ fn invalid(reason: &str) -> Result<(), PluginError> {
 /// Reference implementation in another language must produce identical bytes
 /// for an equivalent manifest. Test fixtures live in
 /// `crates/rdlp-plugin/tests/manifest_canonical.rs`.
+///
+/// **IMPORTANT — forward compatibility:** if you add a new field to `Manifest`,
+/// decide explicitly whether to include it here. Omitting a field from the
+/// canonical form is intentional in some cases (e.g. fields added for runtime
+/// state that aren't part of the signed surface), but the omission must be
+/// deliberate. Silently leaving a new field out is a signing-format bug that
+/// breaks reproducibility in third-party tooling. Update this function or
+/// document the omission inline when extending the manifest schema.
 #[must_use]
 pub fn canonical_bytes(m: &Manifest) -> Vec<u8> {
     use std::collections::BTreeMap;
