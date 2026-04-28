@@ -30,50 +30,71 @@ impl RecodeStage {
         Self { ffmpeg }
     }
 
-    /// Check if the format is a supported container.
-    fn is_supported_container(format: &str) -> bool {
-        format.parse::<ContainerFormat>().is_ok()
-    }
-
-    /// Determine if stream copy (remux) is possible for the codec/container combination.
-    fn can_remux(input_ext: &str, output_ext: &str, video_codec: Option<&str>) -> bool {
+    /// Determine if stream copy (remux) is possible for the codec/container
+    /// combination. `video_codec` is the input file's video codec name as
+    /// reported by ffprobe — still a string until the cross-extractor
+    /// codec-typing migration lands.
+    fn can_remux(input_ext: &str, output: ContainerFormat, video_codec: Option<&str>) -> bool {
         fn codec_is(codec: &str, names: &[&str]) -> bool {
             names.iter().any(|n| n.eq_ignore_ascii_case(codec))
         }
-        fn ext_is(ext: &str, exts: &[&str]) -> bool {
-            exts.iter().any(|e| e.eq_ignore_ascii_case(ext))
-        }
 
-        if ext_is(output_ext, &["mp4", "f4v"]) {
-            video_codec
-                .is_some_and(|c| codec_is(c, &["h264", "avc", "h265", "hevc", "mpeg4", "av1"]))
-        } else if ext_is(output_ext, &["mkv", "mka", "nut", "mxf"]) {
-            true
-        } else if output_ext.eq_ignore_ascii_case("webm") {
-            video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
-        } else if output_ext.eq_ignore_ascii_case("ivf") {
-            video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
-        } else if output_ext.eq_ignore_ascii_case("3gp") {
-            video_codec.is_some_and(|c| codec_is(c, &["h264", "avc", "h263", "mpeg4"]))
-        } else if output_ext.eq_ignore_ascii_case("asf") {
-            video_codec.is_some_and(|c| codec_is(c, &["wmv1", "wmv2", "h264", "avc", "mpeg4"]))
-        } else if ext_is(output_ext, &["mpg", "vob"]) {
-            video_codec.is_some_and(|c| {
+        match output {
+            ContainerFormat::Mp4 | ContainerFormat::F4v => video_codec
+                .is_some_and(|c| codec_is(c, &["h264", "avc", "h265", "hevc", "mpeg4", "av1"])),
+            ContainerFormat::Mkv
+            | ContainerFormat::Mka
+            | ContainerFormat::Nut
+            | ContainerFormat::Mxf
+            | ContainerFormat::Avi => true,
+            ContainerFormat::WebM | ContainerFormat::Ivf => {
+                video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
+            }
+            ContainerFormat::ThreeGp => {
+                video_codec.is_some_and(|c| codec_is(c, &["h264", "avc", "h263", "mpeg4"]))
+            }
+            ContainerFormat::Asf => {
+                video_codec.is_some_and(|c| codec_is(c, &["wmv1", "wmv2", "h264", "avc", "mpeg4"]))
+            }
+            ContainerFormat::Mpg | ContainerFormat::Vob => video_codec.is_some_and(|c| {
                 codec_is(c, &["mpeg1", "mpeg1video", "mpeg2", "mpeg2video", "mpeg4"])
-            })
-        } else if output_ext.eq_ignore_ascii_case("avi") {
-            true
-        } else {
-            input_ext.eq_ignore_ascii_case(output_ext)
+            }),
+            // Audio-only and any-other-video containers fall back to the
+            // input/output ext compare.
+            other => input_ext.eq_ignore_ascii_case(other.as_ext()),
+        }
+    }
+
+    /// Pick the default video codec to encode toward when no explicit
+    /// encoder override is given.
+    fn default_codec_for(target: ContainerFormat) -> &'static str {
+        match target {
+            ContainerFormat::WebM | ContainerFormat::Ivf => "vp9",
+            ContainerFormat::Ogg => "theora",
+            ContainerFormat::Mpg | ContainerFormat::Vob => "mpeg2",
+            _ => "h264",
+        }
+    }
+
+    /// Default `(preset, crf)` for a known target codec. Returns `(None, None)`
+    /// for codecs without a meaningful default — the codec falls back to its
+    /// FFmpeg-shipped defaults.
+    fn default_preset_crf_for_codec(target_codec: &str) -> (Option<String>, Option<u32>) {
+        match target_codec {
+            "h264" | "h265" | "hevc" | "vvc" | "h266" => (Some("medium".to_string()), Some(23)),
+            "vp9" | "vp8" => (None, Some(30)),
+            "av1" => (None, Some(28)),
+            _ => (None, None),
         }
     }
 
     /// Build video conversion options.
     ///
-    /// Returns `None` when an explicit encoder override is requested but not available.
-    /// `audio_codec` is `None` for copy, `Some(name)` for re-encode.
+    /// Returns `None` when an explicit encoder override is requested but not
+    /// available in this FFmpeg build. `audio_codec` is `None` for copy,
+    /// `Some(name)` for re-encode.
     fn build_convert_options(
-        target_format: &str,
+        target: ContainerFormat,
         can_remux: bool,
         encoder_override: Option<&str>,
         audio_copy: bool,
@@ -101,20 +122,9 @@ impl RecodeStage {
             });
         }
 
-        let target_codec = match target_format {
-            "webm" | "ivf" => "vp9",
-            "ogg" => "theora",
-            "mpg" | "vob" => "mpeg2",
-            _ => "h264",
-        };
-
+        let target_codec = Self::default_codec_for(target);
         let encoder = video_codecs::resolve_encoder(target_codec);
-        let (preset, crf) = match target_codec {
-            "h264" | "h265" | "hevc" | "vvc" | "h266" => (Some("medium".to_string()), Some(23)),
-            "vp9" | "vp8" => (None, Some(30)),
-            "av1" => (None, Some(28)),
-            _ => (None, None),
-        };
+        let (preset, crf) = Self::default_preset_crf_for_codec(target_codec);
 
         Some(VideoConvertOptions {
             remux_only: false,
@@ -161,42 +171,33 @@ impl PipelineStage for RecodeStage {
 
         let input_file = msg.tracker.primary();
 
-        // Resolve target container: prefer recode_container, fallback to recode_video
-        let target_container = msg.config.recode_container.or(msg.config.recode_video);
-
-        let target_format = match target_container {
-            Some(c) => c.as_ext(),
-            None => {
+        // Resolve target container: prefer recode_container, fallback to
+        // recode_video, fallback again to MP4.
+        let target = msg
+            .config
+            .recode_container
+            .or(msg.config.recode_video)
+            .unwrap_or_else(|| {
                 debug!("RecodeStage: no recode target configured; defaulting to MP4");
-                "mp4"
-            }
-        };
-
-        if !Self::is_supported_container(target_format) {
-            return Err(PostProcessError::UnsupportedFormat {
-                format: target_format.to_string(),
-                operation: "video conversion".to_string(),
-            }
-            .into());
-        }
+                ContainerFormat::Mp4
+            });
+        let target_ext = target.as_ext();
 
         let input_ext = input_file
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        if input_ext.eq_ignore_ascii_case(target_format) && msg.config.video_encoder.is_none() {
+        if input_ext.eq_ignore_ascii_case(target_ext) && msg.config.video_encoder.is_none() {
             debug!(
-                "RecodeStage: file already in target format ({}) and no encoder override, skipping",
-                target_format
+                "RecodeStage: file already in target format ({target_ext}) and no encoder override, skipping"
             );
             return Ok(msg);
         }
 
         info!(
-            "RecodeStage: converting {} → {}",
-            input_file.display(),
-            target_format
+            "RecodeStage: converting {} → {target_ext}",
+            input_file.display()
         );
 
         let media_info = self
@@ -206,7 +207,7 @@ impl PipelineStage for RecodeStage {
             .context("recode stage: failed to probe input file")?;
         // When a video encoder is explicitly requested, always transcode — never remux
         let can_remux = msg.config.video_encoder.is_none()
-            && Self::can_remux(input_ext, target_format, media_info.video_codec.as_deref());
+            && Self::can_remux(input_ext, target, media_info.video_codec.as_deref());
 
         if can_remux {
             debug!("RecodeStage: remuxing (stream copy)");
@@ -236,21 +237,16 @@ impl PipelineStage for RecodeStage {
             match recode_audio {
                 RecodeAudioMode::Copy => (true, None),
                 RecodeAudioMode::Auto => {
-                    // Select best audio encoder for the target container
-                    let encoder = target_container
-                        .map(audio_encoder_registry::select_audio_encoder_for_container)
-                        .unwrap_or("aac");
-                    debug!("RecodeStage: auto audio encoder for {target_format}: {encoder}");
+                    let encoder =
+                        audio_encoder_registry::select_audio_encoder_for_container(target);
+                    debug!("RecodeStage: auto audio encoder for {target_ext}: {encoder}");
                     (false, Some(encoder.to_string()))
                 }
                 RecodeAudioMode::Encoder { ref name } => {
-                    // Validate compatibility with target container
-                    if let Some(container) = target_container
-                        && !audio_encoder_registry::container_supports_audio_codec(container, name)
-                    {
+                    if !audio_encoder_registry::container_supports_audio_codec(target, name) {
                         warn!(
                             "RecodeStage: audio codec '{name}' may not be compatible with \
-                             container '{target_format}'; proceeding anyway"
+                             container '{target_ext}'; proceeding anyway"
                         );
                     }
                     let resolved = audio_encoder_registry::resolve_audio_encoder(name)
@@ -259,9 +255,7 @@ impl PipelineStage for RecodeStage {
                                 "RecodeStage: audio encoder '{name}' not available; \
                                  falling back to container default"
                             );
-                            target_container
-                                .map(audio_encoder_registry::select_audio_encoder_for_container)
-                                .unwrap_or("aac")
+                            audio_encoder_registry::select_audio_encoder_for_container(target)
                         });
                     debug!("RecodeStage: using audio encoder: {resolved}");
                     (false, Some(resolved.to_string()))
@@ -269,10 +263,10 @@ impl PipelineStage for RecodeStage {
             }
         };
 
-        let output_path = msg.tracker.temp_path(&input_file, target_format);
+        let output_path = msg.tracker.temp_path(&input_file, target_ext);
 
         let mut opts = match Self::build_convert_options(
-            target_format,
+            target,
             can_remux,
             msg.config.video_encoder.as_deref(),
             audio_copy,
@@ -312,7 +306,7 @@ impl PipelineStage for RecodeStage {
             } else if opts.audio_copy {
                 cb.on_log("Recode: audio=copy");
             }
-            cb.on_log(&format!("Recode: container={target_format}"));
+            cb.on_log(&format!("Recode: container={target_ext}"));
         }
 
         let progress_callback =
@@ -441,39 +435,50 @@ mod tests {
     }
 
     #[test]
-    fn is_supported_container() {
-        assert!(RecodeStage::is_supported_container("mp4"));
-        assert!(RecodeStage::is_supported_container("mkv"));
-        assert!(RecodeStage::is_supported_container("webm"));
-        assert!(!RecodeStage::is_supported_container("xyz"));
-    }
-
-    #[test]
     fn can_remux_h264_to_mp4() {
-        assert!(RecodeStage::can_remux("mkv", "mp4", Some("h264")));
+        assert!(RecodeStage::can_remux(
+            "mkv",
+            ContainerFormat::Mp4,
+            Some("h264")
+        ));
     }
 
     #[test]
     fn cannot_remux_vp9_to_mp4() {
-        assert!(!RecodeStage::can_remux("webm", "mp4", Some("vp9")));
+        assert!(!RecodeStage::can_remux(
+            "webm",
+            ContainerFormat::Mp4,
+            Some("vp9")
+        ));
     }
 
     #[test]
     fn can_remux_anything_to_mkv() {
-        assert!(RecodeStage::can_remux("mp4", "mkv", Some("h264")));
-        assert!(RecodeStage::can_remux("webm", "mkv", Some("vp9")));
+        assert!(RecodeStage::can_remux(
+            "mp4",
+            ContainerFormat::Mkv,
+            Some("h264")
+        ));
+        assert!(RecodeStage::can_remux(
+            "webm",
+            ContainerFormat::Mkv,
+            Some("vp9")
+        ));
     }
 
     #[test]
     fn build_convert_options_remux() {
-        let opts = RecodeStage::build_convert_options("mp4", true, None, true, None).unwrap();
+        let opts = RecodeStage::build_convert_options(ContainerFormat::Mp4, true, None, true, None)
+            .unwrap();
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
     }
 
     #[test]
     fn build_convert_options_transcode_mp4() {
-        let opts = RecodeStage::build_convert_options("mp4", false, None, true, None).unwrap();
+        let opts =
+            RecodeStage::build_convert_options(ContainerFormat::Mp4, false, None, true, None)
+                .unwrap();
         assert!(!opts.remux_only);
         assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, Some("medium".to_string()));
@@ -485,7 +490,7 @@ mod tests {
     #[test]
     fn build_convert_options_with_audio_codec() {
         let opts = RecodeStage::build_convert_options(
-            "mp4",
+            ContainerFormat::Mp4,
             false,
             None,
             false,
@@ -499,7 +504,7 @@ mod tests {
     #[test]
     fn build_convert_options_unavailable_encoder_returns_none() {
         let result = RecodeStage::build_convert_options(
-            "mp4",
+            ContainerFormat::Mp4,
             false,
             Some("nonexistent_enc_xyz"),
             true,
