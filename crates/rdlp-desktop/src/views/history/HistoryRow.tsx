@@ -70,12 +70,12 @@ export function HistoryRow({ job }: HistoryRowProps) {
                 </p>
                 <div className="flex items-center gap-2 mt-0.5">
                     {job.completed_at && (
-                        <span className="text-[10px] text-[#444444]">
+                        <span className="text-[10px] text-[var(--text-muted)]">
                             {formatRelativeDate(job.completed_at)}
                         </span>
                     )}
                     {job.output_path && (
-                        <span className="text-[10px] text-[#333333] truncate">
+                        <span className="text-[10px] text-[var(--text-muted)] truncate">
                             {job.output_path.split(/[\\/]/).pop()}
                         </span>
                     )}
@@ -89,7 +89,7 @@ export function HistoryRow({ job }: HistoryRowProps) {
                     <button
                         onClick={handleReveal}
                         aria-label="Reveal in folder"
-                        className="p-1.5 rounded-[4px] text-[#444444] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
                     >
                         <FolderOpen className="w-3 h-3" />
                     </button>
@@ -98,7 +98,7 @@ export function HistoryRow({ job }: HistoryRowProps) {
                     <button
                         onClick={handleRedownload}
                         aria-label="Re-download"
-                        className="p-1.5 rounded-[4px] text-[#444444] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
                     >
                         <RotateCcw className="w-3 h-3" />
                     </button>

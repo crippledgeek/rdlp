@@ -27,7 +27,7 @@ const statusConfig: Record<JobStatus, { label: string; className: string }> = {
     },
     cancelled: {
         label: "Cancelled",
-        className: "text-[#666666] bg-[#141414] border border-[#1e1e1e]",
+        className: "text-[var(--text-muted)] bg-[#141414] border border-[#1e1e1e]",
     },
 };
 

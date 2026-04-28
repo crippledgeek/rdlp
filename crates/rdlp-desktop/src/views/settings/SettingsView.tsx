@@ -57,7 +57,7 @@ export function SettingsView() {
     if (isLoading || !draft) {
         return (
             <div className="flex items-center justify-center h-full">
-                <p className="text-[13px] text-[#444444] animate-pulse">Loading settings…</p>
+                <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
             </div>
         );
     }

@@ -48,7 +48,7 @@ export function IconRail() {
                                 "relative flex items-center justify-center w-10 h-10 rounded-[6px] my-0.5 transition-colors",
                                 isActive
                                     ? "bg-[#1a2a4a] text-[#4a9eff]"
-                                    : "text-[#666666] hover:text-[#aaaaaa] hover:bg-[#0e0e1e]",
+                                    : "text-[var(--text-muted)] hover:text-[#aaaaaa] hover:bg-[#0e0e1e]",
                             )}
                         >
                             {/* Left edge active indicator */}

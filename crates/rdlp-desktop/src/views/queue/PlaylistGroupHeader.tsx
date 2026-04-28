@@ -76,9 +76,9 @@ export function PlaylistGroupHeader({
             {/* Title row */}
             <div className="flex items-center gap-2">
                 {collapsed ? (
-                    <ChevronRight className="w-3.5 h-3.5 text-[#666666] shrink-0" />
+                    <ChevronRight className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
                 ) : (
-                    <ChevronDown className="w-3.5 h-3.5 text-[#666666] shrink-0" />
+                    <ChevronDown className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
                 )}
 
                 <span className="flex-1 min-w-0 text-[13px] font-medium text-[#F8FAFC] truncate">
@@ -96,7 +96,7 @@ export function PlaylistGroupHeader({
                             void handleCancelAll();
                         }}
                         aria-label="Cancel all downloads in this playlist"
-                        className="p-1 rounded-[4px] text-[#666666] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
+                        className="p-1 rounded-[4px] text-[var(--text-muted)] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
                     >
                         <XCircle className="w-3.5 h-3.5" />
                     </button>
@@ -130,7 +130,7 @@ export function PlaylistGroupHeader({
                     <span className="text-[#22C55E]">{stats.completed} completed</span>
                 )}
                 {stats.pending > 0 && (
-                    <span className="text-[#666666]">{stats.pending} pending</span>
+                    <span className="text-[var(--text-muted)]">{stats.pending} pending</span>
                 )}
                 {stats.failed > 0 && (
                     <span className="text-[#EF4444]">{stats.failed} failed</span>

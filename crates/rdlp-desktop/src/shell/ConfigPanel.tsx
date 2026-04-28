@@ -21,7 +21,7 @@ export function ConfigPanel() {
         if (!analyzeUrl) {
             return (
                 <div className="h-full flex items-center justify-center p-4">
-                    <p className="text-[11px] text-[#444444] text-center">
+                    <p className="text-[11px] text-[var(--text-muted)] text-center">
                         Paste a URL to see format options
                     </p>
                 </div>
@@ -39,7 +39,7 @@ export function ConfigPanel() {
         if (!selectedJobId) {
             return (
                 <div className="h-full flex items-center justify-center p-4 border-l border-[#1a1a2e]">
-                    <p className="text-[11px] text-[#444444] text-center">
+                    <p className="text-[11px] text-[var(--text-muted)] text-center">
                         Select a job to see details
                     </p>
                 </div>
@@ -57,7 +57,7 @@ export function ConfigPanel() {
         if (!selectedJobId) {
             return (
                 <div className="h-full flex items-center justify-center p-4 border-l border-[#1a1a2e]">
-                    <p className="text-[11px] text-[#444444] text-center">
+                    <p className="text-[11px] text-[var(--text-muted)] text-center">
                         Select an item to see details
                     </p>
                 </div>

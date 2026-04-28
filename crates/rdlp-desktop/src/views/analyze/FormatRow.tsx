@@ -52,7 +52,7 @@ export const FormatRow = memo(
                         const codec = format.vcodec;
                         if (!codec || codec === "none") {
                             return (
-                                <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[#444444] min-w-[85px]">
+                                <td key={cell.id} className="px-2 py-1.5 text-[11px] text-[var(--text-muted)] min-w-[85px]">
                                     —
                                 </td>
                             );
@@ -87,7 +87,7 @@ export const FormatRow = memo(
                                             <span>{group}</span>
                                         </span>
                                     ) : (
-                                        <span className="text-[#444444]">—</span>
+                                        <span className="text-[var(--text-muted)]">—</span>
                                     )}
                                 </td>
                             );

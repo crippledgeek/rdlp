@@ -47,7 +47,7 @@ export function SearchFilterBar() {
 
     return (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#1a1a2e] shrink-0">
-            <span className="text-[10px] text-[#666666] uppercase tracking-[1px] mr-1">Filters</span>
+            <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-[1px] mr-1">Filters</span>
             {descriptors.map((desc: SearchFilterDescriptor) => (
                 <Select
                     key={desc.key}

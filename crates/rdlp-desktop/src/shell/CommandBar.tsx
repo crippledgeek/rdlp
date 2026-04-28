@@ -117,7 +117,7 @@ export function CommandBar() {
                 className="flex items-center flex-1 gap-2"
                 style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             >
-                <Search className="w-3.5 h-3.5 text-[#666666] shrink-0" />
+                <Search className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
 
                 {/* URL/search input */}
                 <input
@@ -129,7 +129,7 @@ export function CommandBar() {
                     placeholder="Paste a URL or search…"
                     aria-label="URL or search query"
                     className={cn(
-                        "flex-1 min-w-0 bg-transparent text-[13px] text-[#eeeeee] placeholder:text-[#444444] outline-none",
+                        "flex-1 min-w-0 bg-transparent text-[13px] text-[#eeeeee] placeholder:text-[var(--text-muted)] outline-none",
                         "border-0 focus:outline-none",
                     )}
                     style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
@@ -171,7 +171,7 @@ export function CommandBar() {
                         type="button"
                         onPress={clearInput}
                         aria-label="Clear input"
-                        className="text-[#444444] hover:text-[#aaaaaa] transition-colors h-auto bg-transparent p-0"
+                        className="text-[var(--text-muted)] hover:text-[#aaaaaa] transition-colors h-auto bg-transparent p-0"
                         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
                     >
                         <X className="w-3.5 h-3.5" />

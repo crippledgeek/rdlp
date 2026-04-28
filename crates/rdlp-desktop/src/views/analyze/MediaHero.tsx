@@ -77,23 +77,23 @@ export function MediaHero({ data, url }: MediaHeroProps) {
                             <span className="text-[11px] text-[#aaaaaa]">
                                 {data.playlist!.count} {data.playlist!.count === 1 ? "episode" : "episodes"}
                             </span>
-                            <span className="text-[#444444]">·</span>
-                            <span className="text-[11px] text-[#666666]">{hostname}</span>
+                            <span className="text-[var(--text-muted)]">·</span>
+                            <span className="text-[11px] text-[var(--text-muted)]">{hostname}</span>
                         </>
                     ) : (
                         <>
-                            <span className="text-[11px] text-[#666666]">{hostname}</span>
+                            <span className="text-[11px] text-[var(--text-muted)]">{hostname}</span>
                             {data.duration !== null && (
                                 <>
-                                    <span className="text-[#444444]">·</span>
-                                    <span className="text-[11px] text-[#666666]">
+                                    <span className="text-[var(--text-muted)]">·</span>
+                                    <span className="text-[11px] text-[var(--text-muted)]">
                                         {formatDuration(data.duration)}
                                     </span>
                                 </>
                             )}
                             {bestFormat?.height && (
                                 <>
-                                    <span className="text-[#444444]">·</span>
+                                    <span className="text-[var(--text-muted)]">·</span>
                                     <StreamBadge value={`${bestFormat.height}p`} category="resolution" />
                                 </>
                             )}

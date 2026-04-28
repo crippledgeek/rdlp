@@ -73,10 +73,10 @@ export function ResultCard({ result, className }: ResultCardProps) {
                 </p>
                 <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     {viewCount && (
-                        <span className="text-[10px] text-[#666666]">{viewCount}</span>
+                        <span className="text-[10px] text-[var(--text-muted)]">{viewCount}</span>
                     )}
                     {result.upload_date && (
-                        <span className="text-[10px] text-[#444444]">{result.upload_date}</span>
+                        <span className="text-[10px] text-[var(--text-muted)]">{result.upload_date}</span>
                     )}
                 </div>
             </div>

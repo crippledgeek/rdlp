@@ -24,7 +24,7 @@ export function JobDetails() {
     if (!job) {
         return (
             <div className="p-3">
-                <p className="text-[11px] text-[#444444]">Job not found</p>
+                <p className="text-[11px] text-[var(--text-muted)]">Job not found</p>
             </div>
         );
     }
@@ -58,13 +58,13 @@ export function JobDetails() {
                     </p>
                     <StatusBadge status={job.status} className="shrink-0 mt-0.5" />
                 </div>
-                <p className="text-[10px] text-[#444444] break-all">{job.url}</p>
+                <p className="text-[10px] text-[var(--text-muted)] break-all">{job.url}</p>
             </div>
 
             {/* Progress (running) */}
             {isRunning && (
                 <div>
-                    <div className="flex items-center justify-between text-[10px] text-[#666666] mb-1">
+                    <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mb-1">
                         <span className="font-mono text-[#aaaaaa]">{Math.round(job.progress ?? 0)}%</span>
                         <div className="flex items-center gap-2">
                             {job.speed && <span>{job.speed}</span>}
@@ -96,19 +96,19 @@ export function JobDetails() {
                 <div className="space-y-1">
                     {job.started_at && (
                         <div className="flex justify-between text-[11px]">
-                            <span className="text-[#666666]">Started</span>
+                            <span className="text-[var(--text-muted)]">Started</span>
                             <span className="text-[#aaaaaa] font-mono">{formatDate(job.started_at)}</span>
                         </div>
                     )}
                     {job.completed_at && (
                         <div className="flex justify-between text-[11px]">
-                            <span className="text-[#666666]">Completed</span>
+                            <span className="text-[var(--text-muted)]">Completed</span>
                             <span className="text-[#aaaaaa] font-mono">{formatDate(job.completed_at)}</span>
                         </div>
                     )}
                     {job.output_path && (
                         <div className="text-[11px]">
-                            <span className="text-[#666666] block">Output</span>
+                            <span className="text-[var(--text-muted)] block">Output</span>
                             <span className="text-[#aaaaaa] font-mono text-[10px] break-all">{job.output_path}</span>
                         </div>
                     )}
@@ -122,37 +122,37 @@ export function JobDetails() {
                     <div className="space-y-1">
                         {job.options.format && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Format</span>
+                                <span className="text-[var(--text-muted)]">Format</span>
                                 <span className="text-[#aaaaaa] font-mono">{job.options.format}</span>
                             </div>
                         )}
                         {job.options.remux && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Remux</span>
+                                <span className="text-[var(--text-muted)]">Remux</span>
                                 <span className="text-[#aaaaaa] font-mono uppercase">{job.options.remux}</span>
                             </div>
                         )}
                         {job.options.extractAudio && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Audio</span>
+                                <span className="text-[var(--text-muted)]">Audio</span>
                                 <span className="text-[#aaaaaa] font-mono uppercase">{job.options.extractAudio}</span>
                             </div>
                         )}
                         {job.options.recodeVideo && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Recode</span>
+                                <span className="text-[var(--text-muted)]">Recode</span>
                                 <span className="text-[#aaaaaa] font-mono uppercase">{job.options.recodeVideo}</span>
                             </div>
                         )}
                         {job.options.videoEncoder && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Encoder</span>
+                                <span className="text-[var(--text-muted)]">Encoder</span>
                                 <span className="text-[#aaaaaa] font-mono">{job.options.videoEncoder}</span>
                             </div>
                         )}
                         {job.options.recodeAudio && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Audio</span>
+                                <span className="text-[var(--text-muted)]">Audio</span>
                                 <span className="text-[#aaaaaa] font-mono">
                                     {job.options.recodeAudio.mode === "encoder"
                                         ? job.options.recodeAudio.name
@@ -162,7 +162,7 @@ export function JobDetails() {
                         )}
                         {job.options.normalizeAudio && (
                             <div className="flex justify-between text-[11px]">
-                                <span className="text-[#666666]">Normalize</span>
+                                <span className="text-[var(--text-muted)]">Normalize</span>
                                 <span className="text-[#4a9e4a] font-mono">on</span>
                             </div>
                         )}
@@ -176,7 +176,7 @@ export function JobDetails() {
                     <h3 className="section-heading">Logs ({job.logMessages.length})</h3>
                     <div className="max-h-[160px] overflow-y-auto space-y-0.5">
                         {job.logMessages.map((msg, i) => (
-                            <p key={i} className="text-[10px] font-mono text-[#666666] leading-relaxed">
+                            <p key={i} className="text-[10px] font-mono text-[var(--text-muted)] leading-relaxed">
                                 {msg}
                             </p>
                         ))}
@@ -207,7 +207,7 @@ export function JobDetails() {
                 {isRunning && (
                     <button
                         onClick={handleCancel}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[12px] text-[#666666] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[12px] text-[var(--text-muted)] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
                     >
                         <X className="w-3.5 h-3.5" />
                         Cancel
@@ -216,7 +216,7 @@ export function JobDetails() {
                 {isTerminal && (
                     <button
                         onClick={handleRemove}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[12px] text-[#444444] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors"
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[12px] text-[var(--text-muted)] hover:text-[var(--text-muted)] hover:bg-[#1a1a2e] transition-colors"
                     >
                         <X className="w-3.5 h-3.5" />
                         Remove

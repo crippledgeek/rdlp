@@ -145,7 +145,7 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
                             "border border-transparent",
                             activePreset === preset.id
                                 ? "bg-[#1a2a4a] text-[#4a9eff] border-[#2a3a5a]"
-                                : "text-[#666666] hover:text-[#aaaaaa] hover:bg-[#0e0e1e]",
+                                : "text-[var(--text-muted)] hover:text-[#aaaaaa] hover:bg-[#0e0e1e]",
                         )}
                     >
                         {preset.label}
@@ -159,7 +159,7 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
                 <Checkbox
                     isSelected={showExpertFormats}
                     onChange={setShowExpertFormats}
-                    className="flex items-center gap-1.5 text-[10px] text-[#666666] hover:text-[#aaaaaa] cursor-pointer select-none"
+                    className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] hover:text-[#aaaaaa] cursor-pointer select-none"
                     aria-label="Show video-only streams"
                 >
                     {({ isSelected }) => (
@@ -178,7 +178,7 @@ export function PresetToolbar({ formats }: PresetToolbarProps) {
                 </Checkbox>
             )}
 
-            <span className="text-[10px] text-[#444444]">
+            <span className="text-[10px] text-[var(--text-muted)]">
                 {formats.length} {formats.length === 1 ? "format" : "formats"}
             </span>
         </div>

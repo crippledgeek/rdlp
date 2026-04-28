@@ -85,7 +85,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                                 style={{ width: `${progress}%` }}
                             />
                         </div>
-                        <div className="flex items-center gap-3 text-[10px] text-[#666666] font-mono">
+                        <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)] font-mono">
                             <span className="text-[#aaaaaa]">{Math.round(progress)}%</span>
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA {job.eta}</span>}
@@ -103,7 +103,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
                 {/* Output path for completed (hidden in compact mode) */}
                 {!compact && isCompleted && job.output_path && (
-                    <p className="text-[10px] text-[#666666] truncate">{job.output_path}</p>
+                    <p className="text-[10px] text-[var(--text-muted)] truncate">{job.output_path}</p>
                 )}
             </div>
 
@@ -113,7 +113,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleCancel(); }}
                         aria-label="Cancel download"
-                        className="p-1.5 rounded-[4px] text-[#666666] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
                     >
                         <X className="w-3.5 h-3.5" />
                     </button>
@@ -122,7 +122,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleRetry(); }}
                         aria-label="Retry download"
-                        className="p-1.5 rounded-[4px] text-[#666666] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
                     >
                         <RotateCcw className="w-3.5 h-3.5" />
                     </button>
@@ -131,7 +131,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleReveal(); }}
                         aria-label="Reveal in folder"
-                        className="p-1.5 rounded-[4px] text-[#666666] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[#4a9eff] hover:bg-[#0f1a2e] transition-colors"
                     >
                         <FolderOpen className="w-3.5 h-3.5" />
                     </button>
@@ -140,7 +140,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleRemove(); }}
                         aria-label="Remove job"
-                        className="p-1.5 rounded-[4px] text-[#444444] hover:text-[#666666] hover:bg-[#1a1a2e] transition-colors"
+                        className="p-1.5 rounded-[4px] text-[var(--text-muted)] hover:text-[var(--text-muted)] hover:bg-[#1a1a2e] transition-colors"
                     >
                         <X className="w-3 h-3" />
                     </button>

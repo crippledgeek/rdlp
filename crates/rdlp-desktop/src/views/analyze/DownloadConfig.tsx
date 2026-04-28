@@ -195,7 +195,7 @@ export function DownloadConfig() {
         >
             {/* Selected format summary */}
             <section className="p-3 border-b border-[#1a1a2e]">
-                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#666666] mb-2">
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mb-2">
                     Selected Format
                 </h3>
                 {selectedFormat ? (
@@ -211,7 +211,7 @@ export function DownloadConfig() {
                                 <StreamBadge value={selectedFormat.protocol.toUpperCase()} category="protocol" />
                             )}
                         </div>
-                        <div className="flex items-center gap-3 text-[11px] text-[#666666]">
+                        <div className="flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
                             {selectedFormat.fps && <span>{selectedFormat.fps} fps</span>}
                             {selectedFormat.filesize !== null && (
                                 <span>{formatFileSize(selectedFormat.filesize)}</span>
@@ -243,18 +243,18 @@ export function DownloadConfig() {
                                     />
                                 )}
                         </div>
-                        <p className="text-[11px] text-[#666666]">
+                        <p className="text-[11px] text-[var(--text-muted)]">
                             Best video + best audio, merged via FFmpeg.
                         </p>
                     </div>
                 ) : (
-                    <p className="text-[11px] text-[#444444]">No format selected</p>
+                    <p className="text-[11px] text-[var(--text-muted)]">No format selected</p>
                 )}
             </section>
 
             {/* Output path */}
             <section className="p-3 border-b border-[#1a1a2e]">
-                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#666666] mb-2">
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mb-2">
                     Output
                 </h3>
                 <form.Field name="outputPath">
@@ -266,7 +266,7 @@ export function DownloadConfig() {
                                 onBlur={field.handleBlur}
                                 onChange={(e) => field.handleChange(e.target.value)}
                                 placeholder="Default output directory"
-                                className="flex-1 min-w-0 px-2 py-1 rounded-[4px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[11px] text-[#aaaaaa] placeholder:text-[#444444] outline-none focus:border-[#4a9eff]"
+                                className="flex-1 min-w-0 px-2 py-1 rounded-[4px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[11px] text-[#aaaaaa] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]"
                             />
                             <Button
                                 type="button"
@@ -276,7 +276,7 @@ export function DownloadConfig() {
                                     const dir = await pickDirectory();
                                     if (dir) field.handleChange(dir);
                                 }}
-                                className="p-1.5 rounded-[4px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[#666666] hover:text-[#aaaaaa] hover:border-[#3a3a4e] transition-colors"
+                                className="p-1.5 rounded-[4px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[var(--text-muted)] hover:text-[#aaaaaa] hover:border-[#3a3a4e] transition-colors"
                                 aria-label="Browse for output directory"
                             >
                                 <FolderOpen className="w-3.5 h-3.5" />
@@ -289,7 +289,7 @@ export function DownloadConfig() {
             {/* Post-Processing */}
             <section className="p-3 border-b border-[#1a1a2e]">
                 <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#666666]">
+                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
                         Post-Processing
                     </h3>
                     <div className="flex items-center gap-3">
@@ -298,7 +298,7 @@ export function DownloadConfig() {
                                 <Checkbox
                                     isSelected={field.state.value}
                                     onChange={field.handleChange}
-                                    className="gap-1 text-[10px] text-[#555555]"
+                                    className="gap-1 text-[10px] text-[var(--text-muted)]"
                                 >
                                     Expert
                                 </Checkbox>
@@ -309,7 +309,7 @@ export function DownloadConfig() {
                                 <Checkbox
                                     isSelected={field.state.value}
                                     onChange={field.handleChange}
-                                    className="gap-1 text-[10px] text-[#555555]"
+                                    className="gap-1 text-[10px] text-[var(--text-muted)]"
                                 >
                                     Verbose
                                 </Checkbox>
@@ -488,7 +488,7 @@ export function DownloadConfig() {
 
             {/* Embed Options */}
             <section className="p-3 border-b border-[#1a1a2e]">
-                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#666666] mb-2">
+                <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mb-2">
                     Embed
                 </h3>
                 <div className="flex flex-col gap-1.5">
@@ -541,7 +541,7 @@ export function DownloadConfig() {
                         "w-full flex items-center justify-center gap-2 py-2 rounded-[6px] text-[13px] font-medium transition-colors",
                         hasSelection && !isSubmitting
                             ? "bg-[#4a9eff] text-white hover:bg-[#3a8ef0] data-[hovered]:bg-[#3a8ef0]"
-                            : "bg-[#1a2a4a] text-[#444444] cursor-not-allowed",
+                            : "bg-[#1a2a4a] text-[var(--text-disabled)] cursor-not-allowed",
                     )}
                 >
                     <Download className="w-4 h-4" />

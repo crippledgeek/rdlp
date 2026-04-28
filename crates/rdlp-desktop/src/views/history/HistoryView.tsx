@@ -83,8 +83,8 @@ export function HistoryView() {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-3">
                 <Clock className="w-10 h-10 text-[#1a1a2e]" />
-                <p className="text-[13px] text-[#444444]">No download history</p>
-                <p className="text-[11px] text-[#333333]">Completed downloads will appear here</p>
+                <p className="text-[13px] text-[var(--text-muted)]">No download history</p>
+                <p className="text-[11px] text-[var(--text-muted)]">Completed downloads will appear here</p>
                 <p className="text-[10px] text-[#2a2a3a]">History is available for this session only</p>
             </div>
         );
@@ -93,7 +93,7 @@ export function HistoryView() {
     if (filtered.length === 0) {
         return (
             <div className="flex items-center justify-center h-full">
-                <p className="text-[13px] text-[#444444]">No results match your search</p>
+                <p className="text-[13px] text-[var(--text-muted)]">No results match your search</p>
             </div>
         );
     }
@@ -103,9 +103,9 @@ export function HistoryView() {
             {groups.map(({ label, jobs: groupJobs }) => (
                 <div key={label}>
                     <div className="sticky top-0 z-10 px-3 py-1.5 bg-[var(--surface-base)] border-b border-[#0f0f1e]">
-                        <p className="text-[10px] text-[#555555] uppercase tracking-wider font-medium">
+                        <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-medium">
                             {label}
-                            <span className="ml-1.5 text-[#333333] normal-case">{groupJobs.length}</span>
+                            <span className="ml-1.5 text-[var(--text-muted)] normal-case">{groupJobs.length}</span>
                         </p>
                     </div>
                     <div className="flex flex-col gap-0.5 p-2">
