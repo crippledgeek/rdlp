@@ -4,10 +4,19 @@
 
 import { setupTauriMock } from "../support/e2e";
 
+// Selectors specific to React Aria Components rendered by Jolly UI:
+// - Checkbox renders as a <label> with data-selected reflecting checked state.
+// - The Output Directory input has id="output-dir".
+
+const OUTPUT_DIR_INPUT = "#output-dir";
+
+function checkboxByLabel(label: string) {
+    return cy.contains("label", label);
+}
+
 describe("Settings page", () => {
     beforeEach(() => {
-        // Navigate to Settings — find the settings nav link in the sidebar
-        cy.contains("Settings").click();
+        cy.goToSettings();
     });
 
     it("shows the Settings heading", () => {
@@ -16,7 +25,7 @@ describe("Settings page", () => {
 
     it("displays the output directory field", () => {
         cy.get('label').contains("Output Directory").should("be.visible");
-        cy.get('input[type="text"]').first().should("have.value", "/home/user/Downloads");
+        cy.get(OUTPUT_DIR_INPUT).should("have.value", "/home/user/Downloads");
     });
 
     it("shows the Browse button for output directory", () => {
@@ -28,32 +37,20 @@ describe("Settings page", () => {
     });
 
     it("shows the embed thumbnail checkbox checked by default", () => {
-        cy.contains("Embed thumbnails")
-            .closest("div")
-            .find('button[role="checkbox"]')
-            .should("have.attr", "aria-checked", "true");
+        checkboxByLabel("Embed thumbnails").should("have.attr", "data-selected", "true");
     });
 
     it("shows the embed metadata checkbox checked by default", () => {
-        cy.contains("Embed metadata")
-            .closest("div")
-            .find('button[role="checkbox"]')
-            .should("have.attr", "aria-checked", "true");
+        checkboxByLabel("Embed metadata").should("have.attr", "data-selected", "true");
     });
 
     it("shows the verbose logging checkbox unchecked by default", () => {
-        cy.contains("Verbose logging")
-            .closest("div")
-            .find('button[role="checkbox"]')
-            .should("have.attr", "aria-checked", "false");
+        checkboxByLabel("Verbose logging").should("not.have.attr", "data-selected");
     });
 
     it("toggles the verbose logging checkbox", () => {
-        cy.contains("Verbose logging")
-            .closest("div")
-            .find('button[role="checkbox"]')
-            .click()
-            .should("have.attr", "aria-checked", "true");
+        checkboxByLabel("Verbose logging").click();
+        checkboxByLabel("Verbose logging").should("have.attr", "data-selected", "true");
     });
 
     it("saves settings without error on clicking Save Settings", () => {
@@ -66,7 +63,7 @@ describe("Settings page", () => {
     it("updates output directory when Browse is clicked and directory is returned", () => {
         cy.contains("button", "Browse").click();
         // The pick_directory mock returns "/home/user/Videos"
-        cy.get('input[type="text"]').first().should("have.value", "/home/user/Videos");
+        cy.get(OUTPUT_DIR_INPUT).should("have.value", "/home/user/Videos");
     });
 
     it("shows error alert when save fails", () => {
@@ -80,17 +77,17 @@ describe("Settings page", () => {
             },
         });
 
-        cy.contains("Settings").click();
+        cy.goToSettings();
         cy.contains("button", "Save Settings").scrollIntoView().click();
 
         cy.get('[role="alert"]').should("contain", "Disk full");
     });
 
-    it("shows all format options in Default Remux Format dropdown", () => {
-        cy.contains("Default Remux Format").should("be.visible");
+    it("shows the Remux Format option in Format Defaults", () => {
+        cy.contains("Remux Format").should("be.visible");
     });
 
-    it("shows subtitle format options", () => {
-        cy.contains("Default Subtitle Format").should("be.visible");
+    it("shows the Subtitle Format option in Format Defaults", () => {
+        cy.contains("Subtitle Format").should("be.visible");
     });
 });
