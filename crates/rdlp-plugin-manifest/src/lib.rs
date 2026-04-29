@@ -205,6 +205,99 @@ pub fn validate_plugin_name(name: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+#[cfg(test)]
+mod validate_plugin_name_tests {
+    use super::{ManifestError, validate_plugin_name};
+
+    fn assert_rejected(name: &str) {
+        match validate_plugin_name(name) {
+            Err(ManifestError::InvalidPluginName { .. }) => {}
+            other => panic!("expected InvalidPluginName for {name:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_name_rejected() {
+        assert_rejected("");
+    }
+
+    #[test]
+    fn over_64_chars_rejected() {
+        assert_rejected(&"a".repeat(65));
+    }
+
+    #[test]
+    fn exactly_64_chars_accepted() {
+        validate_plugin_name(&"a".repeat(64)).unwrap();
+    }
+
+    #[test]
+    fn uppercase_rejected() {
+        assert_rejected("MyPlugin");
+        assert_rejected("PLUGIN");
+    }
+
+    #[test]
+    fn underscore_rejected() {
+        assert_rejected("my_plugin");
+    }
+
+    #[test]
+    fn dot_rejected() {
+        assert_rejected("my.plugin");
+    }
+
+    #[test]
+    fn slash_rejected_path_traversal() {
+        // The motivating attack: validate_plugin_name is the gate against
+        // `name = "../../.ssh"` resolving outside the plugin dir.
+        assert_rejected("../evil");
+        assert_rejected("foo/bar");
+        assert_rejected("..");
+    }
+
+    #[test]
+    fn colon_rejected_sled_namespace_collision() {
+        // Sled trees are namespaced as `plugin::<name>`; a colon would let
+        // `name = "evil::collide"` shadow another plugin's namespace.
+        assert_rejected("evil::collide");
+        assert_rejected("a:b");
+    }
+
+    #[test]
+    fn leading_hyphen_rejected() {
+        assert_rejected("-foo");
+    }
+
+    #[test]
+    fn whitespace_rejected() {
+        assert_rejected("foo bar");
+        assert_rejected(" foo");
+        assert_rejected("foo\n");
+    }
+
+    #[test]
+    fn null_byte_rejected() {
+        assert_rejected("foo\0bar");
+    }
+
+    #[test]
+    fn valid_kebab_accepted() {
+        validate_plugin_name("my-plugin-1").unwrap();
+        validate_plugin_name("a").unwrap();
+        validate_plugin_name("0").unwrap();
+        validate_plugin_name("a-b-c").unwrap();
+        validate_plugin_name("plugin123").unwrap();
+    }
+
+    #[test]
+    fn double_hyphen_accepted_per_rule() {
+        // Rule allows any combination of [a-z0-9-]; consecutive hyphens are
+        // permitted (no collision with any escape sequence in the consumers).
+        validate_plugin_name("my--plugin").unwrap();
+    }
+}
+
 fn validate(m: &Manifest) -> Result<(), ManifestError> {
     if m.name.is_empty() {
         return invalid("empty name");

@@ -14,6 +14,24 @@ except ImportError:
     _AVAILABLE = False
 
 
+def _check_status(status: int, expected_status, url: str) -> None:
+    """Raise `RuntimeError` if `status` is not 2xx and is not the explicitly-
+    allowed `expected_status`. Extracted for unit-testability — without
+    componentize-py bindings present, the surrounding `fetch_text` cannot be
+    called directly, but this pure-Python predicate can be exercised in tests
+    to pin the contract.
+
+    Callers that need to inspect a specific non-2xx (e.g. yt-dlp's
+    `expected_status=404` for soft 404s) pass that integer; everything else
+    in the non-2xx range raises.
+    """
+    if 200 <= status < 300:
+        return
+    if expected_status is not None and status == expected_status:
+        return
+    raise RuntimeError(f"HTTP {status} fetching {url}")
+
+
 def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
                expected_status: int = None) -> str:
     """Fetch a URL and return the body decoded as UTF-8 text.
@@ -23,9 +41,6 @@ def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
     bodies (login walls, error pages) would be returned as if they were the
     page content, masking auth failures and rate-limits as "extractor returns
     empty results".
-
-    Callers that need to inspect non-2xx responses (e.g. yt-dlp's
-    `expected_status=404` for soft 404s) pass an explicit allowed status.
     """
     if not _AVAILABLE:
         raise RuntimeError("_host.fetch_text called outside componentize-py runtime")
@@ -37,9 +52,7 @@ def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
         timeout_ms=timeout_ms,
     )
     resp = host_fetch.fetch(req)
-    status = resp.status
-    if not (200 <= status < 300) and status != expected_status:
-        raise RuntimeError(f"HTTP {status} fetching {url}")
+    _check_status(resp.status, expected_status, url)
     return bytes(resp.body).decode("utf-8", errors="replace")
 
 

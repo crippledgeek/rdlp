@@ -409,23 +409,39 @@ mod tests {
 
     #[test]
     fn template_manifest_parses_against_real_schema() {
-        // The emitted template must be parseable by the real Manifest type
-        // (modulo placeholder values — base64 content isn't validated until
-        // `rdlp plugin sign` runs).
+        // Round-trip the emitted template through the real Manifest parser —
+        // catches schema drift automatically (a field rename in
+        // rdlp-plugin-manifest::Manifest would fail this test). String-contains
+        // assertions remain as belt-and-suspenders for the forbidden [wasm]
+        // table and capability-vocab.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("plugin.toml.template");
         write_manifest(&path, "test-plugin", &["https://example.com/*".to_string()]).unwrap();
         let body = std::fs::read_to_string(&path).unwrap();
-        // Must not contain forbidden [wasm] table.
+
+        // 1. Real schema must accept the body (placeholder base64 strings are
+        // structurally valid even if cryptographically meaningless until
+        // `rdlp plugin sign` runs).
+        let manifest = rdlp_plugin_manifest::parse_manifest_str(&body)
+            .expect("emitted template must round-trip through parse_manifest_str");
+        assert_eq!(manifest.name, "test-plugin");
+        assert_eq!(manifest.matches, vec!["https://example.com/*".to_string()]);
+        assert_eq!(manifest.priority, 150);
+        assert_eq!(manifest.capabilities, vec!["fetch", "log"]);
+        assert!(matches!(
+            manifest.signature,
+            rdlp_plugin_manifest::Signature::Ed25519 { .. }
+        ));
+
+        // 2. String-level invariants — defensive guards against schema regressions
+        // that would still parse but ship the wrong shape.
         assert!(
             !body.contains("[wasm]"),
-            "template has invalid [wasm] table"
+            "template has forbidden [wasm] table"
         );
-        // Must contain the placeholder signature block.
-        assert!(body.contains("[signature]"));
-        assert!(body.contains("type = \"ed25519\""));
-        // Capability vocab must be unprefixed.
-        assert!(body.contains("\"fetch\""));
-        assert!(!body.contains("\"host:fetch\""));
+        assert!(
+            !body.contains("\"host:fetch\""),
+            "capability vocab must be unprefixed"
+        );
     }
 }

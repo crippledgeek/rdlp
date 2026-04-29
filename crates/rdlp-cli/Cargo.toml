@@ -49,6 +49,7 @@ mockito = "1.7"
 wiremock = "0.6"
 async-trait = { workspace = true }
 regex = { workspace = true }
+rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
 
 [lints]
 workspace = true

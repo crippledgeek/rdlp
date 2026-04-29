@@ -255,6 +255,53 @@ class TestTraverseObj:
         assert result == [] or result is None  # either acceptable for Slice 1
 
 
+class TestHostCheckStatus:
+    """Pin the HTTP-status check on _host.fetch_text without requiring the
+    componentize-py runtime — _check_status is pure-Python and unit-testable."""
+
+    def test_2xx_passes(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        _check_status(200, None, "https://x")
+        _check_status(204, None, "https://x")
+        _check_status(299, None, "https://x")
+
+    def test_4xx_raises(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        with pytest.raises(RuntimeError, match="HTTP 404"):
+            _check_status(404, None, "https://example.com/missing")
+
+    def test_5xx_raises(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            _check_status(503, None, "https://example.com")
+
+    def test_3xx_raises(self):
+        # Redirect status without a Location is also a non-success.
+        from rdlp_ytdlp_compat._host import _check_status
+        with pytest.raises(RuntimeError, match="HTTP 301"):
+            _check_status(301, None, "https://example.com")
+
+    def test_expected_status_allows_match(self):
+        # yt-dlp's soft-404 pattern: expected_status=404 means "I'll handle it".
+        from rdlp_ytdlp_compat._host import _check_status
+        _check_status(404, 404, "https://example.com")
+
+    def test_expected_status_does_not_allow_other_errors(self):
+        # expected_status=404 must NOT silently allow 500.
+        from rdlp_ytdlp_compat._host import _check_status
+        with pytest.raises(RuntimeError, match="HTTP 500"):
+            _check_status(500, 404, "https://example.com")
+
+    def test_expected_status_2xx_still_passes(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        _check_status(200, 404, "https://example.com")
+
+    def test_url_appears_in_error(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        with pytest.raises(RuntimeError, match="example.com/auth"):
+            _check_status(401, None, "https://example.com/auth")
+
+
 class TestExtractM3U8Formats:
     def test_extract_m3u8_returns_formats_only(self):
         # The base method returns formats only (drops subs). The companion
