@@ -43,8 +43,8 @@ fn malformed_plugin_toml_does_not_break_client() {
     let client = RdlpClient::new(config).expect("client must build despite broken plugin");
     let names = client.list_extractors();
     // Built-ins must be present and the broken plugin must not be.
-    assert!(names.contains(&"Generic".to_string()));
-    assert!(!names.contains(&"broken".to_string()));
+    assert!(names.contains(&"Generic"));
+    assert!(!names.contains(&"broken"));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn missing_plugin_dir_does_not_break_client() {
     };
 
     let client = RdlpClient::new(config).expect("client must build with missing plugin dir");
-    assert!(client.list_extractors().contains(&"Generic".to_string()));
+    assert!(client.list_extractors().contains(&"Generic"));
 }
 
 #[test]
@@ -95,5 +95,5 @@ fn corrupted_disabled_list_blocks_bootstrap() {
     // here, the test only confirms the corrupted-disabled-list path
     // doesn't panic and still builds the client with built-ins.
     let client = RdlpClient::new(config).expect("client builds (fail-soft top-level)");
-    assert!(client.list_extractors().contains(&"Generic".to_string()));
+    assert!(client.list_extractors().contains(&"Generic"));
 }

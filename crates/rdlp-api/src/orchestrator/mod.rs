@@ -383,16 +383,13 @@ impl Orchestrator {
         self.download_subtitles_standalone(info).await
     }
 
-    /// List all available extractors
+    /// List all available extractors. Test-only — public API consumers
+    /// should call `RdlpClient::list_extractors` (which borrows directly
+    /// from the cached registry rather than constructing an orchestrator).
     #[must_use]
-    pub fn list_extractors(&self) -> Vec<&str> {
+    #[cfg(test)]
+    pub(crate) fn list_extractors(&self) -> Vec<&str> {
         self.extractor_registry.list_extractors()
-    }
-
-    /// List all available download protocols
-    #[must_use]
-    pub fn list_downloaders(&self) -> Vec<&str> {
-        self.downloader_registry.list_downloaders()
     }
 
     /// Load archive if configured, returning `None` if not configured.

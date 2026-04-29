@@ -106,7 +106,7 @@ signature = "PLACEHOLDER"
     let client = RdlpClient::new(config).expect("client");
     let extractors = client.list_extractors();
     assert!(
-        extractors.iter().any(|e| e == "example"),
+        extractors.contains(&"example"),
         "expected `example` plugin in list_extractors() output, got: {extractors:?}"
     );
 }
