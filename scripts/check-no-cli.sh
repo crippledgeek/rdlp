@@ -9,9 +9,21 @@ set -euo pipefail
 
 FOUND=0
 
+# Allowlist: build-time tooling that legitimately invokes external CLIs
+# (NOT FFmpeg / NOT runtime extraction). Each entry must have a comment
+# explaining why the exception is justified.
+#
+# - rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs: invokes componentize-py
+#   (Python toolchain) at plugin-build time. Not FFmpeg. Not runtime.
+ALLOWLIST_REGEX='^crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp\.rs:'
+
 # Search production source directories only (exclude tests/ and comment lines)
 for pattern in 'std::process::Command' 'Command::new("ffmpeg")' 'Command::new("ffprobe")'; do
-    if grep -rn "$pattern" crates/*/src/ 2>/dev/null | grep -v '^\([^:]*:[^:]*:\)\s*//'; then
+    matches=$(grep -rn "$pattern" crates/*/src/ 2>/dev/null \
+        | grep -v '^\([^:]*:[^:]*:\)\s*//' \
+        | grep -Ev "$ALLOWLIST_REGEX" || true)
+    if [ -n "$matches" ]; then
+        echo "$matches"
         echo "ERROR: Forbidden CLI pattern found: $pattern"
         FOUND=1
     fi
