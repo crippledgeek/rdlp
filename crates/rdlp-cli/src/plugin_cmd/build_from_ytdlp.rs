@@ -250,10 +250,13 @@ fn stage_build_dir(
 /// 3. Errors raise via `Err(<variant>)`, NOT return, because the WIT
 ///    Protocol method signature is the `Ok` payload only — see
 ///    `extractor_plugin/types.py::Err` (a frozen-dataclass Exception).
-/// 4. Multiple `InfoExtractor` subclasses in `user_plugin` are an explicit
-///    error: alphabetical-first selection silently dropped sibling
-///    extractors before this commit. Per-file plugins must declare exactly
-///    one extractor; multi-class sites should ship one .py per extractor.
+/// 4. Multi-class plugin support (Slice 2): `_entry.py` walks every
+///    concrete `InfoExtractor` subclass in `user_plugin` at extract time
+///    and dispatches by `cls.suitable(url)`. SVT-style siblings
+///    (SVTPlayIE / SVTSeriesIE / SVTPageIE) ship in one .py and the
+///    `suitable()` overrides decide which class claims a given URL.
+///    Discovery + dispatch live in `rdlp_ytdlp_compat._dispatch` so they
+///    are unit-testable in plain CPython.
 /// 5. info_dict shape is validated per yt-dlp's documented contract
 ///    (`yt_dlp/extractor/common.py:107-498` at upstream tag 2026.03.17):
 ///    `id` and `title` are required strs; either `formats` or `url` must
@@ -299,37 +302,31 @@ from rdlp_ytdlp_compat import (
     NetworkError as _NetworkError,
 )
 from rdlp_ytdlp_compat._host import HostHttpError as _HostHttpError
+from rdlp_ytdlp_compat._dispatch import (
+    DispatchError as _DispatchError,
+    discover_ie_classes as _discover_ie_classes,
+    dispatch_url as _dispatch_url,
+)
 
 
-def _discover_ie_class():
-    """Find the user's InfoExtractor subclass. Multiple matches are an error
-    (alphabetical-first selection silently drops siblings); zero matches is
-    also an error.
-    """
-    candidates = []
-    for _name in dir(user_plugin):
-        _v = getattr(user_plugin, _name)
-        if (isinstance(_v, type)
-                and issubclass(_v, _CompatInfoExtractor)
-                and _v is not _CompatInfoExtractor):
-            candidates.append(_v)
-    if not candidates:
-        raise RuntimeError(
-            "no InfoExtractor subclass found in plugin — declare "
-            "`class FooIE(InfoExtractor):` at module top level"
-        )
-    if len(candidates) > 1:
-        names = ", ".join(c.__name__ for c in candidates)
-        raise RuntimeError(
-            "multiple InfoExtractor subclasses found in plugin: "
-            f"[{names}]. build-from-ytdlp supports exactly one extractor "
-            "per .py file; split each into its own file or build separately."
-        )
-    return candidates[0]
+# Discover all concrete InfoExtractor subclasses at module load. Exactly
+# zero candidates = plugin-authoring error (raised loudly at first call
+# below). Multi-class plugins (e.g. SVT with Play/Series/Page IEs in one
+# file) keep all classes — extract-time dispatch picks the right one
+# per URL via cls.suitable().
+try:
+    _IE_CLASSES = _discover_ie_classes(user_plugin)
+except _DispatchError as _e:
+    # Surface at extract() / metadata() rather than here — componentize-py
+    # init errors crash the whole instance.
+    _IE_CLASSES = []
+    _DISCOVERY_ERROR = _e
+else:
+    _DISCOVERY_ERROR = None
 
-
-_IE_CLASS = _discover_ie_class()
-_IE = _IE_CLASS()
+# Pre-instantiate one IE per class. Slice-1 used a single `_IE` instance;
+# Slice-2 keeps a dict so dispatch can route URLs to the right object.
+_IE_INSTANCES = {cls: cls() for cls in _IE_CLASSES}
 
 
 def _format_payload(e):
@@ -500,18 +497,37 @@ def _validate_id(d):
 # PascalCase) for componentize-py-pin@0.17.2 to discover and instantiate it.
 class ExtractorPlugin(_ExtractorPluginProtocol):
     def metadata(self) -> PluginInfo:
+        if _DISCOVERY_ERROR is not None:
+            raise Err(ExtractError_Internal(str(_DISCOVERY_ERROR)))
+        # When multiple IE classes ship in one plugin, the manifest's
+        # plugin name is determined by the `.py` filename (kebab-cased
+        # at build time). For metadata reporting we use the first class
+        # purely for the `url_regex` hint shown in `rdlp plugin info`;
+        # actual matching still walks every class via `suitable()`.
+        primary = _IE_CLASSES[0]
         return PluginInfo(
-            name=_IE_CLASS.__name__.lower(),
+            name=primary.__name__.lower(),
             version="0.1.0",
             wit_version="0.1.0",
             matches=[],  # populated from manifest at install time
-            url_regex=getattr(_IE_CLASS, "_VALID_URL", None),
+            url_regex=getattr(primary, "_VALID_URL", None),
             priority=150,
             claims_override=[],
             supports_search=False,
         )
 
     def extract(self, url: str) -> InfoDict:
+        if _DISCOVERY_ERROR is not None:
+            raise Err(ExtractError_Internal(str(_DISCOVERY_ERROR)))
+        # Walk every IE class in the plugin and pick the first whose
+        # `suitable(url)` is True. Sibling-override classes (e.g.
+        # SVTSeriesIE.suitable yields when SVTPlayIE.suitable matches)
+        # are honoured because dispatch_url respects each class's own
+        # suitable() implementation.
+        ie_class = _dispatch_url(_IE_CLASSES, url)
+        if ie_class is None:
+            raise Err(ExtractError_UnsupportedUrl(url))
+        ie = _IE_INSTANCES[ie_class]
         # All extraction logic — including _dict_to_info_dict's _opt_str
         # type-check on each format field — runs INSIDE the try. Otherwise
         # _opt_str's _ExtractorError on a bad format dict would propagate
@@ -519,7 +535,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         # which componentize-py surfaces as a wasm trap (instance killed,
         # epoch fuel lost) instead of the graceful WIT variant.
         try:
-            d = _IE._real_extract(url)
+            d = ie._real_extract(url)
             _validate_id(d)
             return _dict_to_info_dict(d)
         except Exception as e:
