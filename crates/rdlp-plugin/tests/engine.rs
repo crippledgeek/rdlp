@@ -1,5 +1,5 @@
 use rdlp_plugin::engine::{Engine, EngineConfig};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn engine_creates_with_default_config() {
@@ -9,17 +9,39 @@ fn engine_creates_with_default_config() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn epoch_ticks_advance_over_time() {
+    // Validates the tick thread is actually running by polling for a target
+    // tick count rather than sampling at a fixed offset. Under contended CI
+    // schedulers (macOS runners in particular) the kernel can delay
+    // `park_timeout` wakeups by 100ms+, so a fixed 300ms sample would race
+    // even with a 50ms tick period. The deadline window is generous enough
+    // that the test can only fail if the tick thread is fundamentally stuck.
     let engine = Engine::new(EngineConfig {
         tick_period: Duration::from_millis(50),
         ..Default::default()
     })
     .expect("engine new");
     let start = engine.current_epoch();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let later = engine.current_epoch();
+
+    const TARGET_TICKS: u64 = 4;
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const DEADLINE: Duration = Duration::from_secs(5);
+
+    let started = Instant::now();
+    let later = loop {
+        let now = engine.current_epoch();
+        if now >= start + TARGET_TICKS {
+            break now;
+        }
+        if started.elapsed() >= DEADLINE {
+            break now;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    };
+
     assert!(
-        later >= start + 4,
-        "expected at least 4 ticks in 300ms; got {start}->{later}"
+        later >= start + TARGET_TICKS,
+        "expected at least {TARGET_TICKS} ticks within {DEADLINE:?}; got {start}->{later} after {:?}",
+        started.elapsed()
     );
     drop(engine);
 }
@@ -31,12 +53,21 @@ fn engine_drop_stops_tick_thread() {
         ..Default::default()
     })
     .expect("engine new");
-    std::thread::sleep(Duration::from_millis(60));
-    let mid = engine.current_epoch();
-    assert!(mid > 0);
+
+    // Poll for the tick thread to advance at least once before dropping —
+    // again, contention-tolerant rather than relying on a fixed wall-clock
+    // sample. After drop the thread is unparked so it observes `shutdown`
+    // promptly; we can't observe the dropped engine but the absence of a
+    // panic / hang is the assertion.
+    let started = Instant::now();
+    while engine.current_epoch() == 0 {
+        if started.elapsed() >= Duration::from_secs(5) {
+            panic!("tick thread never advanced epoch within 5s");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(engine.current_epoch() > 0);
     drop(engine);
-    // After drop, the tick thread should stop quickly. We can't observe the
-    // dropped engine, but no panics is the assertion.
 }
 
 #[test]

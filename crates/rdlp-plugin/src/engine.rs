@@ -13,7 +13,7 @@ use crate::PluginError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Engine configuration. All fields are tunable from the rdlp `Config`.
 #[derive(Debug, Clone)]
@@ -53,10 +53,11 @@ impl Engine {
     /// Construct a new engine with the given configuration.
     ///
     /// Spawns a background thread that ticks the engine's epoch every
-    /// `cfg.tick_period`. On drop, the shutdown flag is set; the thread
-    /// exits within one tick period when the loop next polls the flag.
-    /// `Drop` does not join — it returns immediately to avoid blocking
-    /// callers for up to `tick_period` ms.
+    /// `cfg.tick_period` using absolute-deadline scheduling
+    /// (`thread::park_timeout` against successive `Instant` targets) so
+    /// individual sleep overshoots under CI/scheduler contention don't
+    /// accumulate as drift across iterations. On drop, the shutdown flag is
+    /// set and the tick thread is unparked for prompt termination.
     pub fn new(cfg: EngineConfig) -> Result<Self, PluginError> {
         let mut config = wasmtime::Config::new();
         config
@@ -79,13 +80,38 @@ impl Engine {
             thread::Builder::new()
                 .name("rdlp-plugin-epoch".into())
                 .spawn(move || {
+                    // Anchor cadence to absolute Instants so a slow scheduler
+                    // wakeup in one cycle doesn't push subsequent targets back.
+                    let mut next = Instant::now() + period;
                     while !shutdown.load(Ordering::Relaxed) {
-                        thread::sleep(period);
-                        if shutdown.load(Ordering::Relaxed) {
-                            break;
+                        let now = Instant::now();
+                        if let Some(remaining) = next.checked_duration_since(now) {
+                            // park_timeout returns early if Drop unparks us.
+                            thread::park_timeout(remaining);
+                            if shutdown.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            // Spurious wakeup: if we haven't reached the
+                            // deadline yet, loop and re-park. checked_duration_since
+                            // returns None once `now >= next`, falling through
+                            // to the tick.
+                            if Instant::now() < next {
+                                continue;
+                            }
                         }
                         engine.increment_epoch();
                         epoch.fetch_add(1, Ordering::Relaxed);
+                        // Compute the next deadline relative to the previous
+                        // target rather than `now`, so a single late wakeup
+                        // doesn't permanently shift the cadence. If we're
+                        // far enough behind that the next deadline is already
+                        // in the past (CI under heavy load), skip ahead to
+                        // avoid a tight catch-up loop.
+                        next += period;
+                        let now = Instant::now();
+                        if next < now {
+                            next = now + period;
+                        }
                     }
                 })
                 .map_err(|e| PluginError::Internal(format!("spawn epoch tick thread: {e}")))?
@@ -117,8 +143,12 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        // Best-effort: wait briefly for the tick thread to notice. We don't
-        // join because a slow `thread::sleep(tick_period)` could block drop
-        // for too long; the OS will reap it after the AtomicBool flip.
+        // Unpark the tick thread so it observes `shutdown` immediately
+        // instead of sleeping out the rest of its current `park_timeout`.
+        // We don't join — a panicked tick thread shouldn't take Drop down,
+        // and the OS will reap it after the loop exits.
+        if let Some(handle) = self._tick_thread.as_ref() {
+            handle.thread().unpark();
+        }
     }
 }
