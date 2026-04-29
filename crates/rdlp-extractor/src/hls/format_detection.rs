@@ -7,6 +7,7 @@ use super::detector::HlsSizeDetector;
 use super::types::HlsStreamFlags;
 use crate::base::common::BaseExtractor;
 use log::debug;
+use rdlp_types::Codec;
 
 /// Slugify a rendition tag (`LANGUAGE` / `GROUP-ID` / `NAME`) into a
 /// format-id-safe token: lowercase ASCII alphanumerics with `-` for
@@ -115,11 +116,11 @@ async fn enrich_single_hls_format(
         format.height = Some(h as u32);
         format.format_note = Some(format!("{h}p"));
     }
-    if hls_info.video_codec.is_some() {
-        format.vcodec = hls_info.video_codec;
+    if let Some(vc) = hls_info.video_codec {
+        format.vcodec = Codec::from(vc);
     }
-    if hls_info.audio_codec.is_some() {
-        format.acodec = hls_info.audio_codec;
+    if let Some(ac) = hls_info.audio_codec {
+        format.acodec = Codec::from(ac);
     }
     format.fps = hls_info.frame_rate;
     if let Some(bw) = hls_info.bandwidth {
@@ -292,25 +293,30 @@ async fn detect_format_sizes_inner(
                         expanded_format.height = height;
                         expanded_format.width = width;
                         if variant.is_audio_only {
-                            // Explicit "none" marker matches yt-dlp convention
-                            // and is required for the selector's `ba` token to
-                            // treat this row as audio-only (`has_video() == false`).
-                            expanded_format.vcodec = Some("none".to_string());
-                            expanded_format.acodec = variant
-                                .audio_codec
-                                .clone()
-                                .or_else(|| Some("mp4a".to_string()));
+                            // Audio-only HLS rendition: video stream Absent;
+                            // ba selector treats as audio-only (has_video() == false).
+                            expanded_format.vcodec = Codec::Absent;
+                            expanded_format.acodec = Codec::from(
+                                variant
+                                    .audio_codec
+                                    .clone()
+                                    .or_else(|| Some("mp4a".to_string())),
+                            );
                         } else {
-                            expanded_format.vcodec = variant
-                                .video_codec
-                                .clone()
-                                .or_else(|| format.vcodec.clone())
-                                .or_else(|| detect_codec_from_id(&format.format_id, true));
-                            expanded_format.acodec = variant
-                                .audio_codec
-                                .clone()
-                                .or_else(|| format.acodec.clone())
-                                .or_else(|| detect_codec_from_id(&format.format_id, false));
+                            expanded_format.vcodec = Codec::from(
+                                variant
+                                    .video_codec
+                                    .clone()
+                                    .or_else(|| format.vcodec.as_str().map(str::to_owned))
+                                    .or_else(|| detect_codec_from_id(&format.format_id, true)),
+                            );
+                            expanded_format.acodec = Codec::from(
+                                variant
+                                    .audio_codec
+                                    .clone()
+                                    .or_else(|| format.acodec.as_str().map(str::to_owned))
+                                    .or_else(|| detect_codec_from_id(&format.format_id, false)),
+                            );
                         }
                         expanded_format.fps = variant.frame_rate;
                         // EXT-X-MEDIA renditions carry no BANDWIDTH: leave
@@ -398,7 +404,7 @@ async fn detect_format_sizes_inner(
     let mut flags = HlsStreamFlags::default();
     // Key: (height, vcodec, acodec, language) — language prevents merging
     // different audio tracks (e.g. SUB/DUB) at the same resolution.
-    type HlsDedup = (Option<u32>, Option<String>, Option<String>, Option<String>);
+    type HlsDedup = (Option<u32>, Codec, Codec, Option<String>);
     let mut seen_hls: std::collections::HashSet<HlsDedup> = std::collections::HashSet::new();
 
     for format_group in results {

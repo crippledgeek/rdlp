@@ -43,6 +43,7 @@ mod tests;
 
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
+use rdlp_types::Codec;
 use rdlp_types::Format;
 use regex::Regex;
 
@@ -52,6 +53,14 @@ pub(crate) use selectors::*;
 /// Maximum URL length to prevent memory exhaustion attacks
 /// Re-exported from rdlp-security for backward compatibility
 pub(crate) use rdlp_security::MAX_URL_LENGTH;
+
+/// Maximum bytes a single webpage fetch will accept before aborting.
+///
+/// Adversarial servers (or compromised CDNs) can stream gigabytes of
+/// payload at us; without a cap, `response.text().await` would buffer
+/// the entire body and OOM the host. 50 MB covers any realistic HTML +
+/// JSON-LD payload with multiple orders of magnitude of headroom.
+pub(crate) const MAX_WEBPAGE_BYTES: usize = 50 * 1024 * 1024;
 
 // ============================================================================
 // Base Extractor
@@ -76,6 +85,38 @@ pub(crate) use rdlp_security::MAX_URL_LENGTH;
 ///     })?;
 /// ```
 pub struct BaseExtractor;
+
+/// Read an HTTP response body as UTF-8 with a size cap.
+///
+/// Streams via `bytes_stream()` so the cap fires the moment cumulative
+/// bytes exceed `MAX_WEBPAGE_BYTES`. The previous `response.text()` path
+/// buffered the entire response before any check, allowing an
+/// adversarial server to OOM the host with a 10 GB body.
+async fn read_capped_text(response: wreq::Response, url: &str) -> Result<String> {
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read response body: {e}"),
+            url: Some(url.to_string()),
+        })?;
+        let chunk_ref: &[u8] = bytes.as_ref();
+        if buf.len().saturating_add(chunk_ref.len()) > MAX_WEBPAGE_BYTES {
+            return Err(RdlpError::Network {
+                message: format!(
+                    "Response body exceeds {MAX_WEBPAGE_BYTES}-byte cap (host integrity guard)"
+                ),
+                url: Some(url.to_string()),
+            });
+        }
+        buf.extend_from_slice(chunk_ref);
+    }
+    String::from_utf8(buf).map_err(|e| RdlpError::Network {
+        message: format!("Response body is not valid UTF-8: {e}"),
+        url: Some(url.to_string()),
+    })
+}
 
 impl BaseExtractor {
     // ========================================================================
@@ -130,10 +171,7 @@ impl BaseExtractor {
 
         check_http_response(&response)?;
 
-        let webpage = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read response body: {e}"),
-            url: Some(url.to_string()),
-        })?;
+        let webpage = read_capped_text(response, url).await?;
 
         // Debug output if verbose
         if ctx.config.verbose {
@@ -187,10 +225,7 @@ impl BaseExtractor {
 
         check_http_response(&response)?;
 
-        let webpage = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read response body: {e}"),
-            url: Some(url.to_string()),
-        })?;
+        let webpage = read_capped_text(response, url).await?;
 
         if ctx.config.verbose {
             crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);
@@ -476,12 +511,12 @@ impl BaseExtractor {
         // Set default codecs for common formats
         match ext.as_str() {
             "mp4" => {
-                format.vcodec = Some("h264".to_string());
-                format.acodec = Some("aac".to_string());
+                format.vcodec = Codec::from("h264".to_string());
+                format.acodec = Codec::from("aac".to_string());
             }
             "webm" => {
-                format.vcodec = Some("vp9".to_string());
-                format.acodec = Some("opus".to_string());
+                format.vcodec = Codec::from("vp9".to_string());
+                format.acodec = Codec::from("opus".to_string());
             }
             _ => {}
         }

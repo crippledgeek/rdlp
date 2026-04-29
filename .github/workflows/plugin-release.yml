@@ -1,0 +1,91 @@
+name: Plugin release
+
+# Builds the example-extractor WASM plugin, signs the WASM blob via cosign
+# keyless OIDC, embeds the resulting Sigstore bundle into the plugin manifest,
+# and attaches both `plugin.wasm` and `plugin.toml` to the GitHub Release for
+# the triggering tag.
+
+on:
+  push:
+    tags:
+      - 'plugin-v*'
+
+permissions:
+  id-token: write   # required for keyless cosign OIDC token exchange
+  contents: write   # required for softprops/action-gh-release upload
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # All third-party actions are pinned to immutable commit SHAs (the
+      # `# vX.Y.Z` comment is the published tag at pin time). This is
+      # supply-chain hardening: a tag-squat or compromised release of any
+      # of these actions cannot inject code into the keyless-OIDC signing
+      # flow, which has `id-token: write` privileges.
+      - name: Checkout source
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable @ 2024-09
+        with:
+          targets: wasm32-wasip1
+
+      - name: Cache cargo build artifacts
+        uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
+        with:
+          workspaces: examples/plugins/example-extractor
+
+      - name: Install cargo-component
+        run: cargo install cargo-component --locked --version 0.21.1
+
+      - name: Build example plugin (release)
+        working-directory: examples/plugins/example-extractor
+        run: cargo component build --release
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@4959ce089c2fe2c0d81946d758c33e9a5b7e9802 # v3.6.0
+        with:
+          cosign-release: 'v2.4.0'
+
+      - name: Sign WASM blob (keyless OIDC)
+        env:
+          WASM_PATH: examples/plugins/example-extractor/target/wasm32-wasip1/release/example_extractor.wasm
+        run: |
+          cosign sign-blob \
+            --yes \
+            --new-bundle-format \
+            --bundle plugin.sigstore \
+            "$WASM_PATH"
+
+      - name: Embed Sigstore bundle into plugin.toml
+        env:
+          WORKFLOW_REF: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/plugin-release.yml@${{ github.ref }}
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+        run: |
+          chmod +x scripts/embed-sigstore-bundle.sh
+          scripts/embed-sigstore-bundle.sh \
+            examples/plugins/example-extractor/plugin.sigstore.toml.template \
+            plugin.sigstore \
+            "$WORKFLOW_REF" \
+            "$OIDC_ISSUER" \
+            > plugin.toml
+
+      - name: Stage release artifacts
+        run: |
+          cp examples/plugins/example-extractor/target/wasm32-wasip1/release/example_extractor.wasm plugin.wasm
+          # Sanity-check non-empty artifacts before they're attached to the
+          # release. A truncated wasm would otherwise be silently published.
+          for f in plugin.wasm plugin.toml plugin.sigstore; do
+            [[ -s "$f" ]] || { echo "::error::$f is empty or missing"; exit 1; }
+          done
+          sha256sum plugin.wasm plugin.toml plugin.sigstore
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2f2d70d54fd3c1dac4f2e8db # v2.0.6
+        with:
+          files: |
+            plugin.wasm
+            plugin.toml
+            plugin.sigstore
+          generate_release_notes: true

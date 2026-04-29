@@ -183,13 +183,25 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// ```
 #[must_use]
 pub fn is_private_host(host: &str) -> bool {
-    // Check for localhost (IP variants handled by the IP parser below)
-    if host == "localhost" {
+    // Strip an optional trailing dot (FQDN form) and bracketed-IPv6 wrapper
+    // before any other check. RFC 2606 / RFC 1535 allow `localhost.` and
+    // `[::1]` as valid host renderings.
+    let host = host.trim_end_matches('.');
+    let host = host.strip_prefix('[').unwrap_or(host);
+    let host = host.strip_suffix(']').unwrap_or(host);
+
+    // Check for localhost in lowercase + common variants.
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost"
+        || lower == "ip6-localhost"
+        || lower == "ip6-loopback"
+        || lower.starts_with("localhost.")
+    {
         return true;
     }
 
     // Check for common internal hostnames
-    if host.ends_with(".local") || host.ends_with(".internal") {
+    if lower.ends_with(".local") || lower.ends_with(".internal") {
         return true;
     }
 
@@ -201,15 +213,56 @@ pub fn is_private_host(host: &str) -> bool {
                     || ipv4.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
                     || ipv4.is_link_local()  // 169.254.0.0/16
                     || ipv4.is_unspecified() // 0.0.0.0
+                    || ipv4.is_broadcast()   // 255.255.255.255
+                    || ipv4.is_multicast() // 224.0.0.0/4
             }
             IpAddr::V6(ipv6) => {
                 ipv6.is_loopback()           // ::1
                     || ipv6.is_unspecified() // ::
+                    || is_ipv6_link_local(&ipv6) // fe80::/10
+                    || is_ipv6_unique_local(&ipv6) // fc00::/7
+                    || is_ipv6_multicast(&ipv6)    // ff00::/8
+                    || is_ipv6_v4_mapped_private(&ipv6) // ::ffff:rfc1918
             }
         };
     }
 
     false
+}
+
+/// IPv6 link-local: `fe80::/10`. First 10 bits == `1111111010`.
+#[inline]
+fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
+}
+
+/// IPv6 Unique Local Address: `fc00::/7`. First 7 bits == `1111110`.
+#[inline]
+fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// IPv6 multicast: `ff00::/8`.
+#[inline]
+fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xff00) == 0xff00
+}
+
+/// `::ffff:0:0/96` IPv4-mapped IPv6. Reject when the wrapped IPv4 is
+/// itself private/loopback/link-local — otherwise an attacker writes
+/// `[::ffff:127.0.0.1]` and bypasses the IPv4 gate.
+#[inline]
+fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        v4.is_loopback()
+            || v4.is_private()
+            || v4.is_link_local()
+            || v4.is_unspecified()
+            || v4.is_broadcast()
+            || v4.is_multicast()
+    } else {
+        false
+    }
 }
 
 /// Validate a proxy URL for security concerns.
@@ -366,24 +419,60 @@ pub fn extract_url_path(url: &str) -> String {
 // ============================================================================
 
 /// Pre-compiled regex patterns for sensitive parameter redaction.
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
+///
+/// Covers common URL-bound credentials: query-param tokens/keys/passwords,
+/// CDN signing parameters (`sig`, `hmac`, `X-Amz-Signature`), and the
+/// `user:pass@` URL authority form. Matching is case-insensitive on the
+/// parameter name so `?Token=` / `?ACCESS_TOKEN=` are also redacted.
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 13]> = LazyLock::new(|| {
     [
         (
-            Regex::new(r"token=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)token=[^&\s]+").expect("valid regex"),
             "token=***",
         ),
-        (Regex::new(r"key=[^&\s]+").expect("valid regex"), "key=***"),
         (
-            Regex::new(r"password=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)key=[^&\s]+").expect("valid regex"),
+            "key=***",
+        ),
+        (
+            Regex::new(r"(?i)password=[^&\s]+").expect("valid regex"),
             "password=***",
         ),
         (
-            Regex::new(r"secret=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)secret=[^&\s]+").expect("valid regex"),
             "secret=***",
         ),
         (
-            Regex::new(r"api_key=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)api_key=[^&\s]+").expect("valid regex"),
             "api_key=***",
+        ),
+        (
+            Regex::new(r"(?i)access_token=[^&\s]+").expect("valid regex"),
+            "access_token=***",
+        ),
+        (
+            Regex::new(r"(?i)bearer=[^&\s]+").expect("valid regex"),
+            "bearer=***",
+        ),
+        (
+            Regex::new(r"(?i)sig=[^&\s]+").expect("valid regex"),
+            "sig=***",
+        ),
+        (
+            Regex::new(r"(?i)signature=[^&\s]+").expect("valid regex"),
+            "signature=***",
+        ),
+        (
+            Regex::new(r"(?i)hmac=[^&\s]+").expect("valid regex"),
+            "hmac=***",
+        ),
+        (
+            Regex::new(r"X-Amz-Signature=[^&\s]+").expect("valid regex"),
+            "X-Amz-Signature=***",
+        ),
+        (
+            Regex::new(r"X-Amz-Credential=[^&\s]+").expect("valid regex"),
+            "X-Amz-Credential=***",
         ),
         // Strip user:pass@ from proxy/URL authority (e.g. http://user:pass@host:port)
         (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
@@ -547,5 +636,103 @@ mod tests {
         let input = "https://example.com/video?id=12345&quality=720p";
         let output = sanitize_for_logging(input);
         assert_eq!(output, input); // No changes expected
+    }
+
+    // ── Hardened IPv6 private-host coverage ─────────────────────────
+
+    #[test]
+    fn ipv6_link_local_is_private() {
+        for ip in ["fe80::1", "fe80::abcd", "FE80::1"] {
+            assert!(is_private_host(ip), "{ip} must be flagged private");
+        }
+    }
+
+    #[test]
+    fn ipv6_unique_local_is_private() {
+        for ip in ["fc00::1", "fd00::1", "fdee:abcd::1"] {
+            assert!(is_private_host(ip), "{ip} must be flagged private");
+        }
+    }
+
+    #[test]
+    fn ipv6_multicast_is_private() {
+        for ip in ["ff00::1", "ff02::1"] {
+            assert!(is_private_host(ip), "{ip} must be flagged private");
+        }
+    }
+
+    #[test]
+    fn ipv6_v4_mapped_loopback_is_private() {
+        // ::ffff:127.0.0.1 — IPv4-mapped form must not bypass the v4 gate.
+        assert!(is_private_host("::ffff:127.0.0.1"));
+        assert!(is_private_host("::ffff:10.0.0.1"));
+        assert!(is_private_host("::ffff:192.168.1.1"));
+    }
+
+    #[test]
+    fn ipv6_global_unicast_is_public() {
+        for ip in ["2001:4860:4860::8888", "2606:4700:4700::1111"] {
+            assert!(
+                !is_private_host(ip),
+                "{ip} must NOT be flagged private (public)"
+            );
+        }
+    }
+
+    #[test]
+    fn localhost_variants_are_private() {
+        for h in [
+            "localhost",
+            "LocalHost",
+            "localhost.",
+            "localhost.localdomain",
+            "ip6-localhost",
+            "ip6-loopback",
+        ] {
+            assert!(is_private_host(h), "{h} must be private");
+        }
+    }
+
+    #[test]
+    fn ipv4_broadcast_and_multicast_are_private() {
+        assert!(is_private_host("255.255.255.255"));
+        assert!(is_private_host("239.255.255.250")); // SSDP multicast
+    }
+
+    #[test]
+    fn validate_url_security_blocks_ipv6_link_local() {
+        // Bracketed form, both upper- and lower-cased.
+        assert!(validate_url_security("http://[fe80::1]/x").is_err());
+        assert!(validate_url_security("https://[FE80::abcd]/").is_err());
+        assert!(validate_url_security("https://[fc00::1]/x").is_err());
+        assert!(validate_url_security("http://[::ffff:127.0.0.1]/").is_err());
+    }
+
+    #[test]
+    fn sanitize_extends_to_cdn_signing() {
+        for input in [
+            "url?sig=abcd1234",
+            "url?HMAC=abcd",
+            "url?access_token=tok",
+            "url?bearer=tok",
+            "url?X-Amz-Signature=abc&X-Amz-Credential=def",
+        ] {
+            let out = sanitize_for_logging(input);
+            assert!(
+                !out.contains("abcd1234")
+                    && !out.contains("=abcd")
+                    && !out.contains("=tok")
+                    && !out.contains("=abc")
+                    && !out.contains("=def"),
+                "expected redaction but got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_case_insensitive_param_names() {
+        // Parameter name case-insensitive (CDN URLs sometimes use TitleCase).
+        let out = sanitize_for_logging("url?TOKEN=hideme");
+        assert!(!out.contains("hideme"), "expected redaction, got: {out}");
     }
 }

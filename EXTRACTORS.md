@@ -225,3 +225,22 @@ cargo run -q -p rdlp-probe -- fetch "https://api.example/v1/x" \
 ```
 
 Always probe with `rdlp-probe` before assuming anything about a site's response shape — assumptions are the most expensive part of an extractor sprint.
+
+---
+
+## Writing a WASM plugin
+
+If you don't want to add an extractor to the rdlp source tree (e.g. because you want to ship it independently, write it in a language other than Rust, or keep it private), you can build a WASM Component Model plugin instead.
+
+Plugins implement the `extractor-plugin` WIT world declared at `crates/rdlp-plugin/wit/extractor.wit`. Any language with a working WIT bindgen toolchain can author plugins:
+
+- **Rust** via `cargo-component`
+- **Python** via `componentize-py`
+- **C / C++** via `wit-bindgen c` + `wasi-sdk`
+- **Go** via TinyGo with WASI Preview 2 support
+- **TypeScript / JavaScript** via `jco` (ComponentizeJS)
+- **Zig**, **C# / .NET**, **MoonBit** — also supported
+
+Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fallback) and dropped into the user's plugin directory (defaults to `~/.config/rdlp/plugins/<name>/`). On first run, rdlp shows the plugin's declared capabilities and asks the user to confirm trust.
+
+Reference plugin example (in Rust + cargo-component) and full plugin author guide are tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213) — pending Task 28. For the design rationale and security model, see `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local).

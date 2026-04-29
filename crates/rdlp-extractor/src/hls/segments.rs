@@ -207,12 +207,12 @@ impl HlsSizeDetector {
             })?;
 
         if !range_response.status().is_success() {
-            return Err(RdlpError::Network {
-                message: format!(
-                    "HTTP {} for segment: {segment_url}",
-                    range_response.status()
-                ),
-                url: Some(segment_url.to_string()),
+            // Typed `Http` so retry classification can pattern-match on
+            // integer status (`is_retryable_error`): 4xx fast-fail, 5xx
+            // retry.
+            return Err(RdlpError::Http {
+                status: range_response.status().as_u16(),
+                reason: format!("segment HEAD: {segment_url}"),
             });
         }
 

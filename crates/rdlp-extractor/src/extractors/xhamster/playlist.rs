@@ -6,7 +6,7 @@ use super::XHamsterExtractor;
 use super::patterns;
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_core::{
     ExponentialBuilder, ExtractionContext, RdlpError, Result, Retryable, check_http_response,
 };
@@ -147,11 +147,13 @@ impl XHamsterExtractor {
                                 Some((position, info))
                             }
                             Ok(Err(e)) => {
-                                debug!(position, total; "Failed to extract video: {e}");
+                                // Bumped from debug → warn so playlist users see
+                                // silent-pruning of items they expected to get.
+                                warn!(position, total; "[XHamster] Failed to extract playlist item: {e}");
                                 None
                             }
                             Err(_) => {
-                                debug!(position, total; "Timed out extracting video");
+                                warn!(position, total; "[XHamster] Timed out extracting playlist item");
                                 None
                             }
                         }
@@ -175,7 +177,19 @@ impl XHamsterExtractor {
             });
         }
 
-        info!(extracted = results.len(), total; "[XHamster] Successfully extracted videos");
+        let extracted = results.len();
+        info!(extracted, total; "[XHamster] Successfully extracted videos");
+        if extracted < total {
+            // Loud aggregate so the user sees the prune count even when
+            // they don't have RUST_LOG=warn on per-item lines.
+            warn!(
+                extracted,
+                total;
+                "[XHamster] {} of {} playlist items could not be extracted",
+                total - extracted,
+                total
+            );
+        }
 
         Ok(results)
     }

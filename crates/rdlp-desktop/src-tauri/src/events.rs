@@ -157,9 +157,11 @@ pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
 pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
     match event {
         Event::Progress { progress, .. } => {
+            // DownloadProgress.progress is already clamped to [0.0, 1.0] by the
+            // Progress newtype — emit the fraction directly without rescaling.
             let pct = progress
-                .percentage
-                .map(|p| (p / 100.0).clamp(0.0, 1.0))
+                .progress
+                .map(|p| f64::from(p.fraction()))
                 .unwrap_or(0.0);
 
             let payload = DownloadProgressPayload {
@@ -234,7 +236,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             let payload = PostProcessProgressPayload {
                 job_id: job_id.to_owned(),
                 stage: stage.clone(),
-                progress: *progress,
+                progress: f64::from(progress.fraction()),
             };
             if let Err(e) = app.emit("postprocess-progress", &payload) {
                 debug!("Failed to emit postprocess-progress for job {job_id}: {e}");

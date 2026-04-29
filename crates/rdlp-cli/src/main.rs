@@ -5,6 +5,7 @@
 mod args;
 mod commands;
 mod config;
+mod plugin_cmd;
 mod selection;
 
 use anyhow::{Context, Result};
@@ -20,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use args::Args;
+use args::{Args, PluginCmd, PluginSubcommand};
 use commands::{fail_with, print_codecs, print_fields};
 use config::build_config;
 
@@ -74,7 +75,27 @@ async fn async_main() -> Result<()> {
     let args = Args::parse();
 
     // Build config with precedence: CLI > config file > defaults
-    let config = build_config(&args).context("failed to build configuration")?;
+    let mut config = build_config(&args).context("failed to build configuration")?;
+
+    // Extend trusted publishers from --trust-publisher flags
+    if !args.trust_publisher.is_empty() {
+        config
+            .plugin_trusted_publishers
+            .extend(args.trust_publisher.iter().cloned());
+    }
+
+    // Plugin management subcommands — handle before any download logic.
+    if let Some(PluginSubcommand::Plugin(plugin_args)) = args.plugin {
+        match plugin_args.cmd {
+            PluginCmd::List => plugin_cmd::run_list(&config).await?,
+            PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config).await?,
+            PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name).await?,
+            PluginCmd::Disable { name } => plugin_cmd::run_disable(&name).await?,
+            PluginCmd::Enable { name } => plugin_cmd::run_enable(&name).await?,
+            PluginCmd::Uninstall { name } => plugin_cmd::run_uninstall(&name, &config).await?,
+        }
+        return Ok(());
+    }
 
     // Create shared MultiProgress for managing progress bars with log output
     let multi_progress = Arc::new(MultiProgress::new());

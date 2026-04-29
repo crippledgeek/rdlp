@@ -21,7 +21,7 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_security::extract_url_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -107,34 +107,47 @@ impl HlsDownloadState {
             return None;
         }
 
-        // Read and parse state file
+        // Read and parse state file. Existence-of-file errors stay at debug
+        // (rare on a normal machine), but any of: open-after-exists, read,
+        // parse, version-mismatch, URL-change, segment-count-change all
+        // mean the user explicitly tried to resume and is about to lose
+        // bytes — those are warn-level so a 5GB re-download isn't silent.
         let mut file = match File::open(&state_path).await {
             Ok(file) => file,
             Err(e) => {
-                debug!("Failed to open HLS state file: {e}");
+                warn!(
+                    path:? = state_path.display();
+                    "HLS state file exists but failed to open ({e}); restarting download from scratch"
+                );
                 return None;
             }
         };
 
         let mut contents = String::new();
         if let Err(e) = file.read_to_string(&mut contents).await {
-            debug!("Failed to read HLS state file: {e}");
+            warn!(
+                path:? = state_path.display();
+                "HLS state file failed to read ({e}); restarting download from scratch"
+            );
             return None;
         }
 
         let state: Self = match serde_json::from_str(&contents) {
             Ok(state) => state,
             Err(e) => {
-                debug!("Failed to parse HLS state file: {e}");
+                warn!(
+                    path:? = state_path.display();
+                    "HLS state file is corrupted ({e}); restarting download from scratch"
+                );
                 return None;
             }
         };
 
         // Validate state
         if state.version != STATE_VERSION {
-            debug!(
-                "HLS state version mismatch (expected {}, got {}), starting fresh",
-                STATE_VERSION, state.version
+            warn!(
+                expected = STATE_VERSION, got = state.version;
+                "HLS state version mismatch — state file written by a different rdlp version; restarting download from scratch"
             );
             return None;
         }
@@ -142,14 +155,17 @@ impl HlsDownloadState {
         // Compare normalized URLs to handle dynamic tokens
         let normalized_url = extract_url_path(playlist_url);
         if state.playlist_url != normalized_url {
-            debug!(old:? = state.playlist_url, new:? = normalized_url; "Playlist URL changed, starting fresh");
+            warn!(
+                old:? = state.playlist_url, new:? = normalized_url;
+                "HLS playlist URL changed — restarting download from scratch (cached segments cannot be reused)"
+            );
             return None;
         }
 
         if state.segment_count != segment_count {
-            debug!(
-                "Segment count changed ({} -> {}), starting fresh",
-                state.segment_count, segment_count
+            warn!(
+                old = state.segment_count, new = segment_count;
+                "HLS segment count changed — restarting download from scratch"
             );
             return None;
         }

@@ -140,21 +140,29 @@ impl PlaylistState {
 impl SessionState {
     /// Load session state from a file, validating version and URL.
     ///
-    /// Returns `None` silently on any failure: missing file, corrupt JSON,
-    /// version mismatch, or URL mismatch. This ensures a fresh start when
-    /// state is invalid without blocking the user.
+    /// Returns `None` on any failure (missing file → debug-level; corrupt
+    /// JSON / version mismatch / URL mismatch → warn-level). The user
+    /// re-ran the same command expecting resume, so a corrupted-state
+    /// "starting fresh" path needs to be visible without RUST_LOG=debug.
     pub async fn load(path: &Path, url: &str) -> Option<Self> {
         let content = match tokio::fs::read_to_string(path).await {
             Ok(c) => c,
-            Err(_) => return None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                log::warn!(
+                    path = path.display().to_string().as_str();
+                    "Session state file exists but failed to read ({e}); starting fresh"
+                );
+                return None;
+            }
         };
 
         let state: Self = match serde_json::from_str(&content) {
             Ok(s) => s,
             Err(e) => {
-                debug!(
+                log::warn!(
                     path = path.display().to_string().as_str();
-                    "Corrupt session state, starting fresh: {e}"
+                    "Session state file is corrupt ({e}); starting fresh"
                 );
                 return None;
             }

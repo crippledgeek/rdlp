@@ -7,9 +7,51 @@ license.workspace = true
 
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
-libloading = { workspace = true }
+rdlp-types = { path = "../rdlp-types" }
+rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
+rdlp-http = { path = "../rdlp-http" }
+rdlp-cookies = { path = "../rdlp-cookies" }
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-security = { path = "../rdlp-security" }
+
+# WASM runtime
+wasmtime = { version = "30", features = ["component-model", "async"] }
+
+# Signing
+sigstore = { version = "0.13", default-features = false, features = ["sigstore-trust-root", "rustls-tls", "verify"] }
+ed25519-dalek = { version = "2", features = ["std", "pem"] }
+
+# Parsing & dispatch
+toml = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+regex = { workspace = true }
+scraper = { workspace = true }
+psl = "2"
+
+# Storage
+sled = "0.34"
+
+# Errors / async
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+log = { workspace = true }
+
+# Misc
+sha2 = "0.10"
+hex = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wat = "1"
+rand = "0.8.5"
 
 [lints]
 workspace = true

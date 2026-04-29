@@ -47,9 +47,32 @@ impl BoaJsEngine {
         Self
     }
 
-    /// Create a fresh Boa context with polyfills injected.
+    /// Create a fresh Boa context with polyfills injected and runtime limits set.
+    ///
+    /// The runtime limits are the host-side guard against pure-CPU JS DoS
+    /// (infinite `while(true)` loops, deep recursion). Boa's `RuntimeLimit`
+    /// errors **cannot be caught from JS** (`try/catch` does not intercept
+    /// them), so a malicious or buggy script eventually returns control to
+    /// the host with an `Err`. This is the strongest guard available without
+    /// upstream wall-clock interruption hooks — `tokio::time::timeout` cannot
+    /// preempt a `spawn_blocking` thread executing a tight loop.
+    ///
+    /// Limit defaults are deliberately generous so that legitimate extractor
+    /// scripts (URL deobfuscation, hash computation, tokenisation passes
+    /// like the EPorner `calc_hash`) finish well within them.
     fn make_context() -> std::result::Result<Context, String> {
         let mut ctx = Context::default();
+
+        // 10 million loop iterations: roughly hundreds of ms on contemporary
+        // hardware for a tight `for (let i=0; i<N; i++)` body. Real extractor
+        // scripts measured at <100k iterations.
+        ctx.runtime_limits_mut()
+            .set_loop_iteration_limit(10_000_000);
+
+        // 256 frames of recursion: enough for genuine recursive parsers,
+        // far short of the ~1 MB stack budget Boa exposes.
+        ctx.runtime_limits_mut().set_recursion_limit(256);
+
         polyfills::inject_polyfills(&mut ctx)
             .map_err(|e| format!("Failed to inject polyfills: {e}"))?;
         Ok(ctx)
@@ -332,5 +355,73 @@ mod tests {
         // It should NOT persist to the next eval (fresh context)
         let result = engine.eval("typeof testVar").await.unwrap();
         assert_eq!(result, serde_json::json!("undefined"));
+    }
+
+    /// Regression: verify that an infinite loop in plugin-supplied JS
+    /// terminates with an error rather than hanging the host. Without
+    /// `runtime_limits_mut().set_loop_iteration_limit`, this would wedge
+    /// the spawn_blocking thread forever.
+    #[tokio::test]
+    async fn infinite_loop_is_aborted_by_runtime_limit() {
+        let engine = BoaJsEngine::new();
+        let result = engine.eval("while (true) {}").await;
+        assert!(
+            result.is_err(),
+            "infinite loop must trip the iteration limit, got Ok({result:?})"
+        );
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.to_lowercase().contains("limit") || err.contains("RuntimeLimit"),
+            "expected RuntimeLimit-shaped error, got: {err}"
+        );
+    }
+
+    /// Regression: a tight try/catch around the offending construct must
+    /// NOT swallow the runtime-limit error. Boa documents that
+    /// RuntimeLimit errors are uncatchable from JS.
+    #[tokio::test]
+    async fn runtime_limit_is_uncatchable_from_js() {
+        let engine = BoaJsEngine::new();
+        let src = r"
+            try {
+                while (true) {}
+            } catch (e) {
+                'caught'
+            }
+        ";
+        let result = engine.eval(src).await;
+        assert!(
+            result.is_err(),
+            "try/catch must NOT swallow RuntimeLimit, got Ok({result:?})"
+        );
+    }
+
+    /// Regression: deeply recursive functions must hit the recursion limit
+    /// rather than blowing the OS stack.
+    #[tokio::test]
+    async fn deep_recursion_is_aborted_by_runtime_limit() {
+        let engine = BoaJsEngine::new();
+        let src = "function r(n) { return r(n + 1); } r(0)";
+        let result = engine.eval(src).await;
+        assert!(
+            result.is_err(),
+            "unbounded recursion must trip the recursion limit, got Ok({result:?})"
+        );
+    }
+
+    /// Sanity: legitimate extractor-shaped workloads (URL deobfuscation
+    /// loops on the order of tens of thousands of iterations) still
+    /// complete cleanly.
+    #[tokio::test]
+    async fn realistic_loops_under_limit_succeed() {
+        let engine = BoaJsEngine::new();
+        let src = "
+            let acc = 0;
+            for (let i = 0; i < 50000; i++) acc += i;
+            acc
+        ";
+        let result = engine.eval(src).await.unwrap();
+        // 50000 * 49999 / 2
+        assert_eq!(result, serde_json::json!(1_249_975_000.0));
     }
 }

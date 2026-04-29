@@ -23,6 +23,7 @@ rdlp-security = { path = "../rdlp-security" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 rdlp-plugin = { path = "../rdlp-plugin" }
 
+dirs = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = { workspace = true }
@@ -34,6 +35,9 @@ wreq = { workspace = true }
 url = { workspace = true }
 futures-util = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+# Advisory file lock for the download archive so concurrent rdlp processes
+# (or unit tests) cannot interleave append+read against the same file.
+fs4 = "0.13"
 
 # Always needed: session_state serialization + EventDto (when `serde` feature enabled)
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +48,12 @@ tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 proptest = "1.4"
 mockito = "1.7"
+# For plugin-dispatch regression test (signs a manifest + wasm in setup).
+ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
+rand = "0.8"
+base64 = { workspace = true }
+sha2 = "0.10"
+hex = { workspace = true }
 
 [lints]
 workspace = true

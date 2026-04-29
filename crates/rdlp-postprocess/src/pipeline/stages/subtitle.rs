@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, warn};
 
 use rdlp_ffmpeg::FFmpegRunner;
 
@@ -86,7 +86,13 @@ impl SubtitleStage {
         // Read the directory once — entries are reused across candidate stems.
         let mut entries = match tokio::fs::read_dir(parent).await {
             Ok(e) => e,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(
+                    "SubtitleStage: could not enumerate {} ({e}); no subtitle files will be discovered",
+                    parent.display()
+                );
+                return Vec::new();
+            }
         };
         let mut dir_entries: Vec<PathBuf> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -177,27 +183,39 @@ impl PipelineStage for SubtitleStage {
         }
 
         let codec = Self::subtitle_codec_for_container(extension);
-        info!(
-            "SubtitleStage: found {} subtitle(s) for embedding (codec: {})",
-            subtitle_files.len(),
-            codec
-        );
-
         // FFmpeg subtitle embedding is not yet implemented in rdlp-ffmpeg.
-        // Log the intent and push a warning — non-fatal, files pass through.
+        // Surface this LOUDLY: a user invoking --embed-subtitles must see a
+        // warn-level message AND a structured warning on the pipeline so
+        // the API event stream (Event::Warning) can flag the failure.
+        // Previously this was an info!("would embed …") line that buried the
+        // gap; users got a video without subtitles and no error.
         let _ = &self.ffmpeg;
+        let langs: Vec<String> = subtitle_files
+            .iter()
+            .map(|(lang, _)| lang.clone())
+            .collect();
+        warn!(
+            "SubtitleStage: --embed-subtitles is configured but FFmpeg \
+             subtitle muxing is not yet implemented. {} subtitle file(s) \
+             ({}) were sidecar-written but NOT embedded into {}. \
+             Track: https://github.com/crippledgeek/rdlp/issues (subtitle-embedding).",
+            subtitle_files.len(),
+            langs.join(", "),
+            media_file.display()
+        );
         for (lang, sub_path) in &subtitle_files {
-            info!(
-                "SubtitleStage: would embed subtitle lang={} path={}",
-                lang,
+            debug!(
+                "SubtitleStage: pending-implementation. lang={lang} codec={codec} path={}",
                 sub_path.display()
             );
         }
-        warn!("SubtitleStage: subtitle embedding via FFmpeg not yet implemented; skipping");
 
-        msg.warnings.push(
-            "Subtitle embedding not yet implemented; subtitles were not embedded.".to_string(),
-        );
+        msg.warnings.push(format!(
+            "Subtitle embedding not implemented; {} subtitle(s) ({}) written \
+             alongside the video but not muxed in.",
+            subtitle_files.len(),
+            langs.join(", "),
+        ));
 
         // Mark subtitle files as temps unless write_subtitles is set.
         if !msg.config.write_subtitles {
@@ -329,5 +347,40 @@ mod tests {
 
         let result = stage.process(msg).await;
         assert!(result.is_ok());
+    }
+
+    /// Negative test for the C1 fix: when subtitle files are discovered but
+    /// the FFmpeg muxer is not yet implemented, the stage MUST push a
+    /// structured warning onto `msg.warnings` so the API event stream
+    /// surfaces it as `Event::Warning`. Previously the stage emitted
+    /// `info!("would embed subtitle …")` which the user never saw.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test-only fixture I/O
+    async fn embed_subtitles_pushes_warning_when_unimplemented() {
+        let dir = tempfile::tempdir().unwrap();
+        let video_path = dir.path().join("video.mp4");
+        std::fs::write(&video_path, b"fake video").unwrap();
+        let sub_path = dir.path().join("video.en.srt");
+        std::fs::write(&sub_path, b"1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+
+        let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+        let stage = SubtitleStage::new(ffmpeg);
+
+        let config = PostProcess {
+            embed_subtitles: true,
+            ..PostProcess::default()
+        };
+        let mut msg = make_msg(vec![video_path.clone()], config);
+        msg.original_stem = "video".to_string();
+
+        let processed = stage.process(msg).await.unwrap();
+        assert!(
+            processed
+                .warnings
+                .iter()
+                .any(|w| w.contains("Subtitle embedding not implemented")),
+            "expected NOT-IMPLEMENTED warning in msg.warnings, got: {:?}",
+            processed.warnings
+        );
     }
 }

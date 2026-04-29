@@ -4,6 +4,7 @@
 //! building Format objects with filesize detection.
 
 use rdlp_core::ExtractionContext;
+use rdlp_types::Codec;
 use rdlp_types::Format;
 use regex::Regex;
 use scraper::{Html, Selector};
@@ -156,8 +157,8 @@ pub(crate) async fn build_formats(
             format.width = width;
             format.format_note = height.map(|h| format!("{h}p"));
             if ext == "mp4" {
-                format.vcodec = Some(CODEC_H264.to_owned());
-                format.acodec = Some(CODEC_AAC.to_owned());
+                format.vcodec = Codec::from(CODEC_H264.to_owned());
+                format.acodec = Codec::from(CODEC_AAC.to_owned());
             }
             format
         })

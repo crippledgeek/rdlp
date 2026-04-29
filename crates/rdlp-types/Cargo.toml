@@ -17,6 +17,7 @@ strum_macros = { workspace = true }
 wreq-util = { workspace = true }
 
 [dev-dependencies]
+toml = { workspace = true }
 
 [lints]
 workspace = true

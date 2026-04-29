@@ -3,6 +3,7 @@
 use crate::events::Event;
 use crate::handle::DownloadId;
 use crate::orchestrator::{DownloadPlan, Orchestrator};
+use rdlp_types::Codec;
 use rdlp_types::{Config, DownloadProtocol, Format, InfoDict};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -30,8 +31,8 @@ fn orchestrator_with_config(config: Config) -> Orchestrator {
 
 fn make_combined(id: &str, height: u32, quality: i32) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
-    f.vcodec = Some("h264".to_string());
-    f.acodec = Some("aac".to_string());
+    f.vcodec = Codec::from("h264".to_string());
+    f.acodec = Codec::from("aac".to_string());
     f.height = Some(height);
     f.quality = Some(quality);
     f.tbr = Some(height as f64 * 2.0);
@@ -40,8 +41,8 @@ fn make_combined(id: &str, height: u32, quality: i32) -> Format {
 
 fn make_video_only(id: &str, height: u32) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
-    f.vcodec = Some("h264".to_string());
-    f.acodec = Some("none".to_string());
+    f.vcodec = Codec::from("h264".to_string());
+    f.acodec = Codec::Absent;
     f.height = Some(height);
     f.vbr = Some(height as f64 * 1.5);
     f
@@ -49,8 +50,8 @@ fn make_video_only(id: &str, height: u32) -> Format {
 
 fn make_audio_only(id: &str, abr: f64) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), "m4a", DownloadProtocol::Https);
-    f.vcodec = Some("none".to_string());
-    f.acodec = Some("aac".to_string());
+    f.vcodec = Codec::Absent;
+    f.acodec = Codec::from("aac".to_string());
     f.abr = Some(abr);
     f
 }

@@ -107,13 +107,13 @@ impl Orchestrator {
     /// Create a new orchestrator with default registries
     ///
     /// # Arguments
-    /// * `config` - Download configuration (Arc-wrapped for cheap sharing)
-    /// * `event_tx` - Channel sender for lifecycle events
-    /// * `download_id` - Unique identifier for this download
-    /// * `cancel_token` - Token for cooperative cancellation
-    /// * `interactive` - Optional callback for interactive user input
-    #[must_use]
-    pub fn new(
+    /// Test-only thin wrapper that forwards to [`new_with_registry`] with
+    /// `None` for both `temp_registry` and `extractor_registry`. Production
+    /// code paths in [`crate::client::RdlpClient`] always supply the
+    /// plugin-aware registry; internal unit/integration tests use this helper
+    /// when they don't need plugins.
+    #[cfg(test)]
+    pub(crate) fn new(
         config: Arc<Config>,
         event_tx: mpsc::Sender<Event>,
         download_id: DownloadId,
@@ -127,14 +127,20 @@ impl Orchestrator {
             cancel_token,
             interactive,
             None,
+            None,
         )
     }
 
-    /// Create a new orchestrator, sharing the given `TempRegistry` across all
-    /// pipeline instances produced by this orchestrator.
+    /// Create a new orchestrator, sharing the given `TempRegistry` and an
+    /// optional pre-built extractor registry across all pipeline instances.
     ///
     /// When `temp_registry` is `None` a fresh registry is created (same
     /// behaviour as [`new`](Self::new)).
+    ///
+    /// When `extractor_registry` is `None` the orchestrator falls back to the
+    /// process-level cached built-in registry (no plugin support in that path).
+    /// Callers that support plugins **MUST** pass a pre-built registry from
+    /// [`RdlpClient`] so plugins are available for every download.
     #[must_use]
     pub fn new_with_registry(
         config: Arc<Config>,
@@ -143,6 +149,7 @@ impl Orchestrator {
         cancel_token: CancellationToken,
         interactive: Option<Arc<dyn InteractiveCallback>>,
         temp_registry: Option<Arc<TempRegistry>>,
+        extractor_registry: Option<Arc<ExtractorRegistry>>,
     ) -> Self {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
@@ -157,15 +164,23 @@ impl Orchestrator {
             Arc::clone(&config), // Cheap Arc clone instead of deep clone
         ));
 
-        let registry = temp_registry.unwrap_or_else(|| Arc::new(TempRegistry::new()));
-        let pipeline = Self::create_pipeline(&config, registry);
+        let pipeline_registry = temp_registry.unwrap_or_else(|| Arc::new(TempRegistry::new()));
+        let pipeline = Self::create_pipeline(&config, pipeline_registry);
 
-        // Cache extractor registry across orchestrator instances — it's stateless
-        // and immutable, so constructing it once saves ~5ms per API call.
-        static EXTRACTOR_REGISTRY: std::sync::OnceLock<Arc<ExtractorRegistry>> =
-            std::sync::OnceLock::new();
-        let extractor_registry =
-            Arc::clone(EXTRACTOR_REGISTRY.get_or_init(|| Arc::new(ExtractorRegistry::new())));
+        // Use the provided registry if given (built with plugins by RdlpClient),
+        // otherwise fall back to the process-level cached built-in-only registry.
+        // The static fallback exists for callers that construct Orchestrator
+        // directly (tests, internal tooling) without going through RdlpClient.
+        let extractor_registry: Arc<dyn ExtractorRegistryTrait> =
+            if let Some(r) = extractor_registry {
+                r as Arc<dyn ExtractorRegistryTrait>
+            } else {
+                static BUILTIN_REGISTRY: std::sync::OnceLock<Arc<ExtractorRegistry>> =
+                    std::sync::OnceLock::new();
+                let r: Arc<ExtractorRegistry> =
+                    Arc::clone(BUILTIN_REGISTRY.get_or_init(|| Arc::new(ExtractorRegistry::new())));
+                r as Arc<dyn ExtractorRegistryTrait>
+            };
 
         Self {
             extractor_registry,
@@ -368,16 +383,13 @@ impl Orchestrator {
         self.download_subtitles_standalone(info).await
     }
 
-    /// List all available extractors
+    /// List all available extractors. Test-only — public API consumers
+    /// should call `RdlpClient::list_extractors` (which borrows directly
+    /// from the cached registry rather than constructing an orchestrator).
     #[must_use]
-    pub fn list_extractors(&self) -> Vec<&str> {
+    #[cfg(test)]
+    pub(crate) fn list_extractors(&self) -> Vec<&str> {
         self.extractor_registry.list_extractors()
-    }
-
-    /// List all available download protocols
-    #[must_use]
-    pub fn list_downloaders(&self) -> Vec<&str> {
-        self.downloader_registry.list_downloaders()
     }
 
     /// Load archive if configured, returning `None` if not configured.

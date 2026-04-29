@@ -14,6 +14,7 @@ members = [
     "crates/rdlp-cookies",
     "crates/rdlp-ratelimit",
     "crates/rdlp-table",
+    "crates/rdlp-plugin-manifest",
     "crates/rdlp-plugin",
     "crates/rdlp-cli",
     "crates/rdlp-desktop/src-tauri",
@@ -34,6 +35,7 @@ default-members = [
     "crates/rdlp-cookies",
     "crates/rdlp-ratelimit",
     "crates/rdlp-table",
+    "crates/rdlp-plugin-manifest",
     "crates/rdlp-plugin",
 ]
 resolver = "2"

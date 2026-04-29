@@ -29,10 +29,12 @@ use crate::events::Event;
 use crate::handle::{DownloadHandle, DownloadId};
 use crate::merge::MergeOverrides;
 use crate::orchestrator::{InteractiveCallback, Orchestrator};
+use crate::plugin_bootstrap::build_registry_with_plugins;
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
 use log::{error, warn};
 use rdlp_core::DownloadStats;
+use rdlp_extractor::ExtractorRegistry;
 use rdlp_postprocess::TempRegistry;
 use rdlp_types::{Config, InfoDict};
 use std::sync::Arc;
@@ -64,6 +66,15 @@ pub struct RdlpClient {
     /// to remove any files that were not cleaned up by a completed pipeline
     /// run (e.g. if the process was killed mid-download).
     temp_registry: Arc<TempRegistry>,
+    /// Pre-built extractor registry (built-ins + any plugins loaded at
+    /// client construction time). Shared across all downloads from this client.
+    extractor_registry: Arc<ExtractorRegistry>,
+    /// Pre-built downloader registry — exposed only so `list_downloaders`
+    /// can return borrowed `&str` names per the project rule. The
+    /// orchestrator builds its own registry per download (with cookies +
+    /// per-config customization), so this field is for the listing API
+    /// surface only.
+    downloader_registry: Arc<rdlp_downloader::DownloaderRegistry>,
 }
 
 impl std::fmt::Debug for RdlpClient {
@@ -124,6 +135,7 @@ impl RdlpClient {
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
         let registry = Arc::clone(&self.temp_registry);
+        let extractor_registry = Arc::clone(&self.extractor_registry);
 
         // Capture whether the user explicitly requested cookies.
         // When explicit, cookie loading failure must be fatal.
@@ -138,6 +150,7 @@ impl RdlpClient {
                 token,
                 interactive_cb,
                 Some(registry),
+                Some(extractor_registry),
             );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
@@ -283,7 +296,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .load_cookies()
             .await
@@ -316,12 +337,14 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new_with_registry(
             Arc::clone(&self.config),
             tx,
             id,
             cancel_token,
             self.interactive.clone(),
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
         );
         orchestrator
             .load_cookies()
@@ -334,18 +357,14 @@ impl RdlpClient {
     }
 
     /// List available extractors.
+    ///
+    /// Returns `Vec<&str>` borrowed from the client's pre-built
+    /// `ExtractorRegistry` (per the project rule: registry methods return
+    /// borrowed names, not allocated `String`s). The reference is tied
+    /// to `&self` so the returned slice lives as long as the client.
     #[must_use]
-    pub fn list_extractors(&self) -> Vec<String> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(1);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
-        orchestrator
-            .list_extractors()
-            .into_iter()
-            .map(String::from)
-            .collect()
+    pub fn list_extractors(&self) -> Vec<&str> {
+        self.extractor_registry.list_extractors()
     }
 
     /// List sites that support search.
@@ -358,7 +377,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .list_search_extractors()
             .into_iter()
@@ -384,7 +411,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .search_filters(site)
             .map_err(|e| RdlpApiError::InvalidInput {
@@ -413,7 +448,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator.search(site, query).await.map_err(Into::into)
     }
 
@@ -437,7 +480,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .search_page(site, query)
             .await
@@ -474,7 +525,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .enrich_search_result(site, preview)
             .await
@@ -482,18 +541,13 @@ impl RdlpClient {
     }
 
     /// List available download protocols.
+    ///
+    /// Returns `Vec<&str>` borrowed from the client's pre-built
+    /// `DownloaderRegistry` (per the project rule: registry methods
+    /// return borrowed names, not allocated `String`s).
     #[must_use]
-    pub fn list_downloaders(&self) -> Vec<String> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(1);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
-        orchestrator
-            .list_downloaders()
-            .into_iter()
-            .map(String::from)
-            .collect()
+    pub fn list_downloaders(&self) -> Vec<&str> {
+        self.downloader_registry.list_downloaders()
     }
 
     /// Post-process a local file without downloading.
@@ -522,6 +576,7 @@ impl RdlpClient {
                 token,
                 None,
                 Some(registry),
+                None, // local file processing does not need plugin extractors
             );
 
             // Build a minimal InfoDict from the file path
@@ -674,10 +729,20 @@ impl RdlpClientBuilder {
             .temp_registry
             .unwrap_or_else(|| Arc::new(TempRegistry::new()));
 
+        // Bootstrap plugins at client construction time. This runs once per
+        // client instance (not once per download). Fail-soft: broken plugin
+        // directories emit warnings and are skipped; built-in extractors
+        // are always present in the returned registry.
+        let extractor_registry = Arc::new(build_registry_with_plugins(&config));
+        // Listing-only registry — see field doc on RdlpClient.
+        let downloader_registry = Arc::new(rdlp_downloader::DownloaderRegistry::new());
+
         Ok(RdlpClient {
             config: Arc::new(config),
             interactive: self.interactive,
             temp_registry,
+            extractor_registry,
+            downloader_registry,
         })
     }
 }

@@ -115,6 +115,24 @@ pub trait InfoExtractor: Send + Sync {
     fn priority(&self) -> i32 {
         0
     }
+
+    /// Whether this extractor is loaded from a third-party WASM plugin
+    /// (vs. a first-party built-in). Defaults to `false`. Used by the
+    /// registry to apply the built-in shadowing clamp.
+    fn is_plugin(&self) -> bool {
+        false
+    }
+
+    /// URL-aware priority used by the registry when a built-in extractor
+    /// is also a candidate for the same URL. Plugins MUST clamp their
+    /// priority to ≤ 99 (below built-ins) for hosts they did not
+    /// explicitly request override for via the manifest's
+    /// `claims_override` list. Built-ins return their static priority.
+    ///
+    /// Default forwards to [`Self::priority`].
+    fn effective_priority(&self, _url: &str, _builtin_competitor: bool) -> i32 {
+        self.priority()
+    }
 }
 
 /// Trait for extractors that support keyword search on a site.

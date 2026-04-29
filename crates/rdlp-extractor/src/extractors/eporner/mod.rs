@@ -16,6 +16,7 @@ pub mod search;
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
+use rdlp_types::Codec;
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use regex::Regex;
 use scraper::Html;
@@ -92,8 +93,8 @@ pub(crate) fn parse_xhr_formats(value: &Value) -> Vec<Format> {
         && !src.is_empty()
     {
         let mut f = Format::new("hls", src, "m3u8", DownloadProtocol::M3u8Native);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("m3u8".to_string());
         f.format_note = Some("HLS".to_string());
         formats.push(f);
@@ -123,8 +124,8 @@ pub(crate) fn parse_xhr_formats(value: &Value) -> Vec<Format> {
             let format_id = format!("mp4-{short}");
             let mut f = Format::new(format_id, src, "mp4", DownloadProtocol::Https);
             f.height = height;
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("mp4".to_string());
             formats.push(f);
         }
@@ -164,8 +165,8 @@ pub(crate) fn parse_dload_formats(page_url: &str, html: &str) -> Vec<Format> {
         let absolute_url = format!("{origin}{rel_path}");
         let mut f = Format::new(format_id, absolute_url, "mp4", DownloadProtocol::Https);
         f.height = height;
-        f.vcodec = Some(codec_tag.to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from(codec_tag.to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("mp4".to_string());
         formats.push(f);
     }

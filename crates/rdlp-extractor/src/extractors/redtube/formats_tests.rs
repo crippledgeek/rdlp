@@ -1,6 +1,7 @@
 //! Tests for RedTube format extraction
 
 use super::*;
+use rdlp_types::Codec;
 use serde_json::Value;
 
 #[test]
@@ -40,7 +41,7 @@ fn test_build_format_with_numeric_quality() {
     assert_eq!(format.height, Some(720));
     assert_eq!(format.width, Some(1280));
     assert_eq!(format.format_note, Some("720p".to_string()));
-    assert_eq!(format.vcodec, Some("h264".to_string()));
+    assert_eq!(format.vcodec, Codec::Present("h264".to_string()));
 }
 
 #[test]

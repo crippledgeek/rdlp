@@ -403,7 +403,7 @@ mod tests {
             logs: Arc<Mutex<Vec<String>>>,
         }
         impl rdlp_core::PostProcessCallback for MockCallback {
-            fn on_progress(&self, _progress: f64) {}
+            fn on_progress(&self, _progress: rdlp_types::Progress) {}
             fn on_log(&self, message: &str) {
                 if let Ok(mut v) = self.logs.lock() {
                     v.push(message.to_string());

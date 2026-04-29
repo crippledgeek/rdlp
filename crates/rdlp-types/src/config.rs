@@ -34,6 +34,13 @@ pub enum ConfigValidationError {
         /// The incompatible CLI option name (e.g. `"extract-audio"`)
         option: String,
     },
+    /// A configuration field value is outside its allowed range.
+    OutOfRange {
+        /// The field name (e.g. `"plugin_timeout_extract_s"`)
+        field: &'static str,
+        /// Human-readable explanation of the allowed range
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -52,6 +59,9 @@ impl fmt::Display for ConfigValidationError {
             }
             Self::StdoutIncompatible { option } => {
                 write!(f, "--{option} is not compatible with -o - (stdout output)")
+            }
+            Self::OutOfRange { field, reason } => {
+                write!(f, "{field}: {reason}")
             }
         }
     }
@@ -246,6 +256,31 @@ pub struct Config {
     /// Load dynamic plugins
     pub load_plugins: bool,
 
+    /// Plugin metadata-call timeout in milliseconds (default 100).
+    #[serde(default)]
+    pub plugin_timeout_metadata_ms: Option<u32>,
+
+    /// Plugin extract-call timeout in seconds (default 30).
+    #[serde(default)]
+    pub plugin_timeout_extract_s: Option<u32>,
+
+    /// Plugin search-call timeout in seconds (default 60).
+    #[serde(default)]
+    pub plugin_timeout_search_s: Option<u32>,
+
+    /// Plugin instance memory cap in MB (default 64).
+    #[serde(default)]
+    pub plugin_memory_limit_mb: Option<u32>,
+
+    /// Plugin instance stack cap in MB (default 1).
+    #[serde(default)]
+    pub plugin_stack_limit_mb: Option<u32>,
+
+    /// Pre-trusted publisher identities for non-interactive plugin install.
+    /// Identity strings are e.g. `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
+    #[serde(default)]
+    pub plugin_trusted_publishers: Vec<String>,
+
     // === Download performance ===
     /// Enable adaptive chunk sizing and connection tuning for downloads.
     /// When true, the downloader adjusts chunk sizes and parallel connections
@@ -341,6 +376,12 @@ impl Default for Config {
             plugin_directories: Vec::new(),
             enabled_plugins: None,
             load_plugins: true,
+            plugin_timeout_metadata_ms: None,
+            plugin_timeout_extract_s: None,
+            plugin_timeout_search_s: None,
+            plugin_memory_limit_mb: None,
+            plugin_stack_limit_mb: None,
+            plugin_trusted_publishers: Vec::new(),
 
             // Download performance
             adaptive_downloads: true,
@@ -392,6 +433,48 @@ impl Config {
                     });
                 }
             }
+        }
+
+        // Plugin timeout / resource range checks
+        if let Some(t) = self.plugin_timeout_extract_s
+            && t > 600
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "plugin_timeout_extract_s",
+                reason: "must be <= 600 (10 min ceiling)",
+            });
+        }
+        if let Some(t) = self.plugin_timeout_search_s
+            && t > 600
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "plugin_timeout_search_s",
+                reason: "must be <= 600",
+            });
+        }
+        if let Some(t) = self.plugin_timeout_metadata_ms
+            && t > 60_000
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "plugin_timeout_metadata_ms",
+                reason: "must be <= 60000ms (60 sec ceiling)",
+            });
+        }
+        if let Some(m) = self.plugin_memory_limit_mb
+            && !(1..=1024).contains(&m)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "plugin_memory_limit_mb",
+                reason: "must be 1..=1024 MB",
+            });
+        }
+        if let Some(s) = self.plugin_stack_limit_mb
+            && !(1..=64).contains(&s)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "plugin_stack_limit_mb",
+                reason: "must be 1..=64 MB",
+            });
         }
 
         Ok(())

@@ -73,25 +73,30 @@ fn extract_from_labeled_links<F>(
 where
     F: Fn(&scraper::ElementRef) -> Option<String>,
 {
+    // The container selector comes in dynamically, so no LazyLock here —
+    // but log loudly on parse failure rather than silently empty-return so
+    // a typo in a caller doesn't ship as "site has no items of this kind".
     let container_selector = match scraper::Selector::parse(container_sel) {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            log::error!("[XTits] dynamic CSS selector failed to parse: {container_sel:?}: {e}");
+            return Vec::new();
+        }
     };
-    let title_selector = match scraper::Selector::parse(".title-row") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let link_selector = match scraper::Selector::parse("a.link") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    static TITLE_ROW_SEL: std::sync::LazyLock<scraper::Selector> = std::sync::LazyLock::new(|| {
+        scraper::Selector::parse(".title-row").expect("static selector")
+    });
+    static LINK_SEL: std::sync::LazyLock<scraper::Selector> =
+        std::sync::LazyLock::new(|| scraper::Selector::parse("a.link").expect("static selector"));
+    let title_selector = &*TITLE_ROW_SEL;
+    let link_selector = &*LINK_SEL;
 
     for container in html.select(&container_selector) {
-        if let Some(title_el) = container.select(&title_selector).next() {
+        if let Some(title_el) = container.select(title_selector).next() {
             let title = title_el.text().collect::<String>();
             if title.trim() == label_text {
                 return container
-                    .select(&link_selector)
+                    .select(link_selector)
                     .filter_map(|el| extract_fn(&el))
                     .collect();
             }

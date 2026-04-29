@@ -32,6 +32,8 @@ pub mod dto;
 pub(crate) mod merge;
 /// Internal orchestrator (moved from rdlp-cli).
 pub(crate) mod orchestrator;
+/// Plugin system bootstrap — fail-soft loader called during client construction.
+pub(crate) mod plugin_bootstrap;
 
 // Convenience re-exports
 pub use client::RdlpClient;
@@ -43,8 +45,8 @@ pub use rdlp_core::{DownloadProgress, config_io};
 pub use rdlp_postprocess::TempRegistry;
 pub use rdlp_types::match_filter::MatchFilter;
 pub use rdlp_types::{
-    AudioFormat, BrowserEmulation, BrowserType, Config, ContainerFormat, FixupPolicy, Format,
-    InfoDict, PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor,
+    AudioFormat, BrowserEmulation, BrowserType, Codec, Config, ContainerFormat, FixupPolicy,
+    Format, InfoDict, PostProcess, RecodeAudioMode, SearchFilter, SearchFilterDescriptor,
     SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview, SearchSiteInfo,
     SubtitleFormat,
 };

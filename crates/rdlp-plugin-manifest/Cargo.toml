@@ -1,0 +1,17 @@
+[package]
+name = "rdlp-plugin-manifest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Plugin manifest schema, parser, and canonical-bytes encoder for rdlp. Pure data; no wasmtime / sigstore / sled dependencies."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = { workspace = true }

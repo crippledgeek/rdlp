@@ -73,9 +73,9 @@ impl CliEventHandler {
             Event::PostProcessProgress {
                 stage, progress, ..
             } => {
+                let position = (f64::from(progress.fraction()) * 1000.0) as u64;
                 if let Some(ref pb) = self.progress_bar {
-                    let pct = (*progress * 1000.0) as u64;
-                    pb.set_position(pct);
+                    pb.set_position(position);
                     pb.set_message(stage.clone());
                 } else if !self.quiet {
                     let pb = self.multi_progress.add(ProgressBar::new(1000));
@@ -86,7 +86,7 @@ impl CliEventHandler {
                         .expect("valid progress template"),
                     );
                     pb.set_message(stage.clone());
-                    pb.set_position((*progress * 1000.0) as u64);
+                    pb.set_position(position);
                     self.progress_bar = Some(pb);
                 }
             }

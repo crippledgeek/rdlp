@@ -314,7 +314,7 @@ impl PipelineStage for RecodeStage {
                 .as_ref()
                 .cloned()
                 .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-                    Arc::new(move |frac| cb.on_progress(frac))
+                    Arc::new(move |frac| cb.on_progress(rdlp_types::Progress::from_f64(frac)))
                 });
 
         let log_callback: Option<Arc<dyn Fn(&str) + Send + Sync>> = if opts.verbose {

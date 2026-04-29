@@ -338,7 +338,7 @@ pub async fn start_download(
             if let Some(job) = q.get_job_mut(&id) {
                 match &event {
                     Event::Progress { progress, .. } => {
-                        job.progress = progress.percentage.map(|p| (p / 100.0).clamp(0.0, 1.0));
+                        job.progress = progress.progress.map(|p| f64::from(p.fraction()));
                         job.speed = Some(progress.speed_string());
                         job.eta = progress.eta.as_ref().map(crate::events::format_eta);
                     }

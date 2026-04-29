@@ -175,6 +175,19 @@ pub(crate) async fn download_segments_with_resume(
             let controller = controller.clone();
 
             async move {
+                // SSRF gate per-segment. The master and media playlists are
+                // validated upstream, but the segment URIs themselves come
+                // from `#EXTINF` lines and resolve via `Url::join` against
+                // the playlist base — both extractor-controlled. A crafted
+                // playlist could embed `http://192.168.x.x/...` segments
+                // here, bypassing the master-URL gate entirely.
+                if let Err(e) = rdlp_security::validate_url_security(&seg_url) {
+                    return Err(RdlpError::Download {
+                        message: format!("HLS segment URL rejected: {e}"),
+                        url: Some(seg_url.clone()),
+                    });
+                }
+
                 // Check if segment file already exists and is non-empty (single async stat)
                 if let Ok(meta) = tokio::fs::metadata(&segment_path).await
                     && meta.len() > 0

@@ -178,7 +178,7 @@ impl Orchestrator {
 /// Prefer formats with audio over video-only, then higher quality, then larger filesize.
 fn pick_better(candidate: &Format, current: &Format) -> bool {
     // Prefer formats that have audio over video-only
-    match (candidate.acodec.is_some(), current.acodec.is_some()) {
+    match (candidate.acodec.is_present(), current.acodec.is_present()) {
         (true, false) => return true,
         (false, true) => return false,
         _ => {}

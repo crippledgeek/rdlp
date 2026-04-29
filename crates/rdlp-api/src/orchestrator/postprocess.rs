@@ -7,6 +7,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
+use rdlp_types::Progress;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -22,7 +23,7 @@ struct PostProcessBridge {
 }
 
 impl PostProcessCallback for PostProcessBridge {
-    fn on_progress(&self, progress: f64) {
+    fn on_progress(&self, progress: Progress) {
         let _ = self.event_tx.try_send(Event::PostProcessProgress {
             id: self.download_id,
             stage: self.stage.clone(),
@@ -184,7 +185,15 @@ impl Orchestrator {
 
         let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(entries) => entries,
-            Err(_) => return,
+            Err(e) => {
+                log::warn!(
+                    "cleanup_leftover_segments: could not enumerate {} ({e}); \
+                     stale .partN files may persist and confuse the next download's \
+                     resume detection",
+                    dir.display()
+                );
+                return;
+            }
         };
 
         let mut deleted = 0;

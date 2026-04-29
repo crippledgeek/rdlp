@@ -372,12 +372,12 @@ pub(super) fn eval_node<'a>(node: &SelectorNode, formats: &'a [Format]) -> Vec<&
 /// # Examples
 ///
 /// ```
-/// use rdlp_types::{Format, format_select};
+/// use rdlp_types::{Codec, Format, format_select};
 /// use rdlp_types::protocol::DownloadProtocol;
 ///
 /// let mut f = Format::new("1", "https://example.com/v", "mp4", DownloadProtocol::Https);
-/// f.vcodec = Some("h264".to_string());
-/// f.acodec = Some("aac".to_string());
+/// f.vcodec = Codec::from("h264");
+/// f.acodec = Codec::from("aac");
 /// let formats = vec![f];
 /// let selected = format_select("best", &formats).unwrap();
 /// assert!(!selected.is_empty());
@@ -393,6 +393,7 @@ pub fn format_select<'a>(
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    use crate::format::Codec;
     use crate::protocol::DownloadProtocol;
 
     fn make_test_formats() -> Vec<Format> {
@@ -402,8 +403,8 @@ mod integration_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        v.vcodec = Some("h264".to_string());
-        v.acodec = Some("none".to_string());
+        v.vcodec = Codec::from("h264".to_string());
+        v.acodec = Codec::Absent;
         v.height = Some(1080);
 
         let mut a = Format::new(
@@ -412,8 +413,8 @@ mod integration_tests {
             "m4a",
             DownloadProtocol::Https,
         );
-        a.vcodec = Some("none".to_string());
-        a.acodec = Some("aac".to_string());
+        a.vcodec = Codec::Absent;
+        a.acodec = Codec::from("aac".to_string());
         a.abr = Some(128.0);
 
         let mut combined = Format::new(
@@ -422,8 +423,8 @@ mod integration_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        combined.vcodec = Some("h264".to_string());
-        combined.acodec = Some("aac".to_string());
+        combined.vcodec = Codec::from("h264".to_string());
+        combined.acodec = Codec::from("aac".to_string());
         combined.height = Some(720);
         combined.quality = Some(2);
 

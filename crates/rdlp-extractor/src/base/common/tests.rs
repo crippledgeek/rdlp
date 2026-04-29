@@ -2,6 +2,7 @@
 
 use super::*;
 use rdlp_security::is_private_host;
+use rdlp_types::Codec;
 use regex::Regex;
 use scraper::Html;
 
@@ -307,8 +308,8 @@ fn test_build_format() {
     assert_eq!(format.height, Some(720));
     assert_eq!(format.width, Some(1280));
     assert_eq!(format.format_note, Some("720p".to_string()));
-    assert_eq!(format.vcodec, Some("h264".to_string()));
-    assert_eq!(format.acodec, Some("aac".to_string()));
+    assert_eq!(format.vcodec, Codec::Present("h264".to_string()));
+    assert_eq!(format.acodec, Codec::Present("aac".to_string()));
 }
 
 #[test]
@@ -320,6 +321,34 @@ fn test_build_format_webm() {
         Some(1080),
     );
 
-    assert_eq!(format.vcodec, Some("vp9".to_string()));
-    assert_eq!(format.acodec, Some("opus".to_string()));
+    assert_eq!(format.vcodec, Codec::Present("vp9".to_string()));
+    assert_eq!(format.acodec, Codec::Present("opus".to_string()));
+}
+
+// ========================================================================
+// Body-cap regression guards
+// ========================================================================
+//
+// These tests lock the value of `MAX_WEBPAGE_BYTES` in two directions: it
+// must be (a) generous enough to fit any realistic HTML+JSON-LD
+// extractor target, and (b) tight enough to prevent OOM on a 32-GB host
+// even with several concurrent extractors running. Bumping the cap in
+// either direction MUST be a deliberate change with this test updated.
+
+#[test]
+fn webpage_cap_is_in_safe_range() {
+    let cap = super::MAX_WEBPAGE_BYTES;
+    // Realistic extractor pages are <5MB even with embedded JSON-LD.
+    // Below 1MB would clip live sites; above 200MB risks OOM under
+    // concurrency. Keep the cap inside a justifiable middle band.
+    assert!(
+        (1024 * 1024..=200 * 1024 * 1024).contains(&cap),
+        "MAX_WEBPAGE_BYTES = {cap} is outside the safe 1..=200 MB band"
+    );
+}
+
+#[test]
+fn webpage_cap_documented_value() {
+    // Pin the documented cap. Bumping is fine but should be intentional.
+    assert_eq!(super::MAX_WEBPAGE_BYTES, 50 * 1024 * 1024);
 }

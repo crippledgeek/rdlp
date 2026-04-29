@@ -28,6 +28,15 @@ jobs:
       - name: Check no CLI FFmpeg usage
         run: bash scripts/check-no-cli.sh
 
+      - name: Check WIT vendor drift
+        # The example-extractor plugin vendors a byte-copy of the host's WIT
+        # contract under examples/plugins/example-extractor/wit/deps/rdlp-plugin.
+        # `cargo-component` requires it for plugin builds, but it has no
+        # automatic refresh — a host WIT bump that forgets to sync the vendored
+        # copy ships an MVP plugin compiled against an older contract.
+        # Diff guard: if the host WIT and vendored copy diverge, fail loud.
+        run: bash scripts/check-wit-drift.sh
+
   build-and-test:
     name: Build & Test (${{ matrix.platform }})
     needs: lint
@@ -79,6 +88,33 @@ jobs:
         # STATUS_ACCESS_VIOLATION (0xc0000005) parsing FFmpeg's transitive
         # system headers — which is the root cause of upstream
         # shssoichiro/ffmpeg-the-third#145.
+
+      - name: Install pinned LLVM 18 (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.8"
+          directory: ${{ runner.temp }}/llvm
+        # `clang-sys` (used by bindgen) loads libclang.dll at runtime. The
+        # `windows-latest` image bumped to clang 20.1.x in late 2026-04 and
+        # both the system clang (PATH-resolved) and the VS-bundled clang
+        # (under VC\Tools\LLVM) crash parsing FFmpeg 8.0 headers — first as
+        # STATUS_STACK_BUFFER_OVERRUN (0xc0000409 = __fastfail/abort, see
+        # https://devblogs.microsoft.com/oldnewthing/20190108-00/?p=100655),
+        # then as STATUS_ACCESS_VIOLATION (0xc0000005, upstream issue
+        # shssoichiro/ffmpeg-the-third#145 failure pattern #2). Pinning to
+        # LLVM 18.1.8 — long-validated against bindgen 0.72 + FFmpeg 8.0 —
+        # eliminates the runner-image dependency entirely.
+
+      - name: Set LIBCLANG_PATH (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $libclang = Join-Path $env:LLVM_PATH "bin"
+          if (-not (Test-Path "$libclang\libclang.dll")) {
+            throw "libclang.dll not found at $libclang"
+          }
+          Add-Content $env:GITHUB_ENV "LIBCLANG_PATH=$libclang"
 
       - name: Install FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'

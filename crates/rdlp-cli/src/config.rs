@@ -262,6 +262,13 @@ pub(crate) fn merge_config(
         config.postprocess.ffmpeg_location = Some(ffmpeg_location.clone());
     }
     if let Some(ref proxy) = args.proxy {
+        // Hard-fail at config-build time when --proxy is set explicitly.
+        // The HttpClientFactory previously logged a warn-level message and
+        // silently dropped the proxy on validation failure — a privacy
+        // regression for users who pass `--proxy` expecting traffic
+        // routing.
+        rdlp_security::validate_proxy_url(proxy)
+            .map_err(|e| anyhow::anyhow!("--proxy validation failed: {e}"))?;
         config.proxy = Some(proxy.clone());
     }
     // Browser emulation: CLI flag > env var > default (ChromeLatest).

@@ -1,0 +1,17 @@
+# Manifest template for the example-extractor reference plugin.
+# Run `scripts/sign-plugin.sh <wasm> <this-file>` to fill in the signature block.
+
+name = "example"
+version = "0.1.0"
+wit_version = "0.1.0"
+matches = ["https://example.com/video/*"]
+url_regex = "^https://example\\.com/video/(?P<id>\\d+)"
+priority = 150
+claims_override = []
+supports_search = false
+capabilities = []
+
+[signature]
+type = "ed25519"
+pubkey = "PLACEHOLDER_PUBKEY"
+signature = "PLACEHOLDER_SIGNATURE"

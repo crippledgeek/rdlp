@@ -11,3 +11,7 @@
 pub mod event_handler;
 /// CLI interactive callback using inquire.
 pub mod interactive;
+/// `rdlp plugin <subcommand>` handlers, exported so integration tests can
+/// drive them without going through `clap`'s argument parsing.
+#[path = "plugin_cmd.rs"]
+pub mod plugin_cmd;
