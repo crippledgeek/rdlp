@@ -29,7 +29,11 @@ fn ytdlp_goldens_build_and_emit_artefacts() {
         let py = root.join(format!("examples/plugins/ytdlp-golden/{name}.py"));
         assert!(py.exists(), "source missing: {py:?}");
 
-        let plugin_dir = py.parent().unwrap().join(name);
+        // build-from-ytdlp normalises Python snake_case filenames to
+        // kebab-case plugin names (manifest validation). The output dir
+        // therefore uses the normalised stem, not the raw filename.
+        let normalised = name.to_ascii_lowercase().replace('_', "-");
+        let plugin_dir = py.parent().unwrap().join(&normalised);
         // Clean any prior build output
         let _ = std::fs::remove_dir_all(&plugin_dir);
 

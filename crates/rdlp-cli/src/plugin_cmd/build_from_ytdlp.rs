@@ -19,17 +19,30 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
         .with_context(|| format!("input not found: {}", plugin_py.display()))?;
     let output_dir =
         output_dir.unwrap_or_else(|| py_path.parent().unwrap_or(Path::new(".")).to_path_buf());
-    let stem = py_path
+    let raw_stem = py_path
         .file_stem()
         .and_then(|s| s.to_str())
         .context("invalid plugin filename")?
         .to_string();
+    // Python source filenames conventionally use snake_case (`simple_html.py`)
+    // because they have to be importable Python identifiers. Plugin manifest
+    // names are kebab-case for filesystem/sled-namespace safety. Translate at
+    // this boundary: `simple_html` → `simple-html`. Lowercasing handles any
+    // PascalCase quirks. Surfacing the translation in stderr lets the author
+    // catch surprises before signing.
+    let stem = raw_stem.to_ascii_lowercase().replace('_', "-");
+    if stem != raw_stem {
+        eprintln!(
+            "Note: plugin filename '{raw_stem}' normalised to plugin name '{stem}' \
+             (manifest names are kebab-case)."
+        );
+    }
     // The stem becomes the plugin name in the manifest (used as a TOML string,
     // a filesystem subdir, and a sled-namespace key). Enforce the same shape
     // the loader will demand at install time, so authors get a clear error
     // here instead of an opaque manifest-parse failure later.
     rdlp_plugin::manifest::validate_plugin_name(&stem)
-        .with_context(|| format!("plugin filename '{stem}' not a valid plugin name"))?;
+        .with_context(|| format!("plugin filename '{raw_stem}' not a valid plugin name"))?;
 
     let source = std::fs::read_to_string(&py_path)?;
     let valid_url =
@@ -567,6 +580,31 @@ mod tests {
         let patterns = valid_url_to_match_patterns(r"some-weird-regex-without-host");
         assert_eq!(patterns, vec!["*://*/*".to_string()]);
         rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
+    }
+
+    #[test]
+    fn stem_normalisation_underscore_to_hyphen() {
+        // build-from-ytdlp normalises Python snake_case filenames to
+        // kebab-case plugin names. Pin the contract so the golden corpus
+        // (`simple_html.py` etc.) keeps producing valid manifest names.
+        let normalised = "simple_html".to_ascii_lowercase().replace('_', "-");
+        assert_eq!(normalised, "simple-html");
+        rdlp_plugin::manifest::validate_plugin_name(&normalised).unwrap();
+    }
+
+    #[test]
+    fn stem_normalisation_passes_clean_kebab_through() {
+        // Already-kebab names are unchanged.
+        let normalised = "my-plugin".to_ascii_lowercase().replace('_', "-");
+        assert_eq!(normalised, "my-plugin");
+    }
+
+    #[test]
+    fn stem_normalisation_lowercases_pascal_case() {
+        // PascalCase Python filenames (rare but legal) lowercase cleanly.
+        let normalised = "SimplePlugin".to_ascii_lowercase().replace('_', "-");
+        assert_eq!(normalised, "simpleplugin");
+        rdlp_plugin::manifest::validate_plugin_name(&normalised).unwrap();
     }
 
     #[test]
