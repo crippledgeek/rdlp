@@ -83,10 +83,9 @@ where
             return Vec::new();
         }
     };
-    static TITLE_ROW_SEL: std::sync::LazyLock<scraper::Selector> =
-        std::sync::LazyLock::new(|| {
-            scraper::Selector::parse(".title-row").expect("static selector")
-        });
+    static TITLE_ROW_SEL: std::sync::LazyLock<scraper::Selector> = std::sync::LazyLock::new(|| {
+        scraper::Selector::parse(".title-row").expect("static selector")
+    });
     static LINK_SEL: std::sync::LazyLock<scraper::Selector> =
         std::sync::LazyLock::new(|| scraper::Selector::parse("a.link").expect("static selector"));
     let title_selector = &*TITLE_ROW_SEL;

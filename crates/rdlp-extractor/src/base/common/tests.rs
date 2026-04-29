@@ -1,8 +1,8 @@
 //! Tests for common base extractor utilities
 
 use super::*;
-use rdlp_types::Codec;
 use rdlp_security::is_private_host;
+use rdlp_types::Codec;
 use regex::Regex;
 use scraper::Html;
 

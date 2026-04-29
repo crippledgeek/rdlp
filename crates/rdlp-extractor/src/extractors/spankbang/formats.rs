@@ -8,8 +8,8 @@
 //!    regex-extract `data-streamkey`, POST to `/api/videos/stream`, parse
 //!    the same JSON shape.
 
-use rdlp_types::{DownloadProtocol, Format};
 use rdlp_types::Codec;
+use rdlp_types::{DownloadProtocol, Format};
 use serde_json::Value;
 
 use super::patterns;

@@ -17,10 +17,10 @@ use crate::host::html_select::HtmlSelectCtx;
 use crate::host::js_eval::JsEvalCtx;
 use crate::host::store_kv::StoreKvCtx;
 use crate::instance::{PluginStoreData, build_store, deadline_ticks};
-use rdlp_http::wreq;
 use crate::loader::LoadedPlugin;
 use crate::manifest::Manifest;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError};
+use rdlp_http::wreq;
 use rdlp_types::{DownloadProtocol, InfoDict};
 
 /// Number of traps before a plugin is automatically disabled for the session.
@@ -93,11 +93,12 @@ impl PluginExtractor {
         // Cloning a linker per call is cheap; rebuilding it (and re-running
         // each capability's bindgen-generated `add_to_linker`) is not.
         let mut linker = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw());
-        crate::host::add_capability_imports(&mut linker, &loaded.manifest)
-            .map_err(|e| PluginError::LinkerWire {
+        crate::host::add_capability_imports(&mut linker, &loaded.manifest).map_err(|e| {
+            PluginError::LinkerWire {
                 plugin: loaded.manifest.name.clone(),
                 reason: format!("{e}"),
-            })?;
+            }
+        })?;
         Ok(Self {
             engine,
             manifest: loaded.manifest,
@@ -356,7 +357,10 @@ fn extract_error_to_plugin_error(
     match err {
         W::UnsupportedUrl(detail) => PluginError::UnsupportedUrl { plugin, detail },
         W::NotFound(detail) => PluginError::NotFound { plugin, detail },
-        W::RateLimited(retry_after) => PluginError::RateLimited { plugin, retry_after },
+        W::RateLimited(retry_after) => PluginError::RateLimited {
+            plugin,
+            retry_after,
+        },
         W::AuthRequired(detail) => PluginError::AuthRequired { plugin, detail },
         W::Network(detail) => PluginError::ExtractNetwork { plugin, detail },
         W::Parse(detail) => PluginError::ExtractParse { plugin, detail },

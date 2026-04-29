@@ -59,7 +59,8 @@ fn list_extractors_includes_loaded_plugin() {
     std::fs::write(plugin_dir.join("plugin.wasm"), &wasm_bytes).unwrap();
 
     let signing_key: SigningKey = SigningKey::generate(&mut OsRng);
-    let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().as_bytes());
+    let pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().as_bytes());
 
     let template = format!(
         r#"name = "example"

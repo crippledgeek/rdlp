@@ -205,7 +205,10 @@ mod tests {
 
         // Backward-compat: legacy "none" / "" / null all deserialise to Absent
         for legacy in ["null", "\"\"", "\"none\"", "\"NONE\""] {
-            assert_eq!(serde_json::from_str::<Codec>(legacy).unwrap(), Codec::Absent);
+            assert_eq!(
+                serde_json::from_str::<Codec>(legacy).unwrap(),
+                Codec::Absent
+            );
         }
     }
 

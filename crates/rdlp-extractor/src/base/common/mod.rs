@@ -43,8 +43,8 @@ mod tests;
 
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
-use rdlp_types::Format;
 use rdlp_types::Codec;
+use rdlp_types::Format;
 use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule

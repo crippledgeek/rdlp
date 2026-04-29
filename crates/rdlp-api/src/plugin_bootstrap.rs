@@ -85,9 +85,7 @@ fn bootstrap_plugins(
     // previously-disabled plugin (security regression).
     let disabled_path = rdlp_dir.join("plugin-disabled.toml");
     let disabled: std::collections::HashSet<String> = read_disabled_list(&disabled_path)
-        .with_context(|| {
-            format!("read disabled-plugin list at {}", disabled_path.display())
-        })?
+        .with_context(|| format!("read disabled-plugin list at {}", disabled_path.display()))?
         .into_iter()
         .collect();
 
@@ -125,15 +123,10 @@ fn bootstrap_plugins(
                         continue;
                     }
                     let plugin_name = loaded.manifest.name.clone();
-                    match PluginExtractor::new(
-                        loaded,
-                        Arc::clone(&engine),
-                        host_resources.clone(),
-                    ) {
+                    match PluginExtractor::new(loaded, Arc::clone(&engine), host_resources.clone())
+                    {
                         Ok(extractor) => {
-                            log::debug!(
-                                "plugin bootstrap: registered plugin '{plugin_name}'"
-                            );
+                            log::debug!("plugin bootstrap: registered plugin '{plugin_name}'");
                             registry.register(Arc::new(extractor));
                             loaded_count += 1;
                         }
@@ -158,9 +151,8 @@ fn bootstrap_plugins(
 fn build_host_resources(config: &Config) -> anyhow::Result<HostResources> {
     let cookie_jar = Arc::new(SimpleCookieJar::new());
     let raw_jar = cookie_jar.jar();
-    let fetch_client = Some(
-        HttpClientFactory::from_rdlp_config(config).build_with_cookies(raw_jar),
-    );
+    let fetch_client =
+        Some(HttpClientFactory::from_rdlp_config(config).build_with_cookies(raw_jar));
 
     // sled DB for host:store-kv. Sited under the rdlp config dir so it's
     // user-private and persists across runs.

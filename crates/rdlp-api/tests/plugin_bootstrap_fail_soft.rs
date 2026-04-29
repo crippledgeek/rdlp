@@ -31,7 +31,11 @@ fn malformed_plugin_toml_does_not_break_client() {
     // invalid manifest. Bootstrap should warn-and-skip, not propagate.
     let plug_dir = tempdir.path().join("plugins").join("broken");
     std::fs::create_dir_all(&plug_dir).unwrap();
-    std::fs::write(plug_dir.join("plugin.toml"), "this = is = not = valid = toml").unwrap();
+    std::fs::write(
+        plug_dir.join("plugin.toml"),
+        "this = is = not = valid = toml",
+    )
+    .unwrap();
     std::fs::write(plug_dir.join("plugin.wasm"), b"not actual wasm").unwrap();
 
     let config = Config {

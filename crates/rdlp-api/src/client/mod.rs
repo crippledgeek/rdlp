@@ -550,7 +550,6 @@ impl RdlpClient {
         self.downloader_registry.list_downloaders()
     }
 
-
     /// Post-process a local file without downloading.
     ///
     /// Applies the configured post-processing pipeline (normalization, remux,

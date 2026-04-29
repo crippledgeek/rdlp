@@ -20,8 +20,8 @@ pub mod search;
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
-use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use rdlp_types::Codec;
+use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use regex::Regex;
 
 use crate::base::common::BaseExtractor;

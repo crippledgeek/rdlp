@@ -212,11 +212,8 @@ impl ExtractorRegistry {
         // Two-pass selection so plugins shadowing built-in host space get
         // clamped: gather suitable candidates, note whether any built-in
         // is among them, then sort by URL-aware effective_priority.
-        let suitable: Vec<&Arc<dyn InfoExtractor>> = self
-            .extractors
-            .iter()
-            .filter(|e| e.suitable(url))
-            .collect();
+        let suitable: Vec<&Arc<dyn InfoExtractor>> =
+            self.extractors.iter().filter(|e| e.suitable(url)).collect();
         let builtin_competitor = suitable.iter().any(|e| !e.is_plugin());
         suitable
             .into_iter()

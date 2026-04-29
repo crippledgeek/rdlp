@@ -84,10 +84,10 @@ fn rejects_malformed_json_bundle() {
 #[test]
 #[ignore = "sigstore-rs 0.13 only parses Bundle v0.1/v0.2; cosign 2.4 --new-bundle-format emits v0.3. Un-ignore once sigstore-rs adds v0.3 support upstream."]
 fn valid_sigstore_bundle_verifies() {
-    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/sigstore_valid.toml");
-    let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/sigstore_valid.wasm");
+    let manifest_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sigstore_valid.toml");
+    let wasm_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sigstore_valid.wasm");
     let toml = std::fs::read_to_string(&manifest_path).expect("missing sigstore manifest fixture");
     let wasm = std::fs::read(&wasm_path).expect("missing sigstore wasm fixture");
     let m = parse_manifest_str(&toml).expect("parse manifest");

@@ -214,7 +214,7 @@ pub fn is_private_host(host: &str) -> bool {
                     || ipv4.is_link_local()  // 169.254.0.0/16
                     || ipv4.is_unspecified() // 0.0.0.0
                     || ipv4.is_broadcast()   // 255.255.255.255
-                    || ipv4.is_multicast()   // 224.0.0.0/4
+                    || ipv4.is_multicast() // 224.0.0.0/4
             }
             IpAddr::V6(ipv6) => {
                 ipv6.is_loopback()           // ::1

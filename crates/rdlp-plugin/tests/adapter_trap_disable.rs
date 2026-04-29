@@ -72,10 +72,7 @@ fn third_trap_disables_plugin() {
     ext.test_record_trap();
     assert!(!ext.test_is_disabled(), "2 strikes does not disable");
     ext.test_record_trap();
-    assert!(
-        ext.test_is_disabled(),
-        "3 strikes MUST disable the adapter"
-    );
+    assert!(ext.test_is_disabled(), "3 strikes MUST disable the adapter");
     assert_eq!(ext.test_trap_count(), 3);
 }
 

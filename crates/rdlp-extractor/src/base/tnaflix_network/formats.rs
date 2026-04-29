@@ -4,8 +4,8 @@
 //! building Format objects with filesize detection.
 
 use rdlp_core::ExtractionContext;
-use rdlp_types::Format;
 use rdlp_types::Codec;
+use rdlp_types::Format;
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;

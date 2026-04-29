@@ -10,8 +10,7 @@ use std::path::PathBuf;
 /// `dir.join(name)` / `remove_dir_all` operation. Gives the user a clear
 /// error message rather than silently mis-resolving the path.
 fn require_valid_name(name: &str) -> Result<()> {
-    validate_plugin_name(name)
-        .map_err(|e| anyhow::anyhow!("invalid plugin name '{name}': {e}"))
+    validate_plugin_name(name).map_err(|e| anyhow::anyhow!("invalid plugin name '{name}': {e}"))
 }
 
 /// Return the rdlp config directory (`~/.config/rdlp` on most platforms).

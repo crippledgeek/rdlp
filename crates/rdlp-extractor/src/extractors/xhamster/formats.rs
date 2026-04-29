@@ -8,8 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use log::debug;
-use rdlp_types::Format;
 use rdlp_types::Codec;
+use rdlp_types::Format;
 use serde_json::Value;
 
 use rdlp_core::JsEngine;

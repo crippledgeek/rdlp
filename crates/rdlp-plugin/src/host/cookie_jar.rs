@@ -167,7 +167,10 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
         // Surface the stub to plugin authors exactly once per plugin so they
         // don't waste hours debugging "0 cookies" — the scoping gate above
         // works, but the read-side cookie parser is a follow-up task.
-        if !ctx.get_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if !ctx
+            .get_warned
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             log::warn!(
                 target: &self.log_target,
                 "host:cookie-jar get_cookies returns an empty list — \
