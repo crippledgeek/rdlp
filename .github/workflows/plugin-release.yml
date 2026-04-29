@@ -49,6 +49,7 @@ jobs:
         run: |
           cosign sign-blob \
             --yes \
+            --new-bundle-format \
             --bundle plugin.sigstore \
             "$WASM_PATH"
 
