@@ -35,6 +35,9 @@ wreq = { workspace = true }
 url = { workspace = true }
 futures-util = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+# Advisory file lock for the download archive so concurrent rdlp processes
+# (or unit tests) cannot interleave append+read against the same file.
+fs4 = "0.13"
 
 # Always needed: session_state serialization + EventDto (when `serde` feature enabled)
 serde = { version = "1", features = ["derive"] }
