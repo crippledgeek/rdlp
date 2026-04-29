@@ -34,8 +34,8 @@ pub struct PluginStoreData {
     /// `log` target — `format!("plugin::{plugin_name}")`.
     pub log_target: String,
     // Capability contexts populated by the loader at instance build time.
-    // Filled in by Tasks 12-17.
-    // pub store_kv:     Option<crate::host::store_kv::StoreKvCtx>,
+    /// Granted `host:store-kv` capability state, or `None` if not requested.
+    pub store_kv: Option<crate::host::store_kv::StoreKvCtx>,
     /// Granted `host:js-eval` capability state, or `None` if not requested.
     pub js_eval: Option<crate::host::js_eval::JsEvalCtx>,
     /// Granted `host:cookie-jar` capability state, or `None` if not requested.
@@ -66,6 +66,7 @@ impl PluginStoreData {
             plugin_name,
             cancel,
             log_target,
+            store_kv: None,
             js_eval: None,
             cookie_jar: None,
             fetch: None,
