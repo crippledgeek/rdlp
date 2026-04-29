@@ -76,7 +76,9 @@ impl From<&Event> for EventDto {
                     "bytes_downloaded": progress.bytes_downloaded,
                     "total_bytes": progress.total_bytes,
                     "speed": progress.speed,
-                    "percentage": progress.percentage,
+                    // Wire-compat: emit as 0.0..=100.0 so external JSON consumers
+                    // see the same shape as before the Progress newtype migration.
+                    "percentage": progress.progress.map(|p| p.percent()),
                     "segments_downloaded": progress.segments_downloaded,
                     "total_segments": progress.total_segments,
                 }),
@@ -206,6 +208,52 @@ mod tests {
         assert_eq!(dto.event_type, "failed");
         assert!(dto.payload["retryable"].as_bool().unwrap());
         assert!(dto.payload["message"].as_str().unwrap().contains("503"));
+    }
+
+    #[test]
+    fn progress_event_emits_percentage_in_zero_to_hundred_scale() {
+        // Regression guard for the Progress newtype migration: the wire format
+        // emitted by EventDto MUST keep "percentage" in 0..=100 even though the
+        // internal DownloadProgress.progress is now a Progress fraction in
+        // 0..=1. External JSON consumers and CLI display rely on the legacy
+        // percentage scale.
+        let id = DownloadId::next();
+        let progress = rdlp_core::DownloadProgress::new(50, Some(100), 1024.0);
+        let event = Event::Progress { id, progress };
+
+        let dto = EventDto::from(&event);
+
+        assert_eq!(dto.event_type, "progress");
+        assert_eq!(
+            dto.payload["percentage"].as_f64().unwrap(),
+            50.0,
+            "percentage must serialize as 0..=100, not 0..=1"
+        );
+    }
+
+    #[test]
+    fn postprocess_progress_emits_fraction_in_zero_to_one_scale() {
+        // The PostProcessProgress wire format is the dual: it stays in 0..=1
+        // because the Tauri / frontend layer reads the fraction directly.
+        let id = DownloadId::next();
+        let event = Event::PostProcessProgress {
+            id,
+            stage: "remux".into(),
+            progress: rdlp_types::Progress::new(0.42),
+        };
+
+        let dto = EventDto::from(&event);
+
+        assert_eq!(dto.event_type, "postprocess_progress");
+        let progress = dto.payload["progress"].as_f64().unwrap();
+        assert!(
+            (0.0..=1.0).contains(&progress),
+            "postprocess progress wire value must stay in 0..=1, got {progress}"
+        );
+        assert!(
+            (progress - 0.42).abs() < 1e-5,
+            "expected 0.42 fraction, got {progress}"
+        );
     }
 
     #[test]

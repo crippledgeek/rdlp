@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rdlp_types::Progress;
 use std::fmt;
 use std::path::Path;
 use std::time::Duration;
@@ -159,8 +160,10 @@ pub struct DownloadProgress {
     /// Estimated time remaining (if total size is known)
     pub eta: Option<Duration>,
 
-    /// Progress percentage (0.0 to 100.0) if total size is known
-    pub percentage: Option<f64>,
+    /// Progress as a clamped fraction in `[0.0, 1.0]` if total size is known.
+    ///
+    /// Use [`Progress::percent`] at display sites to scale to `0.0..=100.0`.
+    pub progress: Option<Progress>,
 
     /// Segments completed (for HLS/segmented downloads)
     pub segments_downloaded: Option<u64>,
@@ -179,13 +182,7 @@ impl DownloadProgress {
     /// Create a new progress update
     #[must_use]
     pub fn new(bytes_downloaded: u64, total_bytes: Option<u64>, speed: f64) -> Self {
-        let percentage = total_bytes.map(|total| {
-            if total > 0 {
-                (bytes_downloaded as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            }
-        });
+        let progress = total_bytes.map(|total| Progress::from_ratio(bytes_downloaded, total));
 
         let eta = if speed > 1.0 {
             total_bytes.and_then(|total| {
@@ -207,7 +204,7 @@ impl DownloadProgress {
             total_bytes,
             speed,
             eta,
-            percentage,
+            progress,
             segments_downloaded: None,
             total_segments: None,
             duration_downloaded: None,
@@ -223,8 +220,8 @@ impl DownloadProgress {
         segments_downloaded: u64,
         total_segments: u64,
     ) -> Self {
-        let percentage = if total_segments > 0 {
-            Some((segments_downloaded as f64 / total_segments as f64) * 100.0)
+        let progress = if total_segments > 0 {
+            Some(Progress::from_ratio(segments_downloaded, total_segments))
         } else {
             None
         };
@@ -252,7 +249,7 @@ impl DownloadProgress {
             total_bytes: None, // Unknown for HLS
             speed,
             eta,
-            percentage,
+            progress,
             segments_downloaded: Some(segments_downloaded),
             total_segments: Some(total_segments),
             duration_downloaded: None,
@@ -273,8 +270,8 @@ impl DownloadProgress {
         duration_downloaded: f64,
         total_duration: f64,
     ) -> Self {
-        let percentage = if total_duration > 0.0 {
-            Some((duration_downloaded / total_duration) * 100.0)
+        let progress = if total_duration > 0.0 {
+            Some(Progress::from_f64(duration_downloaded / total_duration))
         } else {
             None
         };
@@ -302,7 +299,7 @@ impl DownloadProgress {
             total_bytes: None,
             speed,
             eta,
-            percentage,
+            progress,
             segments_downloaded: Some(segments_downloaded),
             total_segments: Some(total_segments),
             duration_downloaded: Some(duration_downloaded),
@@ -339,10 +336,11 @@ impl DownloadProgress {
 
 impl fmt::Display for DownloadProgress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(pct) = self.percentage {
+        if let Some(p) = self.progress {
             write!(
                 f,
-                "{pct:.1}% ({} / {})",
+                "{:.1}% ({} / {})",
+                p.percent(),
                 self.bytes_string(),
                 self.total_string()
             )
@@ -460,7 +458,8 @@ mod tests {
     #[test]
     fn test_download_progress() {
         let progress = DownloadProgress::new(50, Some(100), 10.0);
-        assert_eq!(progress.percentage, Some(50.0));
+        assert_eq!(progress.progress.map(|p| p.fraction()), Some(0.5));
+        assert_eq!(progress.progress.map(|p| p.percent()), Some(50.0));
         assert!(progress.eta.is_some());
         assert_eq!(progress.eta.unwrap().as_secs(), 5);
     }

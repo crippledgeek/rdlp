@@ -7,6 +7,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
+use rdlp_types::Progress;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -22,7 +23,7 @@ struct PostProcessBridge {
 }
 
 impl PostProcessCallback for PostProcessBridge {
-    fn on_progress(&self, progress: f64) {
+    fn on_progress(&self, progress: Progress) {
         let _ = self.event_tx.try_send(Event::PostProcessProgress {
             id: self.download_id,
             stage: self.stage.clone(),
