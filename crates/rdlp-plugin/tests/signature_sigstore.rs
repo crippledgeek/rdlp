@@ -82,11 +82,8 @@ fn rejects_malformed_json_bundle() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "sigstore-rs 0.13 only parses Bundle v0.1/v0.2; cosign 2.4 --new-bundle-format emits v0.3. Un-ignore once sigstore-rs adds v0.3 support upstream."]
 fn valid_sigstore_bundle_verifies() {
-    // TODO(Task 30): place real Sigstore-signed fixture in
-    // tests/fixtures/sigstore_valid.toml + tests/fixtures/sigstore_valid.wasm,
-    // then remove the `#[ignore]` above.
     let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sigstore_valid.toml");
     let wasm_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

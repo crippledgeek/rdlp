@@ -18,7 +18,7 @@ wasmtime = { version = "30", features = ["component-model", "async"] }
 wasmtime-wasi = { version = "30" }
 
 # Signing
-sigstore = { version = "0.10", default-features = false, features = ["sigstore-trust-root", "verify"] }
+sigstore = { version = "0.13", default-features = false, features = ["sigstore-trust-root", "rustls-tls", "verify"] }
 ed25519-dalek = { version = "2", features = ["std", "pem"] }
 
 # Parsing & dispatch
