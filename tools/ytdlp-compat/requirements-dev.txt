@@ -1,0 +1,5 @@
+# Pinned to last release targeting wasmtime 30 (rdlp's host pin).
+# DO NOT BUMP without bumping wasmtime in crates/rdlp-plugin/Cargo.toml in lockstep.
+# See docs/planning/2026-04-29-ytdlp-compat-shim-slice-1.md "Background" for rationale.
+componentize-py==0.17.2
+pytest==8.3.4
