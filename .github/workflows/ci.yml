@@ -213,9 +213,41 @@ jobs:
       - name: Test (workspace)
         run: cargo test --workspace
 
+  # Path-filter to avoid running the expensive golden build (~12 min;
+  # apt-install + componentize-py 0.17.2 + 3 × 35 MB wasm builds) on commits
+  # that can't possibly affect its outputs. Runs unconditionally on push
+  # (merges to develop) so the protected-branch state is always validated.
+  golden-filter:
+    name: Should run yt-dlp golden?
+    runs-on: ubuntu-22.04
+    outputs:
+      run: ${{ steps.f.outputs.golden }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            golden:
+              - 'tools/ytdlp-compat/**'
+              - 'crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs'
+              - 'crates/rdlp-cli/src/plugin_cmd.rs'
+              - 'crates/rdlp-cli/src/args.rs'
+              - 'crates/rdlp-cli/src/main.rs'
+              - 'crates/rdlp-plugin/wit/**'
+              - 'crates/rdlp-plugin/src/host/**'
+              - 'crates/rdlp-plugin-manifest/src/**'
+              - 'examples/plugins/ytdlp-golden/**'
+              - 'examples/plugins/ytdlp-hello-world/**'
+              - '.github/workflows/ci.yml'
+
   ytdlp-plugin-golden:
     name: yt-dlp Plugin Golden Build
-    needs: build-and-test
+    needs: [build-and-test, golden-filter]
+    # Always run on push (merges into develop); on PR, run only when the
+    # filter caught a relevant change. Skipping is the desired outcome on
+    # PRs that touch unrelated code, not a failure.
+    if: github.event_name == 'push' || needs.golden-filter.outputs.run == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -247,17 +279,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install componentize-py 0.17.2
+      # uv is Astral's pip-replacement; ~10x faster wheel install + first-
+      # class --require-hashes support. `setup-uv` action caches the uv
+      # download cache keyed on the requirements file, so a clean run that
+      # would have spent ~30s downloading componentize-py's 35 MB wheel
+      # plus pytest's transitive closure is cut to a few seconds on a hit.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/ytdlp-compat/requirements-dev.txt
+
+      - name: Install componentize-py-pin@0.17.2 via uv
         working-directory: tools/ytdlp-compat
         run: |
-          python -m venv .venv
-          .venv/bin/pip install -r requirements-dev.txt
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python \
+            --require-hashes -r requirements-dev.txt
           .venv/bin/componentize-py --version
 
       - name: Run rdlp_ytdlp_compat unit tests
         working-directory: tools/ytdlp-compat
         run: |
-          .venv/bin/pip install -e .
+          uv pip install --python .venv/bin/python -e .
           .venv/bin/pytest tests/ -v
 
       - uses: dtolnay/rust-toolchain@stable

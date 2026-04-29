@@ -9,11 +9,16 @@ Python compatibility shim that re-implements yt-dlp's `InfoExtractor` base class
 `requirements-dev.txt` is hash-pinned. Install with:
 
 ```bash
+# Recommended — uv (Astral) is ~10x faster and ships with caching:
+uv venv .venv --python 3.12
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.txt
+
+# pip equivalent if you don't have uv:
 python3 -m venv .venv
 .venv/bin/pip install --require-hashes -r requirements-dev.txt
 ```
 
-`pip` will refuse to install if any artifact's SHA-256 doesn't match — protecting against PyPI mirror compromise or a substituted-bytes attack against the pinned version.
+Both `uv pip` and `pip` refuse to install if any artifact's SHA-256 doesn't match — protecting against PyPI mirror compromise or a substituted-bytes attack against the pinned version.
 
 ## Authoring constraint
 
