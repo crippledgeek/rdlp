@@ -6095,6 +6095,7 @@ dependencies = [
  "rdlp-core",
  "rdlp-http",
  "rdlp-jsinterp",
+ "rdlp-plugin-manifest",
  "rdlp-security",
  "rdlp-types",
  "regex",
@@ -6112,6 +6113,17 @@ dependencies = [
  "url",
  "wasmtime",
  "wat",
+]
+
+[[package]]
+name = "rdlp-plugin-manifest"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

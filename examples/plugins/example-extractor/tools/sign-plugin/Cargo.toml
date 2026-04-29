@@ -7,7 +7,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rdlp-plugin = { path = "../../../../../crates/rdlp-plugin" }
+# Depend on the leaf manifest crate only — pulls serde + toml + sha2 + thiserror.
+# Switching from `rdlp-plugin` (which transitively pulls wasmtime + sigstore +
+# sled, ~6800 lines of Cargo.lock) shrinks this tool's lock to a few hundred
+# lines and keeps signing builds fast.
+rdlp-plugin-manifest = { path = "../../../../../crates/rdlp-plugin-manifest" }
 ed25519-dalek = { version = "2", features = ["std", "pem", "pkcs8"] }
 base64 = "0.22"
 anyhow = "1"

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
 rdlp-types = { path = "../rdlp-types" }
+rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }

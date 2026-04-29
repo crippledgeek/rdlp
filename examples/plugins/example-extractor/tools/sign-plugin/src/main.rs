@@ -11,7 +11,7 @@ use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::Signer;
-use rdlp_plugin::manifest::{canonical_bytes, parse_manifest_str};
+use rdlp_plugin_manifest::{canonical_bytes, parse_manifest_str};
 use std::fs;
 use std::path::Path;
 
