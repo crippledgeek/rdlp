@@ -38,8 +38,9 @@ pub struct PluginStoreData {
     // pub fetch:        Option<crate::host::fetch::FetchCtx>,
     // pub cookie_jar:   Option<crate::host::cookie_jar::CookieJarCtx>,
     // pub js_eval:      Option<crate::host::js_eval::JsEvalCtx>,
-    // pub html_select:  Option<crate::host::html_select::HtmlSelectCtx>,
     // pub store_kv:     Option<crate::host::store_kv::StoreKvCtx>,
+    /// Granted `host:html-select` capability state, or `None` if not requested.
+    pub html_select: Option<crate::host::html_select::HtmlSelectCtx>,
 }
 
 impl PluginStoreData {
@@ -62,6 +63,7 @@ impl PluginStoreData {
             plugin_name,
             cancel,
             log_target,
+            html_select: None,
         }
     }
 }
