@@ -1,0 +1,14 @@
+name = "hello-world"
+version = "0.1.0"
+wit_version = "0.1.0"
+matches = ["https://example.com/*"]
+priority = 150
+claims_override = []
+supports_search = false
+capabilities = ["fetch", "log"]
+
+# Signature filled in by build pipeline (test) or `rdlp plugin sign` (prod).
+[signature]
+type = "ed25519"
+pubkey = "{{PUBKEY_B64}}"
+signature = "{{SIG_B64}}"
