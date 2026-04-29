@@ -41,7 +41,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
         with:
-          cosign-release: 'v2.4.0'
+          cosign-release: 'v2.3.0'
 
       - name: Sign WASM blob (keyless OIDC)
         env:
