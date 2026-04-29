@@ -67,6 +67,23 @@
 //! 4. **First-install confirmation** — capability disclosure + override
 //!    claim prominence
 //!
+//! ## Known limitations (Phase 1 MVP)
+//!
+//! - **No WASI 0.2 surface is linked.** The host wires only the six capability
+//!   interfaces above; `wasi:cli/*`, `wasi:io/*`, `wasi:filesystem/*`, etc. are
+//!   intentionally absent. Plugins built with `cargo-component` against a
+//!   `std`-using Rust crate will silently pull WASI 0.2 imports and trap at
+//!   instantiation with `component imports instance ..., but a matching
+//!   implementation was not found in the linker`. Authors must build with
+//!   `#![no_std]` (or use `wit-bindgen` directly without cargo-component's
+//!   default WASI scaffolding) for Phase 1. Wiring a sandboxed WASI surface
+//!   is tracked separately and out of scope for the MVP.
+//! - **Sigstore happy-path verification** is `#[ignore]`'d in
+//!   `tests/signature_sigstore.rs`: cosign 2.4 emits Bundle v0.3 protobuf
+//!   format and sigstore-rs 0.13 only parses v0.1 / v0.2. Re-enable once
+//!   sigstore-rs adds v0.3 parsing upstream. Sad-path tests cover the
+//!   verifier's error mapping.
+//!
 //! ## See also
 //!
 //! - Design spec: `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local)
