@@ -586,3 +586,44 @@ class TestRaiseHelpers:
             ie.raise_no_formats("no media available", video_id="vid")
         assert "[no formats]" in excinfo.value.orig_msg
         assert excinfo.value.video_id == "vid"
+
+    def test_raise_login_required_sets_ie_to_extractor_name(self):
+        # Upstream yt-dlp's raise_* helpers populate ExtractorError.ie so
+        # ported code that does `except ExtractorError as e: log(e.ie)`
+        # sees the extractor identity, not None.
+        class FooIE(InfoExtractor):
+            pass
+        with pytest.raises(ExtractorError) as excinfo:
+            FooIE().raise_login_required()
+        assert excinfo.value.ie == "Foo"  # class name minus trailing "IE"
+
+    def test_raise_geo_restricted_sets_ie(self):
+        class BarIE(InfoExtractor):
+            pass
+        with pytest.raises(GeoRestrictedError) as excinfo:
+            BarIE().raise_geo_restricted(countries=["JP"])
+        assert excinfo.value.ie == "Bar"
+
+    def test_raise_no_formats_sets_ie(self):
+        class BazIE(InfoExtractor):
+            pass
+        with pytest.raises(ExtractorError) as excinfo:
+            BazIE().raise_no_formats("no media", video_id="vid")
+        assert excinfo.value.ie == "Baz"
+
+    def test_ie_name_uses_explicit_IE_NAME_attribute(self):
+        # When the extractor declares `IE_NAME = "youtube:music"` upstream-
+        # style, that takes precedence over the class-name derivation.
+        class WeirdNamedExtractor(InfoExtractor):
+            IE_NAME = "youtube:music"
+        with pytest.raises(ExtractorError) as excinfo:
+            WeirdNamedExtractor().raise_login_required()
+        assert excinfo.value.ie == "youtube:music"
+
+    def test_ie_name_falls_back_to_class_name_when_no_IE_suffix(self):
+        # If the class doesn't end in "IE", use the full class name.
+        class FooBarExtractor(InfoExtractor):
+            pass
+        with pytest.raises(ExtractorError) as excinfo:
+            FooBarExtractor().raise_login_required()
+        assert excinfo.value.ie == "FooBarExtractor"

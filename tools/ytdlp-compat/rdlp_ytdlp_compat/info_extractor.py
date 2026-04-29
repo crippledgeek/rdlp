@@ -240,17 +240,34 @@ class InfoExtractor:
     # an `ExtractorError(expected=True)` tagged with a marker phrase so the
     # _entry.py WIT mapping can pick the right variant.
 
+    @property
+    def _ie_name(self):
+        """The extractor's own name, for ExtractorError(ie=...) parity with
+        upstream. yt-dlp uses `IE_NAME` if the extractor declares it,
+        falling back to the class name minus the trailing `IE`."""
+        ie_name = getattr(self, "IE_NAME", None)
+        if ie_name is None:
+            cls_name = type(self).__name__
+            ie_name = cls_name[:-2] if cls_name.endswith("IE") else cls_name
+        return ie_name
+
     def raise_login_required(
         self, msg="This video is only available for registered users",
         metadata_available=False, method=None,
     ):
-        """yt-dlp's raise_login_required. Maps to WIT auth-required."""
+        """yt-dlp's raise_login_required. Maps to WIT auth-required.
+
+        Sets `ie=self._ie_name` on the underlying ExtractorError so ported
+        code that does `except ExtractorError as e: log(e.ie)` sees the
+        extractor identity (matches upstream behaviour)."""
         from rdlp_ytdlp_compat._errors import ExtractorError
         full_msg = msg
         if method is not None:
             full_msg = f"{msg}. Use {method} to log in."
         # Marker phrase keys the _entry.py message-text dispatch.
-        raise ExtractorError(f"[login required] {full_msg}", expected=True)
+        raise ExtractorError(
+            f"[login required] {full_msg}", expected=True, ie=self._ie_name,
+        )
 
     def raise_geo_restricted(
         self, msg="This video is not available from your location due to geo restriction",
@@ -259,15 +276,20 @@ class InfoExtractor:
         """yt-dlp's raise_geo_restricted. Maps to WIT auth-required (Slice 1
         has no dedicated geo-restricted variant)."""
         from rdlp_ytdlp_compat._errors import GeoRestrictedError
-        raise GeoRestrictedError(msg, countries=countries)
+        raise GeoRestrictedError(msg, countries=countries, ie=self._ie_name)
 
     def raise_no_formats(self, msg, expected=False, video_id=None):
         """yt-dlp's raise_no_formats. Maps to WIT not-found when expected
-        (the user-facing "no formats available"); to internal otherwise."""
+        (the user-facing "no formats available"); to internal otherwise.
+
+        Sets `ie=self._ie_name` for upstream parity."""
         from rdlp_ytdlp_compat._errors import ExtractorError
         # Marker phrase keys the _entry.py dispatch.
         prefix = "[no formats] "
-        raise ExtractorError(f"{prefix}{msg}", expected=expected, video_id=video_id)
+        raise ExtractorError(
+            f"{prefix}{msg}", expected=expected, video_id=video_id,
+            ie=self._ie_name,
+        )
 
     def _download_webpage(self, url_or_request, video_id, note=None, errnote=None,
                           fatal=True, tries=1, timeout=NO_DEFAULT, *,

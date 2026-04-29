@@ -244,10 +244,15 @@ jobs:
   ytdlp-plugin-golden:
     name: yt-dlp Plugin Golden Build
     needs: [build-and-test, golden-filter]
-    # Always run on push (merges into develop); on PR, run only when the
-    # filter caught a relevant change. Skipping is the desired outcome on
-    # PRs that touch unrelated code, not a failure.
-    if: github.event_name == 'push' || needs.golden-filter.outputs.run == 'true'
+    # Always run on push (merges into develop) and on workflow_dispatch
+    # (manual reruns must exercise the golden — that's the one case where
+    # you most want it). On PR, run only when the filter caught a relevant
+    # change. Skipping is the desired outcome on PRs that touch unrelated
+    # code, not a failure.
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.golden-filter.outputs.run == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
