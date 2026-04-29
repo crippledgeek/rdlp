@@ -80,6 +80,26 @@ jobs:
         # system headers — which is the root cause of upstream
         # shssoichiro/ffmpeg-the-third#145.
 
+      - name: Pin LIBCLANG_PATH to VS-bundled LLVM (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        # `clang-sys` (used by bindgen) resolves libclang.dll at runtime via
+        # PATH search. The `windows-latest` image bumped to clang 20.1.8 in
+        # late 2026-04, and the new clang's libclang.dll crashes parsing
+        # FFmpeg 8.0 headers with STATUS_STACK_BUFFER_OVERRUN (0xc0000409,
+        # which is `__fastfail`/abort, not a real buffer overrun — see
+        # https://devblogs.microsoft.com/oldnewthing/20190108-00/?p=100655).
+        # Pinning LIBCLANG_PATH to the VS-bundled LLVM matches the upstream
+        # ffmpeg-the-third CI pattern and uses a libclang version validated
+        # against the same MSVC headers we just put on INCLUDE.
+        run: |
+          $VCINSTALLDIR = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $libclang = Join-Path $VCINSTALLDIR "VC\Tools\LLVM\x64\bin"
+          if (-not (Test-Path "$libclang\libclang.dll")) {
+            throw "libclang.dll not found at $libclang"
+          }
+          Add-Content $env:GITHUB_ENV "LIBCLANG_PATH=$libclang"
+
       - name: Install FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'
         run: brew install ffmpeg
