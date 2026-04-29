@@ -10,7 +10,7 @@
 
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
-use log::{debug, info};
+use log::{debug, info, warn};
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, check_http_response};
 use rdlp_types::InfoDict;
 use scraper::{Html, Selector};
@@ -176,14 +176,15 @@ pub async fn extract_playlist(
                         Some((position, info))
                     }
                     Ok(Err(e)) => {
-                        debug!(
+                        // Bumped from debug → warn so users see silent-pruning.
+                        warn!(
                             position, total, title:? = video_title_hint;
-                            "Failed to extract video: {e}"
+                            "[PornHub] Failed to extract playlist item: {e}"
                         );
                         None
                     }
                     Err(_) => {
-                        debug!(position, total, title:? = video_title_hint; "Timed out extracting video");
+                        warn!(position, total, title:? = video_title_hint; "[PornHub] Timed out extracting playlist item");
                         None
                     }
                 }
@@ -213,7 +214,17 @@ pub async fn extract_playlist(
         });
     }
 
-    info!(extracted = results.len(), total; "[PornHub] Successfully extracted videos");
+    let extracted = results.len();
+    info!(extracted, total; "[PornHub] Successfully extracted videos");
+    if extracted < total {
+        warn!(
+            extracted,
+            total;
+            "[PornHub] {} of {} playlist items could not be extracted",
+            total - extracted,
+            total
+        );
+    }
 
     Ok(results)
 }

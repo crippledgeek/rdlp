@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, warn};
 
 use rdlp_ffmpeg::FFmpegRunner;
 
@@ -177,27 +177,39 @@ impl PipelineStage for SubtitleStage {
         }
 
         let codec = Self::subtitle_codec_for_container(extension);
-        info!(
-            "SubtitleStage: found {} subtitle(s) for embedding (codec: {})",
-            subtitle_files.len(),
-            codec
-        );
-
         // FFmpeg subtitle embedding is not yet implemented in rdlp-ffmpeg.
-        // Log the intent and push a warning — non-fatal, files pass through.
+        // Surface this LOUDLY: a user invoking --embed-subtitles must see a
+        // warn-level message AND a structured warning on the pipeline so
+        // the API event stream (Event::Warning) can flag the failure.
+        // Previously this was an info!("would embed …") line that buried the
+        // gap; users got a video without subtitles and no error.
         let _ = &self.ffmpeg;
+        let langs: Vec<String> = subtitle_files
+            .iter()
+            .map(|(lang, _)| lang.clone())
+            .collect();
+        warn!(
+            "SubtitleStage: --embed-subtitles is configured but FFmpeg \
+             subtitle muxing is not yet implemented. {} subtitle file(s) \
+             ({}) were sidecar-written but NOT embedded into {}. \
+             Track: https://github.com/crippledgeek/rdlp/issues (subtitle-embedding).",
+            subtitle_files.len(),
+            langs.join(", "),
+            media_file.display()
+        );
         for (lang, sub_path) in &subtitle_files {
-            info!(
-                "SubtitleStage: would embed subtitle lang={} path={}",
-                lang,
+            debug!(
+                "SubtitleStage: pending-implementation. lang={lang} codec={codec} path={}",
                 sub_path.display()
             );
         }
-        warn!("SubtitleStage: subtitle embedding via FFmpeg not yet implemented; skipping");
 
-        msg.warnings.push(
-            "Subtitle embedding not yet implemented; subtitles were not embedded.".to_string(),
-        );
+        msg.warnings.push(format!(
+            "Subtitle embedding not implemented; {} subtitle(s) ({}) written \
+             alongside the video but not muxed in.",
+            subtitle_files.len(),
+            langs.join(", "),
+        ));
 
         // Mark subtitle files as temps unless write_subtitles is set.
         if !msg.config.write_subtitles {

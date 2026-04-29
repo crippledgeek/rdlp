@@ -77,42 +77,42 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// Duration is the bare text node after `span.right`; view count is the
 /// leading number inside `span.right`. Both are best-effort and the parser
 /// accepts cards with the metadata block missing or partially populated.
+// Static selectors compiled once at first reference. `expect()` here means a
+// CSS-selector typo causes a panic at first use rather than silently
+// producing zero results — the previous `Err(_) => return Vec::new()`
+// pattern hid programmer errors as "site returned no matches".
+static BLOCK_SEL: std::sync::LazyLock<Selector> =
+    std::sync::LazyLock::new(|| Selector::parse("div.thumb-block").expect("static selector"));
+static THUMB_IMG_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
+    Selector::parse(r#"div.thumb-inside a[href^="/video-"] img"#).expect("static selector")
+});
+static TITLE_LINK_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
+    Selector::parse(r#"div.thumb-under a[href^="/video-"]"#).expect("static selector")
+});
+static UPLOADER_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
+    Selector::parse("div.uploader span.name").expect("static selector")
+});
+static METADATA_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
+    Selector::parse("div.thumb-under p.metadata").expect("static selector")
+});
+static METADATA_RIGHT_SEL: std::sync::LazyLock<Selector> =
+    std::sync::LazyLock::new(|| Selector::parse("span.right").expect("static selector"));
+
 pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     let doc = Html::parse_document(html);
 
-    // Top-level card is div.thumb-block
-    let block_sel = match Selector::parse("div.thumb-block") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    // Thumbnail image inside the thumb pane
-    let thumb_img_sel = match Selector::parse(r#"div.thumb-inside a[href^="/video-"] img"#) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    // Title link in the text-under section
-    let title_link_sel = match Selector::parse(r#"div.thumb-under a[href^="/video-"]"#) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let uploader_sel = match Selector::parse("div.uploader span.name") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let metadata_sel = match Selector::parse("div.thumb-under p.metadata") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let metadata_right_sel = match Selector::parse("span.right") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let block_sel = &*BLOCK_SEL;
+    let thumb_img_sel = &*THUMB_IMG_SEL;
+    let title_link_sel = &*TITLE_LINK_SEL;
+    let uploader_sel = &*UPLOADER_SEL;
+    let metadata_sel = &*METADATA_SEL;
+    let metadata_right_sel = &*METADATA_RIGHT_SEL;
 
     let mut results = Vec::new();
 
-    for block in doc.select(&block_sel) {
+    for block in doc.select(block_sel) {
         // Title link (has `title` attribute and href)
-        let Some(title_link) = block.select(&title_link_sel).next() else {
+        let Some(title_link) = block.select(title_link_sel).next() else {
             continue;
         };
 
@@ -136,24 +136,24 @@ pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
 
         // Thumbnail from `data-src` on the img inside the thumb pane
         let thumbnail_url = block
-            .select(&thumb_img_sel)
+            .select(thumb_img_sel)
             .next()
             .and_then(|img| img.value().attr("data-src"))
             .map(str::to_string);
 
         let uploader = block
-            .select(&uploader_sel)
+            .select(uploader_sel)
             .next()
             .map(|n| n.text().collect::<String>().trim().to_string())
             .filter(|s| !s.is_empty());
 
         let (duration, view_count) =
             block
-                .select(&metadata_sel)
+                .select(metadata_sel)
                 .next()
                 .map_or((None, None), |meta| {
                     let view_count = meta
-                        .select(&metadata_right_sel)
+                        .select(metadata_right_sel)
                         .next()
                         .and_then(|r| r.text().next())
                         .map(str::trim)

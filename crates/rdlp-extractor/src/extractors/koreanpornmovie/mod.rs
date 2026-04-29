@@ -507,7 +507,13 @@ async fn scrape_durations_from_html_response(
 ) -> std::collections::HashMap<String, f64> {
     let text = match result {
         Ok(resp) => resp.text().await.unwrap_or_default(),
-        Err(_) => return std::collections::HashMap::new(),
+        Err(e) => {
+            // Network failure was previously indistinguishable from "page
+            // had no durations" — surface it at debug so investigators
+            // can find why the duration map is empty.
+            log::debug!("[KoreanPornMovie] duration scrape failed: {e}");
+            return std::collections::HashMap::new();
+        }
     };
     scrape_durations_from_html(&text)
 }
