@@ -5,6 +5,12 @@
 //! → `remove_dir_all` on raw user input).
 
 #![allow(clippy::disallowed_methods)] // test fixture I/O
+// XDG_CONFIG_HOME and HOME are process-global. Each async test holds
+// `xdg_lock()` for the full body — including across `.await` — so a
+// concurrent test cannot yank the env var out from under it. A
+// `tokio::sync::Mutex` wouldn't help: the await points are inside CLI
+// helpers we don't want to make `Send + Sync` aware of test plumbing.
+#![allow(clippy::await_holding_lock)]
 
 use rdlp_plugin::disabled_list::read_disabled_list;
 use rdlp_plugin::manifest::validate_plugin_name;
