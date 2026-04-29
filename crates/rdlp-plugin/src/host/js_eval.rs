@@ -5,17 +5,23 @@
 //! sandbox globals injected as top-level JS variables. Results are serialised to
 //! JSON strings.
 //!
-//! # Timeout / memory caps
+//! # Iteration / recursion / memory caps
 //!
-//! `JsEvalCtx` carries `timeout` and `memory_cap` fields that document the
-//! intended limits, but Boa's interruption API is not yet wired through the
-//! `rdlp-jsinterp` public surface. The wasmtime epoch deadline (set per-call in
-//! `instance::build_store`) provides a coarser cap: if a plugin spins inside
-//! `eval()` the WASM instance will trap when the epoch deadline fires — but only
-//! after the boa `spawn_blocking` thread completes or is abandoned. This is a
-//! known limitation of the MVP; a future sprint should wire Boa's
-//! `Context::set_max_call_stack_size` and the interrupt callback to honour the
-//! wall-clock deadline inside the blocking thread.
+//! `BoaJsEngine::make_context` sets `runtime_limits_mut().set_loop_iteration_limit`
+//! (10M iterations) and `set_recursion_limit` (256 frames) at every context
+//! construction. These are the host-side guard against pure-CPU JS DoS:
+//! infinite `while(true)` loops and unbounded recursion both terminate with a
+//! `RuntimeLimit` error that **cannot be caught from JS** (boa documents this;
+//! `try/catch` does not intercept it). This is the strongest guard available
+//! without wall-clock interruption — `tokio::time::timeout` cannot preempt a
+//! `spawn_blocking` thread executing a tight loop.
+//!
+//! `JsEvalCtx.timeout` and `memory_cap` remain as documentation of the
+//! intended wall-clock / heap envelope; they are NOT independently enforced.
+//! For wall-clock cancellation across the full plugin call (not just JS),
+//! the wasmtime epoch deadline set per-call in `instance::build_store` is
+//! the authoritative mechanism — a plugin that legitimately yields back from
+//! `host:js-eval` will trap on the next instruction once the epoch fires.
 //!
 //! # Capability denial
 //!
@@ -28,15 +34,21 @@ use rdlp_jsinterp::BoaJsEngine;
 use std::time::Duration;
 use wasmtime::component::Linker;
 
-/// Per-plugin js-eval context. Carries wall-clock + memory caps for documentation
-/// and future enforcement. See module-level doc for current limitation.
+/// Per-plugin js-eval context.
+///
+/// The fields are advisory: pure-CPU DoS is bounded by the iteration and
+/// recursion limits applied to every Boa context inside `rdlp-jsinterp`
+/// (see module-level doc). These fields document the intended wall-clock
+/// and heap envelope for plugin authors; the wasmtime epoch deadline
+/// enforces wall-clock at the WASM level once `host:js-eval` returns.
 #[derive(Debug, Clone)]
 pub struct JsEvalCtx {
-    /// Wall-clock cap on a single eval call. Default 5 seconds.
-    /// Not yet enforced inside the boa `spawn_blocking` thread.
+    /// Documented wall-clock cap on a single eval call. Default 5 seconds.
+    /// Not enforced inside the boa `spawn_blocking` thread; pure-CPU loops
+    /// are bounded by `runtime_limits_mut().set_loop_iteration_limit` instead.
     pub timeout: Duration,
-    /// Memory cap inside the boa context. Default 32 MB.
-    /// Not yet enforced by Boa's public API.
+    /// Documented memory cap inside the boa context. Default 32 MB.
+    /// Not enforced by Boa's public API.
     pub memory_cap: usize,
 }
 
