@@ -81,8 +81,24 @@ fn rejects_malformed_json_bundle() {
     );
 }
 
+// Bundle v0.3 happy-path is gated behind upstream sigstore-rs support.
+// Status as of 2026-04-29:
+//   - sigstore-rs latest = 0.13.0 (published 2025-10-16) — no v0.3 parser.
+//     Tracking: https://github.com/sigstore/sigstore-rs/issues/432 (open).
+//     Reference PR https://github.com/sigstore/sigstore-rs/pull/518 closed
+//     un-merged (Nov 2025); the prerequisite PR chain (#513 Merkle/Rekor v2,
+//     #514 DSSE) is closed/blocked respectively. Indefinite ETA upstream.
+//   - cosign 2.4+ emits Bundle v0.3 by default with --new-bundle-format.
+// Verifier-side fallback options if v0.3 becomes a hard requirement before
+// upstream lands:
+//   1. Switch verifier dep to `sigstore-verify` 0.6 (prefix-dev/sigstore-rust),
+//      a workspace shipped by the same author who closed the upstream demo PR.
+//      66k+ downloads, has its own conformance suite, Apache-2.0.
+//   2. Sign without --new-bundle-format (cosign still supports v0.1/v0.2).
+// Sad-path coverage (mismatched signatures, tampered bundles, missing
+// fields) is in `signature_sigstore_negative.rs` and runs unconditionally.
 #[test]
-#[ignore = "sigstore-rs 0.13 only parses Bundle v0.1/v0.2; cosign 2.4 --new-bundle-format emits v0.3. Un-ignore once sigstore-rs adds v0.3 support upstream."]
+#[ignore = "sigstore-rs 0.13 only parses Bundle v0.1/v0.2; see comment above for upstream status + migration options"]
 fn valid_sigstore_bundle_verifies() {
     let manifest_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sigstore_valid.toml");
