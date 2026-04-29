@@ -176,3 +176,164 @@ fn test_postprocess_embedded_in_config() {
         crate::fixup_policy::FixupPolicy::DetectOrWarn
     );
 }
+
+// === Plugin timeout / resource limit validation ===
+
+#[test]
+fn test_plugin_defaults_pass_validation() {
+    let config = Config::default();
+    assert!(config.plugin_timeout_metadata_ms.is_none());
+    assert!(config.plugin_timeout_extract_s.is_none());
+    assert!(config.plugin_timeout_search_s.is_none());
+    assert!(config.plugin_memory_limit_mb.is_none());
+    assert!(config.plugin_stack_limit_mb.is_none());
+    assert!(config.plugin_trusted_publishers.is_empty());
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_plugin_timeout_extract_too_large() {
+    let mut config = Config::default();
+    config.plugin_timeout_extract_s = Some(700);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_timeout_extract_s",
+            reason: "must be <= 600 (10 min ceiling)",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_timeout_extract_at_ceiling_passes() {
+    let mut config = Config::default();
+    config.plugin_timeout_extract_s = Some(600);
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_plugin_timeout_search_too_large() {
+    let mut config = Config::default();
+    config.plugin_timeout_search_s = Some(601);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_timeout_search_s",
+            reason: "must be <= 600",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_timeout_metadata_too_large() {
+    let mut config = Config::default();
+    config.plugin_timeout_metadata_ms = Some(60_001);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_timeout_metadata_ms",
+            reason: "must be <= 60000ms (60 sec ceiling)",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_memory_limit_zero_fails() {
+    let mut config = Config::default();
+    config.plugin_memory_limit_mb = Some(0);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_memory_limit_mb",
+            reason: "must be 1..=1024 MB",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_memory_limit_too_large() {
+    let mut config = Config::default();
+    config.plugin_memory_limit_mb = Some(2000);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_memory_limit_mb",
+            reason: "must be 1..=1024 MB",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_memory_limit_at_bounds_passes() {
+    let mut config = Config::default();
+    config.plugin_memory_limit_mb = Some(1);
+    assert!(config.validate().is_ok());
+    config.plugin_memory_limit_mb = Some(1024);
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_plugin_stack_limit_zero_fails() {
+    let mut config = Config::default();
+    config.plugin_stack_limit_mb = Some(0);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_stack_limit_mb",
+            reason: "must be 1..=64 MB",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_stack_limit_too_large() {
+    let mut config = Config::default();
+    config.plugin_stack_limit_mb = Some(65);
+    let err = config.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "plugin_stack_limit_mb",
+            reason: "must be 1..=64 MB",
+        }
+    );
+}
+
+#[test]
+fn test_plugin_stack_limit_at_bounds_passes() {
+    let mut config = Config::default();
+    config.plugin_stack_limit_mb = Some(1);
+    assert!(config.validate().is_ok());
+    config.plugin_stack_limit_mb = Some(64);
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_plugin_trusted_publishers_toml_roundtrip() {
+    let mut config = Config::default();
+    config.plugin_trusted_publishers = vec![
+        "sigstore:github:user/repo".to_string(),
+        "ed25519:deadbeef".to_string(),
+    ];
+    let toml_str = toml::to_string(&config).expect("serialization failed");
+    let roundtripped: Config = toml::from_str(&toml_str).expect("deserialization failed");
+    assert_eq!(
+        roundtripped.plugin_trusted_publishers,
+        config.plugin_trusted_publishers
+    );
+}
+
+#[test]
+fn test_out_of_range_error_display() {
+    let err = ConfigValidationError::OutOfRange {
+        field: "plugin_memory_limit_mb",
+        reason: "must be 1..=1024 MB",
+    };
+    assert_eq!(err.to_string(), "plugin_memory_limit_mb: must be 1..=1024 MB");
+}
