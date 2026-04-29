@@ -35,10 +35,11 @@ pub struct PluginStoreData {
     pub log_target: String,
     // Capability contexts populated by the loader at instance build time.
     // Filled in by Tasks 12-17.
-    // pub fetch:        Option<crate::host::fetch::FetchCtx>,
     // pub cookie_jar:   Option<crate::host::cookie_jar::CookieJarCtx>,
     // pub js_eval:      Option<crate::host::js_eval::JsEvalCtx>,
     // pub store_kv:     Option<crate::host::store_kv::StoreKvCtx>,
+    /// Granted `host:fetch` capability state, or `None` if not requested.
+    pub fetch: Option<crate::host::fetch::FetchCtx>,
     /// Granted `host:html-select` capability state, or `None` if not requested.
     pub html_select: Option<crate::host::html_select::HtmlSelectCtx>,
 }
@@ -63,6 +64,7 @@ impl PluginStoreData {
             plugin_name,
             cancel,
             log_target,
+            fetch: None,
             html_select: None,
         }
     }
