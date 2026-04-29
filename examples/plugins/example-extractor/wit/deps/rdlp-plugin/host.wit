@@ -1,0 +1,75 @@
+package rdlp:plugin@0.1.0;
+
+interface host-fetch {
+    record request {
+        url: string,
+        method: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+        timeout-ms: option<u32>,
+    }
+
+    record response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+        final-url: string,
+    }
+
+    variant fetch-error {
+        timeout,
+        cancelled,
+        network(string),
+        too-many-redirects,
+        body-too-large,
+    }
+
+    fetch: func(req: request) -> result<response, fetch-error>;
+}
+
+interface host-cookie-jar {
+    record cookie {
+        name: string,
+        value: string,
+        domain: string,
+        path: string,
+        secure: bool,
+        http-only: bool,
+        expires: option<u64>,
+    }
+
+    get-cookies: func(url: string) -> list<cookie>;
+    set-cookie: func(url: string, cookie: cookie) -> result<_, string>;
+}
+
+interface host-js-eval {
+    record context {
+        source-url: string,
+        sandbox-globals: list<tuple<string, string>>,
+    }
+
+    eval: func(ctx: context, source: string) -> result<string, string>;
+}
+
+interface host-html-select {
+    select: func(html: string, css-selector: string) -> list<string>;
+    select-attr: func(html: string, css-selector: string, attr: string) -> list<string>;
+}
+
+interface host-log {
+    enum level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    log: func(level: level, message: string);
+}
+
+interface host-store-kv {
+    get: func(key: string) -> option<list<u8>>;
+    set: func(key: string, value: list<u8>) -> result<_, string>;
+    delete: func(key: string);
+}

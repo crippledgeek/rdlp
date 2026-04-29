@@ -1,0 +1,3 @@
+/target/
+/tools/sign-plugin/target/
+src/bindings.rs

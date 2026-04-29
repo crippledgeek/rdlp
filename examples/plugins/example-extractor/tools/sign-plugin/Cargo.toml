@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "example-sign-plugin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rdlp-plugin = { path = "../../../../../crates/rdlp-plugin" }
+ed25519-dalek = { version = "2", features = ["std", "pem", "pkcs8"] }
+base64 = "0.22"
+anyhow = "1"
