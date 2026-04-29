@@ -22,6 +22,7 @@ fn workspace_root() -> PathBuf {
 
 #[test]
 #[ignore = "slow: builds 3 ~35MB wasm components via componentize-py (~30s each)"]
+#[allow(clippy::disallowed_methods)] // test fixture — sync I/O is acceptable per clippy.toml
 fn ytdlp_goldens_build_and_emit_artefacts() {
     let root = workspace_root();
     for name in GOLDENS {
