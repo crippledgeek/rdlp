@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_types::Codec;
 use regex::Regex;
 
 use crate::base::common::BaseExtractor;
@@ -64,8 +65,8 @@ fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec
 
     if let Some(hls_url) = &format_urls.hls {
         let mut f = Format::new("hls", hls_url, "m3u8", DownloadProtocol::M3u8);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("m3u8".to_string());
         f.format_note = Some("HLS".to_string());
         formats.push(f);
@@ -73,8 +74,8 @@ fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec
     if let Some(low_url) = &format_urls.mp4_low {
         let height = parse_mp4_height(low_url).or(Some(360));
         let mut f = Format::new("mp4_low", low_url, "mp4", DownloadProtocol::Https);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("mp4".to_string());
         f.format_note = Some("SD".to_string());
         f.height = height;
@@ -84,8 +85,8 @@ fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec
     if let Some(high_url) = &format_urls.mp4_high {
         let height = parse_mp4_height(high_url).or(Some(720));
         let mut f = Format::new("mp4_high", high_url, "mp4", DownloadProtocol::Https);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("mp4".to_string());
         f.format_note = Some("HD".to_string());
         f.height = height;

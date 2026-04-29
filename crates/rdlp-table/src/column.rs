@@ -61,11 +61,11 @@ fn extract_size(f: &Format) -> String {
 }
 
 fn extract_codecs(f: &Format) -> String {
-    let codecs = match (&f.vcodec, &f.acodec) {
-        (Some(v), Some(a)) if v != "none" && a != "none" => format!("{v}/{a}"),
-        (Some(v), _) if v != "none" => format!("{v} (video only)"),
-        (_, Some(a)) if a != "none" => format!("{a} (audio only)"),
-        _ => "Unknown".to_string(),
+    let codecs = match (f.vcodec.as_str(), f.acodec.as_str()) {
+        (Some(v), Some(a)) => format!("{v}/{a}"),
+        (Some(v), None) => format!("{v} (video only)"),
+        (None, Some(a)) => format!("{a} (audio only)"),
+        (None, None) => "Unknown".to_string(),
     };
     if f.has_drm.unwrap_or(false) {
         format!("{codecs} [DRM]")
@@ -321,6 +321,7 @@ pub fn compute_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdlp_types::Codec;
     use rdlp_types::protocol::DownloadProtocol;
 
     fn make_format(note: &str, width: u32, height: u32, ext: &str) -> Format {
@@ -333,8 +334,8 @@ mod tests {
         f.format_note = Some(note.to_string());
         f.width = Some(width);
         f.height = Some(height);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.fps = Some(30.0);
         f.abr = Some(128.0);
         f.vbr = Some(5000.0);
@@ -429,8 +430,8 @@ mod tests {
         f.format_note = Some("720p".into());
         f.width = Some(1280);
         f.height = Some(720);
-        f.vcodec = Some("h264".into());
-        f.acodec = Some("aac".into());
+        f.vcodec = Codec::from("h264");
+        f.acodec = Codec::from("aac");
         // fps, abr, vbr not set → extract returns empty string
         // dynamic_range, language not set → extract_note returns empty string
 

@@ -1,5 +1,6 @@
 //! Format types for video/audio streams
 
+mod codec;
 mod display;
 pub mod selector;
 
@@ -10,6 +11,7 @@ use std::sync::OnceLock;
 
 use crate::protocol::DownloadProtocol;
 
+pub use codec::Codec;
 pub use selector::{FormatSelectError, FormatSelector, FormatSorter, format_select};
 
 /// Video/audio format information
@@ -58,13 +60,17 @@ pub struct Format {
     pub asr: Option<u32>,
 
     // === Codec information ===
-    /// Video codec (e.g., "h264", "vp9", "av1")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vcodec: Option<String>,
+    /// Video codec (e.g., `Codec::Present("h264")`, `Codec::Present("vp9")`,
+    /// `Codec::Absent` for audio-only streams). The `"none"` sentinel
+    /// (and the empty string) is normalised to [`Codec::Absent`] at every
+    /// entry point so call-sites need only check `is_absent` / `is_present`.
+    #[serde(default, skip_serializing_if = "Codec::is_absent")]
+    pub vcodec: Codec,
 
-    /// Audio codec (e.g., "aac", "opus", "mp3")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub acodec: Option<String>,
+    /// Audio codec (e.g., `Codec::Present("aac")`, `Codec::Present("opus")`,
+    /// `Codec::Absent` for video-only streams).
+    #[serde(default, skip_serializing_if = "Codec::is_absent")]
+    pub acodec: Codec,
 
     /// File extension (e.g., "mp4", "webm", "m4a")
     pub ext: String,
@@ -181,11 +187,11 @@ impl fmt::Debug for Format {
         if let Some(v) = &self.asr {
             d.field("asr", v);
         }
-        if let Some(v) = &self.vcodec {
-            d.field("vcodec", v);
+        if let Some(v) = self.vcodec.as_str() {
+            d.field("vcodec", &v);
         }
-        if let Some(v) = &self.acodec {
-            d.field("acodec", v);
+        if let Some(v) = self.acodec.as_str() {
+            d.field("acodec", &v);
         }
         if let Some(v) = &self.format_note {
             d.field("format_note", v);
@@ -248,8 +254,8 @@ impl Format {
             vbr: None,
             abr: None,
             asr: None,
-            vcodec: None,
-            acodec: None,
+            vcodec: Codec::Absent,
+            acodec: Codec::Absent,
             ext: ext.into(),
             format_note: None,
             protocol,
@@ -271,12 +277,12 @@ impl Format {
 
     /// Check if this format has video
     pub fn has_video(&self) -> bool {
-        self.vcodec.as_ref().is_some_and(|c| c != "none")
+        self.vcodec.is_present()
     }
 
     /// Check if this format has audio
     pub fn has_audio(&self) -> bool {
-        self.acodec.as_ref().is_some_and(|c| c != "none")
+        self.acodec.is_present()
     }
 
     /// Get resolution as string (e.g., "1920x1080")
@@ -393,8 +399,8 @@ mod tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        format.vcodec = Some("h264".to_string());
-        format.acodec = Some("none".to_string());
+        format.vcodec = Codec::Present("h264".to_string());
+        format.acodec = Codec::Absent;
 
         assert!(format.has_video());
         assert!(!format.has_audio());
@@ -408,8 +414,8 @@ mod tests {
             "m4a",
             DownloadProtocol::Https,
         );
-        format.vcodec = Some("none".to_string());
-        format.acodec = Some("aac".to_string());
+        format.vcodec = Codec::Absent;
+        format.acodec = Codec::Present("aac".to_string());
 
         assert!(!format.has_video());
         assert!(format.has_audio());

@@ -434,8 +434,8 @@ fn convert_format(w: crate::bindings::rdlp::plugin::types::Format) -> rdlp_types
     f.tbr = w.tbr.map(f64::from);
     f.vbr = w.vbr.map(f64::from);
     f.abr = w.abr.map(f64::from);
-    f.vcodec = w.vcodec;
-    f.acodec = w.acodec;
+    f.vcodec = rdlp_types::Codec::from(w.vcodec);
+    f.acodec = rdlp_types::Codec::from(w.acodec);
     f.container = w.container;
     f.filesize = w.filesize;
     f.format_note = w.format_note;

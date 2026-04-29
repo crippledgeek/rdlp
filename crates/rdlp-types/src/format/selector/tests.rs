@@ -1,15 +1,15 @@
 //! Tests for the format selector parser and evaluator.
 
 use super::*;
-use crate::format::Format;
+use crate::format::{Codec, Format};
 use crate::protocol::DownloadProtocol;
 
 // ---- Test helpers ----
 
 fn make_combined(id: &str, ext: &str, height: u32, quality: i32) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
-    f.vcodec = Some("h264".to_string());
-    f.acodec = Some("aac".to_string());
+    f.vcodec = Codec::Present("h264".to_string());
+    f.acodec = Codec::Present("aac".to_string());
     f.height = Some(height);
     f.width = Some(height * 16 / 9);
     f.quality = Some(quality);
@@ -19,8 +19,8 @@ fn make_combined(id: &str, ext: &str, height: u32, quality: i32) -> Format {
 
 fn make_video_only(id: &str, ext: &str, height: u32) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
-    f.vcodec = Some("h264".to_string());
-    f.acodec = Some("none".to_string());
+    f.vcodec = Codec::Present("h264".to_string());
+    f.acodec = Codec::Absent;
     f.height = Some(height);
     f.width = Some(height * 16 / 9);
     f.vbr = Some(height as f64 * 1.5);
@@ -29,8 +29,8 @@ fn make_video_only(id: &str, ext: &str, height: u32) -> Format {
 
 fn make_audio_only(id: &str, ext: &str, abr: f64) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
-    f.vcodec = Some("none".to_string());
-    f.acodec = Some("aac".to_string());
+    f.vcodec = Codec::Absent;
+    f.acodec = Codec::Present("aac".to_string());
     f.abr = Some(abr);
     f
 }
@@ -1061,8 +1061,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        m360.vcodec = Some("h264".to_string());
-        m360.acodec = Some("aac".to_string());
+        m360.vcodec = Codec::Present("h264".to_string());
+        m360.acodec = Codec::Present("aac".to_string());
         m360.height = Some(360);
         m360.width = Some(640);
         m360.quality = Some(1);
@@ -1075,8 +1075,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        m720.vcodec = Some("h264".to_string());
-        m720.acodec = Some("aac".to_string());
+        m720.vcodec = Codec::Present("h264".to_string());
+        m720.acodec = Codec::Present("aac".to_string());
         m720.height = Some(720);
         m720.width = Some(1280);
         m720.quality = Some(2);
@@ -1090,8 +1090,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        m1080.vcodec = Some("h264".to_string());
-        m1080.acodec = Some("aac".to_string());
+        m1080.vcodec = Codec::Present("h264".to_string());
+        m1080.acodec = Codec::Present("aac".to_string());
         m1080.height = Some(1080);
         m1080.width = Some(1920);
         m1080.quality = Some(3);
@@ -1105,8 +1105,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        v720_h264.vcodec = Some("avc1.4d401f".to_string()); // real h264 codec string
-        v720_h264.acodec = Some("none".to_string());
+        v720_h264.vcodec = Codec::Present("avc1.4d401f".to_string()); // real h264 codec string
+        v720_h264.acodec = Codec::Absent;
         v720_h264.height = Some(720);
         v720_h264.width = Some(1280);
         v720_h264.vbr = Some(2000.0);
@@ -1118,8 +1118,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        v1080_h264.vcodec = Some("avc1.640028".to_string()); // real h264 codec string
-        v1080_h264.acodec = Some("none".to_string());
+        v1080_h264.vcodec = Codec::Present("avc1.640028".to_string()); // real h264 codec string
+        v1080_h264.acodec = Codec::Absent;
         v1080_h264.height = Some(1080);
         v1080_h264.width = Some(1920);
         v1080_h264.vbr = Some(4000.0);
@@ -1132,8 +1132,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        v1440_vp9.vcodec = Some("vp9".to_string());
-        v1440_vp9.acodec = Some("none".to_string());
+        v1440_vp9.vcodec = Codec::Present("vp9".to_string());
+        v1440_vp9.acodec = Codec::Absent;
         v1440_vp9.height = Some(1440);
         v1440_vp9.width = Some(2560);
         v1440_vp9.vbr = Some(8000.0);
@@ -1145,8 +1145,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        v2160_vp9.vcodec = Some("vp9".to_string());
-        v2160_vp9.acodec = Some("none".to_string());
+        v2160_vp9.vcodec = Codec::Present("vp9".to_string());
+        v2160_vp9.acodec = Codec::Absent;
         v2160_vp9.height = Some(2160);
         v2160_vp9.width = Some(3840);
         v2160_vp9.vbr = Some(16000.0);
@@ -1159,8 +1159,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        v1080_av1.vcodec = Some("av01.0.08M.08".to_string()); // real av1 codec string
-        v1080_av1.acodec = Some("none".to_string());
+        v1080_av1.vcodec = Codec::Present("av01.0.08M.08".to_string()); // real av1 codec string
+        v1080_av1.acodec = Codec::Absent;
         v1080_av1.height = Some(1080);
         v1080_av1.width = Some(1920);
         v1080_av1.vbr = Some(3500.0);
@@ -1172,8 +1172,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        v2160_av1.vcodec = Some("av01.0.13M.10".to_string()); // real av1 codec string
-        v2160_av1.acodec = Some("none".to_string());
+        v2160_av1.vcodec = Codec::Present("av01.0.13M.10".to_string()); // real av1 codec string
+        v2160_av1.acodec = Codec::Absent;
         v2160_av1.height = Some(2160);
         v2160_av1.width = Some(3840);
         v2160_av1.vbr = Some(12000.0);
@@ -1185,8 +1185,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::Https,
         );
-        v720_h265.vcodec = Some("hev1.1.6.L93.90".to_string()); // real h265 codec string
-        v720_h265.acodec = Some("none".to_string());
+        v720_h265.vcodec = Codec::Present("hev1.1.6.L93.90".to_string()); // real h265 codec string
+        v720_h265.acodec = Codec::Absent;
         v720_h265.height = Some(720);
         v720_h265.width = Some(1280);
         v720_h265.vbr = Some(1800.0);
@@ -1199,8 +1199,8 @@ mod compat_tests {
             "m4a",
             DownloadProtocol::Https,
         );
-        a128_aac.vcodec = Some("none".to_string());
-        a128_aac.acodec = Some("mp4a.40.2".to_string()); // real aac codec string
+        a128_aac.vcodec = Codec::Absent;
+        a128_aac.acodec = Codec::Present("mp4a.40.2".to_string()); // real aac codec string
         a128_aac.abr = Some(128.0);
         a128_aac.asr = Some(44100);
         a128_aac.filesize = Some(20 * 1024 * 1024); // 20 MB
@@ -1211,8 +1211,8 @@ mod compat_tests {
             "m4a",
             DownloadProtocol::Https,
         );
-        a256_aac.vcodec = Some("none".to_string());
-        a256_aac.acodec = Some("mp4a.40.2".to_string());
+        a256_aac.vcodec = Codec::Absent;
+        a256_aac.acodec = Codec::Present("mp4a.40.2".to_string());
         a256_aac.abr = Some(256.0);
         a256_aac.asr = Some(44100);
         // No filesize
@@ -1223,8 +1223,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        a160_opus.vcodec = Some("none".to_string());
-        a160_opus.acodec = Some("opus".to_string());
+        a160_opus.vcodec = Codec::Absent;
+        a160_opus.acodec = Codec::Present("opus".to_string());
         a160_opus.abr = Some(160.0);
         a160_opus.asr = Some(48000);
 
@@ -1234,8 +1234,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        a70_opus.vcodec = Some("none".to_string());
-        a70_opus.acodec = Some("opus".to_string());
+        a70_opus.vcodec = Codec::Absent;
+        a70_opus.acodec = Codec::Present("opus".to_string());
         a70_opus.abr = Some(70.0);
         a70_opus.asr = Some(48000);
 
@@ -1245,8 +1245,8 @@ mod compat_tests {
             "webm",
             DownloadProtocol::Https,
         );
-        a128_vorbis.vcodec = Some("none".to_string());
-        a128_vorbis.acodec = Some("vorbis".to_string());
+        a128_vorbis.vcodec = Codec::Absent;
+        a128_vorbis.acodec = Codec::Present("vorbis".to_string());
         a128_vorbis.abr = Some(128.0);
         a128_vorbis.asr = Some(44100);
 
@@ -1257,8 +1257,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::M3u8,
         );
-        hls_audio.vcodec = Some("none".to_string());
-        hls_audio.acodec = Some("aac".to_string());
+        hls_audio.vcodec = Codec::Absent;
+        hls_audio.acodec = Codec::Present("aac".to_string());
         hls_audio.abr = Some(128.0);
 
         // ---- HLS muxed ----
@@ -1268,8 +1268,8 @@ mod compat_tests {
             "mp4",
             DownloadProtocol::M3u8,
         );
-        hls_720.vcodec = Some("h264".to_string());
-        hls_720.acodec = Some("aac".to_string());
+        hls_720.vcodec = Codec::Present("h264".to_string());
+        hls_720.acodec = Codec::Present("aac".to_string());
         hls_720.height = Some(720);
         hls_720.width = Some(1280);
         hls_720.quality = Some(4); // HLS muxed ranked higher via quality
@@ -1615,7 +1615,7 @@ mod compat_tests {
             .select(&formats);
         assert_eq!(result.len(), 1);
         assert!(
-            result[0].vcodec.as_deref().unwrap_or("").starts_with("h26"),
+            result[0].vcodec.as_str().unwrap_or("").starts_with("h26"),
             "vcodec must start with h26"
         );
         assert_eq!(result[0].format_id, "hls_720");
@@ -1631,7 +1631,7 @@ mod compat_tests {
             .unwrap()
             .select(&formats);
         assert_eq!(result.len(), 1);
-        assert!(result[0].vcodec.as_deref().unwrap_or("").starts_with("avc"));
+        assert!(result[0].vcodec.as_str().unwrap_or("").starts_with("avc"));
         assert_eq!(result[0].format_id, "137");
     }
 
@@ -1935,7 +1935,7 @@ mod compat_tests {
         let video = &result[0];
         let audio = &result[1];
         assert!(
-            video.vcodec.as_deref().unwrap_or("").starts_with("avc"),
+            video.vcodec.as_str().unwrap_or("").starts_with("avc"),
             "video vcodec must start with avc"
         );
         assert_eq!(video.format_id, "137");
@@ -1957,7 +1957,7 @@ mod compat_tests {
             .filter(|f| {
                 // Remove avc video-only formats; keep combined (h264), other video-only,
                 // and all audio formats.
-                let vcodec = f.vcodec.as_deref().unwrap_or("");
+                let vcodec = f.vcodec.as_str().unwrap_or("");
                 let is_avc_video_only = vcodec.starts_with("avc") && !f.has_audio();
                 !is_avc_video_only
             })
@@ -2769,7 +2769,7 @@ mod sort_edge_cases {
                 "mp4",
                 DownloadProtocol::Https,
             );
-            f.vcodec = Some("h264".to_string());
+            f.vcodec = Codec::Present("h264".to_string());
             f
         };
         let f_other = {
@@ -2779,7 +2779,7 @@ mod sort_edge_cases {
                 "mp4",
                 DownloadProtocol::Other("rtmp".to_string()),
             );
-            f.vcodec = Some("h264".to_string());
+            f.vcodec = Codec::Present("h264".to_string());
             f
         };
 
@@ -2876,10 +2876,10 @@ mod sort_edge_cases {
     #[test]
     fn codec_none_treated_as_missing() {
         let mut f_none = make_format("none_codec");
-        f_none.vcodec = Some("none".to_string());
+        f_none.vcodec = Codec::Absent;
 
         let mut f_h264 = make_format("h264");
-        f_h264.vcodec = Some("h264".to_string());
+        f_h264.vcodec = Codec::Present("h264".to_string());
 
         let spec = sort::FormatSorter::parse("vcodec").unwrap();
         let mut formats: Vec<&Format> = vec![&f_none, &f_h264];
@@ -2892,12 +2892,12 @@ mod sort_edge_cases {
     #[test]
     fn sort_hasaud_prefers_formats_with_audio() {
         let mut with_aud = make_format("aud");
-        with_aud.vcodec = Some("none".to_string());
-        with_aud.acodec = Some("aac".to_string());
+        with_aud.vcodec = Codec::Absent;
+        with_aud.acodec = Codec::Present("aac".to_string());
 
         let mut no_aud = make_format("vid");
-        no_aud.vcodec = Some("h264".to_string());
-        no_aud.acodec = Some("none".to_string());
+        no_aud.vcodec = Codec::Present("h264".to_string());
+        no_aud.acodec = Codec::Absent;
 
         let spec = sort::FormatSorter::parse("hasaud").unwrap();
         let mut formats: Vec<&Format> = vec![&no_aud, &with_aud];
@@ -3327,8 +3327,8 @@ mod negative_eval {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = None; // truly missing, not "none"
-        f.acodec = None;
+        f.vcodec = Codec::Absent; // truly missing, not "none"
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("b*[vcodec=h264]")
             .unwrap()
@@ -3344,8 +3344,8 @@ mod negative_eval {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = None;
-        f.acodec = None;
+        f.vcodec = Codec::Absent;
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("b*[vcodec=?h264]")
             .unwrap()
@@ -3384,8 +3384,8 @@ mod negative_eval {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = Some("h264".to_string());
-        f.acodec = None;
+        f.vcodec = Codec::Present("h264".to_string());
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("bv*[acodec=aac]")
             .unwrap()
@@ -3401,8 +3401,8 @@ mod negative_eval {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = Some("h264".to_string());
-        f.acodec = None;
+        f.vcodec = Codec::Present("h264".to_string());
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("bv*[acodec=?aac]")
             .unwrap()
@@ -4019,8 +4019,8 @@ mod negative_eval_2 {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = None;
-        f.acodec = None;
+        f.vcodec = Codec::Absent;
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("b*[vcodec!^=?h264]")
             .unwrap()
@@ -4052,8 +4052,8 @@ mod negative_eval_2 {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = None;
-        f.acodec = None;
+        f.vcodec = Codec::Absent;
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("b*[vcodec!=h264]")
             .unwrap()
@@ -4193,8 +4193,8 @@ mod negative_eval_2 {
         let result = FormatSelector::parse("bv").unwrap().select(&formats);
         // matches_token: bv (non-modified Video) checks f.has_video() && !f.has_audio()
         // has_video() checks vcodec != Some("none"), which is true for None → false
-        // Actually, has_video() with vcodec=None: vcodec.as_deref() != Some("none") → true
-        // and has_audio() with acodec=None: acodec.as_deref() != Some("none") → true
+        // Actually, has_video() with vcodec=None: vcodec.as_str() != Some("none") → true
+        // and has_audio() with acodec=None: acodec.as_str() != Some("none") → true
         // So has_video() && !has_audio() = true && !true = false
         // But codecs_unknown = vcodec.is_none() && acodec.is_none() = true
         // matches_token Keyword Video non-modified doesn't use codecs_unknown
@@ -4224,8 +4224,8 @@ mod negative_eval_2 {
             "mp4",
             DownloadProtocol::Https,
         );
-        f.vcodec = Some("none".to_string());
-        f.acodec = Some("none".to_string());
+        f.vcodec = Codec::Absent;
+        f.acodec = Codec::Absent;
         let formats = vec![f];
         let result = FormatSelector::parse("mergeall").unwrap().select(&formats);
         // has_video()=false, has_audio()=false → excluded by mergeall filter
@@ -4302,11 +4302,11 @@ mod negative_sort_2 {
     #[test]
     fn sort_missing_abr_ranks_last() {
         let mut f_with = make_format("with");
-        f_with.acodec = Some("aac".to_string());
+        f_with.acodec = Codec::Present("aac".to_string());
         f_with.abr = Some(256.0);
 
         let mut f_without = make_format("without");
-        f_without.acodec = Some("aac".to_string());
+        f_without.acodec = Codec::Present("aac".to_string());
 
         let spec = sort::FormatSorter::parse("abr").unwrap();
         let mut formats: Vec<&Format> = vec![&f_without, &f_with];
@@ -4407,10 +4407,10 @@ mod negative_sort_2 {
     #[test]
     fn vcodec_ascending_prefers_worst_codec() {
         let mut f_av1 = make_format("av1");
-        f_av1.vcodec = Some("av1".to_string());
+        f_av1.vcodec = Codec::Present("av1".to_string());
 
         let mut f_h264 = make_format("h264");
-        f_h264.vcodec = Some("h264".to_string());
+        f_h264.vcodec = Codec::Present("h264".to_string());
 
         // +vcodec → ascending → worst codec first
         let spec = sort::FormatSorter::parse("+vcodec").unwrap();
@@ -4459,10 +4459,10 @@ mod negative_sort_2 {
     #[test]
     fn unknown_vcodec_ranks_below_known() {
         let mut f_known = make_format("h264");
-        f_known.vcodec = Some("h264".to_string());
+        f_known.vcodec = Codec::Present("h264".to_string());
 
         let mut f_unknown = make_format("custom_codec");
-        f_unknown.vcodec = Some("my_custom_codec_v3".to_string());
+        f_unknown.vcodec = Codec::Present("my_custom_codec_v3".to_string());
 
         let spec = sort::FormatSorter::parse("vcodec").unwrap();
         let mut formats: Vec<&Format> = vec![&f_unknown, &f_known];
@@ -4854,10 +4854,10 @@ mod negative_sort_3 {
     #[test]
     fn empty_vcodec_string_treated_as_missing() {
         let mut f_empty = make_format("empty_codec");
-        f_empty.vcodec = Some(String::new()); // ""
+        f_empty.vcodec = Codec::Absent; // ""
 
         let mut f_h264 = make_format("h264");
-        f_h264.vcodec = Some("h264".to_string());
+        f_h264.vcodec = Codec::Present("h264".to_string());
 
         let spec = sort::FormatSorter::parse("vcodec").unwrap();
         let mut formats: Vec<&Format> = vec![&f_empty, &f_h264];
@@ -4870,10 +4870,10 @@ mod negative_sort_3 {
     #[test]
     fn empty_acodec_string_treated_as_missing() {
         let mut f_empty = make_format("empty_codec");
-        f_empty.acodec = Some(String::new());
+        f_empty.acodec = Codec::Absent;
 
         let mut f_aac = make_format("aac");
-        f_aac.acodec = Some("aac".to_string());
+        f_aac.acodec = Codec::Present("aac".to_string());
 
         let spec = sort::FormatSorter::parse("acodec").unwrap();
         let mut formats: Vec<&Format> = vec![&f_empty, &f_aac];

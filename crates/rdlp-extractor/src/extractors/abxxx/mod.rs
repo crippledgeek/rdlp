@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_types::Codec;
 use regex::Regex;
 use serde_json::Value;
 
@@ -135,8 +136,8 @@ fn entry_to_format(video_id: &str, idx: usize, entry: &Value) -> Option<Format> 
     let format_id = format!("{ext}-{idx}-{video_id}");
     let mut f = Format::new(format_id, url, ext, DownloadProtocol::Https);
     f.container = Some(ext.to_string());
-    f.vcodec = Some("h264".to_string());
-    f.acodec = Some("aac".to_string());
+    f.vcodec = Codec::from("h264".to_string());
+    f.acodec = Codec::from("aac".to_string());
     // Placeholder: videofile.php returns one stream (the best). The slug-
     // search enrichment overwrites this with the real `{height}p` label
     // when it lands; if enrichment fails the GUI still has something

@@ -19,6 +19,7 @@ pub mod search;
 use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_types::Codec;
 use regex::Regex;
 
 use crate::base::common::BaseExtractor;
@@ -75,8 +76,8 @@ impl XVideosExtractor {
         if let Some(hls_url) = fmt_urls.hls {
             let mut f = Format::new("hls-0", hls_url, "m3u8", DownloadProtocol::M3u8Native);
             f.format_note = Some("HLS".to_string());
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("m3u8".to_string());
             formats.push(f);
         }
@@ -85,8 +86,8 @@ impl XVideosExtractor {
             let height = parse_mp4_height(&high_url).or(Some(720));
             let mut f = Format::new("mp4-hd", high_url, "mp4", DownloadProtocol::Https);
             f.format_note = Some("HD".to_string());
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("mp4".to_string());
             f.height = height;
             formats.push(f);
@@ -96,8 +97,8 @@ impl XVideosExtractor {
             let height = parse_mp4_height(&low_url).or(Some(360));
             let mut f = Format::new("mp4-sd", low_url, "mp4", DownloadProtocol::Https);
             f.format_note = Some("SD".to_string());
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("mp4".to_string());
             f.height = height;
             f.quality = Some(-2);

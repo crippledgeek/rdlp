@@ -224,6 +224,7 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
 mod tests {
     use super::*;
     use console::measure_text_width;
+    use rdlp_types::Codec;
     use rdlp_types::protocol::DownloadProtocol;
 
     fn make_format(note: &str, width: u32, height: u32, ext: &str) -> Format {
@@ -236,8 +237,8 @@ mod tests {
         f.format_note = Some(note.to_string());
         f.width = Some(width);
         f.height = Some(height);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.fps = Some(30.0);
         f.abr = Some(128.0);
         f.vbr = Some(5000.0);
@@ -251,8 +252,8 @@ mod tests {
             make_format("720p", 1280, 720, "mp4"),
             {
                 let mut f = make_format("480p", 854, 480, "webm");
-                f.vcodec = Some("vp9".to_string());
-                f.acodec = Some("none".to_string());
+                f.vcodec = Codec::from("vp9".to_string());
+                f.acodec = Codec::Absent;
                 f.filesize = Some(230_000_000);
                 f
             },

@@ -192,7 +192,7 @@ fn nth_of_token(token: &FormatToken) -> Option<u32> {
 /// `Extension` shorthands resolve to `best[ext=<ext>]` semantics, i.e. any
 /// format with that extension.
 fn matches_token(token: &FormatToken, f: &Format) -> bool {
-    let codecs_unknown = f.vcodec.is_none() && f.acodec.is_none();
+    let codecs_unknown = f.vcodec.is_absent() && f.acodec.is_absent();
     match token {
         FormatToken::Keyword {
             stream_type,
@@ -282,11 +282,11 @@ fn evaluate_filter(filter: &Filter, f: &Format) -> FilterResult {
             compare_opt_num_r(f.filesize.map(|v| v as f64), &filter.op, &filter.value)
         }
         FilterField::Ext => bool_to_result(compare_str(&f.ext, &filter.op, &filter.value)),
-        FilterField::Vcodec => match &f.vcodec {
+        FilterField::Vcodec => match f.vcodec.as_str() {
             Some(v) => bool_to_result(compare_str(v, &filter.op, &filter.value)),
             None => FilterResult::FieldMissing,
         },
-        FilterField::Acodec => match &f.acodec {
+        FilterField::Acodec => match f.acodec.as_str() {
             Some(v) => bool_to_result(compare_str(v, &filter.op, &filter.value)),
             None => FilterResult::FieldMissing,
         },

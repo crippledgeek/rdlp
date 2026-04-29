@@ -117,8 +117,8 @@ pub async fn get_formats(
             height: f.height,
             fps: f.fps,
             tbr: f.tbr,
-            vcodec: f.vcodec.clone(),
-            acodec: f.acodec.clone(),
+            vcodec: f.vcodec.as_str().map(str::to_string),
+            acodec: f.acodec.as_str().map(str::to_string),
             filesize: f.get_filesize(),
             vbr: f.vbr,
             abr: f.abr,
@@ -216,8 +216,8 @@ pub async fn validate_format_expression(
             f.abr = fd.abr;
             f.asr = fd.asr;
             f.filesize = fd.filesize;
-            f.vcodec = fd.vcodec.clone();
-            f.acodec = fd.acodec.clone();
+            f.vcodec = rdlp_api::Codec::from(fd.vcodec.clone());
+            f.acodec = rdlp_api::Codec::from(fd.acodec.clone());
             f
         })
         .collect();

@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use log::debug;
 use rdlp_types::Format;
+use rdlp_types::Codec;
 use serde_json::Value;
 
 use rdlp_core::JsEngine;
@@ -27,9 +28,9 @@ fn detect_vcodec(url: &str) -> Option<&'static str> {
 
 /// Apply codec fixup to all formats (detect vcodec from URL patterns).
 pub fn fixup_formats(formats: &mut [Format]) {
-    for f in formats.iter_mut().filter(|f| f.vcodec.is_none()) {
+    for f in formats.iter_mut().filter(|f| f.vcodec.is_absent()) {
         if let Some(vcodec) = detect_vcodec(&f.url) {
-            f.vcodec = Some(vcodec.to_string());
+            f.vcodec = Codec::from(vcodec.to_string());
         }
     }
 }

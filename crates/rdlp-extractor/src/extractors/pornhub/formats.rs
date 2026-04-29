@@ -276,6 +276,7 @@ fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdlp_types::Codec;
 
     #[test]
     fn test_extract_from_js_vars() {
@@ -324,7 +325,7 @@ mod tests {
         assert_eq!(format.format_id, "1080p");
         assert_eq!(format.height, Some(1080));
         assert_eq!(format.width, Some(1920));
-        assert_eq!(format.vcodec, Some("h264".to_string()));
+        assert_eq!(format.vcodec, Codec::Present("h264".to_string()));
     }
 
     #[test]

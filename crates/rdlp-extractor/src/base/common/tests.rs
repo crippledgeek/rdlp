@@ -1,6 +1,7 @@
 //! Tests for common base extractor utilities
 
 use super::*;
+use rdlp_types::Codec;
 use rdlp_security::is_private_host;
 use regex::Regex;
 use scraper::Html;
@@ -307,8 +308,8 @@ fn test_build_format() {
     assert_eq!(format.height, Some(720));
     assert_eq!(format.width, Some(1280));
     assert_eq!(format.format_note, Some("720p".to_string()));
-    assert_eq!(format.vcodec, Some("h264".to_string()));
-    assert_eq!(format.acodec, Some("aac".to_string()));
+    assert_eq!(format.vcodec, Codec::Present("h264".to_string()));
+    assert_eq!(format.acodec, Codec::Present("aac".to_string()));
 }
 
 #[test]
@@ -320,8 +321,8 @@ fn test_build_format_webm() {
         Some(1080),
     );
 
-    assert_eq!(format.vcodec, Some("vp9".to_string()));
-    assert_eq!(format.acodec, Some("opus".to_string()));
+    assert_eq!(format.vcodec, Codec::Present("vp9".to_string()));
+    assert_eq!(format.acodec, Codec::Present("opus".to_string()));
 }
 
 // ========================================================================

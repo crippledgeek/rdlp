@@ -18,8 +18,8 @@ use std::sync::LazyLock;
 
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{
-    DownloadProtocol, Format, InfoDict, SearchFilterDescriptor, SearchPageResponse, SearchQuery,
-    SearchResultPreview,
+    Codec, DownloadProtocol, Format, InfoDict, SearchFilterDescriptor, SearchPageResponse,
+    SearchQuery, SearchResultPreview,
 };
 
 use crate::base::common::BaseExtractor;
@@ -643,8 +643,8 @@ fn make_video_format(format_id: &str, url: &str) -> Format {
 
     let mut format = Format::new(format_id, url, ext, protocol);
     // Mark as video (not audio-only) — actual codec determined at download time
-    format.vcodec = Some("video".to_string());
-    format.acodec = Some("audio".to_string());
+    format.vcodec = Codec::from("video".to_string());
+    format.acodec = Codec::from("audio".to_string());
     format
 }
 

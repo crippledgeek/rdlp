@@ -44,6 +44,7 @@ mod tests;
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
 use rdlp_types::Format;
+use rdlp_types::Codec;
 use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
@@ -510,12 +511,12 @@ impl BaseExtractor {
         // Set default codecs for common formats
         match ext.as_str() {
             "mp4" => {
-                format.vcodec = Some("h264".to_string());
-                format.acodec = Some("aac".to_string());
+                format.vcodec = Codec::from("h264".to_string());
+                format.acodec = Codec::from("aac".to_string());
             }
             "webm" => {
-                format.vcodec = Some("vp9".to_string());
-                format.acodec = Some("opus".to_string());
+                format.vcodec = Codec::from("vp9".to_string());
+                format.acodec = Codec::from("opus".to_string());
             }
             _ => {}
         }

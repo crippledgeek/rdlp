@@ -50,7 +50,7 @@ pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
 pub use fixup_policy::FixupPolicy;
 pub use format::{
-    Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
+    Codec, Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use parse_error::ParseEnumError;

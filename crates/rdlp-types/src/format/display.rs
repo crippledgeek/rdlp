@@ -26,11 +26,11 @@ impl Format {
                 parts.push(format!("{fps}fps"));
             }
 
-            if let Some(vcodec) = self.vcodec.as_deref().filter(|c| *c != "none") {
+            if let Some(vcodec) = self.vcodec.as_str() {
                 parts.push(format!("vcodec:{vcodec}"));
             }
 
-            if let Some(acodec) = self.acodec.as_deref().filter(|c| *c != "none") {
+            if let Some(acodec) = self.acodec.as_str() {
                 parts.push(format!("acodec:{acodec}"));
             }
 

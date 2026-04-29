@@ -9,6 +9,7 @@
 //!    the same JSON shape.
 
 use rdlp_types::{DownloadProtocol, Format};
+use rdlp_types::Codec;
 use serde_json::Value;
 
 use super::patterns;
@@ -60,8 +61,8 @@ pub(super) fn build_formats(data: &Value) -> Vec<Format> {
             && let Some(url) = arr.first().and_then(Value::as_str)
         {
             let mut f = Format::new(label, url, "mp4", DownloadProtocol::Https);
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("mp4".to_string());
             f.height = height_for_label(label);
             f.format_note = Some(label.to_uppercase());
@@ -74,8 +75,8 @@ pub(super) fn build_formats(data: &Value) -> Vec<Format> {
         && let Some(url) = arr.first().and_then(Value::as_str)
     {
         let mut f = Format::new("hls", url, "m3u8", DownloadProtocol::M3u8);
-        f.vcodec = Some("h264".to_string());
-        f.acodec = Some("aac".to_string());
+        f.vcodec = Codec::from("h264".to_string());
+        f.acodec = Codec::from("aac".to_string());
         f.container = Some("m3u8".to_string());
         f.format_note = Some("HLS".to_string());
         formats.push(f);
@@ -90,8 +91,8 @@ pub(super) fn build_formats(data: &Value) -> Vec<Format> {
             && let Some(url) = arr.first().and_then(Value::as_str)
         {
             let mut f = Format::new(&key, url, "m3u8", DownloadProtocol::M3u8);
-            f.vcodec = Some("h264".to_string());
-            f.acodec = Some("aac".to_string());
+            f.vcodec = Codec::from("h264".to_string());
+            f.acodec = Codec::from("aac".to_string());
             f.container = Some("m3u8".to_string());
             f.height = height_for_label(label);
             f.format_note = Some(format!("HLS {}", label.to_uppercase()));
@@ -138,7 +139,7 @@ mod tests {
             .expect("1080p MP4 row");
         assert_eq!(f1080.ext, "mp4");
         assert_eq!(f1080.height, Some(1080));
-        assert_eq!(f1080.vcodec.as_deref(), Some("h264"));
+        assert_eq!(f1080.vcodec.as_str(), Some("h264"));
         // Multi-rendition HLS master row.
         let hls = formats
             .iter()

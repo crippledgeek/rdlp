@@ -8,6 +8,7 @@ use super::state::DownloadState;
 use super::*;
 use crate::events::Event;
 use crate::handle::DownloadId;
+use rdlp_types::Codec;
 use rdlp_types::{Config, Format, InfoDict};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,8 +48,8 @@ fn create_test_format(format_id: &str, quality: &str, filesize: Option<u64>) -> 
     format.filesize = filesize;
     format.width = Some(1920);
     format.height = Some(1080);
-    format.vcodec = Some("h264".to_string());
-    format.acodec = Some("aac".to_string());
+    format.vcodec = Codec::from("h264".to_string());
+    format.acodec = Codec::from("aac".to_string());
     format.tbr = Some(2000.0);
     format
 }

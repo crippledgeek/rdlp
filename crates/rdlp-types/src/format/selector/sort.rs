@@ -380,8 +380,8 @@ fn sort_key(spec: &SortFieldSpec, f: &Format) -> SortKey {
         }
 
         // ---- codec fields (tier-based) ------------------------------------
-        "vcodec" => codec_key(f.vcodec.as_deref(), VIDEO_CODEC_TIERS, spec),
-        "acodec" => codec_key(f.acodec.as_deref(), AUDIO_CODEC_TIERS, spec),
+        "vcodec" => codec_key(f.vcodec.as_str(), VIDEO_CODEC_TIERS, spec),
+        "acodec" => codec_key(f.acodec.as_str(), AUDIO_CODEC_TIERS, spec),
         "vext" | "aext" | "ext" => string_rank_key(Some(f.ext.as_str()), spec),
 
         // ---- protocol -----------------------------------------------------
@@ -650,6 +650,7 @@ impl FormatSortExt for Format {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::Codec;
     use crate::format::Format;
     use crate::protocol::DownloadProtocol;
 
@@ -670,18 +671,18 @@ mod tests {
     fn default_prefers_higher_resolution() {
         let mut f480 = make_format("480p");
         f480.height = Some(480);
-        f480.vcodec = Some("h264".to_string());
-        f480.acodec = Some("aac".to_string());
+        f480.vcodec = Codec::from("h264".to_string());
+        f480.acodec = Codec::from("aac".to_string());
 
         let mut f1080 = make_format("1080p");
         f1080.height = Some(1080);
-        f1080.vcodec = Some("h264".to_string());
-        f1080.acodec = Some("aac".to_string());
+        f1080.vcodec = Codec::from("h264".to_string());
+        f1080.acodec = Codec::from("aac".to_string());
 
         let mut f720 = make_format("720p");
         f720.height = Some(720);
-        f720.vcodec = Some("h264".to_string());
-        f720.acodec = Some("aac".to_string());
+        f720.vcodec = Codec::from("h264".to_string());
+        f720.acodec = Codec::from("aac".to_string());
 
         let mut formats: Vec<&Format> = vec![&f480, &f1080, &f720];
         FormatSorter::default_order().sort(&mut formats);
@@ -749,11 +750,11 @@ mod tests {
     #[test]
     fn vcodec_tier_av1_over_h264() {
         let mut fav1 = make_format("av1");
-        fav1.vcodec = Some("av1".to_string());
+        fav1.vcodec = Codec::from("av1".to_string());
         fav1.height = Some(1080);
 
         let mut fh264 = make_format("h264");
-        fh264.vcodec = Some("h264".to_string());
+        fh264.vcodec = Codec::from("h264".to_string());
         fh264.height = Some(1080);
 
         let spec = FormatSorter::parse("vcodec").unwrap();
@@ -767,10 +768,10 @@ mod tests {
     #[test]
     fn acodec_tier_flac_over_mp3() {
         let mut fflac = make_format("flac");
-        fflac.acodec = Some("flac".to_string());
+        fflac.acodec = Codec::from("flac".to_string());
 
         let mut fmp3 = make_format("mp3");
-        fmp3.acodec = Some("mp3".to_string());
+        fmp3.acodec = Codec::from("mp3".to_string());
 
         let spec = FormatSorter::parse("acodec").unwrap();
         let mut formats: Vec<&Format> = vec![&fmp3, &fflac];
@@ -856,10 +857,10 @@ mod tests {
     #[test]
     fn codec_tier_vp9_over_h264() {
         let mut fvp9 = make_format("vp9");
-        fvp9.vcodec = Some("vp9".to_string());
+        fvp9.vcodec = Codec::from("vp9".to_string());
 
         let mut fh264 = make_format("h264");
-        fh264.vcodec = Some("h264".to_string());
+        fh264.vcodec = Codec::from("h264".to_string());
 
         let spec = FormatSorter::parse("vcodec").unwrap();
         let mut formats: Vec<&Format> = vec![&fh264, &fvp9];
@@ -872,12 +873,12 @@ mod tests {
     #[test]
     fn hasvid_prefers_formats_with_video() {
         let mut with_vid = make_format("vid");
-        with_vid.vcodec = Some("h264".to_string());
-        with_vid.acodec = Some("none".to_string());
+        with_vid.vcodec = Codec::from("h264".to_string());
+        with_vid.acodec = Codec::Absent;
 
         let mut no_vid = make_format("aud");
-        no_vid.vcodec = Some("none".to_string());
-        no_vid.acodec = Some("aac".to_string());
+        no_vid.vcodec = Codec::Absent;
+        no_vid.acodec = Codec::from("aac".to_string());
 
         let spec = FormatSorter::parse("hasvid").unwrap();
         let mut formats: Vec<&Format> = vec![&no_vid, &with_vid];
@@ -892,11 +893,11 @@ mod tests {
         // Two formats at same resolution, different codecs.
         let mut fav1 = make_format("av1");
         fav1.height = Some(1080);
-        fav1.vcodec = Some("av1".to_string());
+        fav1.vcodec = Codec::from("av1".to_string());
 
         let mut fh264 = make_format("h264");
         fh264.height = Some(1080);
-        fh264.vcodec = Some("h264".to_string());
+        fh264.vcodec = Codec::from("h264".to_string());
 
         let spec = FormatSorter::parse("res,vcodec").unwrap();
         let mut formats: Vec<&Format> = vec![&fh264, &fav1];
