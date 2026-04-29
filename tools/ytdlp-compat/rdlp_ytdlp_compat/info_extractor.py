@@ -109,6 +109,92 @@ def unified_timestamp(date_str, day_first=True, tz_offset=0):
     return None
 
 
+def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
+                 get_all=True, casesense=True, traverse_string=False):
+    """yt-dlp's traverse_obj — Slice-1 subset.
+
+    Each path is a tuple of segments. Supported segment types in Slice 1:
+      - str: dict key (case-sensitive unless `casesense=False`)
+      - int: list index
+      - Ellipsis (...): iterate all values of a Mapping/Iterable
+      - callable: filter (keep elements where callable(item) is truthy)
+
+    Default behaviour:
+      - default=NO_DEFAULT: returns [] on branched miss (when get_all=True),
+        None on scalar miss. Real extractors rely on this distinction —
+        if traverse_obj(...) AND len(...) both work on branched paths.
+      - get_all=True: branched paths return a list of all matches.
+      - get_all=False: return only the first match, no branching.
+      - casesense=False: dict-key lookup is case-insensitive.
+
+    Multiple paths: first non-empty result wins.
+    """
+    sentinel_default = default is NO_DEFAULT
+    any_branched = False
+    for path in paths:
+        if not isinstance(path, tuple):
+            path = (path,)
+        is_branched = any(seg is Ellipsis or callable(seg) for seg in path)
+        any_branched = any_branched or is_branched
+        result = _traverse_one(obj, path, get_all=get_all, casesense=casesense)
+        if result is None or (isinstance(result, list) and not result):
+            continue
+        if expected_type is not None:
+            if isinstance(result, list):
+                result = [v for v in result if isinstance(v, expected_type)]
+                if not result:
+                    continue
+            elif not isinstance(result, expected_type):
+                continue
+        if get_all is False and isinstance(result, list):
+            result = result[0] if result else None
+            if result is None:
+                continue
+        return result
+    # No path produced a hit
+    if sentinel_default:
+        # yt-dlp default: [] for branched/get_all paths, None for scalar paths.
+        return [] if (any_branched and get_all) else None
+    return default
+
+
+def _traverse_one(obj, path, get_all=True, casesense=True):
+    if not path:
+        return obj
+    head, *rest = path
+    if head is Ellipsis:
+        if isinstance(obj, dict):
+            items = list(obj.values())
+        elif isinstance(obj, (list, tuple)):
+            items = list(obj)
+        else:
+            return None
+        out = []
+        for item in items:
+            v = _traverse_one(item, rest, get_all=get_all, casesense=casesense) if rest else item
+            if v is None:
+                continue
+            if isinstance(v, list):
+                out.extend(v)
+            else:
+                out.append(v)
+        return out if out else []
+    if callable(head):
+        if not isinstance(obj, (list, tuple)):
+            return None
+        return [item for item in obj if head(item)]
+    if isinstance(head, str) and isinstance(obj, dict) and not casesense:
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() == head.lower():
+                return _traverse_one(v, rest, get_all=get_all, casesense=casesense) if rest else v
+        return None
+    try:
+        nxt = obj[head]
+    except (KeyError, IndexError, TypeError):
+        return None
+    return _traverse_one(nxt, rest, get_all=get_all, casesense=casesense) if rest else nxt
+
+
 class InfoExtractor:
     """Base class for yt-dlp-style extractors. I/O helpers added in Tasks 6-7.
 
@@ -173,3 +259,117 @@ class InfoExtractor:
             if errnote is not None:
                 _host.log("warn", f"{errnote} for {video_id}: {e}")
             return None
+
+    def _search_regex(self, pattern, string, name, default=NO_DEFAULT,
+                      fatal=True, flags=0, group=None):
+        """yt-dlp's _search_regex. CRITICAL: real default is fatal=True (extractors
+        omit the kwarg expecting raise-on-miss). Accepts a single pattern OR an
+        iterable of patterns/compiled regexes; first match wins.
+
+        - group=None: return first non-None group, or group(0) if no groups.
+        - group=int/str: return that named/numbered group.
+        - group=list/tuple: return tuple of groups.
+        """
+        patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
+        m = None
+        for pat in patterns:
+            m = _re.search(pat, string, flags) if isinstance(pat, str) else pat.search(string)
+            if m is not None:
+                break
+        if m is not None:
+            if group is None:
+                groups = m.groups()
+                if groups:
+                    for g in groups:
+                        if g is not None:
+                            return g
+                return m.group(0)
+            if isinstance(group, (list, tuple)):
+                return tuple(m.group(g) for g in group)
+            return m.group(group)
+        # No match
+        if default is NO_DEFAULT:
+            if fatal:
+                raise ValueError(f"Unable to extract {name}")
+            _host.log("warn", f"unable to extract {name}; returning None")
+            return None
+        return default
+
+    def _html_search_meta(self, name, html, display_name=None, fatal=False, **kwargs):
+        """yt-dlp's _html_search_meta. `name` accepts scalar or iterable of meta-tag
+        names. Real yt-dlp matches FIVE attributes: itemprop|name|property|id|http-equiv
+        — limiting to property+name breaks any extractor that uses og: tags via
+        http-equiv or itemprop microdata. The default fatal is False (distinct
+        from _search_regex)."""
+        names = name if isinstance(name, (list, tuple)) else [name]
+        default = kwargs.get("default", NO_DEFAULT)
+        for n in names:
+            attrs = "(?:itemprop|name|property|id|http-equiv)"
+            # content first
+            pat = rf'<meta[^>]+(?:{attrs})=["\']{_re.escape(n)}["\'][^>]*content=["\']([^"\']*)["\']'
+            m = _re.search(pat, html, _re.IGNORECASE)
+            if m is None:
+                # content second
+                pat = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:{attrs})=["\']{_re.escape(n)}["\']'
+                m = _re.search(pat, html, _re.IGNORECASE)
+            if m is not None:
+                return m.group(1)
+        if default is not NO_DEFAULT:
+            return default
+        if fatal:
+            raise ValueError(f"Unable to extract {display_name or names[0]}")
+        return None
+
+    def _extract_m3u8_formats(self, *args, **kwargs):
+        """yt-dlp's _extract_m3u8_formats. Returns formats only (drops subs).
+        For (formats, subs) tuple, use _extract_m3u8_formats_and_subtitles."""
+        formats, _subs = self._extract_m3u8_formats_and_subtitles(*args, **kwargs)
+        return formats
+
+    def _extract_m3u8_formats_and_subtitles(
+            self, m3u8_url, video_id, ext=None, entry_protocol="m3u8_native",
+            preference=None, quality=None, m3u8_id=None, note=None, errnote=None,
+            fatal=True, live=False, data=None, headers=None, query=None):
+        """yt-dlp's _extract_m3u8_formats_and_subtitles. Slice-1 scope: master
+        playlist only — does NOT recurse into media playlists. Returns
+        (formats, subs={})."""
+        body = _host.fetch_text(m3u8_url)
+        formats = []
+        lines = body.splitlines()
+        for i, line in enumerate(lines):
+            if not line.startswith("#EXT-X-STREAM-INF:"):
+                continue
+            attrs = self._parse_m3u8_attrs(line[len("#EXT-X-STREAM-INF:"):])
+            if i + 1 >= len(lines):
+                continue
+            url = lines[i + 1].strip()
+            if not url or url.startswith("#"):
+                continue
+            url = urljoin(m3u8_url, url)
+            bandwidth = int_or_none(attrs.get("BANDWIDTH"), scale=1000)
+            resolution = attrs.get("RESOLUTION", "")
+            width = height = None
+            if "x" in resolution:
+                w, h = resolution.split("x", 1)
+                width = int_or_none(w)
+                height = int_or_none(h)
+            formats.append({
+                "format_id": f"{m3u8_id}-{bandwidth}" if m3u8_id else str(bandwidth or len(formats)),
+                "url": url,
+                "ext": ext or "mp4",
+                "protocol": entry_protocol,
+                "tbr": bandwidth,
+                "width": width,
+                "height": height,
+                "preference": preference,
+                "quality": quality,
+            })
+        return formats, {}
+
+    @staticmethod
+    def _parse_m3u8_attrs(s):
+        """Parse `KEY1=VALUE1,KEY2="VALUE 2"` into a dict."""
+        out = {}
+        for m in _re.finditer(r'([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))', s):
+            out[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
+        return out
