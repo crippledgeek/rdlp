@@ -7,6 +7,7 @@ helpers are fully unit-testable in plain Python.
 import collections.abc as _collections_abc
 import datetime
 import email.utils
+import html as _html
 import json as _json
 import re as _re
 from urllib.parse import urljoin as _stdlib_urljoin
@@ -635,3 +636,281 @@ class InfoExtractor:
         for m in _re.finditer(r'([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))', s):
             out[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
         return out
+
+    # ------------------------------------------------------------------
+    # Slice-2 additions (SVT support)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _match_valid_url(cls, url):
+        """yt-dlp's `_match_valid_url` (`extractor/common.py:617-626`).
+        Compiles `_VALID_URL` lazily and caches on the class — uses
+        `cls.__dict__` rather than `getattr` so the cache doesn't bleed
+        from a parent class. Returns the first matching `re.Match` or
+        `None`."""
+        if cls._VALID_URL is None or cls._VALID_URL is False:
+            return None
+        if "_VALID_URL_RE" not in cls.__dict__:
+            from rdlp_ytdlp_compat._utils import variadic as _variadic
+            cls._VALID_URL_RE = tuple(
+                _re.compile(p, _re.VERBOSE) for p in _variadic(cls._VALID_URL)
+            )
+        for regex in cls._VALID_URL_RE:
+            m = regex.match(url)
+            if m is not None:
+                return m
+        return None
+
+    @classmethod
+    def _match_id(cls, url):
+        """yt-dlp's `_match_id` (`extractor/common.py:635-637`). Returns
+        `_match_valid_url(url).group('id')`. Raises IndexError /
+        AttributeError on miss — caller should use `get_temp_id` for the
+        soft variant."""
+        return cls._match_valid_url(url).group("id")
+
+    @classmethod
+    def suitable(cls, url):
+        """yt-dlp's `suitable` (`extractor/common.py:622-625`). Default
+        delegates to `_match_valid_url`; subclasses override to delegate
+        to sibling extractors (e.g. `SVTSeriesIE.suitable` returns False
+        when `SVTPlayIE.suitable(url)` matches)."""
+        return cls._match_valid_url(url) is not None
+
+    @classmethod
+    def ie_key(cls):
+        """yt-dlp's `ie_key` (`extractor/common.py:835-837`). Strips the
+        trailing `IE` suffix to produce the canonical extractor key."""
+        name = cls.__name__
+        return name[:-2] if name.endswith("IE") else name
+
+    @staticmethod
+    def url_result(url, ie=None, video_id=None, video_title=None,
+                   *, url_transparent=False, **kwargs):
+        """yt-dlp's `url_result` (`extractor/common.py:1281-1295`).
+        Wraps a URL in an info-dict entry of type `url` (or
+        `url_transparent`) for downstream re-extraction by another
+        extractor."""
+        if ie is not None:
+            kwargs["ie_key"] = ie if isinstance(ie, str) else ie.ie_key()
+        if video_id is not None:
+            kwargs["id"] = video_id
+        if video_title is not None:
+            kwargs["title"] = video_title
+        return {
+            **kwargs,
+            "_type": "url_transparent" if url_transparent else "url",
+            "url": url,
+        }
+
+    @staticmethod
+    def playlist_result(entries, playlist_id=None, playlist_title=None,
+                        playlist_description=None, *, multi_video=False,
+                        **kwargs):
+        """yt-dlp's `playlist_result` (`extractor/common.py:1303-1316`).
+        Returns an info-dict shaped as a `playlist` (or `multi_video`)
+        with `entries` either a list or a generator."""
+        if playlist_id:
+            kwargs["id"] = playlist_id
+        if playlist_title:
+            kwargs["title"] = playlist_title
+        if playlist_description is not None:
+            kwargs["description"] = playlist_description
+        return {
+            **kwargs,
+            "_type": "multi_video" if multi_video else "playlist",
+            "entries": entries,
+        }
+
+    # --- OpenGraph helpers --------------------------------------------------
+
+    @staticmethod
+    def _og_regexes(prop):
+        """yt-dlp's `_og_regexes` (`extractor/common.py:1463-1473`).
+        Generates the two regex forms used to find an OpenGraph meta tag
+        (property-then-content and content-then-property orderings).
+        `&#x3A;` literal accepted as a `:` substitute for sites that
+        HTML-encode the property name."""
+        content_re = (
+            r'content=(?:"([^"]+?)"|\'([^\']+?)\'|\s*([^\s"\'=<>`]+?)(?=\s|/?>))'
+        )
+        sep = r'(?:&#x3A;|[:-])'
+        property_re = (
+            rf'(?:name|property)=(?:\'og{sep}{_re.escape(prop)}\'|'
+            rf'"og{sep}{_re.escape(prop)}"|\s*og{sep}{_re.escape(prop)}\b)'
+        )
+        template = r"<meta[^>]+?%s[^>]+?%s"
+        return [
+            template % (property_re, content_re),
+            template % (content_re, property_re),
+        ]
+
+    def _og_search_property(self, prop, html_text, name=None, **kargs):
+        """yt-dlp's `_og_search_property` (`extractor/common.py:1480-1490`).
+        Iterates `_og_regexes` over a property name (or an iterable of
+        names), runs `_search_regex` with `re.DOTALL`, unescapes HTML
+        entities."""
+        from rdlp_ytdlp_compat._utils import variadic as _variadic
+        props = _variadic(prop)
+        if name is None:
+            name = f"OpenGraph {props[0]}"
+        og_regexes = []
+        for p in props:
+            og_regexes.extend(self._og_regexes(p))
+        escaped = self._search_regex(
+            og_regexes, html_text, name, flags=_re.DOTALL, **kargs,
+        )
+        if escaped is None:
+            return None
+        # `_search_regex` with multi-group regex returns the first
+        # non-None group (one of the three content-quote variants).
+        return _html.unescape(escaped)
+
+    def _og_search_title(self, html_text, *, fatal=False, **kargs):
+        """yt-dlp's `_og_search_title` (`extractor/common.py:1498-1499`).
+        Default `fatal=False` — missing returns None."""
+        return self._og_search_property(
+            "title", html_text, fatal=fatal, **kargs,
+        )
+
+    def _og_search_thumbnail(self, html_text, **kargs):
+        """yt-dlp's `_og_search_thumbnail` (`extractor/common.py:1492-1493`).
+        Always non-fatal."""
+        return self._og_search_property(
+            "image", html_text, "thumbnail URL", fatal=False, **kargs,
+        )
+
+    # --- JSON search --------------------------------------------------------
+
+    def _search_json(self, start_pattern, string, name, video_id, *,
+                     end_pattern="", contains_pattern=r"{(?s:.+)}",
+                     fatal=True, default=NO_DEFAULT, **kwargs):
+        """yt-dlp's `_search_json` (`extractor/common.py:1352-1378`).
+        Locates a JSON object in `string` matching
+        `(start_pattern)\\s*(json)\\s*(end_pattern)`, then parses it.
+        Default `contains_pattern` is the lazy brace-balanced regex
+        `{(?s:.+)}` — `_parse_json` tolerates trailing junk via
+        `ignore_extra=True`. `default` overrides `fatal=True`."""
+        if default is NO_DEFAULT:
+            has_default = False
+        else:
+            fatal, has_default = False, True
+
+        full_pattern = (
+            rf"(?:{start_pattern})\s*(?P<json>{contains_pattern})\s*"
+            rf"(?:{end_pattern})"
+        )
+        json_string = self._search_regex(
+            full_pattern, string, name, group="json",
+            fatal=fatal,
+            default=None if has_default else NO_DEFAULT,
+        )
+        if not json_string:
+            return default if has_default else {}
+        try:
+            return self._parse_json(
+                json_string, video_id, fatal=True, **kwargs,
+            )
+        except (_json.JSONDecodeError, ValueError) as e:
+            if fatal:
+                from rdlp_ytdlp_compat._errors import ExtractorError
+                raise ExtractorError(
+                    f"Unable to extract {name} - Failed to parse JSON: {e}",
+                    video_id=video_id,
+                ) from e
+            return default if has_default else {}
+
+    def _search_nextjs_data(self, webpage, video_id, *,
+                            fatal=True, default=NO_DEFAULT, **kw):
+        """yt-dlp's `_search_nextjs_data` (`extractor/common.py:1783-1791`).
+        Specialisation of `_search_json` for the canonical
+        `<script id="__NEXT_DATA__" ...>...</script>` blob."""
+        if default is not NO_DEFAULT:
+            fatal = False
+        return self._search_json(
+            r'<script[^>]+id=[\'"]__NEXT_DATA__[\'"][^>]*>',
+            webpage, "next.js data", video_id,
+            end_pattern="</script>", fatal=fatal, default=default, **kw,
+        )
+
+    # --- subtitle / format merge helpers ------------------------------------
+
+    @staticmethod
+    def _merge_subtitle_items(list1, list2):
+        """yt-dlp's `_merge_subtitle_items` (private helper used by
+        `_merge_subtitles`). Dedupes by (url, data) tuple — two
+        subtitle entries with the same URL count as one."""
+        list1_data = {(item.get("url"), item.get("data")) for item in list1}
+        ret = list(list1)
+        ret.extend(
+            item for item in list2
+            if (item.get("url"), item.get("data")) not in list1_data
+        )
+        return ret
+
+    @classmethod
+    def _merge_subtitles(cls, *dicts, target=None):
+        """yt-dlp's `_merge_subtitles` (`extractor/common.py:3939-3946`).
+        Merges per-language subtitle lists into `target`; mutates AND
+        returns `target` so callers can chain."""
+        if target is None:
+            target = {}
+        for d in dicts:
+            if not d:
+                continue
+            for lang, subs in d.items():
+                target[lang] = cls._merge_subtitle_items(
+                    target.get(lang, []), subs,
+                )
+        return target
+
+    # --- network helpers ----------------------------------------------------
+
+    def _download_json(self, url_or_request, video_id, note=None, errnote=None,
+                       transform_source=None, fatal=True, encoding=None,
+                       data=None, headers=None, query=None,
+                       expected_status=None, **kwargs):
+        """yt-dlp's `_download_json` (compat with `extractor/common.py`).
+        Fetches a URL via `_download_webpage` then parses JSON. Any
+        `**kwargs` flow through to `_parse_json`."""
+        body = self._download_webpage(
+            url_or_request, video_id, note=note, errnote=errnote,
+            fatal=fatal, encoding=encoding, data=data, headers=headers,
+            query=query, expected_status=expected_status,
+        )
+        if body is None:
+            return None
+        return self._parse_json(
+            body, video_id, transform_source=transform_source,
+            fatal=fatal, errnote=errnote, **kwargs,
+        )
+
+    def geo_verification_headers(self):
+        """yt-dlp's `geo_verification_headers`
+        (`extractor/common.py:3971-3976`). Real impl returns
+        `{'Ytdl-request-proxy': geo_verification_proxy}` when the param
+        is set; we don't ship YoutubeDL params, so the dict is always
+        empty. Returning `{}` keeps the call site compatible."""
+        return {}
+
+    # --- dead-format stubs --------------------------------------------------
+
+    def _extract_f4m_formats(self, *args, **kwargs):
+        """F4M (Adobe HDS) is a dead streaming format; SVT and other
+        modern extractors call it as a fallback but never actually rely
+        on the output (the m3u8/MPD branches succeed first). Stub
+        returns `[]` so the call site doesn't error."""
+        _host.log("debug", "F4M format requested; not supported, returning []")
+        return []
+
+    def _extract_mpd_formats_and_subtitles(self, *args, **kwargs):
+        """DASH/MPD is unimplemented in rdlp-downloader (see the
+        `project_dash-protocol-missing` memory). Stub returns
+        `([], {})` — extractors using DASH-only sources will surface a
+        `NoFormatsError` downstream rather than crash here."""
+        _host.log(
+            "debug",
+            "MPD/DASH format requested; not yet supported in rdlp, "
+            "returning empty pair",
+        )
+        return [], {}
