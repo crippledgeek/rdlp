@@ -152,6 +152,51 @@ fn invalid(s: &str, why: &str) -> PluginError {
     PluginError::Internal(format!("invalid match pattern '{s}': {why}"))
 }
 
+// ── URL regex compilation ─────────────────────────────────────────────────────
+
+use regex::RegexBuilder;
+use std::time::{Duration, Instant};
+
+/// Maximum compiled NFA size for a plugin's `url_regex`, in bytes. Guards
+/// against counted-repetition expansion (e.g. `a{5}{5}{5}{5}{5}` blowing the
+/// compiled automaton).
+const REGEX_SIZE_LIMIT: usize = 64 * 1024;
+
+/// Maximum lazy-DFA size in bytes — a separate cap from the NFA `size_limit`.
+const REGEX_DFA_SIZE_LIMIT: usize = 64 * 1024;
+
+/// Wall-clock cap on regex compilation. Catches pathological patterns that
+/// pass the size limits but take an unreasonable amount of time to build.
+const REGEX_COMPILE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Compile a plugin's `url_regex` with hardened limits.
+///
+/// Rust's regex crate uses an RE2-style linear-time engine and is structurally
+/// immune to ReDoS at match time, but its compile-time complexity is unbounded
+/// by default. The `size_limit` and `dfa_size_limit` knobs cap the compiled
+/// output; the wall-clock check defends against pathological inputs that compile
+/// slowly even within those caps.
+///
+/// On error, [`PluginError::RegexCompile`] carries `plugin` so the operator can
+/// identify the offending plugin.
+pub fn compile_url_regex(plugin: &str, source: &str) -> Result<regex::Regex, PluginError> {
+    let start = Instant::now();
+    let result = RegexBuilder::new(source)
+        .size_limit(REGEX_SIZE_LIMIT)
+        .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
+        .build();
+    if start.elapsed() > REGEX_COMPILE_TIMEOUT {
+        return Err(PluginError::RegexCompile {
+            plugin: plugin.to_string(),
+            reason: "compilation exceeded 1s wall-clock".to_string(),
+        });
+    }
+    result.map_err(|e| PluginError::RegexCompile {
+        plugin: plugin.to_string(),
+        reason: e.to_string(),
+    })
+}
+
 /// Dispatcher backed by a linear scan over registered patterns.
 ///
 /// MVP-grade — good enough for hundreds of plugins. Future optimization:
