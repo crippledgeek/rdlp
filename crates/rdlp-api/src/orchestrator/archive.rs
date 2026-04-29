@@ -70,7 +70,18 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut file = OpenOptions::new().append(true).create(true).open(path)?;
+    // Windows note: opening with `.append(true)` alone produces a handle with
+    // only FILE_APPEND_DATA access. LockFileEx (what fs4 calls underneath)
+    // requires GENERIC_READ or GENERIC_WRITE on the handle and fails with
+    // ERROR_ACCESS_DENIED otherwise. Adding `.read(true)` widens the desired
+    // access mask without changing the append semantic — the kernel still
+    // adjusts the file offset to end-of-file on every write thanks to
+    // `.append(true)`.
+    let mut file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)?;
 
     // Exclusive lock — blocks until any concurrent writer releases. NFS
     // / non-POSIX filesystems may return an error; in that environment
