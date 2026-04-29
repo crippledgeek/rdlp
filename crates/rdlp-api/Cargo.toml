@@ -23,6 +23,7 @@ rdlp-security = { path = "../rdlp-security" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 rdlp-plugin = { path = "../rdlp-plugin" }
 
+dirs = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = { workspace = true }

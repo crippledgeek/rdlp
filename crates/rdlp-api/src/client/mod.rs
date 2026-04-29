@@ -29,10 +29,12 @@ use crate::events::Event;
 use crate::handle::{DownloadHandle, DownloadId};
 use crate::merge::MergeOverrides;
 use crate::orchestrator::{InteractiveCallback, Orchestrator};
+use crate::plugin_bootstrap::build_registry_with_plugins;
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
 use log::{error, warn};
 use rdlp_core::DownloadStats;
+use rdlp_extractor::ExtractorRegistry;
 use rdlp_postprocess::TempRegistry;
 use rdlp_types::{Config, InfoDict};
 use std::sync::Arc;
@@ -64,6 +66,9 @@ pub struct RdlpClient {
     /// to remove any files that were not cleaned up by a completed pipeline
     /// run (e.g. if the process was killed mid-download).
     temp_registry: Arc<TempRegistry>,
+    /// Pre-built extractor registry (built-ins + any plugins loaded at
+    /// client construction time). Shared across all downloads from this client.
+    extractor_registry: Arc<ExtractorRegistry>,
 }
 
 impl std::fmt::Debug for RdlpClient {
@@ -124,6 +129,7 @@ impl RdlpClient {
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
         let registry = Arc::clone(&self.temp_registry);
+        let extractor_registry = Arc::clone(&self.extractor_registry);
 
         // Capture whether the user explicitly requested cookies.
         // When explicit, cookie loading failure must be fatal.
@@ -138,6 +144,7 @@ impl RdlpClient {
                 token,
                 interactive_cb,
                 Some(registry),
+                Some(extractor_registry),
             );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
@@ -522,6 +529,7 @@ impl RdlpClient {
                 token,
                 None,
                 Some(registry),
+                None, // local file processing does not need plugin extractors
             );
 
             // Build a minimal InfoDict from the file path
@@ -674,10 +682,17 @@ impl RdlpClientBuilder {
             .temp_registry
             .unwrap_or_else(|| Arc::new(TempRegistry::new()));
 
+        // Bootstrap plugins at client construction time. This runs once per
+        // client instance (not once per download). Fail-soft: broken plugin
+        // directories emit warnings and are skipped; built-in extractors
+        // are always present in the returned registry.
+        let extractor_registry = Arc::new(build_registry_with_plugins(&config));
+
         Ok(RdlpClient {
             config: Arc::new(config),
             interactive: self.interactive,
             temp_registry,
+            extractor_registry,
         })
     }
 }

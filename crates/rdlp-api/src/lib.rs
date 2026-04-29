@@ -32,6 +32,8 @@ pub mod dto;
 pub(crate) mod merge;
 /// Internal orchestrator (moved from rdlp-cli).
 pub(crate) mod orchestrator;
+/// Plugin system bootstrap — fail-soft loader called during client construction.
+pub(crate) mod plugin_bootstrap;
 
 // Convenience re-exports
 pub use client::RdlpClient;
