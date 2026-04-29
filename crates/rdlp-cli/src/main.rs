@@ -93,6 +93,10 @@ async fn async_main() -> Result<()> {
             PluginCmd::Disable { name } => plugin_cmd::run_disable(&name).await?,
             PluginCmd::Enable { name } => plugin_cmd::run_enable(&name).await?,
             PluginCmd::Uninstall { name } => plugin_cmd::run_uninstall(&name, &config).await?,
+            PluginCmd::BuildFromYtdlp {
+                plugin_py,
+                output_dir,
+            } => plugin_cmd::run_build_from_ytdlp(plugin_py, output_dir).await?,
         }
         return Ok(());
     }
