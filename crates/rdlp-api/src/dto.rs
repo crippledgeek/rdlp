@@ -113,7 +113,7 @@ impl From<&Event> for EventDto {
             Event::Failed { error, .. } => (
                 "failed",
                 json!({
-                    "message": error.user_message().as_ref(),
+                    "message": AsRef::<str>::as_ref(&error.user_message()),
                     "retryable": error.is_retryable(),
                 }),
             ),
