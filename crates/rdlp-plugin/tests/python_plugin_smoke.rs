@@ -144,20 +144,20 @@ fn read_artefact() -> Vec<u8> {
     wasm
 }
 
-/// End-to-end extract dispatch — currently blocked by Phase 1 host limits:
+/// End-to-end extract dispatch through the bumped `StoreLimits`.
 ///
-/// 1. `wasi:cli/environment@0.2.0` and friends are not linked. Worked around
-///    in `build.sh` via `componentize-py --stub-wasi`.
-/// 2. `PluginStoreData::new` pins `StoreLimitsBuilder::instances(1)`, but a
-///    componentize-py CPython component instantiates ≥2 sub-components, so
-///    instantiation traps with "resource limit exceeded: instance count too
-///    high at 2". This is a host-side bump, not a plugin defect.
-///
-/// Marked `#[ignore]` and asserts the documented trap message — fix the host
-/// limit in Task 3/4 follow-up, then update this test to assert success.
+/// Originally this test was a negative assertion ("trap on instance count too
+/// high at 2") because `PluginStoreData::new` pinned
+/// `StoreLimitsBuilder::instances(1)` and a componentize-py CPython component
+/// instantiates as ~5–6 core sub-components. Task 4 bumped the host limits
+/// (see `crates/rdlp-plugin/src/instance.rs`) so the plugin now runs to
+/// completion. The test asserts on real `InfoDict` fields produced by the
+/// `examples/plugins/ytdlp-hello-world` plugin. The remaining `wasi:cli`
+/// import gap is still worked around in `build.sh` via
+/// `componentize-py --stub-wasi`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "Phase-1 host instance-limit gap; see test docstring"]
-async fn python_hello_world_extract_traps_on_instance_limit() {
+#[ignore = "requires examples/plugins/ytdlp-hello-world/build.sh to have run"]
+async fn python_hello_world_extract_succeeds() {
     let wasm = read_artefact();
 
     let td = TempDir::new().unwrap();
@@ -210,12 +210,23 @@ async fn python_hello_world_extract_traps_on_instance_limit() {
     let extract_start = Instant::now();
     let result = adapter.extract("https://example.com/foo", &ctx).await;
     let extract_ms = extract_start.elapsed().as_millis();
-    eprintln!("[measure] extract dispatch (until trap): {extract_ms} ms");
+    eprintln!("[measure] extract dispatch: {extract_ms} ms");
 
-    let err = result.expect_err("Phase-1 host limits — extract MUST trap until host bump");
-    let msg = format!("{err}");
+    let info = match result {
+        Ok(info) => info,
+        Err(err) => panic!("extract returned Err: {err}"),
+    };
+
+    assert_eq!(info.id, "hello-1", "id mismatch: {info:?}");
     assert!(
-        msg.contains("instance count too high"),
-        "expected instance-limit trap, got: {msg}"
+        info.title.contains("Hello"),
+        "title should contain \"Hello\"; got {:?}",
+        info.title
+    );
+    assert_eq!(info.formats.len(), 1, "expected 1 format; got {:?}", info.formats);
+    assert_eq!(
+        info.formats[0].url, "https://example.com/foo",
+        "format url mismatch: {:?}",
+        info.formats[0]
     );
 }

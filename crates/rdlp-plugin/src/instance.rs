@@ -54,12 +54,41 @@ impl PluginStoreData {
     pub fn new(plugin_name: impl Into<String>, cancel: CancellationToken) -> Self {
         let plugin_name = plugin_name.into();
         let log_target = format!("plugin::{plugin_name}");
+        // StoreLimits calibration:
+        //
+        // - `memory_size` (64 MiB) is the threat-model boundary and is
+        //   intentionally preserved here.
+        // - `instances`/`memories`/`tables` are bumped above the original
+        //   `(1, 1, 10)` to accommodate componentize-py-built CPython
+        //   components. Empirical measurement against the hello-world spike
+        //   (`examples/plugins/ytdlp-hello-world`, componentize-py 0.17.2)
+        //   showed >32 core sub-instances at instantiate time — CPython's
+        //   `dlopen` path produces one instance per dynamically-linked
+        //   shared object plus the runtime adapter shims. Spin's production
+        //   wasmtime+componentize-py embedder
+        //   (`spin/crates/core/src/lib.rs:95–181`) uses
+        //   `max_core_instances_per_component = 200`,
+        //   `max_memories_per_component = 32`,
+        //   `max_tables_per_component = 64`. We adopt the same values so
+        //   legitimate CPython composition has Spin-equivalent headroom.
+        // - `table_elements` is set to 100_000 (matches Spin) to prevent
+        //   table-grow DoS while leaving room for CPython's indirect-call
+        //   tables and dlopen GOT.
+        // - `trap_on_grow_failure(true)` surfaces resource-cap violations
+        //   as wasm traps that the existing epoch-deadline path catches
+        //   deterministically, instead of leaving the plugin in a half-grown
+        //   state where `memory.grow` quietly returned -1.
+        //
+        // Threat model: per-call store isolation, capability gating, and the
+        // 30s/60s epoch-deadline timeouts already mitigate any
+        // multiplicative-instance attack this widening might enable.
         let limits = StoreLimitsBuilder::new()
             .memory_size(64 * 1024 * 1024)
-            .table_elements(10_000)
-            .instances(1)
-            .tables(10)
-            .memories(1)
+            .table_elements(100_000)
+            .instances(200)
+            .tables(64)
+            .memories(32)
+            .trap_on_grow_failure(true)
             .build();
         Self {
             limits,
