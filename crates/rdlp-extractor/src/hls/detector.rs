@@ -310,3 +310,70 @@ impl HlsSizeDetector {
         }
     }
 }
+
+#[cfg(test)]
+mod ssrf_and_typed_status {
+    //! Contract tests for the security + retry-classification properties
+    //! the HLS module exposes. These don't run a real HTTP fetch (that
+    //! requires mockito + the wreq stack); they exercise the typed-error
+    //! contract directly so a future refactor can't silently regress
+    //! either property.
+    use rdlp_core::RdlpError;
+    use rdlp_core::retry::is_retryable_error;
+
+    /// 4xx HLS errors MUST surface as `RdlpError::Http { status, .. }`
+    /// — `is_retryable_error` then classifies them as non-retryable
+    /// (fast-fail) instead of treating them as a generic Network error
+    /// that retries forever.
+    #[test]
+    fn hls_4xx_is_not_retryable_when_typed_as_http() {
+        for status in [400, 401, 403, 404, 410, 451] {
+            let e = RdlpError::Http {
+                status,
+                reason: "playlist fetch: https://example.com/m.m3u8".into(),
+            };
+            assert!(
+                !is_retryable_error(&e),
+                "HTTP {status} must NOT retry under the typed-Http contract"
+            );
+        }
+    }
+
+    /// 5xx + 429 MUST retry. Mirror of the 4xx assertion above.
+    #[test]
+    fn hls_5xx_and_429_remain_retryable() {
+        for status in [429, 500, 502, 503, 504] {
+            let e = RdlpError::Http {
+                status,
+                reason: "playlist fetch: https://example.com/m.m3u8".into(),
+            };
+            assert!(
+                is_retryable_error(&e),
+                "HTTP {status} must remain retryable"
+            );
+        }
+    }
+
+    /// HLS-style segment URLs that resolve to private/loopback addresses
+    /// MUST be rejected by the security validator. The downloader uses
+    /// this gate per-segment so a crafted #EXTINF line with
+    /// `http://192.168.x.x/...` cannot bypass the master-URL gate.
+    #[test]
+    fn hls_segment_url_ssrf_rejected_by_validator() {
+        for bad in [
+            "http://127.0.0.1/seg-001.ts",
+            "http://[::1]/seg-001.ts",
+            "http://[fe80::1]/seg-001.ts",
+            "http://192.168.1.5/seg-001.ts",
+            "http://10.0.0.1/seg-001.ts",
+            "http://169.254.169.254/seg-001.ts",
+            "http://localhost/seg-001.ts",
+            "http://[::ffff:127.0.0.1]/seg-001.ts",
+        ] {
+            assert!(
+                rdlp_security::validate_url_security(bad).is_err(),
+                "HLS segment SSRF gate must reject {bad}"
+            );
+        }
+    }
+}

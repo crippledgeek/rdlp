@@ -348,4 +348,39 @@ mod tests {
         let result = stage.process(msg).await;
         assert!(result.is_ok());
     }
+
+    /// Negative test for the C1 fix: when subtitle files are discovered but
+    /// the FFmpeg muxer is not yet implemented, the stage MUST push a
+    /// structured warning onto `msg.warnings` so the API event stream
+    /// surfaces it as `Event::Warning`. Previously the stage emitted
+    /// `info!("would embed subtitle …")` which the user never saw.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test-only fixture I/O
+    async fn embed_subtitles_pushes_warning_when_unimplemented() {
+        let dir = tempfile::tempdir().unwrap();
+        let video_path = dir.path().join("video.mp4");
+        std::fs::write(&video_path, b"fake video").unwrap();
+        let sub_path = dir.path().join("video.en.srt");
+        std::fs::write(&sub_path, b"1\n00:00:00,000 --> 00:00:01,000\nhi\n").unwrap();
+
+        let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+        let stage = SubtitleStage::new(ffmpeg);
+
+        let config = PostProcess {
+            embed_subtitles: true,
+            ..PostProcess::default()
+        };
+        let mut msg = make_msg(vec![video_path.clone()], config);
+        msg.original_stem = "video".to_string();
+
+        let processed = stage.process(msg).await.unwrap();
+        assert!(
+            processed
+                .warnings
+                .iter()
+                .any(|w| w.contains("Subtitle embedding not implemented")),
+            "expected NOT-IMPLEMENTED warning in msg.warnings, got: {:?}",
+            processed.warnings
+        );
+    }
 }
