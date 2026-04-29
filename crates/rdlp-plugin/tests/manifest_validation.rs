@@ -1,4 +1,4 @@
-use rdlp_plugin::manifest::{parse_manifest_str, Signature};
+use rdlp_plugin::manifest::{Signature, parse_manifest_str};
 
 const VALID_TOML: &str = r#"
 name = "youtube"
@@ -88,7 +88,10 @@ fn tld_wildcard_accepted_with_claim_all_urls_capability() {
             r#"matches = ["https://*.youtube.com/*"]"#,
             r#"matches = ["https://*/*"]"#,
         )
-        .replace(r#"["fetch", "log"]"#, r#"["fetch", "log", "claim-all-urls"]"#);
+        .replace(
+            r#"["fetch", "log"]"#,
+            r#"["fetch", "log", "claim-all-urls"]"#,
+        );
     let m = parse_manifest_str(&toml).expect("should accept");
     assert!(m.capabilities.contains(&"claim-all-urls".to_string()));
 }

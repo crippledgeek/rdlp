@@ -1,8 +1,8 @@
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::add_capability_imports;
 use rdlp_plugin::instance::PluginStoreData;
-use rdlp_plugin::manifest::parse_manifest_str;
 use rdlp_plugin::manifest::Manifest;
+use rdlp_plugin::manifest::parse_manifest_str;
 
 fn manifest_with_caps(caps: &[&str]) -> Manifest {
     let cap_list = caps

@@ -335,5 +335,8 @@ fn test_out_of_range_error_display() {
         field: "plugin_memory_limit_mb",
         reason: "must be 1..=1024 MB",
     };
-    assert_eq!(err.to_string(), "plugin_memory_limit_mb: must be 1..=1024 MB");
+    assert_eq!(
+        err.to_string(),
+        "plugin_memory_limit_mb: must be 1..=1024 MB"
+    );
 }

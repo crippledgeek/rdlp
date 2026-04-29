@@ -1,6 +1,6 @@
+use rdlp_plugin::PluginError;
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::instance::{build_store, deadline_ticks, run_with_cancel};
-use rdlp_plugin::PluginError;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -62,8 +62,7 @@ async fn run_with_cancel_returns_cancelled_when_token_fires() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_with_cancel_returns_inner_result_when_no_cancel() {
     let cancel = CancellationToken::new();
-    let result: Result<i32, PluginError> =
-        run_with_cancel("test", &cancel, async { Ok(42) }).await;
+    let result: Result<i32, PluginError> = run_with_cancel("test", &cancel, async { Ok(42) }).await;
     assert_eq!(result.unwrap(), 42);
 }
 

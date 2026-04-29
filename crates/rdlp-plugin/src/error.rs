@@ -25,7 +25,9 @@ pub enum PluginError {
     },
 
     /// The plugin binary hash no longer matches the previously trusted identity.
-    #[error("plugin '{plugin}' identity mismatch: previously trusted '{old}', now '{new}'. Run `rdlp plugin retrust {plugin}` to accept.")]
+    #[error(
+        "plugin '{plugin}' identity mismatch: previously trusted '{old}', now '{new}'. Run `rdlp plugin retrust {plugin}` to accept."
+    )]
     IdentityMismatch {
         /// Plugin name as declared in its manifest.
         plugin: String,
@@ -36,7 +38,9 @@ pub enum PluginError {
     },
 
     /// The plugin requests a capability not previously approved by the user.
-    #[error("plugin '{plugin}' requests new capability '{cap}' not previously approved. Re-confirm to update.")]
+    #[error(
+        "plugin '{plugin}' requests new capability '{cap}' not previously approved. Re-confirm to update."
+    )]
     CapabilityCreep {
         /// Plugin name as declared in its manifest.
         plugin: String,
@@ -45,7 +49,9 @@ pub enum PluginError {
     },
 
     /// A different plugin is already trusted under this name.
-    #[error("plugin name '{plugin}' already trusted under different identity '{existing}'. Run `rdlp plugin uninstall {plugin}` first.")]
+    #[error(
+        "plugin name '{plugin}' already trusted under different identity '{existing}'. Run `rdlp plugin uninstall {plugin}` first."
+    )]
     NameSquatting {
         /// Plugin name that is being squatted.
         plugin: String,

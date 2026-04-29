@@ -8,7 +8,8 @@ fn build_signed_manifest(wasm_bytes: &[u8]) -> (Manifest, SigningKey) {
     let mut csprng = OsRng;
     let key = SigningKey::generate(&mut csprng);
 
-    let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
+    let pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
     let toml = format!(
         r#"
 name = "test"
@@ -61,10 +62,14 @@ fn wrong_key_fails() {
     let (mut m, _key) = build_signed_manifest(wasm);
     let other = SigningKey::generate(&mut OsRng);
     if let Signature::Ed25519 { pubkey, .. } = &mut m.signature {
-        *pubkey = base64::engine::general_purpose::STANDARD.encode(other.verifying_key().as_bytes());
+        *pubkey =
+            base64::engine::general_purpose::STANDARD.encode(other.verifying_key().as_bytes());
     }
     let err = verify_ed25519(&m, wasm).unwrap_err();
-    assert!(matches!(err, rdlp_plugin::PluginError::SignatureInvalid { .. }));
+    assert!(matches!(
+        err,
+        rdlp_plugin::PluginError::SignatureInvalid { .. }
+    ));
 }
 
 #[test]
@@ -76,7 +81,10 @@ fn malformed_pubkey_base64_fails_clearly() {
     }
     let err = verify_ed25519(&m, wasm).unwrap_err();
     let msg = err.to_string();
-    assert!(matches!(err, rdlp_plugin::PluginError::SignatureInvalid { .. }));
+    assert!(matches!(
+        err,
+        rdlp_plugin::PluginError::SignatureInvalid { .. }
+    ));
     assert!(msg.contains("pubkey") || msg.contains("base64"));
 }
 
@@ -88,7 +96,10 @@ fn truncated_signature_fails_clearly() {
         *signature = base64::engine::general_purpose::STANDARD.encode([0u8; 10]);
     }
     let err = verify_ed25519(&m, wasm).unwrap_err();
-    assert!(matches!(err, rdlp_plugin::PluginError::SignatureInvalid { .. }));
+    assert!(matches!(
+        err,
+        rdlp_plugin::PluginError::SignatureInvalid { .. }
+    ));
 }
 
 #[test]
@@ -111,6 +122,9 @@ bundle = "deadbeef"
     let m = parse_manifest_str(toml).unwrap();
     let err = verify_ed25519(&m, wasm).unwrap_err();
     let msg = err.to_string();
-    assert!(matches!(err, rdlp_plugin::PluginError::SignatureInvalid { .. }));
+    assert!(matches!(
+        err,
+        rdlp_plugin::PluginError::SignatureInvalid { .. }
+    ));
     assert!(msg.to_lowercase().contains("ed25519"));
 }

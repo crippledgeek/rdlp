@@ -122,15 +122,9 @@ impl TrustStore {
     /// Compare requested capabilities against the previously approved set for `name`.
     /// For unknown names, every requested capability is treated as new.
     #[must_use]
-    pub fn check_capabilities(
-        &self,
-        name: &str,
-        requested: &BTreeSet<String>,
-    ) -> CapabilityCheck {
+    pub fn check_capabilities(&self, name: &str, requested: &BTreeSet<String>) -> CapabilityCheck {
         let Some(entry) = self.file.entries.get(name) else {
-            return CapabilityCheck::NewCapabilitiesRequested(
-                requested.iter().cloned().collect(),
-            );
+            return CapabilityCheck::NewCapabilitiesRequested(requested.iter().cloned().collect());
         };
         let new: Vec<String> = requested
             .difference(&entry.approved_capabilities)

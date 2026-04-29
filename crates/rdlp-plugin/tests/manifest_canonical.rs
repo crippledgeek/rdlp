@@ -58,9 +58,15 @@ signature = "ZA"
     let m = parse_manifest_str(toml).unwrap();
     let bytes = canonical_bytes(&m);
     let s = std::str::from_utf8(&bytes).unwrap();
-    assert!(!s.contains("[signature]"), "must exclude signature block header");
+    assert!(
+        !s.contains("[signature]"),
+        "must exclude signature block header"
+    );
     assert!(!s.contains("pubkey"), "must not include signature fields");
-    assert!(!s.contains("signature ="), "must not include signature value");
+    assert!(
+        !s.contains("signature ="),
+        "must not include signature value"
+    );
 }
 
 #[test]

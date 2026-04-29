@@ -57,9 +57,7 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
         };
 
         if validate_url_security(&req.url).is_err() {
-            return Err(FetchError::Network(
-                "url failed security validation".into(),
-            ));
+            return Err(FetchError::Network("url failed security validation".into()));
         }
 
         let method = req

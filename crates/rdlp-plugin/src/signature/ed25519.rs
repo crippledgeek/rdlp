@@ -38,31 +38,34 @@ pub fn verify_ed25519(manifest: &Manifest, wasm_bytes: &[u8]) -> Result<(), Plug
             reason: format!("signature base64 decode failed: {e}"),
         })?;
 
-    let pubkey_array: [u8; 32] = pubkey_bytes.as_slice().try_into().map_err(|_| {
-        PluginError::SignatureInvalid {
-            plugin: manifest.name.clone(),
-            reason: format!(
-                "pubkey wrong length: got {} bytes, expected 32",
-                pubkey_bytes.len()
-            ),
-        }
-    })?;
-    let sig_array: [u8; 64] = sig_bytes.as_slice().try_into().map_err(|_| {
-        PluginError::SignatureInvalid {
-            plugin: manifest.name.clone(),
-            reason: format!(
-                "signature wrong length: got {} bytes, expected 64",
-                sig_bytes.len()
-            ),
-        }
-    })?;
+    let pubkey_array: [u8; 32] =
+        pubkey_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| PluginError::SignatureInvalid {
+                plugin: manifest.name.clone(),
+                reason: format!(
+                    "pubkey wrong length: got {} bytes, expected 32",
+                    pubkey_bytes.len()
+                ),
+            })?;
+    let sig_array: [u8; 64] =
+        sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| PluginError::SignatureInvalid {
+                plugin: manifest.name.clone(),
+                reason: format!(
+                    "signature wrong length: got {} bytes, expected 64",
+                    sig_bytes.len()
+                ),
+            })?;
 
-    let verifying_key = VerifyingKey::from_bytes(&pubkey_array).map_err(|e| {
-        PluginError::SignatureInvalid {
+    let verifying_key =
+        VerifyingKey::from_bytes(&pubkey_array).map_err(|e| PluginError::SignatureInvalid {
             plugin: manifest.name.clone(),
             reason: format!("invalid ed25519 pubkey: {e}"),
-        }
-    })?;
+        })?;
     let sig = DalekSig::from_bytes(&sig_array);
 
     let mut buf = canonical_bytes(manifest);

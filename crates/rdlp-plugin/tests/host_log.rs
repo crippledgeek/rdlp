@@ -1,5 +1,5 @@
 use rdlp_plugin::engine::{Engine, EngineConfig};
-use rdlp_plugin::instance::{build_store, PluginStoreData};
+use rdlp_plugin::instance::{PluginStoreData, build_store};
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
@@ -49,7 +49,13 @@ fn host_impl_all_levels_do_not_panic() {
     // The futures are driven to completion synchronously because the Host impl
     // is synchronous in its side-effects (log macro calls); the async wrapper
     // is imposed by bindgen.
-    for level in [Level::Trace, Level::Debug, Level::Info, Level::Warn, Level::Error] {
+    for level in [
+        Level::Trace,
+        Level::Debug,
+        Level::Info,
+        Level::Warn,
+        Level::Error,
+    ] {
         let fut = data.log(level, "test message".to_string());
         // Drive the future — it should complete instantly with no side effects
         // visible here (the log crate drops calls when no subscriber is installed).

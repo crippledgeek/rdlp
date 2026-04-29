@@ -83,9 +83,15 @@ fn either_scheme_matches_http_and_https() {
 #[test]
 fn trie_lookup_returns_matching_values() {
     let mut t: MatchTrie<&'static str> = MatchTrie::default();
-    t.insert(MatchPattern::parse("https://*.youtube.com/*").unwrap(), "youtube");
+    t.insert(
+        MatchPattern::parse("https://*.youtube.com/*").unwrap(),
+        "youtube",
+    );
     t.insert(MatchPattern::parse("https://vimeo.com/*").unwrap(), "vimeo");
-    t.insert(MatchPattern::parse("https://example.com/api/*").unwrap(), "api");
+    t.insert(
+        MatchPattern::parse("https://example.com/api/*").unwrap(),
+        "api",
+    );
 
     let results = t.lookup(&Url::parse("https://m.youtube.com/watch").unwrap());
     assert_eq!(results, vec!["youtube"]);
@@ -101,7 +107,10 @@ fn trie_lookup_returns_matching_values() {
 fn trie_lookup_can_return_multiple_values() {
     let mut t: MatchTrie<&'static str> = MatchTrie::default();
     t.insert(MatchPattern::parse("https://*/*").unwrap(), "fallback");
-    t.insert(MatchPattern::parse("https://specific.com/*").unwrap(), "specific");
+    t.insert(
+        MatchPattern::parse("https://specific.com/*").unwrap(),
+        "specific",
+    );
     let results = t.lookup(&Url::parse("https://specific.com/").unwrap());
     assert_eq!(results.len(), 2);
 }

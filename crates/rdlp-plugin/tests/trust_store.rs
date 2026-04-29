@@ -81,7 +81,10 @@ fn identity_check_detects_mismatch() {
     .unwrap();
     let result = ts.check_identity_match("x", "sigstore:github:bob/x");
     match result {
-        IdentityCheck::Mismatch { recorded, presented } => {
+        IdentityCheck::Mismatch {
+            recorded,
+            presented,
+        } => {
             assert_eq!(recorded, "sigstore:github:alice/x");
             assert_eq!(presented, "sigstore:github:bob/x");
         }

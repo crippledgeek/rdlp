@@ -121,14 +121,8 @@ impl InfoExtractor for PluginExtractor {
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let ticks = deadline_ticks(self.extract_timeout, Duration::from_millis(100));
-        let mut store = build_store(
-            &self.engine,
-            &self.manifest.name,
-            cancel.clone(),
-            ticks,
-        );
-        let mut linker =
-            wasmtime::component::Linker::<PluginStoreData>::new(self.engine.raw());
+        let mut store = build_store(&self.engine, &self.manifest.name, cancel.clone(), ticks);
+        let mut linker = wasmtime::component::Linker::<PluginStoreData>::new(self.engine.raw());
         crate::host::add_capability_imports(&mut linker, &self.manifest).map_err(|e| {
             RdlpError::Extraction {
                 message: format!(
@@ -139,9 +133,14 @@ impl InfoExtractor for PluginExtractor {
             }
         })?;
 
-        let result =
-            call_plugin_extract(&mut store, &linker, &self.component, url, &self.manifest.name)
-                .await;
+        let result = call_plugin_extract(
+            &mut store,
+            &linker,
+            &self.component,
+            url,
+            &self.manifest.name,
+        )
+        .await;
 
         match result {
             Ok(info) => Ok(info),
@@ -176,21 +175,20 @@ async fn call_plugin_extract(
     url: &str,
     plugin_name: &str,
 ) -> Result<InfoDict, PluginError> {
-    let inst =
-        crate::bindings::ExtractorPlugin::instantiate_async(&mut *store, component, linker)
-            .await
-            .map_err(|e| PluginError::Trapped {
-                plugin: plugin_name.to_string(),
-                reason: format!("instantiate: {e}"),
-            })?;
-
-    let wit_result = inst
-        .call_extract(&mut *store, url)
+    let inst = crate::bindings::ExtractorPlugin::instantiate_async(&mut *store, component, linker)
         .await
         .map_err(|e| PluginError::Trapped {
             plugin: plugin_name.to_string(),
-            reason: format!("call_extract: {e}"),
+            reason: format!("instantiate: {e}"),
         })?;
+
+    let wit_result =
+        inst.call_extract(&mut *store, url)
+            .await
+            .map_err(|e| PluginError::Trapped {
+                plugin: plugin_name.to_string(),
+                reason: format!("call_extract: {e}"),
+            })?;
 
     match wit_result {
         Ok(info) => Ok(convert_info_dict(info, url, plugin_name)),
@@ -258,8 +256,8 @@ fn convert_info_dict(
     out.formats = w.formats.into_iter().map(convert_format).collect();
     // Convert subtitle list → InfoDict's `HashMap<lang, Vec<Subtitle>>` format.
     if !w.subtitles.is_empty() {
-        use std::collections::HashMap;
         use rdlp_types::info_dict::Subtitle;
+        use std::collections::HashMap;
         let mut map: HashMap<String, Vec<Subtitle>> = HashMap::new();
         for s in w.subtitles {
             map.entry(s.language).or_default().push(Subtitle {

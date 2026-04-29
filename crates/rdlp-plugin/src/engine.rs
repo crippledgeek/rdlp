@@ -10,8 +10,8 @@
 //! See design spec §10–11 and tracking issue #213.
 
 use crate::PluginError;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 

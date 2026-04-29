@@ -1,5 +1,5 @@
-use rdlp_plugin::manifest::{parse_manifest_str, Manifest};
-use rdlp_plugin::priority::{effective_priority, BUILT_IN_MAX, PLUGIN_MAX, PLUGIN_MIN, USER_MAX};
+use rdlp_plugin::manifest::{Manifest, parse_manifest_str};
+use rdlp_plugin::priority::{BUILT_IN_MAX, PLUGIN_MAX, PLUGIN_MIN, USER_MAX, effective_priority};
 use url::Url;
 
 fn manifest_for_test(priority: u32, claims_override: &[&str]) -> Manifest {

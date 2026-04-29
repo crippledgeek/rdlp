@@ -1,5 +1,5 @@
-use rdlp_plugin::dispatch::compile_url_regex;
 use rdlp_plugin::PluginError;
+use rdlp_plugin::dispatch::compile_url_regex;
 
 #[test]
 fn normal_regex_compiles() {
@@ -19,10 +19,7 @@ fn regex_with_explosive_counted_repetition_rejected() {
 #[test]
 fn syntactically_invalid_regex_rejected_with_clear_error() {
     let result = compile_url_regex("test", "(unclosed group");
-    assert!(matches!(
-        result,
-        Err(PluginError::RegexCompile { .. })
-    ));
+    assert!(matches!(result, Err(PluginError::RegexCompile { .. })));
 }
 
 #[test]
@@ -35,8 +32,7 @@ fn empty_regex_compiles_but_matches_anything_at_position_zero() {
 
 #[test]
 fn captures_named_groups_work() {
-    let r =
-        compile_url_regex("test", r"^https://(?P<host>[^/]+)/(?P<id>\d+)").unwrap();
+    let r = compile_url_regex("test", r"^https://(?P<host>[^/]+)/(?P<id>\d+)").unwrap();
     let caps = r.captures("https://example.com/42").unwrap();
     assert_eq!(&caps["host"], "example.com");
     assert_eq!(&caps["id"], "42");

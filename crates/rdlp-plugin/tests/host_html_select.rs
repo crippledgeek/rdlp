@@ -41,7 +41,10 @@ async fn select_attr_returns_attribute_values() {
 #[test]
 fn invalid_selector_returns_empty_list_not_error() {
     let result = HtmlSelectCtx::select_text(SAMPLE_HTML, ":::invalid:::");
-    assert!(result.is_empty(), "invalid selector should be empty, not panic");
+    assert!(
+        result.is_empty(),
+        "invalid selector should be empty, not panic"
+    );
 }
 
 #[test]

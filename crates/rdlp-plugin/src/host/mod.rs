@@ -32,8 +32,7 @@ pub fn add_capability_imports(
     let caps: BTreeSet<&str> = manifest.capabilities.iter().map(String::as_str).collect();
 
     if caps.contains("log") {
-        log::add_to_linker(linker)
-            .map_err(|e| PluginError::Internal(format!("link log: {e}")))?;
+        log::add_to_linker(linker).map_err(|e| PluginError::Internal(format!("link log: {e}")))?;
     }
     if caps.contains("html-select") {
         html_select::add_to_linker(linker)

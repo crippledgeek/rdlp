@@ -7,12 +7,9 @@ fn open_db(dir: &TempDir) -> sled::Db {
 
 #[test]
 fn add_to_linker_succeeds() {
-    let engine =
-        rdlp_plugin::engine::Engine::new(Default::default()).expect("engine");
+    let engine = rdlp_plugin::engine::Engine::new(Default::default()).expect("engine");
     let mut linker =
-        wasmtime::component::Linker::<rdlp_plugin::instance::PluginStoreData>::new(
-            engine.raw(),
-        );
+        wasmtime::component::Linker::<rdlp_plugin::instance::PluginStoreData>::new(engine.raw());
     rdlp_plugin::host::store_kv::add_to_linker(&mut linker).expect("link");
 }
 

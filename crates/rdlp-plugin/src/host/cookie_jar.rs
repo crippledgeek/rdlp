@@ -97,11 +97,7 @@ pub fn allowed_hosts_from_matches(patterns: &[String]) -> Vec<String> {
                 return None;
             }
             let etld = effective_etld_plus_one(host);
-            if etld.is_empty() {
-                None
-            } else {
-                Some(etld)
-            }
+            if etld.is_empty() { None } else { Some(etld) }
         })
         .collect();
     out.sort();
