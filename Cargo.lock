@@ -5881,6 +5881,7 @@ dependencies = [
  "rdlp-api",
  "rdlp-ffmpeg",
  "rdlp-plugin",
+ "rdlp-plugin-manifest",
  "rdlp-ratelimit",
  "rdlp-security",
  "rdlp-table",

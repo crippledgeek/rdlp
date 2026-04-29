@@ -17,24 +17,28 @@
 set -euo pipefail
 
 HOST_DIR="crates/rdlp-plugin/wit"
-VENDORED_DIR="examples/plugins/example-extractor/wit/deps/rdlp-plugin"
+VENDORED_DIRS=(
+    "examples/plugins/example-extractor/wit/deps/rdlp-plugin"
+    "examples/plugins/ytdlp-hello-world/wit/deps/rdlp-plugin"
+)
 
 if [ ! -d "$HOST_DIR" ]; then
     echo "error: host WIT directory not found at $HOST_DIR" >&2
     exit 2
 fi
-if [ ! -d "$VENDORED_DIR" ]; then
-    echo "error: vendored WIT directory not found at $VENDORED_DIR" >&2
-    exit 2
-fi
 
-if ! diff -r "$HOST_DIR" "$VENDORED_DIR"; then
-    cat <<EOF >&2
+for VENDORED_DIR in "${VENDORED_DIRS[@]}"; do
+    if [ ! -d "$VENDORED_DIR" ]; then
+        echo "error: vendored WIT directory not found at $VENDORED_DIR" >&2
+        exit 2
+    fi
+    if ! diff -r "$HOST_DIR" "$VENDORED_DIR"; then
+        cat <<EOF >&2
 
 ERROR: WIT vendor drift detected.
 
-The host WIT under $HOST_DIR has diverged from the example plugin's
-vendored copy at $VENDORED_DIR.
+The host WIT under $HOST_DIR has diverged from the vendored copy at
+$VENDORED_DIR.
 
 To fix:
     cp $HOST_DIR/*.wit $VENDORED_DIR/
@@ -42,7 +46,8 @@ To fix:
 
 Then re-run this check.
 EOF
-    exit 1
-fi
+        exit 1
+    fi
+done
 
-echo "WIT vendor parity OK ($(ls "$HOST_DIR" | wc -l) files match)"
+echo "WIT vendor parity OK ($(ls "$HOST_DIR" | wc -l) files × ${#VENDORED_DIRS[@]} vendored copies match)"

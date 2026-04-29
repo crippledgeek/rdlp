@@ -1,0 +1,12 @@
+[project]
+name = "rdlp_ytdlp_compat"
+version = "0.1.0"
+description = "yt-dlp InfoExtractor compatibility shim for rdlp WASM plugins"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rdlp_ytdlp_compat*"]

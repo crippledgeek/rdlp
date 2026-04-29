@@ -1,0 +1,98 @@
+package rdlp:plugin@0.1.0;
+
+interface types {
+    record plugin-info {
+        name: string,
+        version: string,
+        wit-version: string,
+        matches: list<string>,
+        url-regex: option<string>,
+        priority: u8,
+        claims-override: list<string>,
+        supports-search: bool,
+    }
+
+    record format {
+        format-id: string,
+        url: string,
+        ext: string,
+        protocol: string,
+        width: option<u32>,
+        height: option<u32>,
+        fps: option<f32>,
+        tbr: option<f32>,
+        vbr: option<f32>,
+        abr: option<f32>,
+        vcodec: option<string>,
+        acodec: option<string>,
+        container: option<string>,
+        filesize: option<u64>,
+        format-note: option<string>,
+    }
+
+    record subtitle-track {
+        language: string,
+        kind: string,
+        url: string,
+        ext: string,
+    }
+
+    record info-dict {
+        id: string,
+        title: string,
+        url: option<string>,
+        formats: list<format>,
+        subtitles: list<subtitle-track>,
+        thumbnail: option<string>,
+        description: option<string>,
+        uploader: option<string>,
+        uploader-id: option<string>,
+        upload-date: option<string>,
+        duration: option<u32>,
+        view-count: option<u64>,
+        like-count: option<u64>,
+        tags: list<string>,
+        categories: list<string>,
+    }
+
+    record search-query {
+        query: string,
+        page: option<u32>,
+        filters: list<tuple<string, string>>,
+    }
+
+    record search-result {
+        url: string,
+        title: string,
+        thumbnail: option<string>,
+        duration: option<u32>,
+        uploader: option<string>,
+    }
+
+    record search-page {
+        results: list<search-result>,
+        page: u32,
+        has-more: bool,
+        total-estimate: option<u64>,
+    }
+
+    variant extract-error {
+        unsupported-url(string),
+        not-found(string),
+        rate-limited(option<u32>),
+        auth-required(string),
+        network(string),
+        parse(string),
+        cancelled,
+        internal(string),
+    }
+
+    variant search-error {
+        unsupported,
+        rate-limited(option<u32>),
+        network(string),
+        parse(string),
+        cancelled,
+        internal(string),
+    }
+}

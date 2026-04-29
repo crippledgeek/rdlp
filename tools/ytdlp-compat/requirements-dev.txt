@@ -1,0 +1,44 @@
+# componentize-py-pin@0.17.2 — last release targeting wasmtime 30 (rdlp's host pin).
+# DO NOT BUMP without bumping wasmtime in crates/rdlp-plugin/Cargo.toml in lockstep.
+# See docs/planning/2026-04-29-ytdlp-compat-shim-slice-1.md "Background" for rationale.
+# Search the repo for `componentize-py-pin@0.17.2` to find every workaround
+# tied to this specific version — they all need revisiting on upgrade.
+#
+# Hash-pinned per supply-chain policy. Install with:
+#     pip install --require-hashes -r requirements-dev.txt
+# Regenerate when bumping versions: see tools/ytdlp-compat/README.md
+# section "Regenerating requirements-dev.txt".
+# componentize-py ships platform-specific binary wheels; all supported OS/arch
+# combinations (linux x86_64/aarch64, macos x86_64/arm64, win amd64) + sdist are
+# listed so any developer machine resolves a matching artifact.
+
+componentize-py==0.17.2 \
+    --hash=sha256:098841d6729ce9773733131f359fd996a8fa5b98bd70c279d7e303cf33ed9c0c \
+    --hash=sha256:c2280294f552440969cc0aca701f1b9f69f702dab74b7bc58a0c9b08f18ed52f \
+    --hash=sha256:4b4a3e0c14fe9532feaf54c208e3be94619a8ffae102725542b8da979e598629 \
+    --hash=sha256:0105d497661a1a5bc985ae817cc251f5234556a83ac5712ab36b5f45a0a344be \
+    --hash=sha256:fc274995921254f039b65c23891ab161f92da5e0528e47586ced57ea07e97959 \
+    --hash=sha256:f3149d93388b8c4cd6807a0a5c8ecce83d647ee21a92b35043111df6746e76e8
+
+pytest==8.3.4 \
+    --hash=sha256:50e16d954148559c9a74109af1eaf0c945ba2d8f30f0a3d3335edde19788b6f6 \
+    --hash=sha256:965370d062bce11e73868e0335abac31b4d3de0e82f4007408d242b4f8610761
+
+# pytest transitive closure (resolved via pip-compile against python 3.12).
+iniconfig==2.3.0 \
+    --hash=sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730 \
+    --hash=sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12
+
+packaging==26.2 \
+    --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e \
+    --hash=sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661
+
+pluggy==1.6.0 \
+    --hash=sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+
+# Windows-only (pytest pulls colorama on win32). Required so Windows devs can
+# `pip install --require-hashes` without a manual override.
+colorama==0.4.6 ; sys_platform == "win32" \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6 \
+    --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44

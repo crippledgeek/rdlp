@@ -212,3 +212,106 @@ jobs:
 
       - name: Test (workspace)
         run: cargo test --workspace
+
+  # Path-filter to avoid running the expensive golden build (~12 min;
+  # apt-install + componentize-py 0.17.2 + 3 × 35 MB wasm builds) on commits
+  # that can't possibly affect its outputs. Runs unconditionally on push
+  # (merges to develop) so the protected-branch state is always validated.
+  golden-filter:
+    name: Should run yt-dlp golden?
+    runs-on: ubuntu-22.04
+    outputs:
+      run: ${{ steps.f.outputs.golden }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            golden:
+              - 'tools/ytdlp-compat/**'
+              - 'crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs'
+              - 'crates/rdlp-cli/src/plugin_cmd.rs'
+              - 'crates/rdlp-cli/src/args.rs'
+              - 'crates/rdlp-cli/src/main.rs'
+              - 'crates/rdlp-plugin/wit/**'
+              - 'crates/rdlp-plugin/src/host/**'
+              - 'crates/rdlp-plugin-manifest/src/**'
+              - 'examples/plugins/ytdlp-golden/**'
+              - 'examples/plugins/ytdlp-hello-world/**'
+              - '.github/workflows/ci.yml'
+
+  ytdlp-plugin-golden:
+    name: yt-dlp Plugin Golden Build
+    needs: [build-and-test, golden-filter]
+    # Always run on push (merges into develop) and on workflow_dispatch
+    # (manual reruns must exercise the golden — that's the one case where
+    # you most want it). On PR, run only when the filter caught a relevant
+    # change. Skipping is the desired outcome on PRs that touch unrelated
+    # code, not a failure.
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.golden-filter.outputs.run == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # The golden test invokes `cargo run -p rdlp-cli` which transitively
+      # depends on ffmpeg-sys-the-third — same dev libs the matrix job needs.
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg7
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            cmake \
+            perl \
+            libclang-dev \
+            musl-tools
+
+      # uv is Astral's pip-replacement; ~10x faster wheel install + first-
+      # class --require-hashes support. setup-uv installs Python via
+      # `uv python install` automatically when `--python 3.12` is requested
+      # by `uv venv`, so a separate actions/setup-python@v5 is redundant
+      # (and adds an extra third-party action to the trust surface for no
+      # gain — security review L2 from PR #221 wave 3).
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: tools/ytdlp-compat/requirements-dev.txt
+
+      - name: Install componentize-py-pin@0.17.2 via uv
+        working-directory: tools/ytdlp-compat
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv/bin/python \
+            --require-hashes -r requirements-dev.txt
+          .venv/bin/componentize-py --version
+
+      - name: Run rdlp_ytdlp_compat unit tests
+        working-directory: tools/ytdlp-compat
+        run: |
+          uv pip install --python .venv/bin/python -e .
+          .venv/bin/pytest tests/ -v
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu-22.04
+
+      - name: Build golden plugins
+        run: cargo test -p rdlp-plugin --test ytdlp_golden -- --ignored --nocapture
+        timeout-minutes: 20

@@ -37,6 +37,14 @@ pub(crate) enum PluginCmd {
         /// Plugin name.
         name: String,
     },
+    /// Build a `.wasm` plugin from a yt-dlp-style Python extractor.
+    BuildFromYtdlp {
+        /// Path to the yt-dlp extractor .py file.
+        plugin_py: std::path::PathBuf,
+        /// Output directory (defaults to the parent of plugin_py).
+        #[arg(short = 'o', long)]
+        output_dir: Option<std::path::PathBuf>,
+    },
 }
 
 /// CLI arguments parsed by clap.

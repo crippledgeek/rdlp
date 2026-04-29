@@ -1,0 +1,9 @@
+# build-from-ytdlp normalises snake_case → kebab-case; ignore both forms
+# so a local build that pre-dates the normalisation doesn't pollute git.
+simple_html/
+simple-html/
+json_traversal/
+json-traversal/
+m3u8_with_fallback/
+m3u8-with-fallback/
+__pycache__/

@@ -1,5 +1,11 @@
 //! `rdlp plugin <subcommand>` — plugin management commands.
 
+// Explicit `#[path]` because lib.rs loads this file via `#[path = "plugin_cmd.rs"]`,
+// which makes implicit submodule lookup resolve from `src/` rather than `src/plugin_cmd/`.
+#[path = "plugin_cmd/build_from_ytdlp.rs"]
+mod build_from_ytdlp;
+pub use build_from_ytdlp::run as run_build_from_ytdlp;
+
 use anyhow::{Context, Result};
 use rdlp_plugin::manifest::validate_plugin_name;
 use rdlp_plugin::trust_store::TrustStore;
