@@ -24,11 +24,32 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
         .and_then(|s| s.to_str())
         .context("invalid plugin filename")?
         .to_string();
+    // The stem becomes the plugin name in the manifest (used as a TOML string,
+    // a filesystem subdir, and a sled-namespace key). Enforce the same shape
+    // the loader will demand at install time, so authors get a clear error
+    // here instead of an opaque manifest-parse failure later.
+    rdlp_plugin::manifest::validate_plugin_name(&stem)
+        .with_context(|| format!("plugin filename '{stem}' not a valid plugin name"))?;
 
     let source = std::fs::read_to_string(&py_path)?;
     let valid_url =
         extract_valid_url(&source).context("could not find _VALID_URL in plugin source")?;
     let matches = valid_url_to_match_patterns(&valid_url);
+    // The fallback pattern `*://*/*` matches the entire internet at priority
+    // 150, shadowing every built-in extractor that doesn't explicitly opt-in
+    // to override-claiming. Authors who hit it on a complex `_VALID_URL` (e.g.
+    // alternation in TLDs, non-trivial subdomain regex) should hand-edit the
+    // generated manifest before signing. Surface this loudly so it isn't
+    // silent.
+    if matches.iter().any(|p| p == "*://*/*") {
+        eprintln!(
+            "WARNING: could not extract a literal hostname from `_VALID_URL`. \
+             Generated manifest uses the over-broad `*://*/*` match pattern, \
+             which intercepts every URL. Hand-edit \
+             `{stem}/plugin.toml.template` `matches = [...]` to your site \
+             before signing."
+        );
+    }
 
     let workspace_root = locate_workspace_root()?;
     let venv = workspace_root.join("tools/ytdlp-compat/.venv");
@@ -151,8 +172,22 @@ fn valid_url_to_match_patterns(regex: &str) -> Vec<String> {
 fn locate_workspace_root() -> Result<PathBuf> {
     let output = Command::new("cargo")
         .args(["locate-project", "--workspace", "--message-format=plain"])
-        .output()?;
-    let path = String::from_utf8(output.stdout)?.trim().to_string();
+        .output()
+        .context("invoke `cargo locate-project` (is cargo on PATH?)")?;
+    if !output.status.success() {
+        bail!(
+            "`cargo locate-project --workspace` exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    let path = String::from_utf8(output.stdout)
+        .context("cargo locate-project produced non-UTF-8 output")?
+        .trim()
+        .to_string();
+    if path.is_empty() {
+        bail!("cargo locate-project produced empty output (run from inside a workspace)");
+    }
     Ok(PathBuf::from(path)
         .parent()
         .context("workspace root has no parent")?

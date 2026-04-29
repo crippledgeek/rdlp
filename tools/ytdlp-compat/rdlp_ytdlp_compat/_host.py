@@ -14,8 +14,19 @@ except ImportError:
     _AVAILABLE = False
 
 
-def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000) -> str:
-    """Fetch a URL and return the body decoded as UTF-8 text."""
+def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
+               expected_status: int = None) -> str:
+    """Fetch a URL and return the body decoded as UTF-8 text.
+
+    Raises `RuntimeError` if the HTTP status is not 2xx (and not equal to
+    `expected_status` if supplied) — without this check, 4xx/5xx response
+    bodies (login walls, error pages) would be returned as if they were the
+    page content, masking auth failures and rate-limits as "extractor returns
+    empty results".
+
+    Callers that need to inspect non-2xx responses (e.g. yt-dlp's
+    `expected_status=404` for soft 404s) pass an explicit allowed status.
+    """
     if not _AVAILABLE:
         raise RuntimeError("_host.fetch_text called outside componentize-py runtime")
     req = _Request(
@@ -26,6 +37,9 @@ def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000) -> str:
         timeout_ms=timeout_ms,
     )
     resp = host_fetch.fetch(req)
+    status = resp.status
+    if not (200 <= status < 300) and status != expected_status:
+        raise RuntimeError(f"HTTP {status} fetching {url}")
     return bytes(resp.body).decode("utf-8", errors="replace")
 
 

@@ -235,7 +235,10 @@ class InfoExtractor:
         last_err = None
         for _ in range(max(1, tries)):
             try:
-                return _host.fetch_text(url, headers=headers or [], timeout_ms=30000)
+                return _host.fetch_text(
+                    url, headers=headers or [], timeout_ms=30000,
+                    expected_status=expected_status,
+                )
             except Exception as e:
                 last_err = e
                 if errnote is not None:
@@ -332,8 +335,24 @@ class InfoExtractor:
             fatal=True, live=False, data=None, headers=None, query=None):
         """yt-dlp's _extract_m3u8_formats_and_subtitles. Slice-1 scope: master
         playlist only — does NOT recurse into media playlists. Returns
-        (formats, subs={})."""
-        body = _host.fetch_text(m3u8_url)
+        (formats, subs={}).
+
+        Honors yt-dlp's `note` / `errnote` / `fatal` logging contract: a
+        host-fetch failure raises only when `fatal=True` (the yt-dlp default);
+        otherwise the error is logged via `errnote` and an empty
+        (formats=[], subs={}) result is returned. Real extractors test
+        `if formats:` and fall back to a non-HLS path when the playlist is
+        unreachable — silently re-raising would break that pattern."""
+        if note is not None:
+            _host.log("info", f"{note}: {m3u8_url}")
+        try:
+            body = _host.fetch_text(m3u8_url, headers=headers)
+        except Exception as e:
+            if errnote is not None:
+                _host.log("warn", f"{errnote}: {e}")
+            if fatal:
+                raise
+            return [], {}
         formats = []
         lines = body.splitlines()
         for i, line in enumerate(lines):

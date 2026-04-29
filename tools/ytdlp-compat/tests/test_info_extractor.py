@@ -265,3 +265,38 @@ class TestExtractM3U8Formats:
         ie = InfoExtractor()
         assert hasattr(ie, "_extract_m3u8_formats")
         assert hasattr(ie, "_extract_m3u8_formats_and_subtitles")
+
+    def test_fetch_failure_with_fatal_false_returns_empty(self):
+        # yt-dlp contract: when fatal=False and the playlist fetch fails, the
+        # helper logs via errnote and returns an empty result so callers can
+        # fall back to non-HLS paths (real extractors do `if formats: ...`).
+        # Outside componentize-py, _host.fetch_text raises RuntimeError —
+        # which exercises the same `except Exception` path as a real network
+        # error inside the runtime.
+        ie = InfoExtractor()
+        formats, subs = ie._extract_m3u8_formats_and_subtitles(
+            "https://example.com/master.m3u8", "vid",
+            errnote="Unable to download HLS playlist",
+            fatal=False,
+        )
+        assert formats == []
+        assert subs == {}
+
+    def test_fetch_failure_with_fatal_true_propagates(self):
+        # When fatal=True (yt-dlp default), the underlying RuntimeError must
+        # propagate so the caller can decide what to do.
+        ie = InfoExtractor()
+        with pytest.raises(RuntimeError):
+            ie._extract_m3u8_formats_and_subtitles(
+                "https://example.com/master.m3u8", "vid",
+                fatal=True,
+            )
+
+    def test_extract_m3u8_drops_subs_with_fatal_false(self):
+        # The non-suffixed wrapper must propagate fatal=False through to the
+        # _and_subtitles companion and only return formats (drop subs).
+        ie = InfoExtractor()
+        formats = ie._extract_m3u8_formats(
+            "https://example.com/master.m3u8", "vid", fatal=False
+        )
+        assert formats == []
