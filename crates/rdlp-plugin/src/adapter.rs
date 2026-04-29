@@ -111,6 +111,28 @@ impl PluginExtractor {
         })
     }
 
+    /// Test-only accessors for the trap counter / disabled flag. Integration
+    /// tests in this crate's `tests/` dir exercise `record_trap` directly
+    /// (the regular path requires a real component + wasmtime store, which
+    /// is too heavy for an invariant test). Hidden from rustdoc so consumers
+    /// don't accidentally rely on them.
+    #[doc(hidden)]
+    pub fn test_record_trap(&self) {
+        self.record_trap();
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn test_is_disabled(&self) -> bool {
+        self.disabled.load(Ordering::Relaxed)
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn test_trap_count(&self) -> u32 {
+        self.trap_count.load(Ordering::Relaxed)
+    }
+
     /// Record a runtime fault. Disables the plugin after `TRAP_DISABLE_THRESHOLD`
     /// cumulative traps so a misbehaving plugin cannot spin forever.
     fn record_trap(&self) {
