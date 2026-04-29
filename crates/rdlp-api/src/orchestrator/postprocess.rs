@@ -184,7 +184,15 @@ impl Orchestrator {
 
         let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(entries) => entries,
-            Err(_) => return,
+            Err(e) => {
+                log::warn!(
+                    "cleanup_leftover_segments: could not enumerate {} ({e}); \
+                     stale .partN files may persist and confuse the next download's \
+                     resume detection",
+                    dir.display()
+                );
+                return;
+            }
         };
 
         let mut deleted = 0;

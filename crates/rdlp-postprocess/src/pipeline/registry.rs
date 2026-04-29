@@ -105,7 +105,14 @@ impl TempRegistry {
             }
             let age = match entry.metadata().and_then(|m| m.modified()) {
                 Ok(mtime) => now.duration_since(mtime).unwrap_or_default(),
-                Err(_) => continue,
+                Err(e) => {
+                    log::debug!(
+                        "TempRegistry: stat failed for {} ({e}); skipping stale-prune \
+                         (file may persist past 1h threshold)",
+                        path.display()
+                    );
+                    continue;
+                }
             };
             if age >= one_hour {
                 if let Err(e) = std::fs::remove_file(&path) {

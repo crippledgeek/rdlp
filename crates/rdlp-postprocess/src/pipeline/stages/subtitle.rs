@@ -86,7 +86,13 @@ impl SubtitleStage {
         // Read the directory once — entries are reused across candidate stems.
         let mut entries = match tokio::fs::read_dir(parent).await {
             Ok(e) => e,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                warn!(
+                    "SubtitleStage: could not enumerate {} ({e}); no subtitle files will be discovered",
+                    parent.display()
+                );
+                return Vec::new();
+            }
         };
         let mut dir_entries: Vec<PathBuf> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
