@@ -1,7 +1,7 @@
 """Pure-Python unit tests for utility helpers (no host I/O)."""
 import pytest
 from rdlp_ytdlp_compat.info_extractor import (
-    int_or_none, try_get, urljoin, unified_timestamp,
+    int_or_none, try_get, urljoin, unified_timestamp, InfoExtractor,
 )
 
 
@@ -102,3 +102,32 @@ class TestUnifiedTimestamp:
 
     def test_none_returns_none(self):
         assert unified_timestamp(None) is None
+
+
+class TestParseJson:
+    def test_valid_json(self):
+        ie = InfoExtractor()
+        assert ie._parse_json('{"a": 1}', "x") == {"a": 1}
+
+    def test_transform_source(self):
+        ie = InfoExtractor()
+        # yt-dlp pattern: strip a JSONP wrapper
+        assert ie._parse_json("callback({\"a\": 1})", "x",
+                              transform_source=lambda s: s[s.index("(")+1:s.rindex(")")]) == {"a": 1}
+
+    def test_invalid_non_fatal_returns_none(self):
+        ie = InfoExtractor()
+        assert ie._parse_json("not json", "x", fatal=False) is None
+
+    def test_invalid_fatal_raises(self):
+        ie = InfoExtractor()
+        with pytest.raises((ValueError, TypeError)):
+            ie._parse_json("not json", "x", fatal=True)
+
+    def test_lenient_kwarg_does_not_exist(self):
+        # yt-dlp doesn't have a lenient kwarg; **parser_kwargs will pass it to
+        # json.loads which rejects unknown kwargs. This test pins the negative.
+        ie = InfoExtractor()
+        with pytest.raises(TypeError):
+            # `lenient=True` is not a valid kwarg for json.loads
+            ie._parse_json('{"a": 1}', "x", lenient=True)

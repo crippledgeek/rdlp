@@ -6,8 +6,11 @@ helpers are fully unit-testable in plain Python.
 """
 import datetime
 import email.utils
+import json as _json
 import re as _re
 from urllib.parse import urljoin as _stdlib_urljoin
+
+from rdlp_ytdlp_compat import _host
 
 
 # yt-dlp uses a NO_DEFAULT sentinel to distinguish "caller passed default=None"
@@ -129,3 +132,44 @@ class InfoExtractor:
 
     def _try_get(self, *args, **kwargs):
         return try_get(*args, **kwargs)
+
+    def _download_webpage(self, url_or_request, video_id, note=None, errnote=None,
+                          fatal=True, tries=1, timeout=NO_DEFAULT, *,
+                          encoding=None, data=None, headers=None, query=None,
+                          expected_status=None, impersonate=None,
+                          require_impersonation=False):
+        """yt-dlp's _download_webpage. `timeout` here is the inter-retry SLEEP
+        (NOT a request timeout — that's controlled host-side). `headers` and
+        `query` default to None (instead of yt-dlp's mutable {} default).
+        impersonate/require_impersonation are accepted for compatibility but
+        ignored — TLS impersonation is host-side via wreq."""
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        if note is not None:
+            _host.log("info", f"{note}: {url}")
+        last_err = None
+        for _ in range(max(1, tries)):
+            try:
+                return _host.fetch_text(url, headers=headers or [], timeout_ms=30000)
+            except Exception as e:
+                last_err = e
+                if errnote is not None:
+                    _host.log("warn", f"{errnote}: {e}")
+        if fatal and last_err is not None:
+            raise last_err
+        return None
+
+    def _parse_json(self, json_string, video_id, transform_source=None,
+                    fatal=True, errnote=None, **parser_kwargs):
+        """yt-dlp's _parse_json. NOTE: yt-dlp has no `lenient` kwarg — it always
+        uses LenientJSONDecoder with strict=False. **parser_kwargs lets callers
+        pass `ignore_extra=True` etc. to the underlying decoder."""
+        if transform_source is not None:
+            json_string = transform_source(json_string)
+        try:
+            return _json.loads(json_string, **parser_kwargs)
+        except (TypeError, ValueError) as e:
+            if fatal:
+                raise
+            if errnote is not None:
+                _host.log("warn", f"{errnote} for {video_id}: {e}")
+            return None
