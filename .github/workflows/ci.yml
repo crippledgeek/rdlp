@@ -28,6 +28,15 @@ jobs:
       - name: Check no CLI FFmpeg usage
         run: bash scripts/check-no-cli.sh
 
+      - name: Check WIT vendor drift
+        # The example-extractor plugin vendors a byte-copy of the host's WIT
+        # contract under examples/plugins/example-extractor/wit/deps/rdlp-plugin.
+        # `cargo-component` requires it for plugin builds, but it has no
+        # automatic refresh — a host WIT bump that forgets to sync the vendored
+        # copy ships an MVP plugin compiled against an older contract.
+        # Diff guard: if the host WIT and vendored copy diverge, fail loud.
+        run: bash scripts/check-wit-drift.sh
+
   build-and-test:
     name: Build & Test (${{ matrix.platform }})
     needs: lint
