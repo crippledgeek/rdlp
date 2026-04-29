@@ -64,7 +64,10 @@ fn ytdlp_goldens_build_and_emit_artefacts() {
 
         let manifest = std::fs::read_to_string(&toml).unwrap();
         // Schema-correctness — no [wasm] table; has [signature] placeholder.
-        assert!(!manifest.contains("[wasm]"), "{name} has invalid [wasm] table");
+        assert!(
+            !manifest.contains("[wasm]"),
+            "{name} has invalid [wasm] table"
+        );
         assert!(
             manifest.contains("[signature]"),
             "{name} missing signature block"

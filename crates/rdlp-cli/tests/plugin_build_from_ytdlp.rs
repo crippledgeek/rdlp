@@ -49,7 +49,10 @@ class DummyIE(InfoExtractor):
     assert!(toml.exists(), "manifest template not produced: {toml:?}");
 
     let manifest = std::fs::read_to_string(&toml).unwrap();
-    assert!(manifest.contains("name = \"dummy\""), "missing name in manifest");
+    assert!(
+        manifest.contains("name = \"dummy\""),
+        "missing name in manifest"
+    );
     assert!(
         manifest.contains("https://example.com/*"),
         "missing match pattern"
@@ -58,5 +61,8 @@ class DummyIE(InfoExtractor):
         manifest.contains("[signature]"),
         "missing signature placeholder block"
     );
-    assert!(!manifest.contains("[wasm]"), "manifest has invalid [wasm] table");
+    assert!(
+        !manifest.contains("[wasm]"),
+        "manifest has invalid [wasm] table"
+    );
 }

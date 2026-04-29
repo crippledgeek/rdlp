@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 
 /// Run the `rdlp plugin build-from-ytdlp` command — invokes componentize-py
@@ -17,12 +17,8 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
     let py_path = plugin_py
         .canonicalize()
         .with_context(|| format!("input not found: {}", plugin_py.display()))?;
-    let output_dir = output_dir.unwrap_or_else(|| {
-        py_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
-    });
+    let output_dir =
+        output_dir.unwrap_or_else(|| py_path.parent().unwrap_or(Path::new(".")).to_path_buf());
     let stem = py_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -30,8 +26,8 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
         .to_string();
 
     let source = std::fs::read_to_string(&py_path)?;
-    let valid_url = extract_valid_url(&source)
-        .context("could not find _VALID_URL in plugin source")?;
+    let valid_url =
+        extract_valid_url(&source).context("could not find _VALID_URL in plugin source")?;
     let matches = valid_url_to_match_patterns(&valid_url);
 
     let workspace_root = locate_workspace_root()?;
@@ -138,17 +134,11 @@ fn valid_url_to_match_patterns(regex: &str) -> Vec<String> {
         r"^https\??(?:s\?)?://(?:\(\?:www\\\.\)\?)([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)",
     )
     .unwrap();
-    let bare = Regex::new(
-        r"^https\??(?:s\?)?://([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)",
-    )
-    .unwrap();
+    let bare = Regex::new(r"^https\??(?:s\?)?://([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)").unwrap();
 
     if let Some(c) = with_www.captures(regex) {
         let host = c[1].replace(r"\.", ".");
-        return vec![
-            format!("https://*.{host}/*"),
-            format!("https://{host}/*"),
-        ];
+        return vec![format!("https://*.{host}/*"), format!("https://{host}/*")];
     }
     if let Some(c) = bare.captures(regex) {
         let host = c[1].replace(r"\.", ".");
@@ -392,7 +382,10 @@ mod tests {
         write_manifest(&path, "test-plugin", &["https://example.com/*".to_string()]).unwrap();
         let body = std::fs::read_to_string(&path).unwrap();
         // Must not contain forbidden [wasm] table.
-        assert!(!body.contains("[wasm]"), "template has invalid [wasm] table");
+        assert!(
+            !body.contains("[wasm]"),
+            "template has invalid [wasm] table"
+        );
         // Must contain the placeholder signature block.
         assert!(body.contains("[signature]"));
         assert!(body.contains("type = \"ed25519\""));

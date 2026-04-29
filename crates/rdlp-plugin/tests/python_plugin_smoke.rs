@@ -37,11 +37,18 @@ const WASM_PATH: &str = concat!(
 
 /// Inline copy of `tests/loader.rs::write_signed_plugin`, adapted to take a
 /// pre-built wasm payload (instead of a WAT stub) and a richer capability set.
-fn write_signed_plugin(dir: &Path, name: &str, key: &SigningKey, wasm: &[u8], capabilities: &[&str]) {
+fn write_signed_plugin(
+    dir: &Path,
+    name: &str,
+    key: &SigningKey,
+    wasm: &[u8],
+    capabilities: &[&str],
+) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("plugin.wasm"), wasm).unwrap();
 
-    let pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
+    let pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
     let cap_str = capabilities
         .iter()
         .map(|c| format!("\"{c}\""))
@@ -99,7 +106,14 @@ async fn python_hello_world_loads_and_signs() {
         "hello-world",
         &key,
         &wasm,
-        &["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+        &[
+            "fetch",
+            "cookie-jar",
+            "js-eval",
+            "html-select",
+            "log",
+            "store-kv",
+        ],
     );
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
     let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
@@ -177,7 +191,14 @@ async fn python_hello_world_extract_succeeds() {
         // populate_capability_contexts), the host returns "denied" at runtime.
         // Phase 1 of the plugin system documents this trade-off in
         // crates/rdlp-plugin/src/lib.rs § "Known limitations".
-        &["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+        &[
+            "fetch",
+            "cookie-jar",
+            "js-eval",
+            "html-select",
+            "log",
+            "store-kv",
+        ],
     );
 
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
@@ -223,7 +244,12 @@ async fn python_hello_world_extract_succeeds() {
         "title should contain \"Hello\"; got {:?}",
         info.title
     );
-    assert_eq!(info.formats.len(), 1, "expected 1 format; got {:?}", info.formats);
+    assert_eq!(
+        info.formats.len(),
+        1,
+        "expected 1 format; got {:?}",
+        info.formats
+    );
     assert_eq!(
         info.formats[0].url, "https://example.com/foo",
         "format url mismatch: {:?}",
