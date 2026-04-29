@@ -220,8 +220,11 @@ class TestSearchRegex:
         assert ie._search_regex(r"NOT", "x", "thing", default="fallback") == "fallback"
 
     def test_fatal_explicit_raises_when_no_match(self):
+        # Raises RegexNotFoundError (typed yt-dlp subclass), which extends
+        # ExtractorError. Old code raised bare ValueError; the typed form
+        # is what the WIT dispatcher recognises (route to parse variant).
         ie = InfoExtractor()
-        with pytest.raises(ValueError):
+        with pytest.raises(RegexNotFoundError):
             ie._search_regex(r"NOT", "x", "thing", fatal=True)
 
     def test_default_fatal_is_true_silent_break_guard(self):
@@ -229,7 +232,7 @@ class TestSearchRegex:
         # expecting a raise; if we default to fatal=False they fail-open and
         # produce empty info-dicts.
         ie = InfoExtractor()
-        with pytest.raises(ValueError):
+        with pytest.raises(RegexNotFoundError):
             ie._search_regex(r"NOT", "x", "thing")  # no fatal kwarg
 
     def test_list_of_patterns_first_match_wins(self):
@@ -559,13 +562,15 @@ class TestRaiseHelpers:
     extractors. Without them, ports fail with AttributeError."""
 
     def test_raise_login_required_raises_extractor_error(self):
+        # Drop-in compat: ExtractorError catches the typed LoginRequiredError
+        # subclass, so ported `except ExtractorError:` still catches.
         ie = InfoExtractor()
         with pytest.raises(ExtractorError) as excinfo:
             ie.raise_login_required()
         assert excinfo.value.expected is True
-        # Marker phrase must be present so _entry.py's WIT mapping picks
-        # auth-required.
-        assert "[login required]" in excinfo.value.orig_msg
+        # Marker prefix is GONE (wave-3 fix C1) — typed class is the
+        # dispatch key. Token must NOT leak into user-facing message.
+        assert "[login required]" not in excinfo.value.orig_msg
 
     def test_raise_login_required_with_method(self):
         ie = InfoExtractor()
@@ -581,10 +586,12 @@ class TestRaiseHelpers:
         assert excinfo.value.expected is True
 
     def test_raise_no_formats_raises_extractor_error(self):
+        # raise_no_formats(expected=False, default) raises a bare
+        # ExtractorError (extractor bug case); the marker prefix is gone.
         ie = InfoExtractor()
         with pytest.raises(ExtractorError) as excinfo:
             ie.raise_no_formats("no media available", video_id="vid")
-        assert "[no formats]" in excinfo.value.orig_msg
+        assert "[no formats]" not in excinfo.value.orig_msg
         assert excinfo.value.video_id == "vid"
 
     def test_raise_login_required_sets_ie_to_extractor_name(self):
@@ -627,3 +634,174 @@ class TestRaiseHelpers:
         with pytest.raises(ExtractorError) as excinfo:
             FooBarExtractor().raise_login_required()
         assert excinfo.value.ie == "FooBarExtractor"
+
+
+# =============================================================================
+# Wave-3 review-fix regression tests
+# =============================================================================
+
+
+class TestTypedSubclasses:
+    """yt-dlp drop-in compat preserved + isinstance-driven dispatch enabled."""
+
+    def test_login_required_extends_extractor_error(self):
+        from rdlp_ytdlp_compat import LoginRequiredError, ExtractorError
+        e = LoginRequiredError("login")
+        assert isinstance(e, ExtractorError)
+        assert e.expected is True
+
+    def test_no_formats_extends_extractor_error(self):
+        from rdlp_ytdlp_compat import NoFormatsError, ExtractorError
+        e = NoFormatsError("no formats")
+        assert isinstance(e, ExtractorError)
+        assert e.expected is True
+
+    def test_not_found_extends_extractor_error(self):
+        from rdlp_ytdlp_compat import NotFoundError, ExtractorError
+        assert isinstance(NotFoundError("missing"), ExtractorError)
+
+    def test_rate_limited_carries_typed_retry_after(self):
+        from rdlp_ytdlp_compat import RateLimitedError
+        e = RateLimitedError("slow down", retry_after=42)
+        assert e.retry_after == 42
+
+    def test_rate_limited_retry_after_optional(self):
+        from rdlp_ytdlp_compat import RateLimitedError
+        assert RateLimitedError("slow down").retry_after is None
+
+    def test_network_error_extends_extractor_error(self):
+        from rdlp_ytdlp_compat import NetworkError, ExtractorError
+        assert isinstance(NetworkError("dns failed"), ExtractorError)
+
+    def test_typed_subclasses_default_messages(self):
+        # Helpers raised without args produce a sensible default — matches
+        # yt-dlp's user-facing message pattern.
+        from rdlp_ytdlp_compat import (
+            LoginRequiredError, NoFormatsError, NotFoundError, RateLimitedError,
+        )
+        assert "registered users" in str(LoginRequiredError())
+        assert "formats" in str(NoFormatsError())
+        assert "not found" in str(NotFoundError()).lower()
+        assert "rate" in str(RateLimitedError()).lower()
+
+
+class TestRaiseHelpersUseTypedSubclasses:
+    """Helpers must raise the typed forms (LoginRequiredError etc.), NOT a
+    bare ExtractorError with a marker prefix. The marker-phrase pattern was
+    fragile (false-positive substring matches in dispatch) and leaked
+    `[login required] ` tokens into user-facing error text."""
+
+    def test_raise_login_required_raises_typed_class(self):
+        from rdlp_ytdlp_compat import LoginRequiredError
+        with pytest.raises(LoginRequiredError) as excinfo:
+            InfoExtractor().raise_login_required()
+        # No marker prefix in message — typed class is the dispatch key.
+        assert "[login required]" not in excinfo.value.orig_msg
+
+    def test_raise_no_formats_expected_true_raises_typed_class(self):
+        from rdlp_ytdlp_compat import NoFormatsError
+        with pytest.raises(NoFormatsError) as excinfo:
+            InfoExtractor().raise_no_formats("nothing", expected=True)
+        assert "[no formats]" not in excinfo.value.orig_msg
+
+    def test_raise_no_formats_expected_false_raises_bare_extractor_error(self):
+        # expected=False = "extractor bug, not site failure" — bare class.
+        from rdlp_ytdlp_compat import ExtractorError, NoFormatsError
+        with pytest.raises(ExtractorError) as excinfo:
+            InfoExtractor().raise_no_formats("buggy", expected=False)
+        # Must NOT be NoFormatsError — that's reserved for the expected case.
+        assert not isinstance(excinfo.value, NoFormatsError)
+        assert excinfo.value.expected is False
+
+
+class TestSearchRegexRaisesTypedException:
+    """_search_regex with fatal=True must raise RegexNotFoundError so the
+    WIT dispatcher routes it to the parse variant via isinstance."""
+
+    def test_fatal_raises_regex_not_found_error(self):
+        from rdlp_ytdlp_compat import RegexNotFoundError
+        ie = InfoExtractor()
+        with pytest.raises(RegexNotFoundError):
+            ie._search_regex(r"NOT", "x", "thing", fatal=True)
+
+    def test_regex_not_found_extends_extractor_error(self):
+        # Drop-in: ported `except ExtractorError:` clauses still catch.
+        from rdlp_ytdlp_compat import RegexNotFoundError, ExtractorError
+        ie = InfoExtractor()
+        with pytest.raises(ExtractorError):
+            ie._search_regex(r"NOT", "x", "thing", fatal=True)
+
+
+class TestHostHttpError:
+    """The host-side HTTP failure is now a typed RuntimeError subclass with
+    `.status` and `.url` attributes — the WIT dispatcher routes by status
+    code without parsing the message string (closes the latent
+    'RuntimeError starting with HTTP' false-positive surface)."""
+
+    def test_host_http_error_subclass_of_runtime_error(self):
+        from rdlp_ytdlp_compat._host import HostHttpError
+        e = HostHttpError(404, "https://example.com/x")
+        assert isinstance(e, RuntimeError)
+
+    def test_host_http_error_carries_typed_attributes(self):
+        from rdlp_ytdlp_compat._host import HostHttpError
+        e = HostHttpError(429, "https://example.com/y")
+        assert e.status == 429
+        assert e.url == "https://example.com/y"
+
+    def test_check_status_raises_typed_host_http_error(self):
+        from rdlp_ytdlp_compat._host import _check_status, HostHttpError
+        with pytest.raises(HostHttpError) as excinfo:
+            _check_status(503, None, "https://example.com")
+        assert excinfo.value.status == 503
+
+    def test_check_status_ok_is_silent(self):
+        from rdlp_ytdlp_compat._host import _check_status
+        _check_status(200, None, "https://example.com")  # no raise
+
+
+class TestSanitizeFilename:
+    """yt-dlp drop-in compat for filename sanitisation."""
+
+    def test_empty_returns_underscore(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        assert sanitize_filename("") == "_"
+
+    def test_none_returns_underscore(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        assert sanitize_filename(None) == "_"
+
+    def test_default_mode_replaces_forbidden_with_unicode_lookalikes(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        # /, \, :, |, *, <, > all forbidden on Windows; replaced not stripped.
+        result = sanitize_filename("a/b\\c:d|e*f<g>h")
+        for ch in "/\\:|*<>":
+            assert ch not in result
+        # Result still contains all letters
+        for ch in "abcdefgh":
+            assert ch in result
+
+    def test_restricted_mode_collapses_to_ascii_underscore(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        result = sanitize_filename("a/b c", restricted=True)
+        assert "/" not in result
+        # whitespace and / both become _
+        assert "_" in result
+
+    def test_control_chars_stripped(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        result = sanitize_filename("foo\x00\x01\x1f\x7fbar")
+        assert "\x00" not in result and "\x01" not in result
+        assert "foo" in result and "bar" in result
+
+    def test_leading_trailing_dots_stripped(self):
+        from rdlp_ytdlp_compat import sanitize_filename
+        # Windows hostile to trailing dot; yt-dlp strips both.
+        assert sanitize_filename(".foo.").strip(".") == "foo"
+
+    def test_path_traversal_neutralised_in_default_mode(self):
+        # The motivating attack: format_id = "../../etc/passwd"
+        from rdlp_ytdlp_compat import sanitize_filename
+        result = sanitize_filename("../../etc/passwd")
+        # / replaced with full-width look-alike or stripped
+        assert "/" not in result

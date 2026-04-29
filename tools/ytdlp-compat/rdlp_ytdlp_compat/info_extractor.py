@@ -236,9 +236,13 @@ class InfoExtractor:
 
     # yt-dlp's standard "raise" helpers (see common.py:1251-1280). Real
     # extractors invoke `self.raise_login_required(...)` / etc. very often;
-    # without these the ports fail with AttributeError. Each helper raises
-    # an `ExtractorError(expected=True)` tagged with a marker phrase so the
-    # _entry.py WIT mapping can pick the right variant.
+    # without these the ports fail with AttributeError.
+    #
+    # Each helper raises a TYPED ExtractorError subclass (LoginRequiredError /
+    # GeoRestrictedError / NoFormatsError) so the `_entry.py` WIT-variant
+    # dispatcher can use `isinstance` instead of fragile substring matching
+    # on message text. The typed subclasses all inherit from `ExtractorError`,
+    # so `except ExtractorError:` in ported code still catches them.
 
     @property
     def _ie_name(self):
@@ -255,40 +259,34 @@ class InfoExtractor:
         self, msg="This video is only available for registered users",
         metadata_available=False, method=None,
     ):
-        """yt-dlp's raise_login_required. Maps to WIT auth-required.
-
-        Sets `ie=self._ie_name` on the underlying ExtractorError so ported
-        code that does `except ExtractorError as e: log(e.ie)` sees the
-        extractor identity (matches upstream behaviour)."""
-        from rdlp_ytdlp_compat._errors import ExtractorError
+        """yt-dlp's raise_login_required. Raises `LoginRequiredError` →
+        WIT `auth-required`. Sets `ie=self._ie_name` for upstream parity."""
+        from rdlp_ytdlp_compat._errors import LoginRequiredError
         full_msg = msg
         if method is not None:
             full_msg = f"{msg}. Use {method} to log in."
-        # Marker phrase keys the _entry.py message-text dispatch.
-        raise ExtractorError(
-            f"[login required] {full_msg}", expected=True, ie=self._ie_name,
-        )
+        raise LoginRequiredError(full_msg, ie=self._ie_name)
 
     def raise_geo_restricted(
         self, msg="This video is not available from your location due to geo restriction",
         countries=None, metadata_available=False,
     ):
-        """yt-dlp's raise_geo_restricted. Maps to WIT auth-required (Slice 1
-        has no dedicated geo-restricted variant)."""
+        """yt-dlp's raise_geo_restricted. Raises `GeoRestrictedError` →
+        WIT `auth-required` (Slice 1 has no dedicated geo-restricted variant;
+        a Slice-2 WIT bump can split it out)."""
         from rdlp_ytdlp_compat._errors import GeoRestrictedError
         raise GeoRestrictedError(msg, countries=countries, ie=self._ie_name)
 
     def raise_no_formats(self, msg, expected=False, video_id=None):
-        """yt-dlp's raise_no_formats. Maps to WIT not-found when expected
-        (the user-facing "no formats available"); to internal otherwise.
-
-        Sets `ie=self._ie_name` for upstream parity."""
-        from rdlp_ytdlp_compat._errors import ExtractorError
-        # Marker phrase keys the _entry.py dispatch.
-        prefix = "[no formats] "
+        """yt-dlp's raise_no_formats. Raises `NoFormatsError` (when
+        `expected=True`) → WIT `not-found`, or `ExtractorError(expected=False)`
+        → WIT `internal` otherwise (yt-dlp convention for unexpected
+        no-formats: it's usually an extractor bug)."""
+        from rdlp_ytdlp_compat._errors import ExtractorError, NoFormatsError
+        if expected:
+            raise NoFormatsError(msg, video_id=video_id, ie=self._ie_name)
         raise ExtractorError(
-            f"{prefix}{msg}", expected=expected, video_id=video_id,
-            ie=self._ie_name,
+            msg, expected=False, video_id=video_id, ie=self._ie_name,
         )
 
     def _download_webpage(self, url_or_request, video_id, note=None, errnote=None,
@@ -311,10 +309,20 @@ class InfoExtractor:
                     url, headers=headers or [], timeout_ms=30000,
                     expected_status=expected_status,
                 )
-            except Exception as e:
+            except RuntimeError as e:
+                # _host.fetch_text raises RuntimeError (and HostHttpError
+                # which subclasses it) for HTTP failures and "outside
+                # runtime". These are the only exception types we expect to
+                # retry. TypeError / AttributeError / ImportError from
+                # buggy host bindings or buggy extractor code propagate
+                # through as bugs — masking them inside this retry loop is
+                # the silent-failure pattern review I4 flagged.
                 last_err = e
-                if errnote is not None:
-                    _host.log("warn", f"{errnote}: {e}")
+                # Always log on failure so test harnesses (caplog) and the
+                # host see the diagnostic, even when the extractor author
+                # forgot to pass `errnote`.
+                label = errnote or f"failed to fetch {url}"
+                _host.log("warn", f"{label}: {e}")
         if fatal and last_err is not None:
             raise last_err
         return None
@@ -365,7 +373,11 @@ class InfoExtractor:
         # No match
         if default is NO_DEFAULT:
             if fatal:
-                raise ValueError(f"Unable to extract {name}")
+                # Raise the typed yt-dlp class so the WIT dispatcher routes
+                # to extract-error::parse via isinstance, and ported code
+                # using `except RegexNotFoundError:` keeps working.
+                from rdlp_ytdlp_compat._errors import RegexNotFoundError
+                raise RegexNotFoundError(f"Unable to extract {name}")
             _host.log("warn", f"unable to extract {name}; returning None")
             return None
         return default
@@ -419,9 +431,12 @@ class InfoExtractor:
             _host.log("info", f"{note}: {m3u8_url}")
         try:
             body = _host.fetch_text(m3u8_url, headers=headers)
-        except Exception as e:
-            if errnote is not None:
-                _host.log("warn", f"{errnote}: {e}")
+        except RuntimeError as e:
+            # Same narrow catch as _download_webpage (I5): only RuntimeError
+            # / HostHttpError subclasses are legitimate retry signals.
+            # Always log on failure so the host sees the diagnostic.
+            label = errnote or f"failed to fetch HLS playlist {m3u8_url}"
+            _host.log("warn", f"{label}: {e}")
             if fatal:
                 raise
             return [], {}

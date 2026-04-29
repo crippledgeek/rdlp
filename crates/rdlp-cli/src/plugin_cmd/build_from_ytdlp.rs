@@ -258,9 +258,12 @@ fn stage_build_dir(
 ///    (`yt_dlp/extractor/common.py:107-498` at upstream tag 2026.03.17):
 ///    `id` and `title` are required strs; either `formats` or `url` must
 ///    be present.
-/// 6. yt-dlp `ExtractorError(expected=True)` is mapped to the appropriate
-///    WIT variant via marker-phrase / cause-type heuristics — see the
-///    `_extractor_error_to_variant` function below for the dispatch table.
+/// 6. Python exceptions are mapped to WIT variants via a pure `isinstance`
+///    ladder — see `_extractor_error_to_variant`. componentize-py 0.17.2
+///    only marshals `Err.value` across the WIT boundary (`__cause__` is
+///    dropped), so the dispatcher flattens one level of `__cause__` /
+///    `cause` (yt-dlp legacy attr) plus `video_id` and `ie` into the
+///    payload string at boundary crossing.
 const ENTRY_TEMPLATE: &str = r#""""Auto-generated entry point for rdlp plugin build-from-ytdlp.
 
 See the Rust doc-comment on ENTRY_TEMPLATE in build_from_ytdlp.rs for the
@@ -289,7 +292,13 @@ from rdlp_ytdlp_compat import (
     UserNotLive as _UserNotLive,
     RegexNotFoundError as _RegexNotFoundError,
     DownloadCancelled as _DownloadCancelled,
+    LoginRequiredError as _LoginRequiredError,
+    NoFormatsError as _NoFormatsError,
+    NotFoundError as _NotFoundError,
+    RateLimitedError as _RateLimitedError,
+    NetworkError as _NetworkError,
 )
+from rdlp_ytdlp_compat._host import HostHttpError as _HostHttpError
 
 
 def _discover_ie_class():
@@ -323,69 +332,123 @@ _IE_CLASS = _discover_ie_class()
 _IE = _IE_CLASS()
 
 
+def _format_payload(e):
+    """Flatten a Python exception into a WIT-payload string.
+
+    componentize-py 0.17.2 only marshals `Err.value` (the variant payload)
+    across the canonical-ABI boundary — `__cause__`, `__context__`,
+    `__traceback__`, and `args` are all dropped. So debugging info (cause
+    chain, video_id, extractor identity) MUST be flattened into the payload
+    string at the dispatch site, otherwise the host sees `"plugin returned
+    None"` with zero context.
+
+    Reads BOTH Python's `__cause__` (set by `raise X() from e`, the modern
+    PEP-3134 form) AND yt-dlp's legacy `cause` attribute (its own
+    convention, set via `ExtractorError(msg, cause=e)`). Walks one level
+    deep — deeper chains rarely add signal, and the host stderr captures
+    the full traceback via the `log` capability if anyone needs it.
+    """
+    msg = str(getattr(e, "orig_msg", e) or "")
+    # __cause__ first (PEP 3134), fall back to yt-dlp's `cause` attribute.
+    cause = getattr(e, "__cause__", None)
+    if cause is None:
+        cause = getattr(e, "cause", None)
+    if cause is not None:
+        msg = f"{msg} (cause: {type(cause).__name__}: {cause})"
+    vid = getattr(e, "video_id", None)
+    if vid:
+        msg = f"{msg} [video_id={vid}]"
+    ie = getattr(e, "ie", None)
+    if ie:
+        msg = f"{msg} [ie={ie}]"
+    return msg
+
+
 def _extractor_error_to_variant(e):
-    """Map a yt-dlp-style exception to the appropriate WIT extract-error
-    variant. Heuristics derive from yt-dlp upstream (`utils/_utils.py`
-    + `extractor/common.py`) which uses `ExtractorError(expected=True)` +
-    marker phrases rather than dedicated typed subclasses for most failure
-    modes."""
-    # Typed subclasses (extracted upstream behaviour) — exact mapping.
+    """Map a Python exception to the appropriate WIT extract-error variant.
+
+    Pure `isinstance` ladder — leaf-first (most-specific subclasses checked
+    before their parents) so e.g. `LoginRequiredError` (subclass of
+    `ExtractorError`) routes to `auth-required` instead of falling through
+    to the parent `ExtractorError` arm. Substring matching on message text
+    is intentionally absent; relying on it produced false-positive routing
+    of real bugs to "expected" variants, masking them from bug reports.
+
+    Variants are listed in WIT-declaration order (see
+    `crates/rdlp-plugin/wit/types.wit::extract-error`):
+
+      unsupported-url(string)  — UnsupportedError
+      not-found(string)        — UserNotLive, NoFormatsError, NotFoundError
+      rate-limited(option<u32>) — RateLimitedError, HTTP 429
+      auth-required(string)    — LoginRequiredError, GeoRestrictedError, HTTP 401/403
+      network(string)          — NetworkError, HostHttpError (other 4xx/5xx)
+      parse(string)            — RegexNotFoundError, bare ExtractorError(expected=True)
+      cancelled                — DownloadCancelled
+      internal(string)         — ExtractorError(expected=False), unknown exceptions
+    """
+    # === Typed subclasses — most-specific first =============================
     if isinstance(e, _UnsupportedError):
-        return ExtractError_UnsupportedUrl(getattr(e, "url", str(e)))
+        return ExtractError_UnsupportedUrl(getattr(e, "url", _format_payload(e)))
+    if isinstance(e, _LoginRequiredError):
+        return ExtractError_AuthRequired(_format_payload(e))
     if isinstance(e, _GeoRestrictedError):
         # No dedicated geo variant in Slice-1 WIT; auth-required is the
-        # closest match (both signal "you can't access this content").
-        return ExtractError_AuthRequired(str(e))
+        # closest match (both mean "you can't access this content").
+        return ExtractError_AuthRequired(_format_payload(e))
+    if isinstance(e, _NoFormatsError):
+        return ExtractError_NotFound(_format_payload(e))
+    if isinstance(e, _NotFoundError):
+        return ExtractError_NotFound(_format_payload(e))
     if isinstance(e, _UserNotLive):
-        return ExtractError_NotFound(str(e))
+        return ExtractError_NotFound(_format_payload(e))
+    if isinstance(e, _RateLimitedError):
+        # `retry_after` carried as a typed attribute, NOT parsed from
+        # message text — survives the WIT boundary as `option<u32>`.
+        return ExtractError_RateLimited(e.retry_after)
+    if isinstance(e, _NetworkError):
+        return ExtractError_Network(_format_payload(e))
     if isinstance(e, _RegexNotFoundError):
-        return ExtractError_Parse(str(e))
+        return ExtractError_Parse(_format_payload(e))
     if isinstance(e, _DownloadCancelled):
         return ExtractError_Cancelled()
 
-    # ExtractorError(expected=True) — dispatch on marker phrases.
-    if isinstance(e, _ExtractorError) and getattr(e, "expected", False):
-        msg = str(getattr(e, "orig_msg", e) or "")
-        msg_l = msg.lower()
-        # Marker phrases set by InfoExtractor.raise_* helpers.
-        if msg.startswith("[login required] ") or "log in" in msg_l \
-                or "login" in msg_l or "sign in" in msg_l:
-            return ExtractError_AuthRequired(msg)
-        if msg.startswith("[no formats] ") or "no formats" in msg_l \
-                or "not available" in msg_l:
-            return ExtractError_NotFound(msg)
-        if "rate" in msg_l and "limit" in msg_l:
-            retry_after = getattr(e, "retry_after", None)
-            return ExtractError_RateLimited(retry_after)
-        if "404" in msg or "not found" in msg_l or "removed" in msg_l \
-                or "deleted" in msg_l:
-            return ExtractError_NotFound(msg)
-        # Default for expected=True: NotFound (caller said "the site told
-        # us no" — not an extractor bug).
-        return ExtractError_NotFound(msg)
-
-    # ExtractorError(expected=False) — likely an extractor bug.
+    # === Bare ExtractorError parent ========================================
+    # Default for expected=True: parse (yt-dlp semantics — "site told us no,
+    # not our bug" maps closest to "we couldn't extract", which is parse).
+    # Default for expected=False: internal (the extractor likely has a bug).
     if isinstance(e, _ExtractorError):
-        return ExtractError_Internal(str(getattr(e, "orig_msg", e) or e))
+        msg = _format_payload(e)
+        if getattr(e, "expected", False):
+            return ExtractError_Parse(msg)
+        return ExtractError_Internal(msg)
 
-    # Network errors raised by _host.fetch_text on non-2xx HTTP status, or
-    # any RuntimeError starting with "HTTP " from the host bridge.
-    msg = str(e)
-    if isinstance(e, RuntimeError) and msg.startswith("HTTP "):
-        # Try to surface 429 specifically.
-        try:
-            status = int(msg.split(" ", 2)[1])
-        except (ValueError, IndexError):
-            status = None
+    # === Typed host HTTP error =============================================
+    # _host.HostHttpError carries `.status` as a typed int attribute, so we
+    # route by status code without parsing message strings (closes the
+    # pre-fix "any RuntimeError starting with 'HTTP ' would mis-dispatch"
+    # latent bug).
+    if isinstance(e, _HostHttpError):
+        status = e.status
+        msg = str(e)
         if status == 429:
             return ExtractError_RateLimited(None)
         if status in (401, 403):
             return ExtractError_AuthRequired(msg)
         if status == 404:
             return ExtractError_NotFound(msg)
-        return ExtractError_Network(msg)
+        if 400 <= status < 600:
+            return ExtractError_Network(msg)
+        # Status outside 4xx/5xx falling through here means caller passed
+        # an `expected_status` that masked it — surface as Internal.
+        return ExtractError_Internal(msg)
 
-    # Anything else — treat as extractor bug.
+    # === Catch-all — extractor bug ========================================
+    # Flatten Python's __cause__ if present (re-raised exceptions from
+    # buggy plugin code).
+    msg = str(e)
+    cause = getattr(e, "__cause__", None)
+    if cause is not None:
+        msg = f"{msg} (cause: {type(cause).__name__}: {cause})"
     return ExtractError_Internal(msg)
 
 
@@ -395,17 +458,31 @@ def _validate_id(d):
     (yt_dlp/extractor/common.py:122-129 @ tag 2026.03.17). Validate at the
     boundary so a buggy plugin returning {"id": None} surfaces a clear
     `ExtractError_Internal` instead of writing the literal string "None"
-    into the archive."""
+    into the archive.
+
+    Errors are tagged "[validate]" so a debugger reading host logs can
+    distinguish "plugin returned bad shape" from "plugin's _real_extract
+    raised". Routes to ExtractError_Internal via the bare-ExtractorError
+    arm of _extractor_error_to_variant.
+    """
+    if not isinstance(d, dict):
+        raise _ExtractorError(
+            f"[validate] plugin _real_extract returned {type(d).__name__}, "
+            f"expected dict",
+            expected=False,
+        )
     vid = d.get("id")
     if not isinstance(vid, str) or not vid:
         raise _ExtractorError(
-            f"plugin returned invalid 'id' (expected non-empty str, got {type(vid).__name__})",
+            f"[validate] info_dict 'id' must be a non-empty str, "
+            f"got {type(vid).__name__}",
             expected=False,
         )
     title = d.get("title")
     if not isinstance(title, str):
         raise _ExtractorError(
-            f"plugin returned invalid 'title' (expected str, got {type(title).__name__})",
+            f"[validate] info_dict 'title' must be a str, "
+            f"got {type(title).__name__}",
             expected=False,
         )
     formats = d.get("formats")
@@ -414,7 +491,7 @@ def _validate_id(d):
     has_url = isinstance(url, str) and url
     if not (has_formats or has_url):
         raise _ExtractorError(
-            "plugin returned info-dict with neither 'formats' nor 'url'",
+            "[validate] info_dict has neither non-empty 'formats' nor 'url'",
             expected=False,
         )
 
@@ -435,57 +512,85 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         )
 
     def extract(self, url: str) -> InfoDict:
+        # All extraction logic — including _dict_to_info_dict's _opt_str
+        # type-check on each format field — runs INSIDE the try. Otherwise
+        # _opt_str's _ExtractorError on a bad format dict would propagate
+        # past the variant dispatcher as an uncaught Python exception,
+        # which componentize-py surfaces as a wasm trap (instance killed,
+        # epoch fuel lost) instead of the graceful WIT variant.
         try:
             d = _IE._real_extract(url)
             _validate_id(d)
+            return _dict_to_info_dict(d)
         except Exception as e:
             raise Err(_extractor_error_to_variant(e))
-        return _dict_to_info_dict(d)
 
     def search(self, query) -> SearchPage:
         raise Err(SearchError_Unsupported())
 
 
-def _opt_str(v):
+def _opt_str(v, where=""):
     """Coerce optional str fields. None → None (not 'None'); int/float are
     converted only if the field's WIT type is `option<string>`. Anything
-    else (list, dict) is rejected as a plugin bug."""
+    else (list, dict) is rejected as a plugin bug.
+
+    `where` is a human-readable location hint ("formats[3].format_id") that
+    surfaces in the validation-error message — without it, debugging a
+    deeply-nested type mismatch in an info-dict means trial-and-error.
+    """
     if v is None:
         return None
     if isinstance(v, str):
         return v
     if isinstance(v, (int, float)):
         return str(v)
+    locus = f" at {where}" if where else ""
     raise _ExtractorError(
-        f"info-dict field has invalid type: expected str/None, got {type(v).__name__}",
+        f"[validate] info-dict field{locus} has invalid type: "
+        f"expected str/None, got {type(v).__name__}",
         expected=False,
     )
 
 
 def _dict_to_info_dict(d: dict) -> InfoDict:
-    formats = [
-        Format(
-            format_id=_opt_str(f.get("format_id")) or "",
-            url=_opt_str(f.get("url")) or "",
-            ext=_opt_str(f.get("ext")) or "mp4",
-            protocol=_opt_str(f.get("protocol")) or "https",
+    # Build formats with index-aware error messages so a malformed
+    # `formats[4].format_id` surfaces with that exact path, not just
+    # `"info-dict field has invalid type: list"`.
+    formats = []
+    for i, f in enumerate(d.get("formats") or []):
+        if not isinstance(f, dict):
+            raise _ExtractorError(
+                f"[validate] formats[{i}] must be a dict, "
+                f"got {type(f).__name__}",
+                expected=False,
+            )
+        formats.append(Format(
+            format_id=_opt_str(f.get("format_id"), f"formats[{i}].format_id") or "",
+            url=_opt_str(f.get("url"), f"formats[{i}].url") or "",
+            ext=_opt_str(f.get("ext"), f"formats[{i}].ext") or "mp4",
+            protocol=_opt_str(f.get("protocol"), f"formats[{i}].protocol") or "https",
             width=f.get("width"), height=f.get("height"), fps=f.get("fps"),
             tbr=f.get("tbr"), vbr=f.get("vbr"), abr=f.get("abr"),
-            vcodec=_opt_str(f.get("vcodec")), acodec=_opt_str(f.get("acodec")),
-            container=_opt_str(f.get("container")), filesize=f.get("filesize"),
-            format_note=_opt_str(f.get("format_note")),
-        )
-        for f in d.get("formats", [])
-    ]
+            vcodec=_opt_str(f.get("vcodec"), f"formats[{i}].vcodec"),
+            acodec=_opt_str(f.get("acodec"), f"formats[{i}].acodec"),
+            container=_opt_str(f.get("container"), f"formats[{i}].container"),
+            filesize=f.get("filesize"),
+            format_note=_opt_str(f.get("format_note"), f"formats[{i}].format_note"),
+        ))
+    # Use defensive .get with explicit default ("") — _validate_id already
+    # ran and rejected non-str id/title, but keeping the .get makes the
+    # coupling resilient to future refactors that might bypass the
+    # validator.
     return InfoDict(
-        id=d["id"],          # required by _validate_id above
-        title=d["title"],    # required by _validate_id above
-        url=_opt_str(d.get("url")), formats=formats, subtitles=[],
-        thumbnail=_opt_str(d.get("thumbnail")),
-        description=_opt_str(d.get("description")),
-        uploader=_opt_str(d.get("uploader")),
-        uploader_id=_opt_str(d.get("uploader_id")),
-        upload_date=_opt_str(d.get("upload_date")),
+        id=d.get("id") or "",
+        title=d.get("title") or "",
+        url=_opt_str(d.get("url"), "url"),
+        formats=formats, subtitles=[],
+        thumbnail=_opt_str(d.get("thumbnail"), "thumbnail"),
+        description=_opt_str(d.get("description"), "description"),
+        uploader=_opt_str(d.get("uploader"), "uploader"),
+        uploader_id=_opt_str(d.get("uploader_id"), "uploader_id"),
+        upload_date=_opt_str(d.get("upload_date"), "upload_date"),
         duration=d.get("duration"), view_count=d.get("view_count"),
         like_count=d.get("like_count"),
         tags=list(d.get("tags") or []),

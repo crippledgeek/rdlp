@@ -280,15 +280,12 @@ jobs:
             libclang-dev \
             musl-tools
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       # uv is Astral's pip-replacement; ~10x faster wheel install + first-
-      # class --require-hashes support. `setup-uv` action caches the uv
-      # download cache keyed on the requirements file, so a clean run that
-      # would have spent ~30s downloading componentize-py's 35 MB wheel
-      # plus pytest's transitive closure is cut to a few seconds on a hit.
+      # class --require-hashes support. setup-uv installs Python via
+      # `uv python install` automatically when `--python 3.12` is requested
+      # by `uv venv`, so a separate actions/setup-python@v5 is redundant
+      # (and adds an extra third-party action to the trust surface for no
+      # gain — security review L2 from PR #221 wave 3).
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:

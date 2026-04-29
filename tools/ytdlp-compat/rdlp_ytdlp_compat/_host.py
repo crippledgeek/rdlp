@@ -24,12 +24,35 @@ except ModuleNotFoundError:
     _AVAILABLE = False
 
 
+class HostHttpError(RuntimeError):
+    """Non-2xx HTTP response from `host:fetch`.
+
+    Carries `status` (int) and `url` (str) as typed attributes so the
+    `_entry.py` WIT-variant dispatcher can route by status code via
+    `isinstance` rather than parsing the message string. Subclasses
+    `RuntimeError` so existing `except RuntimeError:` clauses still catch
+    it (including ported yt-dlp code that catches RuntimeError defensively).
+    """
+
+    def __init__(self, status: int, url: str):
+        super().__init__(f"HTTP {status} fetching {url}")
+        self.status = status
+        self.url = url
+
+
 def _check_status(status: int, expected_status, url: str) -> None:
-    """Raise `RuntimeError` if `status` is not 2xx and is not the explicitly-
+    """Raise `HostHttpError` if `status` is not 2xx and is not the explicitly-
     allowed `expected_status`. Extracted for unit-testability — without
     componentize-py bindings present, the surrounding `fetch_text` cannot be
     called directly, but this pure-Python predicate can be exercised in tests
     to pin the contract.
+
+    NOTE: This is a status-code-only check. Sites that respond `200 OK` with
+    HTML for a login wall / soft-paywall are NOT detected here — that's the
+    extractor's responsibility (e.g. by looking for a known login-form
+    selector and calling `self.raise_login_required()`). The host can't
+    reliably distinguish "real content with embedded JS check" from "login
+    wall served as 200" without parsing the body.
 
     Callers that need to inspect a specific non-2xx (e.g. yt-dlp's
     `expected_status=404` for soft 404s) pass that integer; everything else
@@ -39,18 +62,22 @@ def _check_status(status: int, expected_status, url: str) -> None:
         return
     if expected_status is not None and status == expected_status:
         return
-    raise RuntimeError(f"HTTP {status} fetching {url}")
+    raise HostHttpError(status, url)
 
 
 def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
                expected_status: int = None) -> str:
     """Fetch a URL and return the body decoded as UTF-8 text.
 
-    Raises `RuntimeError` if the HTTP status is not 2xx (and not equal to
-    `expected_status` if supplied) — without this check, 4xx/5xx response
-    bodies (login walls, error pages) would be returned as if they were the
-    page content, masking auth failures and rate-limits as "extractor returns
-    empty results".
+    Raises `HostHttpError` if the HTTP status is not 2xx (and not equal to
+    `expected_status` if supplied). The error carries `.status` as a typed
+    attribute so the WIT dispatcher can route by status code without
+    inspecting message strings.
+
+    SCOPE: This guards against status-driven failure modes (4xx/5xx bodies
+    masquerading as content). It does NOT detect 200-OK login-wall HTML
+    pages; extractors must do that themselves and call
+    `self.raise_login_required()` when their content-shape check fails.
     """
     if not _AVAILABLE:
         raise RuntimeError("_host.fetch_text called outside componentize-py runtime")

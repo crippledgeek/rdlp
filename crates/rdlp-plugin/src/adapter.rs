@@ -422,16 +422,61 @@ fn convert_info_dict(
     out
 }
 
+/// Sanitise a plugin-supplied string before it enters a filesystem path.
+///
+/// Plugin output is untrusted: a malicious extractor could return
+/// `format_id = "/etc/cron.d/evil"` or `ext = "../../../home/user/.bashrc"`
+/// to escape the configured output directory via downstream
+/// `PathBuf::join` (which on POSIX *replaces* the buffer when the joined
+/// segment is absolute — exactly the path-injection vector security review
+/// M1 of PR #221 flagged).
+///
+/// Strip:
+/// - Path separators (`/`, `\`) — neutralises both POSIX and Windows
+///   traversal.
+/// - Drive-letter prefix (`C:` etc) and namespace prefix (`\\?\`) — Windows
+///   absolute-path forms.
+/// - Null bytes — defensive against C-string truncation in any FFI path.
+/// - Leading dots and whitespace — collapse `..`, `.foo`, ` foo` to safe
+///   forms before joining.
+///
+/// Empty results collapse to a single underscore so downstream filename
+/// formatters never receive a zero-length component.
+///
+/// This mirrors yt-dlp's `sanitize_filename` semantics conservatively
+/// (strict-only mode; no Unicode look-alike substitution) since these
+/// strings flow into rdlp's archive identity, not into user-visible
+/// titles.
+fn sanitise_for_path(s: String) -> String {
+    if s.is_empty() {
+        return "_".to_string();
+    }
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !matches!(*c, '/' | '\\' | '\0' | ':'))
+        .collect();
+    let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
+    if trimmed.is_empty() {
+        "_".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Convert a WIT `Format` to `rdlp_types::Format`.
 ///
 /// Numeric widening: WIT uses `f32` for `fps`/`tbr`/`vbr`/`abr`; rdlp-types
-/// uses `f64`. All other field shapes match directly.
+/// uses `f64`. `format_id` and `ext` are sanitised before they enter the
+/// type — they're consumed by downstream filename formatters and must not
+/// carry path separators or drive-letter prefixes (security review M1).
 fn convert_format(w: crate::bindings::rdlp::plugin::types::Format) -> rdlp_types::Format {
     let protocol = w
         .protocol
         .parse::<DownloadProtocol>()
         .unwrap_or(DownloadProtocol::Https);
-    let mut f = rdlp_types::Format::new(w.format_id, w.url, w.ext, protocol);
+    let format_id = sanitise_for_path(w.format_id);
+    let ext = sanitise_for_path(w.ext);
+    let mut f = rdlp_types::Format::new(format_id, w.url, ext, protocol);
     f.width = w.width;
     f.height = w.height;
     f.fps = w.fps.map(f64::from);
@@ -440,8 +485,62 @@ fn convert_format(w: crate::bindings::rdlp::plugin::types::Format) -> rdlp_types
     f.abr = w.abr.map(f64::from);
     f.vcodec = rdlp_types::Codec::from(w.vcodec);
     f.acodec = rdlp_types::Codec::from(w.acodec);
-    f.container = w.container;
+    f.container = w.container.map(sanitise_for_path);
     f.filesize = w.filesize;
     f.format_note = w.format_note;
     f
+}
+
+#[cfg(test)]
+mod sanitise_for_path_tests {
+    use super::sanitise_for_path;
+
+    #[test]
+    fn empty_collapses_to_underscore() {
+        assert_eq!(sanitise_for_path(String::new()), "_");
+    }
+
+    #[test]
+    fn pure_dots_or_whitespace_collapse_to_underscore() {
+        assert_eq!(sanitise_for_path("...".into()), "_");
+        assert_eq!(sanitise_for_path("   ".into()), "_");
+        assert_eq!(sanitise_for_path(". . . ".into()), "_");
+    }
+
+    #[test]
+    fn leading_slash_stripped_blocks_absolute_path_injection() {
+        // The motivating M1 attack: malicious format_id = "/etc/passwd".
+        // After sanitisation, downstream PathBuf::join cannot escape.
+        assert_eq!(sanitise_for_path("/etc/passwd".into()), "etcpasswd");
+        assert_eq!(sanitise_for_path("/".into()), "_");
+    }
+
+    #[test]
+    fn windows_drive_letter_neutralised() {
+        // `C:\Windows\System32` would PathBuf::join as an absolute Windows
+        // path. Stripping `:` plus separators reduces it to a relative segment.
+        assert_eq!(
+            sanitise_for_path("C:\\Windows\\System32".into()),
+            "CWindowsSystem32"
+        );
+    }
+
+    #[test]
+    fn null_bytes_stripped() {
+        assert_eq!(sanitise_for_path("foo\0bar".into()), "foobar");
+    }
+
+    #[test]
+    fn parent_directory_traversal_neutralised() {
+        // "../../etc/passwd" — separators removed, leading dots stripped.
+        assert_eq!(sanitise_for_path("../../etc/passwd".into()), "etcpasswd");
+    }
+
+    #[test]
+    fn legitimate_format_ids_unchanged() {
+        assert_eq!(sanitise_for_path("hls-1280".into()), "hls-1280");
+        assert_eq!(sanitise_for_path("video-720p".into()), "video-720p");
+        assert_eq!(sanitise_for_path("dash-fragments".into()), "dash-fragments");
+        assert_eq!(sanitise_for_path("h264_aac_128k".into()), "h264_aac_128k");
+    }
 }
