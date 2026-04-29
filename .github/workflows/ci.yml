@@ -212,3 +212,37 @@ jobs:
 
       - name: Test (workspace)
         run: cargo test --workspace
+
+  ytdlp-plugin-golden:
+    name: yt-dlp Plugin Golden Build
+    needs: build-and-test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install componentize-py 0.17.2
+        working-directory: tools/ytdlp-compat
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/componentize-py --version
+
+      - name: Run rdlp_ytdlp_compat unit tests
+        working-directory: tools/ytdlp-compat
+        run: |
+          .venv/bin/pip install -e .
+          .venv/bin/pytest tests/ -v
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ubuntu-22.04
+
+      - name: Build golden plugins
+        run: cargo test -p rdlp-plugin --test ytdlp_golden -- --ignored --nocapture
+        timeout-minutes: 20
