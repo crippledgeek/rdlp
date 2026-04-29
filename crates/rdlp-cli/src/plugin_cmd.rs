@@ -1,9 +1,18 @@
 //! `rdlp plugin <subcommand>` — plugin management commands.
 
 use anyhow::{Context, Result};
+use rdlp_plugin::manifest::validate_plugin_name;
 use rdlp_plugin::trust_store::TrustStore;
 use rdlp_types::Config;
 use std::path::PathBuf;
+
+/// Reject path-traversing or otherwise unsafe plugin names BEFORE any
+/// `dir.join(name)` / `remove_dir_all` operation. Gives the user a clear
+/// error message rather than silently mis-resolving the path.
+fn require_valid_name(name: &str) -> Result<()> {
+    validate_plugin_name(name)
+        .map_err(|e| anyhow::anyhow!("invalid plugin name '{name}': {e}"))
+}
 
 /// Return the rdlp config directory (`~/.config/rdlp` on most platforms).
 pub fn config_path() -> Result<PathBuf> {
@@ -72,6 +81,7 @@ pub async fn run_list(config: &Config) -> Result<()> {
 
 /// `rdlp plugin info <name>` — show detailed info for a specific plugin.
 pub async fn run_info(name: &str, config: &Config) -> Result<()> {
+    require_valid_name(name)?;
     for dir in &config.plugin_directories {
         let plugin_dir = dir.join(name);
         let manifest_path = plugin_dir.join("plugin.toml");
@@ -125,8 +135,13 @@ pub async fn run_retrust(name: &str) -> Result<()> {
 
 /// `rdlp plugin disable <name>` — add the plugin to the disabled list.
 pub async fn run_disable(name: &str) -> Result<()> {
+    require_valid_name(name)?;
     let path = disabled_list_path()?;
-    let mut current = read_disabled(&path).unwrap_or_default();
+    // Fail loudly on a corrupted disabled list. Silently treating it as
+    // empty would re-enable a previously-blocked plugin — a security
+    // regression we explicitly do not want.
+    let mut current = read_disabled(&path)
+        .with_context(|| format!("read disabled-plugin list at {}", path.display()))?;
     if current.contains(&name.to_string()) {
         println!("Plugin '{name}' is already disabled.");
         return Ok(());
@@ -140,8 +155,10 @@ pub async fn run_disable(name: &str) -> Result<()> {
 
 /// `rdlp plugin enable <name>` — remove the plugin from the disabled list.
 pub async fn run_enable(name: &str) -> Result<()> {
+    require_valid_name(name)?;
     let path = disabled_list_path()?;
-    let mut current = read_disabled(&path).unwrap_or_default();
+    let mut current = read_disabled(&path)
+        .with_context(|| format!("read disabled-plugin list at {}", path.display()))?;
     let before = current.len();
     current.retain(|n| n != name);
     if current.len() == before {
@@ -155,6 +172,7 @@ pub async fn run_enable(name: &str) -> Result<()> {
 
 /// `rdlp plugin uninstall <name>` — delete the plugin directory and forget its trust entry.
 pub async fn run_uninstall(name: &str, config: &Config) -> Result<()> {
+    require_valid_name(name)?;
     let mut found = false;
     for dir in &config.plugin_directories {
         let plugin_dir = dir.join(name);
@@ -178,22 +196,10 @@ pub async fn run_uninstall(name: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// TOML shape for the disabled-plugins list file.
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-struct DisabledList {
-    #[serde(default)]
-    disabled: Vec<String>,
-}
-
-fn read_disabled(path: &PathBuf) -> Result<Vec<String>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
-    let s = std::fs::read_to_string(path)?;
-    let parsed: DisabledList = toml::from_str(&s)?;
-    Ok(parsed.disabled)
-}
+// The disabled-list TOML shape and reader live in `rdlp_plugin::disabled_list`
+// so that orchestrator bootstrap (in rdlp-api) can read the same file the
+// CLI writes without taking a dependency on rdlp-cli.
+use rdlp_plugin::disabled_list::{DisabledList, read_disabled_list as read_disabled};
 
 fn write_disabled(path: &PathBuf, list: &[String]) -> Result<()> {
     let dl = DisabledList {
@@ -204,7 +210,26 @@ fn write_disabled(path: &PathBuf, list: &[String]) -> Result<()> {
         #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
         std::fs::create_dir_all(parent)?;
     }
+    // Atomic write: tmp + rename in the same dir, mirroring TrustStore::persist.
+    // Plain `std::fs::write` would corrupt the file on crash mid-write.
+    let mut tmp_path = path.clone();
+    let tmp_name = format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("plugin-disabled")
+    );
+    tmp_path.set_file_name(tmp_name);
     #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
-    std::fs::write(path, s)?;
+    std::fs::write(&tmp_path, s)?;
+    #[cfg(unix)]
+    {
+        // Restrict mode to user-only — mirrors the trust store.
+        use std::os::unix::fs::PermissionsExt;
+        #[allow(clippy::disallowed_methods)]
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }

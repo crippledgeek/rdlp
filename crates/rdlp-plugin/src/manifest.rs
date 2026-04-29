@@ -77,9 +77,14 @@ impl Signature {
         match self {
             Signature::Sigstore { identity, .. } => format!("sigstore:{identity}"),
             Signature::Ed25519 { pubkey, .. } => {
+                // Full 32-byte SHA-256 of the base64-encoded pubkey, hex-rendered.
+                // An earlier MVP used only the first 8 bytes (64 bits) which
+                // gave a 2^32 birthday-collision cost — a crafted pubkey
+                // whose 8-byte SHA-256 prefix matched an already-trusted
+                // entry would inherit its approved capabilities silently.
                 use sha2::{Digest, Sha256};
                 let hash = Sha256::digest(pubkey.as_bytes());
-                format!("ed25519:{}", hex::encode(&hash[..8]))
+                format!("ed25519:{}", hex::encode(hash))
             }
         }
     }
@@ -113,10 +118,51 @@ pub fn parse_manifest_file(path: &Path) -> Result<Manifest, PluginError> {
     })
 }
 
+/// Validate a plugin name as a path-traversal-safe identifier.
+///
+/// Plugin names are used directly as filesystem path components (under
+/// `~/.config/rdlp/plugins/<name>/`), as sled tree namespaces
+/// (`plugin::<name>`), and as trust-store keys. Allowing arbitrary strings
+/// would let `name = "../../.ssh"` resolve to a `remove_dir_all` outside
+/// the plugin dir from the `rdlp plugin uninstall` command, and let
+/// `name = "evil::collide"` shadow another plugin's sled namespace.
+///
+/// Rule: lowercase kebab-case, must start with `[a-z0-9]`, may contain
+/// `[a-z0-9-]` thereafter, length 1..=64.
+pub fn validate_plugin_name(name: &str) -> Result<(), PluginError> {
+    fn err(name: &str, reason: &str) -> Result<(), PluginError> {
+        Err(PluginError::InvalidPluginName {
+            name: name.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+    if name.is_empty() {
+        return err(name, "empty");
+    }
+    if name.len() > 64 {
+        return err(name, "longer than 64 characters");
+    }
+    let bytes = name.as_bytes();
+    let first = bytes[0];
+    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return err(name, "must start with a lowercase letter or digit");
+    }
+    for &b in bytes {
+        if !(b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+            return err(
+                name,
+                "only lowercase letters, digits, and hyphens are allowed",
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate(m: &Manifest) -> Result<(), PluginError> {
     if m.name.is_empty() {
         return invalid("empty name");
     }
+    validate_plugin_name(&m.name)?;
     if !(100..=199).contains(&m.priority) {
         return invalid(&format!(
             "priority {} outside allowed range 100..=199",

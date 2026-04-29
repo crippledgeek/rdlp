@@ -8,11 +8,11 @@
 
 use crate::instance::PluginStoreData;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use wasmtime::component::Linker;
 
 /// Per-plugin cookie context. Holds a clone of the shared `SimpleCookieJar`
 /// plus the set of allowed effective domains.
-#[derive(Clone)]
 pub struct CookieJarCtx {
     /// Shared cookie jar — same instance across all plugins; scoping is enforced
     /// at this layer, not in the jar itself.
@@ -20,6 +20,9 @@ pub struct CookieJarCtx {
     /// Allowed effective domains (eTLD+1 form) derived from the plugin's
     /// match patterns. Lower-case, no scheme, no port.
     pub allowed_etld_plus_one: Vec<String>,
+    /// Tracks whether the `get_cookies` stub-warning has fired for this
+    /// plugin instance — emit at most once per ctx so logs don't drown.
+    pub get_warned: AtomicBool,
 }
 
 impl CookieJarCtx {
@@ -29,6 +32,7 @@ impl CookieJarCtx {
         Self {
             jar,
             allowed_etld_plus_one: allowed_hosts_from_matches(match_patterns),
+            get_warned: AtomicBool::new(false),
         }
     }
 
@@ -44,6 +48,7 @@ impl CookieJarCtx {
         Self {
             jar: Arc::new(rdlp_cookies::SimpleCookieJar::new()),
             allowed_etld_plus_one,
+            get_warned: AtomicBool::new(false),
         }
     }
 
@@ -159,9 +164,16 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
         if !ctx.host_in_scope(host) {
             return Vec::new();
         }
-        // TODO(follow-up): parse "name=value" strings from
-        // `ctx.jar.get_cookies(&url).await` into WIT Cookie records.
-        // The scoping gate above is the security-critical part of this task.
+        // Surface the stub to plugin authors exactly once per plugin so they
+        // don't waste hours debugging "0 cookies" — the scoping gate above
+        // works, but the read-side cookie parser is a follow-up task.
+        if !ctx.get_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::warn!(
+                target: &self.log_target,
+                "host:cookie-jar get_cookies returns an empty list — \
+                 cookie record parsing not yet wired (security scoping IS enforced)"
+            );
+        }
         Vec::new()
     }
 

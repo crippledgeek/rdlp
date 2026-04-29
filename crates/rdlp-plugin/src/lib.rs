@@ -95,6 +95,7 @@
 #![warn(missing_docs)]
 
 pub mod adapter;
+pub mod disabled_list;
 pub mod dispatch;
 pub mod engine;
 pub mod error;

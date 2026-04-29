@@ -209,10 +209,18 @@ impl ExtractorRegistry {
     /// ```
     #[must_use]
     pub fn find_extractor(&self, url: &str) -> Option<Arc<dyn InfoExtractor>> {
-        self.extractors
+        // Two-pass selection so plugins shadowing built-in host space get
+        // clamped: gather suitable candidates, note whether any built-in
+        // is among them, then sort by URL-aware effective_priority.
+        let suitable: Vec<&Arc<dyn InfoExtractor>> = self
+            .extractors
             .iter()
             .filter(|e| e.suitable(url))
-            .max_by_key(|e| e.priority())
+            .collect();
+        let builtin_competitor = suitable.iter().any(|e| !e.is_plugin());
+        suitable
+            .into_iter()
+            .max_by_key(|e| e.effective_priority(url, builtin_competitor))
             .cloned()
     }
 

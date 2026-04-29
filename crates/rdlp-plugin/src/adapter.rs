@@ -11,7 +11,13 @@ use regex::Regex;
 
 use crate::PluginError;
 use crate::engine::Engine;
+use crate::host::cookie_jar::CookieJarCtx;
+use crate::host::fetch::FetchCtx;
+use crate::host::html_select::HtmlSelectCtx;
+use crate::host::js_eval::JsEvalCtx;
+use crate::host::store_kv::StoreKvCtx;
 use crate::instance::{PluginStoreData, build_store, deadline_ticks};
+use rdlp_http::wreq;
 use crate::loader::LoadedPlugin;
 use crate::manifest::Manifest;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError};
@@ -19,6 +25,19 @@ use rdlp_types::{DownloadProtocol, InfoDict};
 
 /// Number of traps before a plugin is automatically disabled for the session.
 const TRAP_DISABLE_THRESHOLD: u32 = 3;
+
+/// Shared host resources cloned into each plugin invocation's
+/// capability contexts. Built once at bootstrap; populated only for the
+/// capabilities the host supplies.
+#[derive(Clone, Default)]
+pub struct HostResources {
+    /// Shared HTTPS client used by the `host:fetch` capability when granted.
+    pub fetch_client: Option<wreq::Client>,
+    /// Shared cookie jar scoped to each plugin's match patterns.
+    pub cookie_jar: Option<Arc<rdlp_cookies::SimpleCookieJar>>,
+    /// Sled DB used to namespace the `host:store-kv` capability per plugin.
+    pub kv_db: Option<Arc<sled::Db>>,
+}
 
 /// Adapter wrapping a loaded WASM plugin to look like a built-in extractor.
 ///
@@ -34,6 +53,11 @@ pub struct PluginExtractor {
     pub component: wasmtime::component::Component,
     /// Pre-compiled URL-match regex (from manifest or permissive fallback).
     pub valid_url_regex: Regex,
+    /// Pre-built linker with the declared capability imports wired once.
+    /// Cloned per invocation rather than rebuilt — `Linker` is cheap to clone.
+    linker: wasmtime::component::Linker<PluginStoreData>,
+    /// Shared host resources used to populate capability contexts per call.
+    host_resources: HostResources,
     /// Running count of trap / timeout / internal errors for the 3-strike rule.
     trap_count: AtomicU32,
     /// Set to `true` after `TRAP_DISABLE_THRESHOLD` traps.
@@ -50,17 +74,37 @@ impl PluginExtractor {
     /// When `url_regex` is absent the adapter falls back to a permissive
     /// `^https?://` pattern so the registry can still route URLs via
     /// `manifest.matches` patterns elsewhere.
-    pub fn new(loaded: LoadedPlugin, engine: Arc<Engine>) -> Result<Self, PluginError> {
+    ///
+    /// `host_resources` carries the shared HTTP client, cookie jar, and sled
+    /// DB the host has chosen to expose. Capabilities the plugin requested
+    /// but for which no resource is supplied are silently denied at runtime
+    /// — host policy decides what to share.
+    pub fn new(
+        loaded: LoadedPlugin,
+        engine: Arc<Engine>,
+        host_resources: HostResources,
+    ) -> Result<Self, PluginError> {
         let valid_url_regex = match &loaded.manifest.url_regex {
             Some(src) => crate::dispatch::compile_url_regex(&loaded.manifest.name, src)?,
             // Static literal — safe to unwrap.
             None => Regex::new(r"^https?://").expect("static regex is always valid"),
         };
+        // Build the linker once with this plugin's declared capability set.
+        // Cloning a linker per call is cheap; rebuilding it (and re-running
+        // each capability's bindgen-generated `add_to_linker`) is not.
+        let mut linker = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw());
+        crate::host::add_capability_imports(&mut linker, &loaded.manifest)
+            .map_err(|e| PluginError::LinkerWire {
+                plugin: loaded.manifest.name.clone(),
+                reason: format!("{e}"),
+            })?;
         Ok(Self {
             engine,
             manifest: loaded.manifest,
             component: loaded.component,
             valid_url_regex,
+            linker,
+            host_resources,
             trap_count: AtomicU32::new(0),
             disabled: AtomicBool::new(false),
             extract_timeout: Duration::from_secs(30),
@@ -108,6 +152,27 @@ impl InfoExtractor for PluginExtractor {
         self.plugin_priority()
     }
 
+    fn is_plugin(&self) -> bool {
+        true
+    }
+
+    /// Plugin-aware priority that clamps to BUILT_IN_MAX (99) when a
+    /// built-in extractor also matches this URL — unless the plugin's
+    /// signed manifest explicitly lists this URL's host in
+    /// `claims_override`.
+    fn effective_priority(&self, url: &str, builtin_competitor: bool) -> i32 {
+        let parsed = url::Url::parse(url).ok();
+        // No competing built-in: no clamp.
+        if !builtin_competitor {
+            return self.plugin_priority();
+        }
+        let p = match parsed {
+            Some(u) => crate::priority::effective_priority(&self.manifest, &u, true, None),
+            None => self.manifest.priority.min(crate::priority::BUILT_IN_MAX),
+        };
+        p as i32
+    }
+
     async fn extract(&self, url: &str, _ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
         if self.disabled.load(Ordering::Relaxed) {
             return Err(RdlpError::Extraction {
@@ -119,49 +184,106 @@ impl InfoExtractor for PluginExtractor {
             });
         }
 
+        // A fresh cancel token per call; the tokio timeout below trips it
+        // when the wall-clock deadline elapses, so host-side futures that
+        // are racing it via `run_with_cancel` (e.g., host:fetch) abort
+        // promptly even if the wasmtime epoch hasn't fired yet.
         let cancel = tokio_util::sync::CancellationToken::new();
         let ticks = deadline_ticks(self.extract_timeout, Duration::from_millis(100));
         let mut store = build_store(&self.engine, &self.manifest.name, cancel.clone(), ticks);
-        let mut linker = wasmtime::component::Linker::<PluginStoreData>::new(self.engine.raw());
-        crate::host::add_capability_imports(&mut linker, &self.manifest).map_err(|e| {
-            RdlpError::Extraction {
-                message: format!(
-                    "plugin {} capability wiring failed: {e}",
-                    self.manifest.name
-                ),
+        self.populate_capability_contexts(store.data_mut())
+            .map_err(|e| RdlpError::Extraction {
+                message: format!("{e:#}"),
                 url: Some(url.to_string()),
-            }
-        })?;
+            })?;
 
-        let result = call_plugin_extract(
-            &mut store,
-            &linker,
-            &self.component,
-            url,
-            &self.manifest.name,
-        )
-        .await;
+        // Wrap the call in a wall-clock timeout. Without it, a CPU-bound
+        // plugin with no host calls only stops on the wasmtime epoch trap,
+        // and a plugin doing host:fetch in a long retry loop never trips
+        // the epoch (host time isn't WASM time).
+        let plugin_name = self.manifest.name.clone();
+        let component = &self.component;
+        let linker = &self.linker;
+        let timeout = self.extract_timeout;
+        let cancel_for_timeout = cancel.clone();
+        let result = match tokio::time::timeout(timeout, async move {
+            call_plugin_extract(&mut store, linker, component, url, &plugin_name).await
+        })
+        .await
+        {
+            Ok(inner) => inner,
+            Err(_) => {
+                cancel_for_timeout.cancel();
+                Err(PluginError::Timeout {
+                    plugin: self.manifest.name.clone(),
+                })
+            }
+        };
 
         match result {
             Ok(info) => Ok(info),
             Err(e) => {
-                // Count traps / timeouts / internal errors against the 3-strike rule.
-                // Domain-level extraction errors (UnsupportedUrl, NotFound, …) are
-                // normal and should not penalise the plugin.
+                // Count traps / timeouts / internal errors against the 3-strike
+                // rule. Domain-level extraction errors (UnsupportedUrl,
+                // NotFound, RateLimited, AuthRequired, …) are surfaced as
+                // dedicated typed variants and do NOT penalise the plugin.
                 if matches!(
                     e,
                     PluginError::Trapped { .. }
                         | PluginError::Timeout { .. }
                         | PluginError::Internal(_)
+                        | PluginError::LinkerWire { .. }
                 ) {
                     self.record_trap();
                 }
-                Err(RdlpError::Extraction {
-                    message: format!("{e:#}"),
-                    url: Some(url.to_string()),
-                })
+                Err(plugin_error_to_rdlp(e, url))
             }
         }
+    }
+}
+
+impl PluginExtractor {
+    /// Populate the per-call capability contexts on the store data based on
+    /// the manifest's declared capabilities AND the host resources we have.
+    /// A capability declared in the manifest with no matching host resource
+    /// is silently denied at the host-impl layer; this matches the design
+    /// principle that the host decides what's actually grantable.
+    fn populate_capability_contexts(&self, data: &mut PluginStoreData) -> Result<(), PluginError> {
+        let caps = &self.manifest.capabilities;
+
+        if caps.iter().any(|c| c == "fetch")
+            && let Some(client) = self.host_resources.fetch_client.clone()
+        {
+            data.fetch = Some(FetchCtx { client });
+        }
+        if caps.iter().any(|c| c == "cookie-jar")
+            && let Some(jar) = self.host_resources.cookie_jar.clone()
+        {
+            data.cookie_jar = Some(CookieJarCtx::new(jar, &self.manifest.matches));
+        }
+        if caps.iter().any(|c| c == "js-eval") {
+            data.js_eval = Some(JsEvalCtx::default());
+        }
+        if caps.iter().any(|c| c == "html-select") {
+            data.html_select = Some(HtmlSelectCtx);
+        }
+        if caps.iter().any(|c| c == "store-kv")
+            && let Some(db) = self.host_resources.kv_db.as_ref()
+        {
+            data.store_kv = Some(StoreKvCtx::open(db, &self.manifest.name)?);
+        }
+        // `log` and `claim-all-urls` need no per-call ctx.
+        Ok(())
+    }
+}
+
+/// Convert a `PluginError` into an `RdlpError` for the orchestrator.
+/// Domain errors carry the same trapping/non-trapping flag at the call
+/// site; this conversion only shapes the user-facing message.
+fn plugin_error_to_rdlp(e: PluginError, url: &str) -> RdlpError {
+    RdlpError::Extraction {
+        message: format!("{e:#}"),
+        url: Some(url.to_string()),
     }
 }
 
@@ -197,25 +319,28 @@ async fn call_plugin_extract(
 }
 
 /// Map a WIT `ExtractError` variant to a `PluginError`.
+///
+/// Domain-level errors (UnsupportedUrl, NotFound, RateLimited, AuthRequired)
+/// map to dedicated `PluginError` variants — they are NOT `Internal` — so the
+/// 3-strike trap rule in `extract` does not penalise plugins that legitimately
+/// reject a URL. Only `W::Internal(_)` (genuine plugin-internal failures) maps
+/// to `PluginError::Internal`.
 fn extract_error_to_plugin_error(
     plugin: &str,
     err: crate::bindings::rdlp::plugin::types::ExtractError,
 ) -> PluginError {
     use crate::bindings::rdlp::plugin::types::ExtractError as W;
-    let reason = match err {
-        W::UnsupportedUrl(s) => format!("unsupported url: {s}"),
-        W::NotFound(s) => format!("not found: {s}"),
-        W::RateLimited(retry) => match retry {
-            Some(secs) => format!("rate limited (retry after {secs}s)"),
-            None => "rate limited".to_string(),
-        },
-        W::AuthRequired(s) => format!("auth required: {s}"),
-        W::Network(s) => format!("network error: {s}"),
-        W::Parse(s) => format!("parse error: {s}"),
-        W::Cancelled => "cancelled".to_string(),
-        W::Internal(s) => format!("internal: {s}"),
-    };
-    PluginError::Internal(format!("plugin {plugin} extract error: {reason}"))
+    let plugin = plugin.to_string();
+    match err {
+        W::UnsupportedUrl(detail) => PluginError::UnsupportedUrl { plugin, detail },
+        W::NotFound(detail) => PluginError::NotFound { plugin, detail },
+        W::RateLimited(retry_after) => PluginError::RateLimited { plugin, retry_after },
+        W::AuthRequired(detail) => PluginError::AuthRequired { plugin, detail },
+        W::Network(detail) => PluginError::ExtractNetwork { plugin, detail },
+        W::Parse(detail) => PluginError::ExtractParse { plugin, detail },
+        W::Cancelled => PluginError::Cancelled { plugin },
+        W::Internal(detail) => PluginError::Internal(format!("plugin {plugin}: {detail}")),
+    }
 }
 
 /// Convert a bindgen-generated `InfoDict` to the rdlp-types `InfoDict`.

@@ -7,10 +7,14 @@
 //! built-in extractors.
 
 use anyhow::Context as _;
+use rdlp_cookies::SimpleCookieJar;
 use rdlp_extractor::ExtractorRegistry;
+use rdlp_http::HttpClientFactory;
 use rdlp_plugin::{
-    adapter::PluginExtractor,
+    adapter::{HostResources, PluginExtractor},
+    disabled_list::read_disabled_list,
     engine::{Engine, EngineConfig},
+    host::store_kv::open_host_db,
     loader::Loader,
     prompt::{AlwaysDeny, PreTrustedIdentities, Prompter},
     trust_store::TrustStore,
@@ -57,17 +61,35 @@ fn bootstrap_plugins(
     };
     let engine = Arc::new(Engine::new(engine_cfg).context("wasmtime engine init")?);
 
-    let trust_path = config_dir()?.join("rdlp").join("plugin-trust.toml");
-    let mut trust_store = TrustStore::open(&trust_path).unwrap_or_else(|e| {
-        log::warn!("plugin trust store at {trust_path:?}: {e}; using in-memory store");
-        // Fall back to an in-memory store at a non-existent path — TrustStore
-        // will re-open from disk on the next process start.
-        TrustStore::open(trust_path).unwrap_or_else(|_| {
-            // If the real path fails too, use a temp path that will never be read.
-            TrustStore::open(std::env::temp_dir().join("rdlp-plugin-trust-fallback.toml"))
-                .expect("tmp trust store always succeeds")
-        })
-    });
+    let rdlp_dir = config_dir()?.join("rdlp");
+    let trust_path = rdlp_dir.join("plugin-trust.toml");
+    // Single attempt — if the real trust store can't be opened, log loudly
+    // (any subsequent first-install confirmations will not persist) and
+    // continue with the original path; TrustStore::open returns an empty
+    // in-memory store on missing files, so this rarely fails for legitimate
+    // I/O reasons. The previous triple-fallback chain was confusing and
+    // hid the failure mode behind a tmp file the next process never read.
+    let mut trust_store = match TrustStore::open(&trust_path) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!(
+                "plugin trust store at {trust_path:?} failed to open: {e}; \
+                 trust decisions made this run WILL NOT PERSIST across restarts"
+            );
+            return Err(e).context("trust store open");
+        }
+    };
+
+    // Read the disabled-plugins list once at bootstrap. A corrupted file is
+    // a hard failure — silently treating it as empty would re-activate any
+    // previously-disabled plugin (security regression).
+    let disabled_path = rdlp_dir.join("plugin-disabled.toml");
+    let disabled: std::collections::HashSet<String> = read_disabled_list(&disabled_path)
+        .with_context(|| {
+            format!("read disabled-plugin list at {}", disabled_path.display())
+        })?
+        .into_iter()
+        .collect();
 
     // Prompter selection — conservative by default:
     //   - AlwaysDeny  : no pre-trusted publishers configured.
@@ -84,25 +106,42 @@ fn bootstrap_plugins(
         Arc::new(AlwaysDeny)
     };
 
+    // Build the shared host resources once. Each plugin's adapter
+    // populates per-call capability contexts from these.
+    let host_resources = build_host_resources(config)?;
+
     let mut loader = Loader::new(&engine, &mut trust_store, prompter);
     let mut loaded_count = 0usize;
 
     for dir in &config.plugin_directories {
         for outcome in loader.discover(dir) {
             match outcome {
-                Ok(loaded) => match PluginExtractor::new(loaded, Arc::clone(&engine)) {
-                    Ok(extractor) => {
-                        log::debug!(
-                            "plugin bootstrap: registered plugin {:?}",
-                            dir.file_name().unwrap_or_default()
+                Ok(loaded) => {
+                    if disabled.contains(&loaded.manifest.name) {
+                        log::info!(
+                            "plugin '{}' is in the disabled list; skipping load",
+                            loaded.manifest.name
                         );
-                        registry.register(Arc::new(extractor));
-                        loaded_count += 1;
+                        continue;
                     }
-                    Err(e) => {
-                        log::warn!("plugin adapter init for {dir:?}: {e}");
+                    let plugin_name = loaded.manifest.name.clone();
+                    match PluginExtractor::new(
+                        loaded,
+                        Arc::clone(&engine),
+                        host_resources.clone(),
+                    ) {
+                        Ok(extractor) => {
+                            log::debug!(
+                                "plugin bootstrap: registered plugin '{plugin_name}'"
+                            );
+                            registry.register(Arc::new(extractor));
+                            loaded_count += 1;
+                        }
+                        Err(e) => {
+                            log::warn!("plugin '{plugin_name}' adapter init failed: {e}");
+                        }
                     }
-                },
+                }
                 Err((plugin_dir, e)) => {
                     log::warn!("plugin {plugin_dir:?} failed to load: {e}");
                 }
@@ -111,6 +150,45 @@ fn bootstrap_plugins(
     }
 
     Ok(loaded_count)
+}
+
+/// Build the shared per-host resources that the plugin adapters use to
+/// populate per-call capability contexts. Failure here is non-fatal at the
+/// per-resource level — the corresponding capability is simply not granted.
+fn build_host_resources(config: &Config) -> anyhow::Result<HostResources> {
+    let cookie_jar = Arc::new(SimpleCookieJar::new());
+    let raw_jar = cookie_jar.jar();
+    let fetch_client = Some(
+        HttpClientFactory::from_rdlp_config(config).build_with_cookies(raw_jar),
+    );
+
+    // sled DB for host:store-kv. Sited under the rdlp config dir so it's
+    // user-private and persists across runs.
+    let kv_db = match config_dir() {
+        Ok(base) => {
+            let kv_path = base.join("rdlp").join("plugin-kv");
+            match open_host_db(&kv_path) {
+                Ok(db) => Some(Arc::new(db)),
+                Err(e) => {
+                    log::warn!(
+                        "plugin store-kv at {}: {e}; the host:store-kv capability will be denied",
+                        kv_path.display()
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("no config dir for plugin store-kv: {e}");
+            None
+        }
+    };
+
+    Ok(HostResources {
+        fetch_client,
+        cookie_jar: Some(cookie_jar),
+        kv_db,
+    })
 }
 
 /// Resolve the platform config directory.

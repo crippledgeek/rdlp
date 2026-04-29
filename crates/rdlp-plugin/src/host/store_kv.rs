@@ -9,6 +9,13 @@ use wasmtime::component::Linker;
 /// Default per-plugin quota: 10 MB.
 pub const DEFAULT_QUOTA_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Open the host-level sled DB used to namespace each plugin's `host:store-kv`
+/// space. The orchestrator opens this once at bootstrap; per-plugin
+/// `StoreKvCtx` instances later carve out namespaced trees from it.
+pub fn open_host_db(path: &std::path::Path) -> Result<sled::Db, PluginError> {
+    sled::open(path).map_err(|e| PluginError::Internal(format!("sled open: {e}")))
+}
+
 /// Per-plugin store-kv context.
 pub struct StoreKvCtx {
     /// The namespaced sled tree for this plugin.

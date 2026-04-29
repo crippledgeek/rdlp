@@ -15,7 +15,6 @@ rdlp-security = { path = "../rdlp-security" }
 
 # WASM runtime
 wasmtime = { version = "30", features = ["component-model", "async"] }
-wasmtime-wasi = { version = "30" }
 
 # Signing
 sigstore = { version = "0.13", default-features = false, features = ["sigstore-trust-root", "rustls-tls", "verify"] }
@@ -37,6 +36,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 tokio-util = { workspace = true }
+futures-util = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }
 

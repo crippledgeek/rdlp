@@ -120,6 +120,95 @@ pub enum PluginError {
         reason: String,
     },
 
+    /// The plugin returned a domain-level "URL not supported" error from `extract`.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' does not support URL: {detail}")]
+    UnsupportedUrl {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Plugin-supplied detail (typically the URL it could not handle).
+        detail: String,
+    },
+
+    /// The plugin returned a domain-level "not found" error from `extract`.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' reported resource not found: {detail}")]
+    NotFound {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Plugin-supplied detail (e.g. the missing video id).
+        detail: String,
+    },
+
+    /// The plugin reported it was rate-limited by the upstream service.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' was rate-limited{}",
+        retry_after.map(|s| format!(" (retry after {s}s)")).unwrap_or_default())]
+    RateLimited {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Optional plugin-suggested retry delay in seconds.
+        retry_after: Option<u32>,
+    },
+
+    /// The plugin reported an authentication / login is required upstream.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' reports auth required: {detail}")]
+    AuthRequired {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Plugin-supplied detail.
+        detail: String,
+    },
+
+    /// The plugin reported a network failure during extract.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' network error during extract: {detail}")]
+    ExtractNetwork {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Plugin-supplied detail.
+        detail: String,
+    },
+
+    /// The plugin reported a parse failure on upstream content.
+    /// Counted as a normal extraction outcome, NOT as a trap.
+    #[error("plugin '{plugin}' parse error during extract: {detail}")]
+    ExtractParse {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Plugin-supplied detail.
+        detail: String,
+    },
+
+    /// Wiring host capability imports into the wasmtime linker failed
+    /// (e.g. a bindgen-generated `add_to_linker` returned an error).
+    #[error("plugin '{plugin}' linker wiring failed: {reason}")]
+    LinkerWire {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// Underlying wasmtime / bindgen error message.
+        reason: String,
+    },
+
+    /// The user explicitly declined to trust this plugin during the
+    /// first-install confirmation prompt.
+    #[error("plugin '{plugin}' load declined by user")]
+    UserDeclined {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+    },
+
+    /// The plugin name failed validation: must be lowercase kebab-case,
+    /// no path-separator characters, no leading hyphen.
+    #[error("plugin name '{name}' is invalid: {reason}")]
+    InvalidPluginName {
+        /// The offending plugin name as supplied by caller / manifest.
+        name: String,
+        /// Why it was rejected.
+        reason: String,
+    },
+
     /// The plugin has been disabled (3-strike rule or explicit user action).
     #[error("plugin '{plugin}' is disabled (3-strike rule or user disabled)")]
     Disabled {

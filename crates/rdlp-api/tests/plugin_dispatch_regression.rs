@@ -89,9 +89,11 @@ signature = "PLACEHOLDER"
     std::fs::write(plugin_dir.join("plugin.toml"), final_toml).unwrap();
 
     // Pre-trust the publisher so the loader's prompter approves the plugin
-    // without interactive input.
+    // without interactive input. Identity must match
+    // `Signature::identity_string()` exactly, which is `ed25519:<hex of full
+    // SHA-256 over the base64-encoded pubkey>` post-MVP-hardening.
     use sha2::{Digest, Sha256};
-    let pub_hash_hex = hex::encode(&Sha256::digest(pubkey_b64.as_bytes())[..8]);
+    let pub_hash_hex = hex::encode(Sha256::digest(pubkey_b64.as_bytes()));
     let identity = format!("ed25519:{pub_hash_hex}");
 
     let config = Config {

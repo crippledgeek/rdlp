@@ -56,14 +56,19 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
             return Err(FetchError::Network("fetch capability not granted".into()));
         };
 
-        if validate_url_security(&req.url).is_err() {
-            return Err(FetchError::Network("url failed security validation".into()));
+        if let Err(e) = validate_url_security(&req.url) {
+            return Err(FetchError::Network(format!("url security: {e}")));
         }
 
-        let method = req
-            .method
-            .parse::<wreq::Method>()
-            .unwrap_or(wreq::Method::GET);
+        let method = match req.method.parse::<wreq::Method>() {
+            Ok(m) => m,
+            Err(_) => {
+                return Err(FetchError::Network(format!(
+                    "invalid HTTP method: {}",
+                    req.method
+                )));
+            }
+        };
         let mut rb = ctx.client.request(method, &req.url);
         for (k, v) in &req.headers {
             rb = rb.header(k, v);
@@ -98,20 +103,34 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
+        // Streaming body cap: abort the moment the cumulative byte count
+        // exceeds MAX_BODY_BYTES so an adversarial server cannot exhaust
+        // plugin memory before the cap fires (the previous `resp.bytes()`
+        // path buffered the entire response BEFORE checking).
+        use futures_util::StreamExt;
         let cancel2 = cancel.clone();
-        let body_fut = resp.bytes();
-        let body = tokio::select! {
-            biased;
-            () = cancel2.cancelled() => return Err(FetchError::Cancelled),
-            b = body_fut => b.map_err(|e| FetchError::Network(e.to_string()))?,
-        };
-        if body.len() > MAX_BODY_BYTES {
-            return Err(FetchError::BodyTooLarge);
+        let mut stream = resp.bytes_stream();
+        let mut body: Vec<u8> = Vec::new();
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel2.cancelled() => return Err(FetchError::Cancelled),
+                chunk = stream.next() => match chunk {
+                    Some(Ok(bytes)) => {
+                        if body.len().saturating_add(bytes.len()) > MAX_BODY_BYTES {
+                            return Err(FetchError::BodyTooLarge);
+                        }
+                        body.extend_from_slice(&bytes);
+                    }
+                    Some(Err(e)) => return Err(FetchError::Network(e.to_string())),
+                    None => break,
+                }
+            }
         }
         Ok(Response {
             status,
             headers,
-            body: body.to_vec(),
+            body,
             final_url,
         })
     }

@@ -159,6 +159,15 @@ impl TrustStore {
 
         #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
         std::fs::write(&tmp_path, s)?;
+        // Restrict mode to user-only. The trust file lists the approved
+        // identities + capabilities of every installed plugin and would
+        // leak that inventory on a default-umask shared system.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
+            let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+        }
         #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
         std::fs::rename(&tmp_path, &self.path)?;
         Ok(())
