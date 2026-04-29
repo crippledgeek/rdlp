@@ -12,13 +12,21 @@ from rdlp_ytdlp_compat._errors import (
     PostProcessingError,
     RateLimitedError,
     RegexNotFoundError,
+    RequiredError,
     UnavailableVideoError,
     UnsupportedError,
     UserNotLive,
     YoutubeDLError,
     network_exceptions,
 )
-from rdlp_ytdlp_compat._utils import sanitize_filename, sanitize_path
+from rdlp_ytdlp_compat._utils import (
+    determine_ext,
+    dict_get,
+    require,
+    sanitize_filename,
+    sanitize_path,
+    variadic,
+)
 from rdlp_ytdlp_compat.info_extractor import (
     NO_DEFAULT,
     InfoExtractor,
@@ -59,7 +67,13 @@ __all__ = [
     "NotFoundError",
     "RateLimitedError",
     "NetworkError",
+    "RequiredError",
     # Filename / path sanitisers mirroring yt_dlp/utils/_utils.py
     "sanitize_filename",
     "sanitize_path",
+    # Slice-2 utility helpers (yt_dlp/utils/_utils.py + utils/traversal.py)
+    "determine_ext",
+    "dict_get",
+    "require",
+    "variadic",
 ]

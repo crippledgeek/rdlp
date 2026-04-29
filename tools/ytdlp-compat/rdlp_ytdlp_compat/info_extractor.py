@@ -4,6 +4,7 @@ I/O helpers (_download_webpage, _parse_json, _search_regex, etc.) are added
 in Tasks 6-7. This module is import-time pure (no host imports), so its
 helpers are fully unit-testable in plain Python.
 """
+import collections.abc as _collections_abc
 import datetime
 import email.utils
 import json as _json
@@ -124,90 +125,245 @@ def unified_timestamp(date_str, day_first=True, tz_offset=0):
     return None
 
 
+def _is_iterable_like(obj):
+    """Mirrors yt-dlp's `is_iterable_like`. A value is "iterable-like" if it
+    has __iter__ and is NOT a string/bytes/dict/Mapping (which we treat
+    as scalars or via different segment kinds)."""
+    if isinstance(obj, (str, bytes, dict)):
+        return False
+    if isinstance(obj, _collections_abc.Mapping):
+        return False
+    return hasattr(obj, "__iter__")
+
+
+def _try_call(func, args=()):
+    """yt-dlp's `try_call` (`_utils.py:2680-2697`) — call func, swallow
+    the documented exception classes and return None. We DO NOT swallow
+    `RequiredError` — it MUST propagate so traverse_obj can catch it on
+    the final path and re-raise as ExtractorError.
+    """
+    from rdlp_ytdlp_compat._errors import RequiredError as _RequiredError
+    try:
+        return func(*args)
+    except _RequiredError:
+        raise
+    except (AttributeError, KeyError, TypeError, IndexError, ValueError,
+            ZeroDivisionError):
+        return None
+
+
 def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                  get_all=True, casesense=True, traverse_string=False):
-    """yt-dlp's traverse_obj — Slice-1 subset.
+    """Safely traverse nested `dict`s and `Iterable`s — Slice-2 subset of
+    yt-dlp's `utils/traversal.py:38-313` @ tag 2026.03.17.
 
-    Each path is a tuple of segments. Supported segment types in Slice 1:
-      - str: dict key (case-sensitive unless `casesense=False`)
-      - int: list index
-      - Ellipsis (...): iterate all values of a Mapping/Iterable
-      - callable: filter (keep elements where callable(item) is truthy)
+    Each path is wrapped in `variadic`, so `'key'` is the same as
+    `('key',)`. The first path producing a non-None result wins; if a
+    path branches but produces empty, the next path is tried.
 
-    Default behaviour:
-      - default=NO_DEFAULT: returns [] on branched miss (when get_all=True),
-        None on scalar miss. Real extractors rely on this distinction —
-        if traverse_obj(...) AND len(...) both work on branched paths.
-      - get_all=True: branched paths return a list of all matches.
-      - get_all=False: return only the first match, no branching.
-      - casesense=False: dict-key lookup is case-insensitive.
+    Supported segment types:
 
-    Multiple paths: first non-empty result wins.
+      - `None`              return current object unchanged
+      - `str` / `int`       dict key / list index lookup
+      - `Ellipsis (...)`    branch over all values of Mapping/Iterable
+      - `set` of one type   type filter — keep value iff isinstance
+      - `set` of N types    multi-type filter
+      - `set` of one func   transformer — apply func, use return value
+      - `(branch, branch)`  branch into multiple sub-paths, chain results
+      - `callable(k, v)`    predicate filter on Mapping.items() /
+                            enumerate(Iterable)
+      - `any` builtin       collapse to first non-None, reset branching
+      - `all` builtin       collect into list, reset branching
+      - `filter` builtin    drop falsy values
+
+    Slice-2 deliberately drops upstream support for `re.Match`,
+    `xml.etree.ElementTree`, `http.cookies.Morsel`, `slice`, and
+    `traverse_string` — none of these are exercised by SVT or by any
+    plausible Slice-2 plugin. Add when a port needs them.
+
+    `default=NO_DEFAULT`: missing paths return None for scalars and `[]`
+    for branched paths. `get_all=False` returns only the first match.
+    `casesense=False` makes dict-key lookups case-insensitive.
+    `expected_type` (a type) keeps the value only if isinstance — applied
+    AFTER traversal so it filters branched results too.
+
+    `RequiredError` raised by `{require(...)}` segments is caught here
+    on non-final paths (so the next path can be tried) and re-raised as
+    `ExtractorError(msg, expected=...)` once the last path is exhausted.
     """
-    sentinel_default = default is NO_DEFAULT
-    any_branched = False
-    for path in paths:
-        if not isinstance(path, tuple):
-            path = (path,)
-        is_branched = any(seg is Ellipsis or callable(seg) for seg in path)
-        any_branched = any_branched or is_branched
-        result = _traverse_one(obj, path, get_all=get_all, casesense=casesense)
-        if result is None or (isinstance(result, list) and not result):
-            continue
-        if expected_type is not None:
-            if isinstance(result, list):
-                result = [v for v in result if isinstance(v, expected_type)]
-                if not result:
-                    continue
-            elif not isinstance(result, expected_type):
-                continue
-        if get_all is False and isinstance(result, list):
-            result = result[0] if result else None
-            if result is None:
-                continue
-        return result
-    # No path produced a hit
-    if sentinel_default:
-        # yt-dlp default: [] for branched/get_all paths, None for scalar paths.
-        return [] if (any_branched and get_all) else None
-    return default
+    from rdlp_ytdlp_compat._errors import (
+        ExtractorError as _ExtractorError,
+        RequiredError as _RequiredError,
+    )
 
+    casefold = lambda k: k.casefold() if isinstance(k, str) else k
 
-def _traverse_one(obj, path, get_all=True, casesense=True):
-    if not path:
-        return obj
-    head, *rest = path
-    if head is Ellipsis:
-        if isinstance(obj, dict):
-            items = list(obj.values())
-        elif isinstance(obj, (list, tuple)):
-            items = list(obj)
-        else:
-            return None
-        out = []
-        for item in items:
-            v = _traverse_one(item, rest, get_all=get_all, casesense=casesense) if rest else item
-            if v is None:
-                continue
-            if isinstance(v, list):
-                out.extend(v)
+    if expected_type is None:
+        type_test = lambda val: val
+    elif isinstance(expected_type, type):
+        type_test = lambda val: val if isinstance(val, expected_type) else None
+    else:
+        type_test = lambda val: _try_call(expected_type, args=(val,))
+
+    def apply_key(key, obj, is_last):
+        """Apply ONE path segment to ONE object. Returns
+        `(branched: bool, results: iterable)`. When non-branched the
+        iterable is a 1-tuple; when branched it's a flat iterable of all
+        results."""
+        branching = False
+        result = None
+
+        if key is None:
+            result = obj
+
+        elif isinstance(key, set):
+            # Set semantics (`utils/traversal.py:127-134`):
+            #   {type}              → type filter (require isinstance)
+            #   {type1, type2, ...} → multi-type filter
+            #   {callable}          → transformer (apply, use return)
+            item = next(iter(key))
+            if len(key) > 1 or isinstance(item, type):
+                # Type filter — every member must be a type.
+                assert all(isinstance(member, type) for member in key), (
+                    "set in traverse_obj path with non-type members must "
+                    "have exactly one element (the transformer callable)"
+                )
+                if isinstance(obj, tuple(key)):
+                    result = obj
             else:
-                out.append(v)
-        return out if out else []
-    if callable(head):
-        if not isinstance(obj, (list, tuple)):
-            return None
-        return [item for item in obj if head(item)]
-    if isinstance(head, str) and isinstance(obj, dict) and not casesense:
-        for k, v in obj.items():
-            if isinstance(k, str) and k.lower() == head.lower():
-                return _traverse_one(v, rest, get_all=get_all, casesense=casesense) if rest else v
+                # Single-callable transformer. RequiredError propagates.
+                result = _try_call(item, args=(obj,))
+
+        elif isinstance(key, (list, tuple)):
+            # Sub-path branching — recurse into each branch and chain.
+            branching = True
+            chained = []
+            for branch in key:
+                sub_results, _, _ = apply_path(obj, branch, is_last)
+                chained.extend(sub_results)
+            result = chained
+
+        elif key is Ellipsis:
+            branching = True
+            if isinstance(obj, _collections_abc.Mapping):
+                result = list(obj.values())
+            elif _is_iterable_like(obj):
+                result = list(obj)
+            else:
+                result = ()
+
+        elif callable(key):
+            # Predicate filter with `(key, value)` signature. Mapping →
+            # iterates .items(); Iterable → enumerate(); else empty.
+            branching = True
+            if isinstance(obj, _collections_abc.Mapping):
+                iter_obj = obj.items()
+            elif _is_iterable_like(obj):
+                iter_obj = enumerate(obj)
+            else:
+                iter_obj = ()
+            result = [v for k, v in iter_obj if _try_call(key, args=(k, v))]
+
+        elif isinstance(obj, _collections_abc.Mapping):
+            # Plain key lookup. Case-insensitive when casesense=False.
+            if casesense or key in obj:
+                result = obj.get(key)
+            else:
+                result = next(
+                    (v for k, v in obj.items() if casefold(k) == key),
+                    None,
+                )
+
+        elif isinstance(key, int):
+            if _is_iterable_like(obj) and isinstance(
+                obj, _collections_abc.Sequence,
+            ):
+                try:
+                    result = obj[key]
+                except IndexError:
+                    result = None
+
+        return branching, (result if branching else (result,))
+
+    def apply_path(start_obj, path, test_type):
+        """Walk a single path through current state. Returns
+        `(results_iter, has_branched, ends_in_dict)`."""
+        from rdlp_ytdlp_compat._utils import variadic as _variadic
+        objs = (start_obj,)
+        has_branched = False
+        seq = list(_variadic(path, (str, bytes, dict, set)))
+
+        last_key = None
+        for idx, key in enumerate(seq):
+            is_last = idx == len(seq) - 1
+            last_key = key
+
+            if not casesense and isinstance(key, str):
+                key = key.casefold()
+
+            # `any` / `all` / `filter` are scope resets (do NOT consume an
+            # object — they reshape the current `objs` collection).
+            if key in (any, all):
+                # After `any`/`all`, branching is collapsed. Note that for
+                # `any`, `objs` becomes a 1-tuple containing either the
+                # first non-None match OR `None` — NOT an empty tuple.
+                # That way a subsequent `{require(...)}` segment still gets
+                # invoked on `None` and raises `RequiredError` as upstream
+                # `yt_dlp/utils/traversal.py:260-267` does.
+                has_branched = False
+                filtered = (o for o in objs if o not in (None, {}))
+                if key is any:
+                    objs = (next(filtered, None),)
+                else:
+                    objs = (list(filtered),)
+                continue
+            if key is filter:
+                objs = tuple(o for o in objs if o)
+                continue
+
+            new_objs = []
+            for o in objs:
+                branched, results = apply_key(key, o, is_last)
+                has_branched = has_branched or branched
+                new_objs.extend(results)
+            objs = new_objs
+
+        return objs, has_branched, False  # Slice-2 doesn't support dict-segment
+
+    sentinel_default = default is NO_DEFAULT
+    last_index = len(paths) - 1
+    last_has_branched = False  # tracks the terminal path's branching state
+    for index, path in enumerate(paths):
+        is_last = index == last_index
+        try:
+            results, has_branched, _ = apply_path(obj, path, True)
+        except _RequiredError as e:
+            if is_last:
+                raise _ExtractorError(e.orig_msg, expected=e.expected) from None
+            continue
+        last_has_branched = has_branched
+        # Drop None / {} — yt-dlp's "unhelpful values".
+        cleaned = [r for r in results if r not in (None, {})]
+        if expected_type is not None:
+            cleaned = [type_test(v) for v in cleaned]
+            cleaned = [v for v in cleaned if v is not None]
+
+        if get_all and has_branched:
+            if cleaned:
+                return cleaned
+            continue
+
+        if cleaned:
+            return cleaned[0]
+    # No path produced a hit. Use the LAST path's runtime branching
+    # state — `any`/`all` reset `has_branched` to False mid-path, so a
+    # path ending in `any` is treated as scalar even if `...` appeared
+    # earlier. This mirrors `yt_dlp/utils/traversal.py:293-298`.
+    if sentinel_default:
+        if get_all and last_has_branched:
+            return []
         return None
-    try:
-        nxt = obj[head]
-    except (KeyError, IndexError, TypeError):
-        return None
-    return _traverse_one(nxt, rest, get_all=get_all, casesense=casesense) if rest else nxt
+    return default
 
 
 class InfoExtractor:

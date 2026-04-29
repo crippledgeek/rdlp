@@ -332,8 +332,15 @@ class TestTraverseObj:
         assert traverse_obj(d, "title", casesense=False) == "Hello"
 
     def test_callable_filter(self):
-        # Keep only ints
-        result = traverse_obj([1, "x", 2, "y"], (lambda v: isinstance(v, int),))
+        # Keep only ints. Slice-2 conforms to yt-dlp's two-arg callable
+        # signature `(key_or_index, value)` per
+        # `yt_dlp/utils/traversal.py:157-178`. Real extractors rely on
+        # the key arg (e.g. SVT line 268: `lambda _, v: v['accessibility']
+        # == 'Default'`); the Slice-1 single-arg form was an over-simplified
+        # shim API that this test now corrects.
+        result = traverse_obj(
+            [1, "x", 2, "y"], (lambda _, v: isinstance(v, int),),
+        )
         assert result == [1, 2]
 
     def test_multiple_paths_first_hit(self):
