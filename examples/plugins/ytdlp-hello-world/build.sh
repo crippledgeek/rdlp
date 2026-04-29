@@ -12,7 +12,7 @@ fi
 # shellcheck disable=SC1090
 source "$ACTIVATE"
 
-# Clear any prior bindings — componentize-py 0.17.2 errors out with
+# Clear any prior bindings — componentize-py-pin@0.17.2 errors out with
 # "File exists (os error 17)" if the destination dir is already populated.
 rm -rf extractor_plugin
 
@@ -21,7 +21,7 @@ rm -rf extractor_plugin
 componentize-py -d wit -w hello-extractor \
     --world-module extractor_plugin bindings .
 
-# componentize-py 0.17.2 does NOT auto-create the output dir (#162); ensure it exists.
+# componentize-py-pin@0.17.2 does NOT auto-create the output dir (#162); ensure it exists.
 mkdir -p out
 
 # Componentize the extractor.py into a .wasm.

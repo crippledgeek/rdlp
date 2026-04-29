@@ -2,15 +2,25 @@
 
 These imports are intentionally module-level (componentize-py issue #23 forbids
 lazy imports). Outside a componentize-py-built component, `extractor_plugin`
-(the renamed wit_world) doesn't exist — we catch ImportError so unit tests
-can still import this module without crashing. I/O helpers raise at call time
-when not available.
+(the renamed wit_world) doesn't exist — we catch `ModuleNotFoundError` so
+unit tests can still import this module without crashing.
+
+We catch the narrower `ModuleNotFoundError` rather than the broader
+`ImportError` so that real bugs in the bindings module (e.g. partial
+componentize-py output, a syntax error in a re-exported module) surface as
+errors at module-load time rather than silently flipping us to "outside
+runtime" mode and producing a plugin that emits no logs. I/O helpers raise
+at call time when not available.
 """
+import logging as _logging
+
+_outside_runtime_logger = _logging.getLogger("rdlp_ytdlp_compat")
+
 try:
     from extractor_plugin.imports import host_fetch, host_log
     from extractor_plugin.imports.host_fetch import Request as _Request
     _AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError:
     _AVAILABLE = False
 
 
@@ -57,8 +67,23 @@ def fetch_text(url: str, headers: list = None, timeout_ms: int = 30000,
 
 
 def log(level: str, message: str) -> None:
-    """Forward a log line to the host. Silent no-op outside the runtime."""
+    """Forward a log line to the host. Outside the runtime, route through
+    the stdlib `logging` module on the `rdlp_ytdlp_compat` logger so test
+    harnesses (pytest's `caplog`) can assert on warning/error lines instead
+    of silently swallowing them."""
     if not _AVAILABLE:
+        # pytest captures via stdlib logging; route through it so test runs
+        # surface extractor diagnostics. Map our level vocabulary to logging.
+        level_map_stdlib = {
+            "trace": _logging.DEBUG,
+            "debug": _logging.DEBUG,
+            "info": _logging.INFO,
+            "warn": _logging.WARNING,
+            "error": _logging.ERROR,
+        }
+        _outside_runtime_logger.log(
+            level_map_stdlib.get(level, _logging.INFO), message
+        )
         return
     level_map = {
         "trace": host_log.Level.TRACE,

@@ -1,11 +1,21 @@
 """Pure-Python unit tests for utility helpers (no host I/O)."""
+import logging
+
 import pytest
+from rdlp_ytdlp_compat import (
+    ExtractorError,
+    GeoRestrictedError,
+    RegexNotFoundError,
+    UnsupportedError,
+    YoutubeDLError,
+)
 from rdlp_ytdlp_compat.info_extractor import (
     InfoExtractor,
     int_or_none, try_get, urljoin, unified_timestamp,
     traverse_obj,
     NO_DEFAULT,
 )
+from rdlp_ytdlp_compat.info_extractor import _NoDefault
 
 
 class TestIntOrNone:
@@ -39,6 +49,66 @@ class TestIntOrNone:
 
     def test_base_radix(self):
         assert int_or_none("ff", base=16) == 255
+
+    def test_bool_true_returns_one(self):
+        # Python's bool IS-A int (`int(True) == 1`). Real extractors
+        # occasionally do `int_or_none(meta.get("isLive"))` — bool input
+        # should pass through cleanly, not raise.
+        assert int_or_none(True) == 1
+        assert int_or_none(False) == 0
+
+    def test_zero_string_returns_zero(self):
+        # Empty string should fall through to default; "0" is a valid value.
+        assert int_or_none("0") == 0
+
+
+class TestNoDefaultSingleton:
+    """`_NoDefault()` must always return the same instance so that any
+    `is NO_DEFAULT` check stays correct — see info_extractor.py for rationale.
+    """
+
+    def test_constructing_returns_singleton(self):
+        assert _NoDefault() is NO_DEFAULT
+
+    def test_repeated_construction_is_same_object(self):
+        assert _NoDefault() is _NoDefault()
+
+    def test_module_constant_identity(self):
+        # An accidental fresh construction must behave identically to the
+        # exported NO_DEFAULT — otherwise sentinel checks silently fail.
+        accidental = _NoDefault()
+        assert accidental is NO_DEFAULT
+
+
+class TestHostLogOutsideRuntime:
+    """When the WIT bindings aren't available (unit-test env), `_host.log`
+    routes through stdlib `logging` so pytest captures warnings instead of
+    silently swallowing them."""
+
+    def test_warn_emitted_through_stdlib_logging(self, caplog):
+        from rdlp_ytdlp_compat import _host
+        with caplog.at_level(logging.WARNING, logger="rdlp_ytdlp_compat"):
+            _host.log("warn", "test warning surfaces in pytest")
+        assert any(
+            "test warning surfaces in pytest" in r.message and r.levelno == logging.WARNING
+            for r in caplog.records
+        )
+
+    def test_error_emitted_through_stdlib_logging(self, caplog):
+        from rdlp_ytdlp_compat import _host
+        with caplog.at_level(logging.ERROR, logger="rdlp_ytdlp_compat"):
+            _host.log("error", "test error surfaces in pytest")
+        assert any(
+            r.levelno == logging.ERROR for r in caplog.records
+        )
+
+    def test_unknown_level_falls_back_to_info(self, caplog):
+        from rdlp_ytdlp_compat import _host
+        with caplog.at_level(logging.INFO, logger="rdlp_ytdlp_compat"):
+            _host.log("nonsense_level", "fallback path")
+        assert any(
+            "fallback path" in r.message for r in caplog.records
+        )
 
 
 class TestTryGet:
@@ -204,6 +274,30 @@ class TestHtmlSearchMeta:
         # Should not raise; default is None
         assert ie._html_search_meta("nope", "<html></html>", "x") is None
 
+    def test_meta_id_attribute(self):
+        # 5th supported attr — id="..." is the rarest of the 5 in real
+        # extractors but the regex must still match it.
+        ie = InfoExtractor()
+        html = '<meta id="page-title" content="Hello via id">'
+        assert ie._html_search_meta("page-title", html, "title") == "Hello via id"
+
+    def test_meta_iterable_name_first_match_wins(self):
+        # `name` accepts a scalar OR an iterable of meta-tag names; the first
+        # one that matches wins. Real yt-dlp extractors pass tuples like
+        # (`og:title`, `twitter:title`) for redundant meta-tag fallbacks.
+        ie = InfoExtractor()
+        html = '<meta name="twitter:title" content="from twitter">'
+        result = ie._html_search_meta(
+            ["og:title", "twitter:title"], html, "title"
+        )
+        assert result == "from twitter"
+
+    def test_meta_attr_match_is_case_insensitive(self):
+        # Real-world HTML often has `Content` (mixed case) or `PROPERTY=...`.
+        ie = InfoExtractor()
+        html = '<META PROPERTY="og:title" CONTENT="Mixed Case">'
+        assert ie._html_search_meta("og:title", html, "title") == "Mixed Case"
+
 
 class TestTraverseObj:
     def test_dict_path(self):
@@ -347,3 +441,148 @@ class TestExtractM3U8Formats:
             "https://example.com/master.m3u8", "vid", fatal=False
         )
         assert formats == []
+
+    def test_master_playlist_parse_happy_path(self, monkeypatch):
+        # Stub _host.fetch_text with a canned master playlist so the parser
+        # loop (BANDWIDTH, RESOLUTION, urljoin, format_id derivation) gets
+        # exercised. Without this test, the entire parser body has zero
+        # coverage — a regression in attribute parsing would silently produce
+        # malformed Format entries.
+        from rdlp_ytdlp_compat import _host
+        m3u8 = (
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=640x360,CODECS=\"avc1.42e00a\"\n"
+            "low/index.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720\n"
+            "high/index.m3u8\n"
+        )
+        monkeypatch.setattr(_host, "fetch_text", lambda *a, **kw: m3u8)
+        ie = InfoExtractor()
+        formats, subs = ie._extract_m3u8_formats_and_subtitles(
+            "https://cdn.example.com/master.m3u8",
+            "vid",
+            ext="mp4",
+            m3u8_id="hls",
+        )
+        assert subs == {}
+        assert len(formats) == 2
+
+        low = formats[0]
+        assert low["url"] == "https://cdn.example.com/low/index.m3u8"
+        assert low["ext"] == "mp4"
+        assert low["protocol"] == "m3u8_native"
+        assert low["tbr"] == 1280  # 1280000 / 1000
+        assert low["width"] == 640
+        assert low["height"] == 360
+        assert low["format_id"] == "hls-1280"
+
+        high = formats[1]
+        assert high["tbr"] == 2560
+        assert high["width"] == 1280
+        assert high["height"] == 720
+
+    def test_master_playlist_skips_malformed_entries(self, monkeypatch):
+        # Trailing #EXT-X-STREAM-INF without a URL line below it should be
+        # skipped, not panic the parser.
+        from rdlp_ytdlp_compat import _host
+        m3u8 = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=500000\n"
+            # No URL line; EOF
+        )
+        monkeypatch.setattr(_host, "fetch_text", lambda *a, **kw: m3u8)
+        ie = InfoExtractor()
+        formats, _ = ie._extract_m3u8_formats_and_subtitles(
+            "https://cdn.example.com/m.m3u8", "vid",
+        )
+        assert formats == []
+
+
+class TestExtractorErrorHierarchy:
+    """Verify the yt-dlp drop-in exception hierarchy. Any rename or
+    constructor-shape regression here would break ported extractors that
+    do `from yt_dlp.utils import ExtractorError`."""
+
+    def test_extractor_error_subclass_of_youtube_dl_error(self):
+        # ExtractorError must inherit from YoutubeDLError so existing
+        # `except YoutubeDLError:` clauses still catch it.
+        assert issubclass(ExtractorError, YoutubeDLError)
+
+    def test_extractor_error_constructor_accepts_all_kwargs(self):
+        # yt-dlp upstream signature: (msg, tb, expected, cause, video_id, ie).
+        # Extractor source uses every one of these — missing kwargs would
+        # fail at first import-and-run.
+        cause = RuntimeError("inner")
+        e = ExtractorError(
+            "boom",
+            tb="<traceback>",
+            expected=True,
+            cause=cause,
+            video_id="abc123",
+            ie="FooIE",
+        )
+        assert e.orig_msg == "boom"
+        assert e.traceback == "<traceback>"
+        assert e.expected is True
+        assert e.cause is cause
+        assert e.video_id == "abc123"
+        assert e.ie == "FooIE"
+
+    def test_extractor_error_default_expected_false(self):
+        e = ExtractorError("boom")
+        assert e.expected is False
+
+    def test_unsupported_error_single_arg_url(self):
+        # Upstream's UnsupportedError is `__init__(self, url)` with
+        # expected=True forced.
+        e = UnsupportedError("https://example.com/foo")
+        assert e.url == "https://example.com/foo"
+        assert e.expected is True
+        assert "https://example.com/foo" in str(e)
+
+    def test_geo_restricted_carries_countries(self):
+        e = GeoRestrictedError("blocked", countries=["US", "GB"])
+        assert e.countries == ["US", "GB"]
+        assert e.expected is True
+
+    def test_regex_not_found_subclass_of_extractor_error(self):
+        # RegexNotFoundError must be catchable as ExtractorError —
+        # yt-dlp's _search_regex raises it and many sites' fallback
+        # code does `except ExtractorError: ...`.
+        assert issubclass(RegexNotFoundError, ExtractorError)
+
+
+class TestRaiseHelpers:
+    """yt-dlp's raise_login_required / raise_geo_restricted / raise_no_formats
+    are method-level on InfoExtractor and are called constantly by ported
+    extractors. Without them, ports fail with AttributeError."""
+
+    def test_raise_login_required_raises_extractor_error(self):
+        ie = InfoExtractor()
+        with pytest.raises(ExtractorError) as excinfo:
+            ie.raise_login_required()
+        assert excinfo.value.expected is True
+        # Marker phrase must be present so _entry.py's WIT mapping picks
+        # auth-required.
+        assert "[login required]" in excinfo.value.orig_msg
+
+    def test_raise_login_required_with_method(self):
+        ie = InfoExtractor()
+        with pytest.raises(ExtractorError) as excinfo:
+            ie.raise_login_required("Please log in", method="cookies")
+        assert "cookies" in excinfo.value.orig_msg
+
+    def test_raise_geo_restricted_raises_geo_restricted_error(self):
+        ie = InfoExtractor()
+        with pytest.raises(GeoRestrictedError) as excinfo:
+            ie.raise_geo_restricted(countries=["US"])
+        assert excinfo.value.countries == ["US"]
+        assert excinfo.value.expected is True
+
+    def test_raise_no_formats_raises_extractor_error(self):
+        ie = InfoExtractor()
+        with pytest.raises(ExtractorError) as excinfo:
+            ie.raise_no_formats("no media available", video_id="vid")
+        assert "[no formats]" in excinfo.value.orig_msg
+        assert excinfo.value.video_id == "vid"

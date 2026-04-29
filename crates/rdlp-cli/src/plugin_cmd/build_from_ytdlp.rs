@@ -1,4 +1,4 @@
-//! `rdlp plugin build-from-ytdlp <plugin.py>` — wraps componentize-py 0.17.2
+//! `rdlp plugin build-from-ytdlp <plugin.py>` — wraps componentize-py-pin@0.17.2
 //! to bundle a yt-dlp-style Python extractor + the `rdlp_ytdlp_compat` shim
 //! into a Component Model `.wasm` plus a `plugin.toml.template` manifest.
 
@@ -72,7 +72,7 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
     let componentize_py = venv.join("bin/componentize-py");
     let world_name = "extractor-plugin";
 
-    // componentize-py 0.17.2: dirty bindings dir errors with EEXIST. Clean first.
+    // componentize-py-pin@0.17.2: dirty bindings dir errors with EEXIST. Clean first.
     let bindings_dir = build_dir.path().join("extractor_plugin");
     if bindings_dir.exists() {
         std::fs::remove_dir_all(&bindings_dir).ok();
@@ -224,39 +224,190 @@ fn stage_build_dir(
     Ok(())
 }
 
+/// Auto-generated `_entry.py` body — wraps the user's yt-dlp-style
+/// `InfoExtractor` subclass and adapts it to the WIT `extractor-plugin`
+/// world. Load-bearing invariants (failing any will break dispatch):
+///
+/// 1. The class implementing `metadata`/`extract`/`search` MUST be named
+///    `ExtractorPlugin` because componentize-py-pin@0.17.2 looks up a concrete
+///    class whose name matches `--world-module` in PascalCase. Renaming it
+///    produces `Can't instantiate abstract class ExtractorPlugin` at load.
+/// 2. All imports stay at module top level (componentize-py issue #23 —
+///    lazy `__import__()` silently fails inside the bundled CPython).
+/// 3. Errors raise via `Err(<variant>)`, NOT return, because the WIT
+///    Protocol method signature is the `Ok` payload only — see
+///    `extractor_plugin/types.py::Err` (a frozen-dataclass Exception).
+/// 4. Multiple `InfoExtractor` subclasses in `user_plugin` are an explicit
+///    error: alphabetical-first selection silently dropped sibling
+///    extractors before this commit. Per-file plugins must declare exactly
+///    one extractor; multi-class sites should ship one .py per extractor.
+/// 5. info_dict shape is validated per yt-dlp's documented contract
+///    (`yt_dlp/extractor/common.py:107-498` at upstream tag 2026.03.17):
+///    `id` and `title` are required strs; either `formats` or `url` must
+///    be present.
+/// 6. yt-dlp `ExtractorError(expected=True)` is mapped to the appropriate
+///    WIT variant via marker-phrase / cause-type heuristics — see the
+///    `_extractor_error_to_variant` function below for the dispatch table.
 const ENTRY_TEMPLATE: &str = r#""""Auto-generated entry point for rdlp plugin build-from-ytdlp.
 
-componentize-py free-function exports collapse into ONE Protocol subclass
-named after --world-module (PascalCase). componentize-py 0.17.2 looks up a
-concrete class named `ExtractorPlugin` (matching the world-module name).
-Errors raise via Err(<variant>), not return.
+See the Rust doc-comment on ENTRY_TEMPLATE in build_from_ytdlp.rs for the
+load-bearing invariants this file maintains. Editing this file directly is
+pointless — it is regenerated on every build-from-ytdlp invocation.
 """
 from extractor_plugin import ExtractorPlugin as _ExtractorPluginProtocol
 from extractor_plugin.types import Err
 from extractor_plugin.imports.types import (
     InfoDict, Format, PluginInfo, SearchPage,
-    ExtractError_NotFound, ExtractError_Internal, SearchError_Unsupported,
+    ExtractError_UnsupportedUrl, ExtractError_NotFound,
+    ExtractError_RateLimited, ExtractError_AuthRequired,
+    ExtractError_Network, ExtractError_Parse, ExtractError_Cancelled,
+    ExtractError_Internal, SearchError_Unsupported,
 )
 
 # User plugin imports — must be top-level (componentize-py #23).
 from user_plugin import *  # noqa: F401,F403
 
 import user_plugin
-from rdlp_ytdlp_compat import InfoExtractor as _CompatInfoExtractor
+from rdlp_ytdlp_compat import (
+    InfoExtractor as _CompatInfoExtractor,
+    ExtractorError as _ExtractorError,
+    UnsupportedError as _UnsupportedError,
+    GeoRestrictedError as _GeoRestrictedError,
+    UserNotLive as _UserNotLive,
+    RegexNotFoundError as _RegexNotFoundError,
+    DownloadCancelled as _DownloadCancelled,
+)
 
-_IE_CLASS = None
-for _name in dir(user_plugin):
-    _v = getattr(user_plugin, _name)
-    if isinstance(_v, type) and issubclass(_v, _CompatInfoExtractor) and _v is not _CompatInfoExtractor:
-        _IE_CLASS = _v
-        break
-if _IE_CLASS is None:
-    raise RuntimeError("no InfoExtractor subclass found in plugin")
+
+def _discover_ie_class():
+    """Find the user's InfoExtractor subclass. Multiple matches are an error
+    (alphabetical-first selection silently drops siblings); zero matches is
+    also an error.
+    """
+    candidates = []
+    for _name in dir(user_plugin):
+        _v = getattr(user_plugin, _name)
+        if (isinstance(_v, type)
+                and issubclass(_v, _CompatInfoExtractor)
+                and _v is not _CompatInfoExtractor):
+            candidates.append(_v)
+    if not candidates:
+        raise RuntimeError(
+            "no InfoExtractor subclass found in plugin — declare "
+            "`class FooIE(InfoExtractor):` at module top level"
+        )
+    if len(candidates) > 1:
+        names = ", ".join(c.__name__ for c in candidates)
+        raise RuntimeError(
+            "multiple InfoExtractor subclasses found in plugin: "
+            f"[{names}]. build-from-ytdlp supports exactly one extractor "
+            "per .py file; split each into its own file or build separately."
+        )
+    return candidates[0]
+
+
+_IE_CLASS = _discover_ie_class()
 _IE = _IE_CLASS()
 
 
+def _extractor_error_to_variant(e):
+    """Map a yt-dlp-style exception to the appropriate WIT extract-error
+    variant. Heuristics derive from yt-dlp upstream (`utils/_utils.py`
+    + `extractor/common.py`) which uses `ExtractorError(expected=True)` +
+    marker phrases rather than dedicated typed subclasses for most failure
+    modes."""
+    # Typed subclasses (extracted upstream behaviour) — exact mapping.
+    if isinstance(e, _UnsupportedError):
+        return ExtractError_UnsupportedUrl(getattr(e, "url", str(e)))
+    if isinstance(e, _GeoRestrictedError):
+        # No dedicated geo variant in Slice-1 WIT; auth-required is the
+        # closest match (both signal "you can't access this content").
+        return ExtractError_AuthRequired(str(e))
+    if isinstance(e, _UserNotLive):
+        return ExtractError_NotFound(str(e))
+    if isinstance(e, _RegexNotFoundError):
+        return ExtractError_Parse(str(e))
+    if isinstance(e, _DownloadCancelled):
+        return ExtractError_Cancelled()
+
+    # ExtractorError(expected=True) — dispatch on marker phrases.
+    if isinstance(e, _ExtractorError) and getattr(e, "expected", False):
+        msg = str(getattr(e, "orig_msg", e) or "")
+        msg_l = msg.lower()
+        # Marker phrases set by InfoExtractor.raise_* helpers.
+        if msg.startswith("[login required] ") or "log in" in msg_l \
+                or "login" in msg_l or "sign in" in msg_l:
+            return ExtractError_AuthRequired(msg)
+        if msg.startswith("[no formats] ") or "no formats" in msg_l \
+                or "not available" in msg_l:
+            return ExtractError_NotFound(msg)
+        if "rate" in msg_l and "limit" in msg_l:
+            retry_after = getattr(e, "retry_after", None)
+            return ExtractError_RateLimited(retry_after)
+        if "404" in msg or "not found" in msg_l or "removed" in msg_l \
+                or "deleted" in msg_l:
+            return ExtractError_NotFound(msg)
+        # Default for expected=True: NotFound (caller said "the site told
+        # us no" — not an extractor bug).
+        return ExtractError_NotFound(msg)
+
+    # ExtractorError(expected=False) — likely an extractor bug.
+    if isinstance(e, _ExtractorError):
+        return ExtractError_Internal(str(getattr(e, "orig_msg", e) or e))
+
+    # Network errors raised by _host.fetch_text on non-2xx HTTP status, or
+    # any RuntimeError starting with "HTTP " from the host bridge.
+    msg = str(e)
+    if isinstance(e, RuntimeError) and msg.startswith("HTTP "):
+        # Try to surface 429 specifically.
+        try:
+            status = int(msg.split(" ", 2)[1])
+        except (ValueError, IndexError):
+            status = None
+        if status == 429:
+            return ExtractError_RateLimited(None)
+        if status in (401, 403):
+            return ExtractError_AuthRequired(msg)
+        if status == 404:
+            return ExtractError_NotFound(msg)
+        return ExtractError_Network(msg)
+
+    # Anything else — treat as extractor bug.
+    return ExtractError_Internal(msg)
+
+
+def _validate_id(d):
+    """yt-dlp's info_dict contract requires `id` and `title` as strs and
+    either `formats` (list[dict]) OR `url` (str)
+    (yt_dlp/extractor/common.py:122-129 @ tag 2026.03.17). Validate at the
+    boundary so a buggy plugin returning {"id": None} surfaces a clear
+    `ExtractError_Internal` instead of writing the literal string "None"
+    into the archive."""
+    vid = d.get("id")
+    if not isinstance(vid, str) or not vid:
+        raise _ExtractorError(
+            f"plugin returned invalid 'id' (expected non-empty str, got {type(vid).__name__})",
+            expected=False,
+        )
+    title = d.get("title")
+    if not isinstance(title, str):
+        raise _ExtractorError(
+            f"plugin returned invalid 'title' (expected str, got {type(title).__name__})",
+            expected=False,
+        )
+    formats = d.get("formats")
+    url = d.get("url")
+    has_formats = isinstance(formats, list) and len(formats) > 0
+    has_url = isinstance(url, str) and url
+    if not (has_formats or has_url):
+        raise _ExtractorError(
+            "plugin returned info-dict with neither 'formats' nor 'url'",
+            expected=False,
+        )
+
+
 # CRITICAL: class name must be `ExtractorPlugin` (matches --world-module
-# PascalCase) for componentize-py 0.17.2 to discover and instantiate it.
+# PascalCase) for componentize-py-pin@0.17.2 to discover and instantiate it.
 class ExtractorPlugin(_ExtractorPluginProtocol):
     def metadata(self) -> PluginInfo:
         return PluginInfo(
@@ -273,39 +424,59 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
     def extract(self, url: str) -> InfoDict:
         try:
             d = _IE._real_extract(url)
+            _validate_id(d)
         except Exception as e:
-            raise Err(ExtractError_Internal(str(e)))
+            raise Err(_extractor_error_to_variant(e))
         return _dict_to_info_dict(d)
 
     def search(self, query) -> SearchPage:
         raise Err(SearchError_Unsupported())
 
 
+def _opt_str(v):
+    """Coerce optional str fields. None → None (not 'None'); int/float are
+    converted only if the field's WIT type is `option<string>`. Anything
+    else (list, dict) is rejected as a plugin bug."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float)):
+        return str(v)
+    raise _ExtractorError(
+        f"info-dict field has invalid type: expected str/None, got {type(v).__name__}",
+        expected=False,
+    )
+
+
 def _dict_to_info_dict(d: dict) -> InfoDict:
     formats = [
         Format(
-            format_id=str(f.get("format_id", "")),
-            url=str(f.get("url", "")),
-            ext=str(f.get("ext", "mp4")),
-            protocol=str(f.get("protocol", "https")),
+            format_id=_opt_str(f.get("format_id")) or "",
+            url=_opt_str(f.get("url")) or "",
+            ext=_opt_str(f.get("ext")) or "mp4",
+            protocol=_opt_str(f.get("protocol")) or "https",
             width=f.get("width"), height=f.get("height"), fps=f.get("fps"),
             tbr=f.get("tbr"), vbr=f.get("vbr"), abr=f.get("abr"),
-            vcodec=f.get("vcodec"), acodec=f.get("acodec"),
-            container=f.get("container"), filesize=f.get("filesize"),
-            format_note=f.get("format_note"),
+            vcodec=_opt_str(f.get("vcodec")), acodec=_opt_str(f.get("acodec")),
+            container=_opt_str(f.get("container")), filesize=f.get("filesize"),
+            format_note=_opt_str(f.get("format_note")),
         )
         for f in d.get("formats", [])
     ]
     return InfoDict(
-        id=str(d.get("id", "")),
-        title=str(d.get("title", "")),
-        url=d.get("url"), formats=formats, subtitles=[],
-        thumbnail=d.get("thumbnail"), description=d.get("description"),
-        uploader=d.get("uploader"), uploader_id=d.get("uploader_id"),
-        upload_date=d.get("upload_date"),
+        id=d["id"],          # required by _validate_id above
+        title=d["title"],    # required by _validate_id above
+        url=_opt_str(d.get("url")), formats=formats, subtitles=[],
+        thumbnail=_opt_str(d.get("thumbnail")),
+        description=_opt_str(d.get("description")),
+        uploader=_opt_str(d.get("uploader")),
+        uploader_id=_opt_str(d.get("uploader_id")),
+        upload_date=_opt_str(d.get("upload_date")),
         duration=d.get("duration"), view_count=d.get("view_count"),
         like_count=d.get("like_count"),
-        tags=d.get("tags", []), categories=d.get("categories", []),
+        tags=list(d.get("tags") or []),
+        categories=list(d.get("categories") or []),
     )
 "#;
 

@@ -15,7 +15,22 @@ from rdlp_ytdlp_compat import _host
 
 # yt-dlp uses a NO_DEFAULT sentinel to distinguish "caller passed default=None"
 # from "no default at all". We mirror that convention.
+#
+# `__new__` enforces singleton: every `_NoDefault()` call returns the same
+# instance, so any `is NO_DEFAULT` check stays correct even when a caller
+# accidentally constructs a fresh instance. Without this guard,
+# `default=_NoDefault()` would be `is not NO_DEFAULT` and silently take the
+# "real default supplied" branch — wrong return path for `_search_regex` /
+# `traverse_obj`. Same pattern as `inspect.Parameter.empty` /
+# `dataclasses.MISSING` in the stdlib.
 class _NoDefault:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __repr__(self):
         return "NO_DEFAULT"
 
@@ -218,6 +233,41 @@ class InfoExtractor:
 
     def _try_get(self, *args, **kwargs):
         return try_get(*args, **kwargs)
+
+    # yt-dlp's standard "raise" helpers (see common.py:1251-1280). Real
+    # extractors invoke `self.raise_login_required(...)` / etc. very often;
+    # without these the ports fail with AttributeError. Each helper raises
+    # an `ExtractorError(expected=True)` tagged with a marker phrase so the
+    # _entry.py WIT mapping can pick the right variant.
+
+    def raise_login_required(
+        self, msg="This video is only available for registered users",
+        metadata_available=False, method=None,
+    ):
+        """yt-dlp's raise_login_required. Maps to WIT auth-required."""
+        from rdlp_ytdlp_compat._errors import ExtractorError
+        full_msg = msg
+        if method is not None:
+            full_msg = f"{msg}. Use {method} to log in."
+        # Marker phrase keys the _entry.py message-text dispatch.
+        raise ExtractorError(f"[login required] {full_msg}", expected=True)
+
+    def raise_geo_restricted(
+        self, msg="This video is not available from your location due to geo restriction",
+        countries=None, metadata_available=False,
+    ):
+        """yt-dlp's raise_geo_restricted. Maps to WIT auth-required (Slice 1
+        has no dedicated geo-restricted variant)."""
+        from rdlp_ytdlp_compat._errors import GeoRestrictedError
+        raise GeoRestrictedError(msg, countries=countries)
+
+    def raise_no_formats(self, msg, expected=False, video_id=None):
+        """yt-dlp's raise_no_formats. Maps to WIT not-found when expected
+        (the user-facing "no formats available"); to internal otherwise."""
+        from rdlp_ytdlp_compat._errors import ExtractorError
+        # Marker phrase keys the _entry.py dispatch.
+        prefix = "[no formats] "
+        raise ExtractorError(f"{prefix}{msg}", expected=expected, video_id=video_id)
 
     def _download_webpage(self, url_or_request, video_id, note=None, errnote=None,
                           fatal=True, tries=1, timeout=NO_DEFAULT, *,

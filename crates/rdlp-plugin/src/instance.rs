@@ -66,7 +66,9 @@ impl PluginStoreData {
         //   `dlopen` path produces one instance per dynamically-linked
         //   shared object plus the runtime adapter shims. Spin's production
         //   wasmtime+componentize-py embedder
-        //   (`spin/crates/core/src/lib.rs:95–181`) uses
+        //   (Spin's `WasmtimeEngineConfigBuilder` /
+        //   `spin/crates/core` — find via the symbol, not a line range,
+        //   since the file gets refactored) uses
         //   `max_core_instances_per_component = 200`,
         //   `max_memories_per_component = 32`,
         //   `max_tables_per_component = 64`. We adopt the same values so

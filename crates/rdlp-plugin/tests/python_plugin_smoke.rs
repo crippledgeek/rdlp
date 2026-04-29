@@ -158,17 +158,11 @@ fn read_artefact() -> Vec<u8> {
     wasm
 }
 
-/// End-to-end extract dispatch through the bumped `StoreLimits`.
-///
-/// Originally this test was a negative assertion ("trap on instance count too
-/// high at 2") because `PluginStoreData::new` pinned
-/// `StoreLimitsBuilder::instances(1)` and a componentize-py CPython component
-/// instantiates as ~5–6 core sub-components. Task 4 bumped the host limits
-/// (see `crates/rdlp-plugin/src/instance.rs`) so the plugin now runs to
-/// completion. The test asserts on real `InfoDict` fields produced by the
-/// `examples/plugins/ytdlp-hello-world` plugin. The remaining `wasi:cli`
-/// import gap is still worked around in `build.sh` via
-/// `componentize-py --stub-wasi`.
+/// End-to-end extract dispatch. Asserts on real `InfoDict` fields produced
+/// by the `examples/plugins/ytdlp-hello-world` plugin. The remaining
+/// `wasi:cli` import gap is worked around in `build.sh` via
+/// `componentize-py --stub-wasi` (Phase-1 limitation; revisit when the host
+/// gains WASI 0.2 surface).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires examples/plugins/ytdlp-hello-world/build.sh to have run"]
 async fn python_hello_world_extract_succeeds() {
