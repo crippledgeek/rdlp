@@ -3,8 +3,41 @@
 //! Contains the `Args` struct with clap derive macros for all
 //! command-line options.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+
+/// Plugin management subcommands.
+#[derive(Subcommand, Debug)]
+pub(crate) enum PluginCmd {
+    /// List installed plugins.
+    List,
+    /// Show details for a specific plugin.
+    Info {
+        /// Plugin name.
+        name: String,
+    },
+    /// Accept a new identity for an already-installed plugin (use after the
+    /// publisher legitimately rotated their signing key).
+    Retrust {
+        /// Plugin name.
+        name: String,
+    },
+    /// Disable a plugin for future runs (writes to disabled list).
+    Disable {
+        /// Plugin name.
+        name: String,
+    },
+    /// Re-enable a previously disabled plugin.
+    Enable {
+        /// Plugin name.
+        name: String,
+    },
+    /// Remove a plugin entirely (deletes the plugin directory + trust entry).
+    Uninstall {
+        /// Plugin name.
+        name: String,
+    },
+}
 
 /// CLI arguments parsed by clap.
 #[derive(Parser)]
@@ -285,4 +318,30 @@ pub(crate) struct Args {
     /// Path to config file (TOML format)
     #[arg(long)]
     pub config_location: Option<PathBuf>,
+
+    // === Plugin options ===
+    /// Pre-trust a publisher identity for non-interactive plugin install.
+    /// Pass repeatedly for multiple identities.
+    /// Format: `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
+    #[arg(long, global = true)]
+    pub trust_publisher: Vec<String>,
+
+    /// Plugin management subcommand.
+    #[command(subcommand)]
+    pub plugin: Option<PluginSubcommand>,
+}
+
+/// Top-level subcommand wrapper for plugin management.
+#[derive(Subcommand, Debug)]
+pub(crate) enum PluginSubcommand {
+    /// Manage installed WASM plugins.
+    Plugin(PluginCmdArgs),
+}
+
+/// Argument holder for plugin subcommand (required by clap's subcommand+subcommand nesting).
+#[derive(clap::Args, Debug)]
+pub(crate) struct PluginCmdArgs {
+    /// Plugin management action.
+    #[command(subcommand)]
+    pub cmd: PluginCmd,
 }

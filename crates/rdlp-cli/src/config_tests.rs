@@ -70,6 +70,8 @@ fn default_args() -> Args {
         fixup: "detect_or_warn".to_string(),
         match_filter: vec![],
         browser: None,
+        trust_publisher: vec![],
+        plugin: None,
     }
 }
 
