@@ -290,7 +290,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .load_cookies()
             .await
@@ -323,12 +331,14 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(
+        let orchestrator = Orchestrator::new_with_registry(
             Arc::clone(&self.config),
             tx,
             id,
             cancel_token,
             self.interactive.clone(),
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
         );
         orchestrator
             .load_cookies()
@@ -347,7 +357,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .list_extractors()
             .into_iter()
@@ -365,7 +383,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .list_search_extractors()
             .into_iter()
@@ -391,7 +417,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .search_filters(site)
             .map_err(|e| RdlpApiError::InvalidInput {
@@ -420,7 +454,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator.search(site, query).await.map_err(Into::into)
     }
 
@@ -444,7 +486,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(16);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .search_page(site, query)
             .await
@@ -481,7 +531,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .enrich_search_result(site, preview)
             .await
@@ -495,7 +553,15 @@ impl RdlpClient {
         let (tx, _rx) = mpsc::channel::<Event>(1);
         let cancel_token = CancellationToken::new();
 
-        let orchestrator = Orchestrator::new(Arc::clone(&self.config), tx, id, cancel_token, None);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            id,
+            cancel_token,
+            None,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
         orchestrator
             .list_downloaders()
             .into_iter()

@@ -107,13 +107,13 @@ impl Orchestrator {
     /// Create a new orchestrator with default registries
     ///
     /// # Arguments
-    /// * `config` - Download configuration (Arc-wrapped for cheap sharing)
-    /// * `event_tx` - Channel sender for lifecycle events
-    /// * `download_id` - Unique identifier for this download
-    /// * `cancel_token` - Token for cooperative cancellation
-    /// * `interactive` - Optional callback for interactive user input
-    #[must_use]
-    pub fn new(
+    /// Test-only thin wrapper that forwards to [`new_with_registry`] with
+    /// `None` for both `temp_registry` and `extractor_registry`. Production
+    /// code paths in [`crate::client::RdlpClient`] always supply the
+    /// plugin-aware registry; internal unit/integration tests use this helper
+    /// when they don't need plugins.
+    #[cfg(test)]
+    pub(crate) fn new(
         config: Arc<Config>,
         event_tx: mpsc::Sender<Event>,
         download_id: DownloadId,

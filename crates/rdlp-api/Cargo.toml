@@ -45,6 +45,12 @@ tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 proptest = "1.4"
 mockito = "1.7"
+# For plugin-dispatch regression test (signs a manifest + wasm in setup).
+ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
+rand = "0.8"
+base64 = { workspace = true }
+sha2 = "0.10"
+hex = { workspace = true }
 
 [lints]
 workspace = true
