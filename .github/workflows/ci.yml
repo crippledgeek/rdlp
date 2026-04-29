@@ -80,21 +80,28 @@ jobs:
         # system headers — which is the root cause of upstream
         # shssoichiro/ffmpeg-the-third#145.
 
-      - name: Pin LIBCLANG_PATH to VS-bundled LLVM (Windows)
+      - name: Install pinned LLVM 18 (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.8"
+          directory: ${{ runner.temp }}/llvm
+        # `clang-sys` (used by bindgen) loads libclang.dll at runtime. The
+        # `windows-latest` image bumped to clang 20.1.x in late 2026-04 and
+        # both the system clang (PATH-resolved) and the VS-bundled clang
+        # (under VC\Tools\LLVM) crash parsing FFmpeg 8.0 headers — first as
+        # STATUS_STACK_BUFFER_OVERRUN (0xc0000409 = __fastfail/abort, see
+        # https://devblogs.microsoft.com/oldnewthing/20190108-00/?p=100655),
+        # then as STATUS_ACCESS_VIOLATION (0xc0000005, upstream issue
+        # shssoichiro/ffmpeg-the-third#145 failure pattern #2). Pinning to
+        # LLVM 18.1.8 — long-validated against bindgen 0.72 + FFmpeg 8.0 —
+        # eliminates the runner-image dependency entirely.
+
+      - name: Set LIBCLANG_PATH (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
-        # `clang-sys` (used by bindgen) resolves libclang.dll at runtime via
-        # PATH search. The `windows-latest` image bumped to clang 20.1.8 in
-        # late 2026-04, and the new clang's libclang.dll crashes parsing
-        # FFmpeg 8.0 headers with STATUS_STACK_BUFFER_OVERRUN (0xc0000409,
-        # which is `__fastfail`/abort, not a real buffer overrun — see
-        # https://devblogs.microsoft.com/oldnewthing/20190108-00/?p=100655).
-        # Pinning LIBCLANG_PATH to the VS-bundled LLVM matches the upstream
-        # ffmpeg-the-third CI pattern and uses a libclang version validated
-        # against the same MSVC headers we just put on INCLUDE.
         run: |
-          $VCINSTALLDIR = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $libclang = Join-Path $VCINSTALLDIR "VC\Tools\LLVM\x64\bin"
+          $libclang = Join-Path $env:LLVM_PATH "bin"
           if (-not (Test-Path "$libclang\libclang.dll")) {
             throw "libclang.dll not found at $libclang"
           }
