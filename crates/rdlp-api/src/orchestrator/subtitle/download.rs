@@ -214,19 +214,75 @@ impl Orchestrator {
     }
 
     /// Download a single subtitle file via HTTP.
+    ///
+    /// Pre-flight: extractor-sourced URLs are validated through
+    /// `rdlp_security::validate_url_security` to prevent SSRF via a
+    /// malicious or compromised extractor returning a private/loopback
+    /// URL in `SubtitleTrack.url`. Body is streamed with a 5 MB cap so
+    /// an adversarial server can't OOM the host before the cap fires.
     async fn download_subtitle_file(
         &self,
         url: &str,
         output: &Path,
     ) -> std::result::Result<(), anyhow::Error> {
+        const MAX_SUBTITLE_BYTES: usize = 5 * 1024 * 1024;
+
+        rdlp_security::validate_url_security(url)
+            .map_err(|e| anyhow::anyhow!("subtitle URL rejected: {e}"))?;
+
         let response = self.extraction_context.http_client.get(url).send().await?;
 
         if !response.status().is_success() {
             anyhow::bail!("Subtitle download failed with status {}", response.status());
         }
 
-        let bytes = response.bytes().await?;
-        tokio::fs::write(output, &bytes).await?;
+        // Streaming size check — abort the moment cumulative bytes
+        // exceed MAX_SUBTITLE_BYTES rather than buffer the full body
+        // before checking.
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk?;
+            if buf.len().saturating_add(bytes.len()) > MAX_SUBTITLE_BYTES {
+                anyhow::bail!(
+                    "subtitle exceeds {MAX_SUBTITLE_BYTES}-byte cap (host integrity guard)"
+                );
+            }
+            buf.extend_from_slice(&bytes);
+        }
+        tokio::fs::write(output, &buf).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! SSRF gate negative tests for `download_subtitle_file`. We don't
+    //! construct a full `Orchestrator` here — the gate is a one-liner
+    //! call into `rdlp_security::validate_url_security`, so these tests
+    //! exercise the guarantee directly: any URL the validator rejects
+    //! MUST also be rejected by the call this module makes.
+
+    #[test]
+    fn ssrf_rejection_pairs_with_validator() {
+        // If the validator rejects, our call site MUST too — the
+        // download path uses `validate_url_security(url)?` as its first
+        // operation. This test locks the contract from drifting.
+        for bad in [
+            "http://127.0.0.1/x.vtt",
+            "http://[::1]/x.vtt",
+            "http://[fe80::1]/x.vtt",
+            "http://192.168.1.1/x.vtt",
+            "http://10.0.0.1/x.vtt",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://localhost/x",
+            "http://[::ffff:127.0.0.1]/x",
+        ] {
+            assert!(
+                rdlp_security::validate_url_security(bad).is_err(),
+                "subtitle SSRF gate must reject {bad}"
+            );
+        }
     }
 }

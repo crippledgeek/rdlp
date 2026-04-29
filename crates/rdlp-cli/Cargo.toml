@@ -16,6 +16,7 @@ path = "src/main.rs"
 # and the rate-limit value parser.
 rdlp-api = { path = "../rdlp-api" }
 rdlp-plugin = { path = "../rdlp-plugin" }
+rdlp-security = { path = "../rdlp-security" }
 rdlp-table = { path = "../rdlp-table" }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }

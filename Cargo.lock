@@ -5871,6 +5871,7 @@ dependencies = [
  "rdlp-ffmpeg",
  "rdlp-plugin",
  "rdlp-ratelimit",
+ "rdlp-security",
  "rdlp-table",
  "rdlp-types",
  "regex",

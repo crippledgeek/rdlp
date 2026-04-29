@@ -240,9 +240,14 @@ impl HlsSizeDetector {
         })?;
 
         if !response.status().is_success() {
-            return Err(RdlpError::Network {
-                message: format!("HTTP {} for playlist: {m3u8_url}", response.status()),
-                url: Some(m3u8_url.to_string()),
+            // Use the typed `RdlpError::Http` so retry classification at
+            // `is_retryable_error()` can pattern-match on integer status:
+            // 4xx fast-fail, 5xx retry. The previous `Network { message }`
+            // path was always treated as retryable, causing 4xx playlists
+            // (404 / 410 / 403) to needlessly retry.
+            return Err(RdlpError::Http {
+                status: response.status().as_u16(),
+                reason: format!("playlist fetch: {m3u8_url}"),
             });
         }
 

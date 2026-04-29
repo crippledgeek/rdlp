@@ -55,6 +55,14 @@ impl Orchestrator {
         // Build output path: {media_stem}.{ext}
         let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
 
+        // SSRF gate: extractor-sourced URLs flow through here, and an
+        // attacker-controlled extractor could return a private/loopback
+        // URL in `info.thumbnail`.
+        if let Err(e) = rdlp_security::validate_url_security(thumbnail_url) {
+            warn!(url = thumbnail_url; "Thumbnail URL rejected by security gate: {e}");
+            return None;
+        }
+
         // Build Referer from the thumbnail URL origin (CDNs often require this)
         let referer = url::Url::parse(thumbnail_url)
             .ok()
@@ -83,13 +91,31 @@ impl Orchestrator {
             return None;
         }
 
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                warn!("Failed to read thumbnail response: {e}");
-                return None;
+        // Streaming size cap (20 MB) — adversarial CDN can't OOM the host
+        // by sending a 1 GB image before the cap fires.
+        const MAX_THUMBNAIL_BYTES: usize = 20 * 1024 * 1024;
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut bytes: Vec<u8> = Vec::new();
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    if bytes.len().saturating_add(chunk.len()) > MAX_THUMBNAIL_BYTES {
+                        warn!(
+                            url = thumbnail_url;
+                            "Thumbnail exceeds {MAX_THUMBNAIL_BYTES}-byte cap; aborting"
+                        );
+                        return None;
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Some(Err(e)) => {
+                    warn!("Failed to read thumbnail response: {e}");
+                    return None;
+                }
+                None => break,
             }
-        };
+        }
 
         if bytes.is_empty() {
             warn!("Thumbnail response was empty");

@@ -94,16 +94,25 @@ impl HttpClientFactory {
             match rdlp_security::validate_proxy_url(proxy_url) {
                 Ok(()) => match wreq::Proxy::all(proxy_url) {
                     Ok(proxy) => builder = builder.proxy(proxy),
-                    Err(e) => tracing::warn!(
-                        "Proxy URL accepted by validator but rejected by wreq; \
-                         continuing without proxy: {}",
-                        e
-                    ),
+                    Err(e) => {
+                        // Validator accepted but wreq couldn't parse the URL —
+                        // log at ERROR (not WARN) since users who pass --proxy
+                        // expecting anonymity must SEE this. The factory's
+                        // public contract assumes a proxy in config is valid;
+                        // CLI now hard-fails proxy at config-build time, so
+                        // reaching this branch indicates a library consumer
+                        // bypassing that gate.
+                        tracing::error!(
+                            "proxy URL accepted by security validator but rejected \
+                             by wreq; the resulting client will NOT route through \
+                             a proxy: {e}"
+                        );
+                    }
                 },
-                Err(e) => tracing::warn!(
-                    "Rejecting proxy URL (failed security validation): {}; \
-                     continuing without proxy",
-                    e
+                Err(e) => tracing::error!(
+                    "rejecting proxy URL (failed security validation): {e}; \
+                     the resulting client will NOT route through a proxy. \
+                     CLI users: this should have been caught at config-build time."
                 ),
             }
         }

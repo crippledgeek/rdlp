@@ -555,3 +555,49 @@ fn test_merge_config_browser_env_fallback() {
         rdlp_api::BrowserEmulation::SafariLatest
     ));
 }
+
+// === Proxy hard-fail negatives ===
+//
+// `--proxy` must be validated at config-build time. A user passing
+// `--proxy http://192.168.1.1:8080` expecting traffic routing must NOT
+// silently get a direct connection: the merge must error out so they
+// know their proxy was rejected.
+
+#[test]
+fn rejects_proxy_pointing_at_loopback() {
+    let mut args = default_args();
+    args.proxy = Some("http://127.0.0.1:3128".into());
+    let result = merge_config(&args, Config::default(), no_interactive());
+    let err = result.expect_err("loopback proxy MUST be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("--proxy validation failed"),
+        "unexpected error message: {msg}"
+    );
+}
+
+#[test]
+fn rejects_proxy_pointing_at_rfc1918() {
+    let mut args = default_args();
+    args.proxy = Some("http://192.168.1.1:8080".into());
+    assert!(merge_config(&args, Config::default(), no_interactive()).is_err());
+}
+
+#[test]
+fn rejects_proxy_with_unsupported_scheme() {
+    let mut args = default_args();
+    args.proxy = Some("ftp://proxy.example.com:21".into());
+    assert!(merge_config(&args, Config::default(), no_interactive()).is_err());
+}
+
+#[test]
+fn accepts_proxy_at_public_https_endpoint() {
+    let mut args = default_args();
+    args.proxy = Some("https://corp-proxy.example.com:443".into());
+    let cfg = merge_config(&args, Config::default(), no_interactive())
+        .expect("public proxy must be accepted");
+    assert_eq!(
+        cfg.proxy.as_deref(),
+        Some("https://corp-proxy.example.com:443")
+    );
+}
