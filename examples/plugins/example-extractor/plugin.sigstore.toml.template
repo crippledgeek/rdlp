@@ -1,0 +1,19 @@
+# Sigstore-signed manifest template for the example-extractor reference plugin.
+# Populated automatically by `.github/workflows/plugin-release.yml` via
+# `scripts/embed-sigstore-bundle.sh` after `cosign sign-blob --keyless`.
+
+name = "example"
+version = "0.1.0"
+wit_version = "0.1.0"
+matches = ["https://example.com/video/*"]
+url_regex = "^https://example\\.com/video/(?P<id>\\d+)"
+priority = 150
+claims_override = []
+supports_search = false
+capabilities = []
+
+[signature]
+type = "sigstore"
+identity = "PLACEHOLDER_IDENTITY"
+oidc_issuer = "PLACEHOLDER_ISSUER"
+bundle = "PLACEHOLDER_BUNDLE"
