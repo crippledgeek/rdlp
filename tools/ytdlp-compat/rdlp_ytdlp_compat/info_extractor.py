@@ -584,16 +584,27 @@ class InfoExtractor:
 
     def _html_search_regex(self, pattern, string, name, default=NO_DEFAULT,
                            fatal=True, flags=0, group=None):
-        """yt-dlp's `_html_search_regex` (`extractor/common.py:1379-1386`).
-        Like `_search_regex` but the matched group is `clean_html`-ed
-        (HTML stripped, entities unescaped, whitespace normalised). Used
-        by extractors that capture text from inside HTML elements where
-        nested tags / character references need to be flattened."""
-        from rdlp_ytdlp_compat._utils import clean_html as _clean_html
-        res = self._search_regex(pattern, string, name, default, fatal, flags, group)
-        if isinstance(res, tuple):
-            return tuple(_clean_html(r) for r in res)
-        return _clean_html(res)
+        """Slice-2.5 passthrough to host-extract-helpers.html-search-regex."""
+        from rdlp_ytdlp_compat._errors import RegexNotFoundError
+        patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
+        for pat in patterns:
+            pat_str = pat if isinstance(pat, str) else pat.pattern
+            try:
+                result = _host.html_search_regex(pat_str, string, flags)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                from rdlp_ytdlp_compat._utils import clean_html as _clean_html
+                res = self._search_regex(pattern, string, name, default, fatal, flags, group)
+                if isinstance(res, tuple):
+                    return tuple(_clean_html(r) for r in res)
+                return _clean_html(res)
+            if result is not None:
+                return result
+        if default is NO_DEFAULT:
+            if fatal:
+                raise RegexNotFoundError(f"Unable to extract {name}")
+            return None
+        return default
 
     @staticmethod
     def _rta_search(html):

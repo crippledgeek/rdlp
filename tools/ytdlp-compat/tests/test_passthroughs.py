@@ -39,3 +39,11 @@ def test_search_regex_raises_on_miss_fatal(monkeypatch, ie):
     monkeypatch.setattr(_host, "search_regex", lambda *a, **k: None)
     with pytest.raises(RegexNotFoundError):
         ie._search_regex(r"x", "y", "name")
+
+
+def test_html_search_regex_calls_host(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+    monkeypatch.setattr(_host, "html_search_regex", lambda pat, s, f: "Hello World")
+    result = ie._html_search_regex(r"<title>(.+?)</title>",
+                                    "<title>Hello <b>World</b></title>", "title")
+    assert result == "Hello World"
