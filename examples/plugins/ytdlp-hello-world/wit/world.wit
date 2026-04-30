@@ -1,5 +1,5 @@
 package local:hello@0.1.0;
 
 world hello-extractor {
-    include rdlp:plugin/extractor-plugin@0.1.0;
+    include rdlp:plugin/extractor-plugin@0.2.0;
 }

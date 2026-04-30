@@ -1,10 +1,5 @@
-# rdlp shim port: only delta from upstream
-# /tmp/ytdlp-slice2/yt_dlp/extractor/xxxymovies.py is the import-line
-# rewrite below — `from .common import InfoExtractor` becomes
-# `from rdlp_ytdlp_compat import InfoExtractor`, and the helpers come
-# from the same package instead of `..utils`.
-from rdlp_ytdlp_compat import (
-    InfoExtractor,
+from .common import InfoExtractor
+from ..utils import (
     int_or_none,
     parse_duration,
 )

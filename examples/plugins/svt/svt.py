@@ -1,22 +1,17 @@
 import json
 import re
 
-# rdlp shim port: the only delta from upstream
-# /tmp/ytdlp-slice2/yt_dlp/extractor/svt.py is the import-line rewrite
-# below — `from .common import InfoExtractor` becomes `from
-# rdlp_ytdlp_compat import InfoExtractor`, and the helper imports come
-# from the same package instead of `..utils` / `..utils.traversal`. The
-# shim's public names are 1:1 with yt-dlp upstream so the rest of the
-# file is verbatim.
-from rdlp_ytdlp_compat import (
-    InfoExtractor,
+from .common import InfoExtractor
+from ..utils import (
     determine_ext,
     dict_get,
     int_or_none,
-    require,
-    traverse_obj,
     try_get,
     unified_timestamp,
+)
+from ..utils.traversal import (
+    require,
+    traverse_obj,
 )
 
 

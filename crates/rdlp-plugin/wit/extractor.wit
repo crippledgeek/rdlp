@@ -1,4 +1,4 @@
-package rdlp:plugin@0.1.0;
+package rdlp:plugin@0.2.0;
 
 world extractor-plugin {
     import host-fetch;
@@ -7,6 +7,7 @@ world extractor-plugin {
     import host-html-select;
     import host-log;
     import host-store-kv;
+    import host-extract-helpers;
 
     use types.{plugin-info, info-dict, search-query, search-page, extract-error, search-error};
 

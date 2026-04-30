@@ -235,6 +235,34 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                 # Single-callable transformer. RequiredError propagates.
                 result = _try_call(item, args=(obj,))
 
+        elif isinstance(key, dict):
+            # Dict-of-paths form (`utils/traversal.py:179-184`):
+            # `{result_key: sub_path, ...}` produces a dict where each
+            # value comes from `traverse_obj(obj, sub_path)`. The outer
+            # `default` propagates into the recursive call so a nested
+            # dict-path failure fills in `{outer_key: {inner_key: default}}`
+            # rather than collapsing to `{}`. Sub-path results that are
+            # None or `{}` (from a fully-pruned nested dict) get treated
+            # as "missing" — pruned when no default, replaced with default
+            # otherwise. apply_path's `is_dict` flag tells the outer caller
+            # the empty-dict result is intentional and must not be pruned.
+            built = {}
+            for k, sub_path in key.items():
+                kwargs = {
+                    "expected_type": expected_type,
+                    "get_all": get_all,
+                    "casesense": casesense,
+                    "traverse_string": traverse_string,
+                }
+                if not sentinel_default:
+                    kwargs["default"] = default
+                v = traverse_obj(obj, sub_path, **kwargs)
+                if v is not None and v != {}:
+                    built[k] = v
+                elif not sentinel_default:
+                    built[k] = default
+            result = built
+
         elif isinstance(key, (list, tuple)):
             # Sub-path branching — recurse into each branch and chain.
             branching = True
@@ -329,7 +357,10 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                 new_objs.extend(results)
             objs = new_objs
 
-        return objs, has_branched, False  # Slice-2 doesn't support dict-segment
+        # `is_dict` flag tells the outer loop the terminal segment was a
+        # dict-of-paths — its `{}`-results are intentional and must NOT be
+        # pruned by the usual "drop None / drop {}" filter.
+        return objs, has_branched, isinstance(last_key, dict)
 
     sentinel_default = default is NO_DEFAULT
     last_index = len(paths) - 1
@@ -337,17 +368,24 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     for index, path in enumerate(paths):
         is_last = index == last_index
         try:
-            results, has_branched, _ = apply_path(obj, path, True)
+            results, has_branched, is_dict = apply_path(obj, path, True)
         except _RequiredError as e:
             if is_last:
                 raise _ExtractorError(e.orig_msg, expected=e.expected) from None
             continue
         last_has_branched = has_branched
-        # Drop None / {} — yt-dlp's "unhelpful values".
-        cleaned = [r for r in results if r not in (None, {})]
-        if expected_type is not None:
-            cleaned = [type_test(v) for v in cleaned]
-            cleaned = [v for v in cleaned if v is not None]
+        if is_dict:
+            # Dict-of-paths terminal segment — keep `{}` (it's a valid
+            # "all sub-keys pruned" result, not an unhelpful sentinel).
+            # `expected_type` was already applied per-value inside the
+            # recursive `traverse_obj` calls in `apply_key`'s dict branch.
+            cleaned = list(results)
+        else:
+            # Drop None / {} — yt-dlp's "unhelpful values".
+            cleaned = [r for r in results if r not in (None, {})]
+            if expected_type is not None:
+                cleaned = [type_test(v) for v in cleaned]
+                cleaned = [v for v in cleaned if v is not None]
 
         if get_all and has_branched:
             if cleaned:
@@ -363,6 +401,43 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     if sentinel_default:
         if get_all and last_has_branched:
             return []
+        return None
+    return default
+
+
+def _format_to_dict(f):
+    """Convert a WIT M3u8Format record into yt-dlp's dict shape."""
+    out = {"format_id": f.format_id, "url": f.url, "ext": f.ext, "protocol": f.protocol}
+    for attr in ("tbr", "width", "height", "fps", "vcodec", "acodec",
+                 "vbr", "abr", "language", "format_note", "format_index",
+                 "manifest_url", "has_drm", "preference", "quality"):
+        v = getattr(f, attr, None)
+        if v is not None:
+            out[attr] = v
+    return out
+
+
+def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
+    """Multi-group / named-group / no-host calls keep going through the
+    local Python `re` module — the host helper returns a single string."""
+    patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
+    for pat in patterns:
+        m = _re.search(pat, string, flags) if isinstance(pat, str) else pat.search(string)
+        if m is not None:
+            if group is None:
+                groups = m.groups()
+                if groups:
+                    for g in groups:
+                        if g is not None:
+                            return g
+                return m.group(0)
+            if isinstance(group, (list, tuple)):
+                return tuple(m.group(g) for g in group)
+            return m.group(group)
+    from rdlp_ytdlp_compat._errors import RegexNotFoundError
+    if default is NO_DEFAULT:
+        if fatal:
+            raise RegexNotFoundError(f"Unable to extract {name}")
         return None
     return default
 
@@ -526,38 +601,32 @@ class InfoExtractor:
 
     def _search_regex(self, pattern, string, name, default=NO_DEFAULT,
                       fatal=True, flags=0, group=None):
-        """yt-dlp's _search_regex. CRITICAL: real default is fatal=True (extractors
-        omit the kwarg expecting raise-on-miss). Accepts a single pattern OR an
-        iterable of patterns/compiled regexes; first match wins.
-
-        - group=None: return first non-None group, or group(0) if no groups.
-        - group=int/str: return that named/numbered group.
-        - group=list/tuple: return tuple of groups.
-        """
+        """Slice-2.5 passthrough to host-extract-helpers.search-regex.
+        yt-dlp's pattern-list semantics + group/fatal/default management
+        stay Python — they're cheap branching the host doesn't see.
+        Falls back to the stdlib `re` path when outside the componentize-py
+        runtime (i.e. `_host._HXH_AVAILABLE` is False and the function
+        raises RuntimeError) so that existing unit tests keep passing."""
+        from rdlp_ytdlp_compat._errors import RegexNotFoundError
+        # multi-group / named-group always use the legacy stdlib path
+        if isinstance(group, (list, tuple)) or (
+            group is not None and not isinstance(group, int)
+        ):
+            return _legacy_search_regex(pattern, string, name, default,
+                                        fatal, flags, group)
         patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
-        m = None
         for pat in patterns:
-            m = _re.search(pat, string, flags) if isinstance(pat, str) else pat.search(string)
-            if m is not None:
-                break
-        if m is not None:
-            if group is None:
-                groups = m.groups()
-                if groups:
-                    for g in groups:
-                        if g is not None:
-                            return g
-                return m.group(0)
-            if isinstance(group, (list, tuple)):
-                return tuple(m.group(g) for g in group)
-            return m.group(group)
-        # No match
+            pat_str = pat if isinstance(pat, str) else pat.pattern
+            try:
+                result = _host.search_regex(pat_str, string, flags)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                return _legacy_search_regex(pattern, string, name, default,
+                                            fatal, flags, group)
+            if result is not None:
+                return result
         if default is NO_DEFAULT:
             if fatal:
-                # Raise the typed yt-dlp class so the WIT dispatcher routes
-                # to extract-error::parse via isinstance, and ported code
-                # using `except RegexNotFoundError:` keeps working.
-                from rdlp_ytdlp_compat._errors import RegexNotFoundError
                 raise RegexNotFoundError(f"Unable to extract {name}")
             _host.log("warn", f"unable to extract {name}; returning None")
             return None
@@ -565,70 +634,75 @@ class InfoExtractor:
 
     def _html_search_regex(self, pattern, string, name, default=NO_DEFAULT,
                            fatal=True, flags=0, group=None):
-        """yt-dlp's `_html_search_regex` (`extractor/common.py:1379-1386`).
-        Like `_search_regex` but the matched group is `clean_html`-ed
-        (HTML stripped, entities unescaped, whitespace normalised). Used
-        by extractors that capture text from inside HTML elements where
-        nested tags / character references need to be flattened."""
-        from rdlp_ytdlp_compat._utils import clean_html as _clean_html
-        res = self._search_regex(pattern, string, name, default, fatal, flags, group)
-        if isinstance(res, tuple):
-            return tuple(_clean_html(r) for r in res)
-        return _clean_html(res)
+        """Slice-2.5 passthrough to host-extract-helpers.html-search-regex."""
+        from rdlp_ytdlp_compat._errors import RegexNotFoundError
+        patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
+        for pat in patterns:
+            pat_str = pat if isinstance(pat, str) else pat.pattern
+            try:
+                result = _host.html_search_regex(pat_str, string, flags)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                from rdlp_ytdlp_compat._utils import clean_html as _clean_html
+                res = self._search_regex(pattern, string, name, default, fatal, flags, group)
+                if isinstance(res, tuple):
+                    return tuple(_clean_html(r) for r in res)
+                return _clean_html(res)
+            if result is not None:
+                return result
+        if default is NO_DEFAULT:
+            if fatal:
+                raise RegexNotFoundError(f"Unable to extract {name}")
+            return None
+        return default
 
     @staticmethod
     def _rta_search(html):
-        """yt-dlp's `_rta_search` (`extractor/common.py:1525-1543`).
-        Returns 18 if the page has the official RTA-5042 meta label OR
-        any of three age-acknowledgement markers (proudly-labeled link,
-        "you acknowledge you are at least N years old", 18 U.S.C. 2257
-        statement). Otherwise returns `None`. Used by adult-content
-        extractors to populate `age_limit`."""
-        if _re.search(
-            r'(?ix)<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA"',
-            html,
-        ):
-            return 18
-        markers = [
-            r'Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>',
-            r">[^<]*you acknowledge you are at least (\d+) years old",
-            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
-        ]
-        age_limit = None
-        for marker in markers:
-            mobj = _re.search(marker, html)
-            if mobj is not None:
-                # Capture group 1 (when present) carries the age threshold;
-                # otherwise default to 18. Upstream uses `traverse_obj` for
-                # the safe extraction; `try / except IndexError` is the
-                # equivalent without the heavy-helper dependency here.
-                try:
-                    captured = mobj.group(1)
-                    val = int(captured) if captured else 18
-                except (IndexError, ValueError):
-                    val = 18
-                age_limit = max(age_limit or 0, val)
-        return age_limit
+        """Slice-2.5 passthrough to host-extract-helpers.rta-search."""
+        try:
+            return _host.rta_search(html)
+        except RuntimeError:
+            # Outside componentize-py runtime — fall back to stdlib path.
+            if _re.search(
+                r'(?ix)<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA"',
+                html,
+            ):
+                return 18
+            markers = [
+                r'Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>',
+                r">[^<]*you acknowledge you are at least (\d+) years old",
+                r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
+            ]
+            age_limit = None
+            for marker in markers:
+                mobj = _re.search(marker, html)
+                if mobj is not None:
+                    try:
+                        captured = mobj.group(1)
+                        val = int(captured) if captured else 18
+                    except (IndexError, ValueError):
+                        val = 18
+                    age_limit = max(age_limit or 0, val)
+            return age_limit
 
     def _html_search_meta(self, name, html, display_name=None, fatal=False, **kwargs):
-        """yt-dlp's _html_search_meta. `name` accepts scalar or iterable of meta-tag
-        names. Real yt-dlp matches FIVE attributes: itemprop|name|property|id|http-equiv
-        — limiting to property+name breaks any extractor that uses og: tags via
-        http-equiv or itemprop microdata. The default fatal is False (distinct
-        from _search_regex)."""
+        """Slice-2.5 passthrough to host-extract-helpers.html-search-meta."""
         names = name if isinstance(name, (list, tuple)) else [name]
         default = kwargs.get("default", NO_DEFAULT)
         for n in names:
-            attrs = "(?:itemprop|name|property|id|http-equiv)"
-            # content first
-            pat = rf'<meta[^>]+(?:{attrs})=["\']{_re.escape(n)}["\'][^>]*content=["\']([^"\']*)["\']'
-            m = _re.search(pat, html, _re.IGNORECASE)
-            if m is None:
-                # content second
-                pat = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:{attrs})=["\']{_re.escape(n)}["\']'
+            try:
+                result = _host.html_search_meta(n, html)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                attrs = "(?:itemprop|name|property|id|http-equiv)"
+                pat = rf'<meta[^>]+(?:{attrs})=["\']{_re.escape(n)}["\'][^>]*content=["\']([^"\']*)["\']'
                 m = _re.search(pat, html, _re.IGNORECASE)
-            if m is not None:
-                return m.group(1)
+                if m is None:
+                    pat = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:{attrs})=["\']{_re.escape(n)}["\']'
+                    m = _re.search(pat, html, _re.IGNORECASE)
+                result = m.group(1) if m is not None else None
+            if result is not None:
+                return result
         if default is not NO_DEFAULT:
             return default
         if fatal:
@@ -642,71 +716,32 @@ class InfoExtractor:
         return formats
 
     def _extract_m3u8_formats_and_subtitles(
-            self, m3u8_url, video_id, ext=None, entry_protocol="m3u8_native",
+            self, m3u8_url, video_id, *, ext=None, entry_protocol="m3u8_native",
             preference=None, quality=None, m3u8_id=None, note=None, errnote=None,
             fatal=True, live=False, data=None, headers=None, query=None):
-        """yt-dlp's _extract_m3u8_formats_and_subtitles. Slice-1 scope: master
-        playlist only — does NOT recurse into media playlists. Returns
-        (formats, subs={}).
-
-        Honors yt-dlp's `note` / `errnote` / `fatal` logging contract: a
-        host-fetch failure raises only when `fatal=True` (the yt-dlp default);
-        otherwise the error is logged via `errnote` and an empty
-        (formats=[], subs={}) result is returned. Real extractors test
-        `if formats:` and fall back to a non-HLS path when the playlist is
-        unreachable — silently re-raising would break that pattern."""
+        """Slice-2.5 passthrough to host-extract-helpers.extract-m3u8."""
         if note is not None:
             _host.log("info", f"{note}: {m3u8_url}")
         try:
-            body = _host.fetch_text(m3u8_url, headers=headers)
+            result = _host.extract_m3u8(
+                m3u8_url, video_id,
+                ext=ext, protocol=entry_protocol, m3u8_id=m3u8_id, fatal=fatal,
+            )
         except RuntimeError as e:
-            # Same narrow catch as _download_webpage (I5): only RuntimeError
-            # / HostHttpError subclasses are legitimate retry signals.
-            # Always log on failure so the host sees the diagnostic.
-            label = errnote or f"failed to fetch HLS playlist {m3u8_url}"
+            # Outside componentize-py runtime or fetch failure.
+            label = errnote or f"failed to extract HLS playlist {m3u8_url}"
             _host.log("warn", f"{label}: {e}")
             if fatal:
                 raise
             return [], {}
-        formats = []
-        lines = body.splitlines()
-        for i, line in enumerate(lines):
-            if not line.startswith("#EXT-X-STREAM-INF:"):
-                continue
-            attrs = self._parse_m3u8_attrs(line[len("#EXT-X-STREAM-INF:"):])
-            if i + 1 >= len(lines):
-                continue
-            url = lines[i + 1].strip()
-            if not url or url.startswith("#"):
-                continue
-            url = urljoin(m3u8_url, url)
-            bandwidth = int_or_none(attrs.get("BANDWIDTH"), scale=1000)
-            resolution = attrs.get("RESOLUTION", "")
-            width = height = None
-            if "x" in resolution:
-                w, h = resolution.split("x", 1)
-                width = int_or_none(w)
-                height = int_or_none(h)
-            formats.append({
-                "format_id": f"{m3u8_id}-{bandwidth}" if m3u8_id else str(bandwidth or len(formats)),
-                "url": url,
-                "ext": ext or "mp4",
-                "protocol": entry_protocol,
-                "tbr": bandwidth,
-                "width": width,
-                "height": height,
-                "preference": preference,
-                "quality": quality,
-            })
-        return formats, {}
-
-    @staticmethod
-    def _parse_m3u8_attrs(s):
-        """Parse `KEY1=VALUE1,KEY2="VALUE 2"` into a dict."""
-        out = {}
-        for m in _re.finditer(r'([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))', s):
-            out[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
-        return out
+        formats = [_format_to_dict(f) for f in result.formats]
+        subtitles = {}
+        for s in result.subtitles:
+            entry = {"url": s.url}
+            if s.ext is not None:
+                entry["ext"] = s.ext
+            subtitles.setdefault(s.language, []).append(entry)
+        return formats, subtitles
 
     # ------------------------------------------------------------------
     # Slice-2 additions (SVT support)
@@ -800,47 +835,47 @@ class InfoExtractor:
 
     # --- OpenGraph helpers --------------------------------------------------
 
-    @staticmethod
-    def _og_regexes(prop):
-        """yt-dlp's `_og_regexes` (`extractor/common.py:1463-1473`).
-        Generates the two regex forms used to find an OpenGraph meta tag
-        (property-then-content and content-then-property orderings).
-        `&#x3A;` literal accepted as a `:` substitute for sites that
-        HTML-encode the property name."""
-        content_re = (
-            r'content=(?:"([^"]+?)"|\'([^\']+?)\'|\s*([^\s"\'=<>`]+?)(?=\s|/?>))'
-        )
-        sep = r'(?:&#x3A;|[:-])'
-        property_re = (
-            rf'(?:name|property)=(?:\'og{sep}{_re.escape(prop)}\'|'
-            rf'"og{sep}{_re.escape(prop)}"|\s*og{sep}{_re.escape(prop)}\b)'
-        )
-        template = r"<meta[^>]+?%s[^>]+?%s"
-        return [
-            template % (property_re, content_re),
-            template % (content_re, property_re),
-        ]
-
     def _og_search_property(self, prop, html_text, name=None, **kargs):
-        """yt-dlp's `_og_search_property` (`extractor/common.py:1480-1490`).
-        Iterates `_og_regexes` over a property name (or an iterable of
-        names), runs `_search_regex` with `re.DOTALL`, unescapes HTML
-        entities."""
+        """Slice-2.5 passthrough to host-extract-helpers.og-search-property."""
         from rdlp_ytdlp_compat._utils import variadic as _variadic
         props = _variadic(prop)
-        if name is None:
-            name = f"OpenGraph {props[0]}"
-        og_regexes = []
         for p in props:
-            og_regexes.extend(self._og_regexes(p))
-        escaped = self._search_regex(
-            og_regexes, html_text, name, flags=_re.DOTALL, **kargs,
-        )
-        if escaped is None:
-            return None
-        # `_search_regex` with multi-group regex returns the first
-        # non-None group (one of the three content-quote variants).
-        return _html.unescape(escaped)
+            try:
+                result = _host.og_search_property(p, html_text)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                if name is None:
+                    name = f"OpenGraph {props[0]}"
+                og_regexes = []
+                for pp in props:
+                    content_re = (
+                        r'content=(?:"([^"]+?)"|\'([^\']+?)\'|\s*([^\s"\'=<>`]+?)(?=\s|/?>))'
+                    )
+                    sep = r'(?:&#x3A;|[:-])'
+                    property_re = (
+                        rf'(?:name|property)=(?:\'og{sep}{_re.escape(pp)}\'|'
+                        rf'"og{sep}{_re.escape(pp)}"|\s*og{sep}{_re.escape(pp)}\b)'
+                    )
+                    template = r"<meta[^>]+?%s[^>]+?%s"
+                    og_regexes.extend([
+                        template % (property_re, content_re),
+                        template % (content_re, property_re),
+                    ])
+                escaped = self._search_regex(
+                    og_regexes, html_text, name, flags=_re.DOTALL, **kargs,
+                )
+                if escaped is None:
+                    return None
+                return _html.unescape(escaped)
+            if result is not None:
+                return result
+        # Mirror the existing default-handling
+        default = kargs.get("default", NO_DEFAULT)
+        if default is not NO_DEFAULT:
+            return default
+        if kargs.get("fatal", False):
+            raise ValueError(f"Unable to extract OpenGraph {props[0]}")
+        return None
 
     def _og_search_title(self, html_text, *, fatal=False, **kargs):
         """yt-dlp's `_og_search_title` (`extractor/common.py:1498-1499`).
@@ -861,32 +896,36 @@ class InfoExtractor:
     def _search_json(self, start_pattern, string, name, video_id, *,
                      end_pattern="", contains_pattern=r"{(?s:.+)}",
                      fatal=True, default=NO_DEFAULT, **kwargs):
-        """yt-dlp's `_search_json` (`extractor/common.py:1352-1378`).
-        Locates a JSON object in `string` matching
-        `(start_pattern)\\s*(json)\\s*(end_pattern)`, then parses it.
-        Default `contains_pattern` is the lazy brace-balanced regex
-        `{(?s:.+)}` — `_parse_json` tolerates trailing junk via
-        `ignore_extra=True`. `default` overrides `fatal=True`."""
+        """Slice-2.5 passthrough to host-extract-helpers.search-json
+        plus stdlib json.loads for the parse step. The contains_pattern
+        kwarg is honoured Python-side via fallback regex match if the
+        WIT default doesn't capture."""
         if default is NO_DEFAULT:
             has_default = False
         else:
             fatal, has_default = False, True
-
-        full_pattern = (
-            rf"(?:{start_pattern})\s*(?P<json>{contains_pattern})\s*"
-            rf"(?:{end_pattern})"
-        )
-        json_string = self._search_regex(
-            full_pattern, string, name, group="json",
-            fatal=fatal,
-            default=None if has_default else NO_DEFAULT,
-        )
-        if not json_string:
-            return default if has_default else {}
         try:
-            return self._parse_json(
-                json_string, video_id, fatal=True, **kwargs,
+            json_string = _host.search_json(start_pattern, end_pattern, string)
+        except RuntimeError:
+            # Outside componentize-py runtime — fall back to stdlib path.
+            full_pattern = (
+                rf"(?:{start_pattern})\s*(?P<json>{contains_pattern})\s*"
+                rf"(?:{end_pattern})"
             )
+            json_string = self._search_regex(
+                full_pattern, string, name, group="json",
+                fatal=fatal,
+                default=None if has_default else NO_DEFAULT,
+            )
+        if not json_string:
+            if not fatal:
+                return default if has_default else {}
+            from rdlp_ytdlp_compat._errors import ExtractorError
+            raise ExtractorError(
+                f"Unable to extract {name}", video_id=video_id,
+            )
+        try:
+            return self._parse_json(json_string, video_id, fatal=True, **kwargs)
         except (_json.JSONDecodeError, ValueError) as e:
             if fatal:
                 from rdlp_ytdlp_compat._errors import ExtractorError
@@ -990,3 +1029,60 @@ class InfoExtractor:
             "returning empty pair",
         )
         return [], {}
+
+    def _search_json_ld(self, html, video_id, expected_type=None, *,
+                        fatal=True, default=NO_DEFAULT):
+        """Slice-2.5 passthrough to host-extract-helpers.extract-json-ld.
+        Returns yt-dlp's typed dict shape directly from the host-side
+        rdlp_extractor::base::common::json_ld extractor."""
+        try:
+            result = _host.extract_json_ld(html)
+        except RuntimeError:
+            # Outside componentize-py runtime.
+            if default is NO_DEFAULT:
+                if fatal:
+                    from rdlp_ytdlp_compat._errors import ExtractorError
+                    raise ExtractorError("Unable to extract JSON-LD",
+                                         video_id=video_id)
+                return {}
+            return default
+        if result is None:
+            if default is NO_DEFAULT:
+                if fatal:
+                    from rdlp_ytdlp_compat._errors import ExtractorError
+                    raise ExtractorError("Unable to extract JSON-LD",
+                                         video_id=video_id)
+                return {}
+            return default
+        # Convert WIT JsonLdVideo record to yt-dlp dict shape
+        out = {}
+        for attr in ("title", "description", "thumbnail", "upload_date",
+                     "duration", "view_count", "like_count"):
+            v = getattr(result, attr, None)
+            if v is not None:
+                out[attr] = v
+        if result.thumbnails:
+            out["thumbnails"] = [{"url": u} for u in result.thumbnails]
+        if result.tags:
+            out["tags"] = list(result.tags)
+        if result.categories:
+            out["categories"] = list(result.categories)
+        return out
+
+    def _set_cookie(self, domain, name, value, path="/", expires=None,
+                    secure=False, http_only=False):
+        """Slice-2.5 passthrough to existing host-cookie-jar capability.
+        Constructs a cookie record from yt-dlp's flat-arg API and calls
+        `_host.cookie_jar.set_cookie(url, cookie)`."""
+        url = f"https://{domain}/"
+        cookie = _host.Cookie(
+            name=name, value=value, domain=domain, path=path,
+            secure=secure, http_only=http_only, expires=expires,
+        )
+        _host.cookie_jar.set_cookie(url, cookie)
+
+    def _set_age_cookies(self, domain):
+        """Convenience wrapper — many adult sites require an age-gate
+        cookie. Sets a generic 'is_adult=1' / 'age_verified=1' cookie."""
+        for name in ("is_adult", "age_verified"):
+            self._set_cookie(domain, name, "1")

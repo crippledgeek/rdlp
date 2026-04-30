@@ -46,6 +46,115 @@ pub use detector::HlsSizeDetector;
 pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
+/// Parsed entry from an HLS master playlist — schema mirrors yt-dlp's
+/// `_extract_m3u8_formats_and_subtitles` per-format dict, lossless.
+#[derive(Debug, Clone)]
+pub struct M3u8Variant {
+    /// Numeric index of this variant in the master playlist (stringified).
+    pub format_id: String,
+    /// Absolute URL of the variant media playlist.
+    pub url: String,
+    /// Container extension for this format (always `"mp4"` for HLS).
+    pub ext: String,
+    /// yt-dlp protocol string (`"m3u8_native"`).
+    pub protocol: String,
+    /// Total bitrate in kbps (from BANDWIDTH attribute, divided by 1000).
+    pub tbr: Option<f32>,
+    /// Horizontal resolution in pixels (from RESOLUTION attribute).
+    pub width: Option<u32>,
+    /// Vertical resolution in pixels (from RESOLUTION attribute).
+    pub height: Option<u32>,
+    /// Frame rate (from FRAME-RATE attribute).
+    pub fps: Option<f32>,
+    /// Video codec string (first codec token from CODECS attribute).
+    pub vcodec: Option<String>,
+    /// Audio codec string (second codec token from CODECS attribute).
+    pub acodec: Option<String>,
+    /// Video bitrate in kbps (not populated from master playlist).
+    pub vbr: Option<f32>,
+    /// Audio bitrate in kbps (not populated from master playlist).
+    pub abr: Option<f32>,
+    /// Language code (from EXT-X-MEDIA LANGUAGE, not populated here).
+    pub language: Option<String>,
+    /// Human-readable format note (not populated from master playlist).
+    pub format_note: Option<String>,
+    /// Zero-based index of this variant in the master playlist.
+    pub format_index: Option<u32>,
+    /// URL of the master playlist this variant was parsed from.
+    pub manifest_url: Option<String>,
+    /// Whether the stream has DRM protection (not detectable from master alone).
+    pub has_drm: Option<bool>,
+    /// yt-dlp format preference score (not set during parsing).
+    pub preference: Option<i32>,
+    /// yt-dlp quality score (not set during parsing).
+    pub quality: Option<f32>,
+}
+
+/// Parse an HLS master playlist into typed variants. Wraps `m3u8_rs`'s
+/// `parse_master_playlist_res`. Resolves relative URIs against
+/// `master_url`. Returns an empty Vec if `text` is a media playlist
+/// (yt-dlp's `_extract_m3u8_formats_and_subtitles` handles media
+/// playlists via a different code path).
+pub fn parse_master_playlist(master_url: &str, text: &str) -> Result<Vec<M3u8Variant>, String> {
+    use m3u8_rs::Playlist;
+    let parsed =
+        m3u8_rs::parse_playlist_res(text.as_bytes()).map_err(|e| format!("parse m3u8: {e:?}"))?;
+    let master = match parsed {
+        Playlist::MasterPlaylist(m) => m,
+        Playlist::MediaPlaylist(_) => return Ok(Vec::new()),
+    };
+    let base = url::Url::parse(master_url).map_err(|e| format!("parse base url: {e}"))?;
+    let mut out = Vec::new();
+    for (i, v) in master.variants.iter().enumerate() {
+        let abs = base.join(&v.uri).map_err(|e| format!("join uri: {e}"))?;
+        let (vcodec, acodec) = split_codecs(v.codecs.as_deref());
+        out.push(M3u8Variant {
+            format_id: format!("{i}"),
+            url: abs.to_string(),
+            ext: "mp4".to_string(),
+            protocol: "m3u8_native".to_string(),
+            tbr: Some((v.bandwidth as f32) / 1000.0),
+            width: v.resolution.as_ref().map(|r| r.width as u32),
+            height: v.resolution.as_ref().map(|r| r.height as u32),
+            fps: v.frame_rate.map(|f| f as f32),
+            vcodec,
+            acodec,
+            vbr: None,
+            abr: None,
+            language: None,
+            format_note: None,
+            format_index: Some(i as u32),
+            manifest_url: Some(master_url.to_string()),
+            has_drm: None,
+            preference: None,
+            quality: None,
+        });
+    }
+    Ok(out)
+}
+
+/// Split a HLS CODECS attribute string ("avc1.640028,mp4a.40.2") into
+/// (vcodec, acodec). Naive: first token starting with "avc"/"hev"/"vp"
+/// is video; first starting with "mp4a"/"opus"/"aac" is audio.
+fn split_codecs(codecs: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(s) = codecs else {
+        return (None, None);
+    };
+    let mut v = None;
+    let mut a = None;
+    for tok in s.split(',') {
+        let t = tok.trim();
+        if v.is_none() && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp")) {
+            v = Some(t.to_string());
+        } else if a.is_none()
+            && (t.starts_with("mp4a") || t.starts_with("opus") || t.starts_with("aac"))
+        {
+            a = Some(t.to_string());
+        }
+    }
+    (v, a)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +428,28 @@ mod tests {
             inferred, None,
             "Should NOT infer audio when AUDIO group referenced"
         );
+    }
+}
+
+#[cfg(test)]
+mod parse_master_playlist_tests {
+    use super::parse_master_playlist;
+
+    const MASTER: &str = "\
+#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"\n\
+hi.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS=\"avc1.4d4015\"\n\
+mid.m3u8\n";
+
+    #[test]
+    fn extracts_two_variants() {
+        let out = parse_master_playlist("https://x.com/master.m3u8", MASTER).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].url, "https://x.com/hi.m3u8");
+        assert_eq!(out[0].width, Some(1920));
+        assert_eq!(out[0].height, Some(1080));
+        assert_eq!(out[1].url, "https://x.com/mid.m3u8");
+        assert_eq!(out[1].height, Some(720));
     }
 }

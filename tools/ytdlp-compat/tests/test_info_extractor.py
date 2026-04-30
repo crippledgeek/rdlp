@@ -457,21 +457,31 @@ class TestExtractM3U8Formats:
         assert formats == []
 
     def test_master_playlist_parse_happy_path(self, monkeypatch):
-        # Stub _host.fetch_text with a canned master playlist so the parser
-        # loop (BANDWIDTH, RESOLUTION, urljoin, format_id derivation) gets
-        # exercised. Without this test, the entire parser body has zero
-        # coverage — a regression in attribute parsing would silently produce
-        # malformed Format entries.
+        # Stub _host.extract_m3u8 so the _format_to_dict conversion and
+        # field mapping (url, ext, tbr, width, height, format_id) are
+        # exercised. Updated for Slice-2.5 passthrough to extract_m3u8.
         from rdlp_ytdlp_compat import _host
-        m3u8 = (
-            "#EXTM3U\n"
-            "#EXT-X-VERSION:3\n"
-            "#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=640x360,CODECS=\"avc1.42e00a\"\n"
-            "low/index.m3u8\n"
-            "#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720\n"
-            "high/index.m3u8\n"
-        )
-        monkeypatch.setattr(_host, "fetch_text", lambda *a, **kw: m3u8)
+
+        class _Fmt:
+            def __init__(self, fid, url, ext, proto, tbr, width, height):
+                self.format_id = fid; self.url = url; self.ext = ext
+                self.protocol = proto; self.tbr = tbr; self.width = width
+                self.height = height
+                self.fps = self.vcodec = self.acodec = None
+                self.vbr = self.abr = self.language = self.format_note = None
+                self.format_index = self.manifest_url = self.has_drm = None
+                self.preference = self.quality = None
+
+        class _Result:
+            formats = [
+                _Fmt("hls-1280", "https://cdn.example.com/low/index.m3u8",
+                     "mp4", "m3u8_native", 1280, 640, 360),
+                _Fmt("hls-2560", "https://cdn.example.com/high/index.m3u8",
+                     "mp4", "m3u8_native", 2560, 1280, 720),
+            ]
+            subtitles = []
+
+        monkeypatch.setattr(_host, "extract_m3u8", lambda *a, **kw: _Result())
         ie = InfoExtractor()
         formats, subs = ie._extract_m3u8_formats_and_subtitles(
             "https://cdn.example.com/master.m3u8",
@@ -486,7 +496,7 @@ class TestExtractM3U8Formats:
         assert low["url"] == "https://cdn.example.com/low/index.m3u8"
         assert low["ext"] == "mp4"
         assert low["protocol"] == "m3u8_native"
-        assert low["tbr"] == 1280  # 1280000 / 1000
+        assert low["tbr"] == 1280
         assert low["width"] == 640
         assert low["height"] == 360
         assert low["format_id"] == "hls-1280"
@@ -497,15 +507,15 @@ class TestExtractM3U8Formats:
         assert high["height"] == 720
 
     def test_master_playlist_skips_malformed_entries(self, monkeypatch):
-        # Trailing #EXT-X-STREAM-INF without a URL line below it should be
-        # skipped, not panic the parser.
+        # When extract_m3u8 returns an empty formats list, the method
+        # should propagate that correctly. Updated for Slice-2.5.
         from rdlp_ytdlp_compat import _host
-        m3u8 = (
-            "#EXTM3U\n"
-            "#EXT-X-STREAM-INF:BANDWIDTH=500000\n"
-            # No URL line; EOF
-        )
-        monkeypatch.setattr(_host, "fetch_text", lambda *a, **kw: m3u8)
+
+        class _Result:
+            formats = []
+            subtitles = []
+
+        monkeypatch.setattr(_host, "extract_m3u8", lambda *a, **kw: _Result())
         ie = InfoExtractor()
         formats, _ = ie._extract_m3u8_formats_and_subtitles(
             "https://cdn.example.com/m.m3u8", "vid",

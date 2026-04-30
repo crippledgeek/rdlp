@@ -284,6 +284,86 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def format_field(obj, field=None, template="%s", ignore=None, default="", func=None):
+    """yt-dlp's `format_field` (utils/_utils.py). Returns
+    `template % obj[field]` when the field is present and not None,
+    else `default`. `func` post-processes the value before
+    formatting."""
+    val = obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+    if val is None or (ignore is not None and val == ignore):
+        return default
+    if func is not None:
+        val = func(val)
+    return template % val
+
+
+def unified_strdate(date_str, day_first=True):
+    """yt-dlp's `unified_strdate` (utils/_utils.py). Parses common date
+    formats and returns 'YYYYMMDD' or None. Builds on
+    `unified_timestamp` then formats to date-only."""
+    if date_str is None or not isinstance(date_str, str):
+        return None
+    s = date_str.strip()
+    if len(s) == 8 and s.isdigit():
+        return s
+    from rdlp_ytdlp_compat.info_extractor import unified_timestamp
+    ts = unified_timestamp(s, day_first=day_first)
+    if ts is None:
+        return None
+    import datetime
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y%m%d")
+
+
+def merge_dicts(*dicts):
+    """yt-dlp's `merge_dicts` (utils/_utils.py). Merge dicts left-to-
+    right; later values override, but None values from later dicts do
+    NOT clobber non-None values from earlier ones. Returns a new dict."""
+    out = {}
+    for d in dicts:
+        if not d:
+            continue
+        for k, v in d.items():
+            if v is None and k in out:
+                continue
+            out[k] = v
+    return out
+
+
+def str_to_int(s):
+    """yt-dlp's `str_to_int` (utils/_utils.py). Parses 'human' integer
+    strings: '1,234' / '1.5K' / '2M' / '3B' / plain digits. Truncates
+    decimals (yt-dlp's behaviour). Returns None on parse failure."""
+    if s is None:
+        return None
+    if not isinstance(s, str):
+        try:
+            return int(s)
+        except (TypeError, ValueError):
+            return None
+    cleaned = s.replace(",", "").strip()
+    if not cleaned:
+        return None
+    multiplier = 1
+    if cleaned[-1].upper() in ("K", "M", "B"):
+        multiplier = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[cleaned[-1].upper()]
+        cleaned = cleaned[:-1]
+    try:
+        return int(float(cleaned) * multiplier)
+    except (ValueError, TypeError):
+        return None
+
+
+def url_or_none(s):
+    """yt-dlp's `url_or_none` (utils/_utils.py). Returns the input if
+    it's a usable URL (http/https/protocol-relative/data:), else None.
+    Rejects relative paths and javascript: URIs."""
+    if not isinstance(s, str):
+        return None
+    if s.startswith(("http://", "https://", "//", "data:")):
+        return s
+    return None
+
+
 # Path-segment separator — POSIX uses `/`; Windows uses both. We split on
 # either to mirror yt-dlp's `_sanitize_path_parts` behaviour.
 _PATH_SEP_RE = re.compile(r"[/\\]")
@@ -309,3 +389,9 @@ def sanitize_path(s: str, force: bool = False) -> str:
     parts = _PATH_SEP_RE.split(s)
     sanitised = [sanitize_filename(p) for p in parts if p]
     return "/".join(sanitised)
+
+
+def str_or_none(v, default=None):
+    """yt-dlp's `str_or_none` (utils/_utils.py:2027). Returns `str(v)` when
+    `v` is not None, else `default`."""
+    return default if v is None else str(v)

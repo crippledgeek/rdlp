@@ -1,4 +1,4 @@
-package rdlp:plugin@0.1.0;
+package rdlp:plugin@0.2.0;
 
 interface host-fetch {
     record request {
@@ -72,4 +72,88 @@ interface host-store-kv {
     get: func(key: string) -> option<list<u8>>;
     set: func(key: string, value: list<u8>) -> result<_, string>;
     delete: func(key: string);
+}
+
+interface host-extract-helpers {
+    use host-fetch.{fetch-error};
+
+    flags regex-flags {
+        ignore-case,
+        multiline,
+        dotall,
+        verbose,
+    }
+
+    record m3u8-format {
+        format-id: string,
+        url: string,
+        ext: string,
+        protocol: string,
+        tbr: option<f32>,
+        width: option<u32>,
+        height: option<u32>,
+        fps: option<f32>,
+        vcodec: option<string>,
+        acodec: option<string>,
+        vbr: option<f32>,
+        abr: option<f32>,
+        language: option<string>,
+        format-note: option<string>,
+        format-index: option<u32>,
+        manifest-url: option<string>,
+        has-drm: option<bool>,
+        preference: option<s32>,
+        quality: option<f32>,
+    }
+
+    record extract-helpers-subtitle {
+        language: string,
+        url: string,
+        ext: option<string>,
+    }
+
+    record m3u8-extraction {
+        formats: list<m3u8-format>,
+        subtitles: list<extract-helpers-subtitle>,
+    }
+
+    record m3u8-options {
+        ext: option<string>,
+        protocol: option<string>,
+        m3u8-id: option<string>,
+        fatal: bool,
+    }
+
+    record json-ld-video {
+        title: option<string>,
+        description: option<string>,
+        thumbnail: option<string>,
+        thumbnails: list<string>,
+        upload-date: option<string>,
+        duration: option<u32>,
+        view-count: option<u64>,
+        like-count: option<u64>,
+        tags: list<string>,
+        categories: list<string>,
+    }
+
+    search-regex: func(pattern: string, haystack: string, re-flags: regex-flags)
+                    -> option<string>;
+
+    html-search-regex: func(pattern: string, haystack: string, re-flags: regex-flags)
+                    -> option<string>;
+
+    html-search-meta: func(name: string, html: string) -> option<string>;
+
+    og-search-property: func(prop: string, html: string) -> option<string>;
+
+    rta-search: func(html: string) -> option<u8>;
+
+    search-json: func(start-pattern: string, end-pattern: string,
+                      haystack: string) -> option<string>;
+
+    extract-m3u8: func(url: string, video-id: string, opts: m3u8-options)
+                    -> result<m3u8-extraction, fetch-error>;
+
+    extract-json-ld: func(html: string) -> option<json-ld-video>;
 }

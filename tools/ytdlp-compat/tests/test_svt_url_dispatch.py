@@ -15,25 +15,76 @@ Each entry is sourced verbatim from
 tag 2026.03.17. URLs marked `'only_matching': True` upstream still
 need to dispatch correctly even if their info_dict isn't asserted.
 """
-import importlib.util
+import importlib
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 
+# ---------------------------------------------------------------------------
+# Fake yt_dlp/ package contents — kept in sync with the Rust constants in
+# crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs (EXTRACTOR_COMMON_PY,
+# UTILS_INIT_PY, UTILS_HELPERS_PY, UTILS_TRAVERSAL_PY, YT_DLP_INIT_PY).
+# ---------------------------------------------------------------------------
+
+_FAKE_YT_DLP_INIT = (
+    '"""rdlp shim — fake yt_dlp package staged by build-from-ytdlp."""\n'
+    '__version__ = "rdlp-shim/0.2"\n'
+)
+
+_FAKE_EXTRACTOR_COMMON = "from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n"
+
+_FAKE_UTILS_INIT = """\
+from .traversal import *  # noqa: F401, F403
+from ._utils import *     # noqa: F401, F403
+"""
+
+_FAKE_UTILS_HELPERS = """\
+from rdlp_ytdlp_compat._utils import (  # noqa: F401
+    clean_html, determine_ext, dict_get, format_field,
+    merge_dicts, parse_duration, sanitize_filename, sanitize_path,
+    str_to_int, unified_strdate, url_or_none, variadic,
+)
+from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
+    int_or_none, try_get, unified_timestamp, urljoin,
+)
+"""
+
+_FAKE_UTILS_TRAVERSAL = """\
+from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
+    traverse_obj,
+)
+from rdlp_ytdlp_compat._utils import (  # noqa: F401
+    dict_get, require,
+)
+"""
+
+
 def _load_svt_module():
-    """Import examples/plugins/svt/svt.py as a Python module without
-    going through componentize-py. The shim's `_dispatch.py` works
-    against any module exposing the IE classes."""
+    """Stage a minimal yt_dlp/ package layout in a temp dir, then import
+    examples/plugins/svt/svt.py as yt_dlp.extractor.svt so its relative
+    imports resolve. Mirrors the build-from-ytdlp staging done at
+    plugin-build time (see stage_build_dir in build_from_ytdlp.rs)."""
     repo_root = Path(__file__).resolve().parents[3]
-    svt_path = repo_root / "examples/plugins/svt/svt.py"
-    assert svt_path.exists(), f"missing source: {svt_path}"
-    spec = importlib.util.spec_from_file_location("svt_under_test", svt_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["svt_under_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    svt_src = repo_root / "examples/plugins/svt/svt.py"
+    assert svt_src.exists(), f"missing source: {svt_src}"
+
+    stage = Path(tempfile.mkdtemp(prefix="ytdlp-shim-test-"))
+    yt = stage / "yt_dlp"
+    (yt / "extractor").mkdir(parents=True)
+    (yt / "utils").mkdir(parents=True)
+    (yt / "__init__.py").write_text(_FAKE_YT_DLP_INIT)
+    (yt / "extractor" / "__init__.py").write_text("")
+    (yt / "extractor" / "common.py").write_text(_FAKE_EXTRACTOR_COMMON)
+    (yt / "utils" / "__init__.py").write_text(_FAKE_UTILS_INIT)
+    (yt / "utils" / "_utils.py").write_text(_FAKE_UTILS_HELPERS)
+    (yt / "utils" / "traversal.py").write_text(_FAKE_UTILS_TRAVERSAL)
+    (yt / "extractor" / "svt.py").write_bytes(svt_src.read_bytes())
+
+    sys.path.insert(0, str(stage))
+    return importlib.import_module("yt_dlp.extractor.svt")
 
 
 SVT = _load_svt_module()

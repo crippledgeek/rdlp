@@ -25,7 +25,7 @@ impl BaseExtractor {
     /// - `P0DT1H1M14S` → 3674
     ///
     /// Returns `None` for any other shape.
-    pub(crate) fn parse_iso8601_duration(duration_str: &str) -> Option<f64> {
+    pub fn parse_iso8601_duration(duration_str: &str) -> Option<f64> {
         let caps = ISO8601_DURATION_PATTERN.captures(duration_str)?;
 
         let hours: f64 = caps

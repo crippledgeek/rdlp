@@ -317,19 +317,29 @@ jobs:
           path: tools/ytdlp-compat/.venv
           key: venv-${{ runner.os }}-py3.12-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt') }}
 
-      - name: Install componentize-py-pin@0.17.2 via uv
-        if: steps.venv-cache.outputs.cache-hit != 'true'
+      # Idempotent ensure-venv. uv-created venvs contain a symlink at
+      # .venv/bin/python pointing at an absolute path on the runner; when
+      # GitHub rotates the runner image, that path can disappear and the
+      # symlink dangles. The requirements-dev.txt hash is unchanged so
+      # the cache restores, but every shebang'd entry-point then fails
+      # with "bad interpreter: No such file or directory". This step
+      # validates the restored venv and rebuilds it in place if the
+      # interpreter symlink is broken — keeping the cache-hit fast path
+      # intact for healthy caches while self-healing on stale ones.
+      - name: Ensure componentize-py-pin@0.17.2 venv
         working-directory: tools/ytdlp-compat
         run: |
-          uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python \
-            --require-hashes -r requirements-dev.txt
+          if .venv/bin/python --version >/dev/null 2>&1 \
+             && .venv/bin/componentize-py --version >/dev/null 2>&1; then
+            echo "Cached venv is healthy"
+          else
+            echo "::warning::Rebuilding venv (no cache hit, or interpreter symlink stale)"
+            rm -rf .venv
+            uv venv .venv --python 3.12
+            uv pip install --python .venv/bin/python \
+              --require-hashes -r requirements-dev.txt
+          fi
           .venv/bin/componentize-py --version
-
-      - name: Verify cached venv (cache-hit fast path)
-        if: steps.venv-cache.outputs.cache-hit == 'true'
-        working-directory: tools/ytdlp-compat
-        run: .venv/bin/componentize-py --version
 
       - name: Run rdlp_ytdlp_compat unit tests
         working-directory: tools/ytdlp-compat

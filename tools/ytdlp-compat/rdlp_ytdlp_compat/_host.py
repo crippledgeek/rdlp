@@ -23,6 +23,13 @@ try:
 except ModuleNotFoundError:
     _AVAILABLE = False
 
+try:
+    from extractor_plugin.imports import host_extract_helpers as _hxh
+    _HXH_AVAILABLE = True
+except ModuleNotFoundError:
+    _hxh = None  # type: ignore[assignment]
+    _HXH_AVAILABLE = False
+
 
 class HostHttpError(RuntimeError):
     """Non-2xx HTTP response from `host:fetch`.
@@ -120,3 +127,119 @@ def log(level: str, message: str) -> None:
         "error": host_log.Level.ERROR,
     }
     host_log.log(level_map.get(level, host_log.Level.INFO), message)
+
+
+# ── Slice 2.5 host-extract-helpers facade ──────────────────────────
+# Wraps the componentize-py-emitted bindings into ergonomic
+# `_host.search_regex(...)` calls. Plugins never touch
+# `extractor_plugin.imports.host_extract_helpers` directly.
+#
+# All functions guard with `_HXH_AVAILABLE` at call time — the same
+# pattern as fetch_text/_AVAILABLE above — so unit tests can import
+# this module without crashing.
+
+import re as _re
+
+
+def _re_flags_to_wit(flags):
+    """Translate Python `re.IGNORECASE | re.MULTILINE | re.DOTALL |
+    re.VERBOSE` int to WIT RegexFlags. Returns 0-valued flags when
+    the bindings are unavailable (callers gate on _HXH_AVAILABLE)."""
+    if flags is None or flags == 0:
+        return _hxh.RegexFlags(0) if _HXH_AVAILABLE else 0
+    out = 0
+    if flags & _re.IGNORECASE:
+        out |= 1 << 0
+    if flags & _re.MULTILINE:
+        out |= 1 << 1
+    if flags & _re.DOTALL:
+        out |= 1 << 2
+    if flags & _re.VERBOSE:
+        out |= 1 << 3
+    return _hxh.RegexFlags(out) if _HXH_AVAILABLE else out
+
+
+def search_regex(pattern, string, flags=0):
+    """Return the first match of `pattern` in `string`, or None."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.search_regex called outside componentize-py runtime")
+    return _hxh.search_regex(pattern, string, _re_flags_to_wit(flags))
+
+
+def html_search_regex(pattern, string, flags=0):
+    """Search for `pattern` in `string` after stripping HTML tags."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.html_search_regex called outside componentize-py runtime")
+    return _hxh.html_search_regex(pattern, string, _re_flags_to_wit(flags))
+
+
+def html_search_meta(name, html):
+    """Extract a ``<meta name="…" content="…">`` value from `html`."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.html_search_meta called outside componentize-py runtime")
+    return _hxh.html_search_meta(name, html)
+
+
+def og_search_property(prop, html):
+    """Extract an Open Graph ``<meta property="og:…" content="…">`` value."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.og_search_property called outside componentize-py runtime")
+    return _hxh.og_search_property(prop, html)
+
+
+def rta_search(html):
+    """Return True if `html` contains a RTA (Restricted to Adults) label."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.rta_search called outside componentize-py runtime")
+    return _hxh.rta_search(html)
+
+
+def search_json(start_pattern, end_pattern, string):
+    """Extract a JSON object delimited by `start_pattern` … `end_pattern`."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.search_json called outside componentize-py runtime")
+    return _hxh.search_json(start_pattern, end_pattern, string)
+
+
+def extract_m3u8(url, video_id, *, ext=None, protocol=None, m3u8_id=None, fatal=True):
+    """Parse an M3U8 playlist and return a list of Format dicts."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.extract_m3u8 called outside componentize-py runtime")
+    opts = _hxh.M3u8Options(ext=ext, protocol=protocol, m3u8_id=m3u8_id, fatal=fatal)
+    return _hxh.extract_m3u8(url, video_id, opts)
+
+
+def extract_json_ld(html):
+    """Extract structured data from JSON-LD ``<script>`` blocks in `html`."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError("_host.extract_json_ld called outside componentize-py runtime")
+    return _hxh.extract_json_ld(html)
+
+
+class Cookie:
+    """Simple cookie record — used by `_set_cookie` to avoid importing the
+    WIT-generated Cookie type in unit tests (outside componentize-py)."""
+
+    def __init__(self, *, name, value, domain, path="/",
+                 secure=False, http_only=False, expires=None):
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.secure = secure
+        self.http_only = http_only
+        self.expires = expires
+
+
+class _CookieJarFacade:
+    """Lazy facade — actual cookie-jar bindings live at extractor_plugin.imports.host_cookie_jar."""
+    def set_cookie(self, url, cookie):
+        from extractor_plugin.imports import host_cookie_jar
+        return host_cookie_jar.set_cookie(url, cookie)
+
+    def get_cookies(self, url):
+        from extractor_plugin.imports import host_cookie_jar
+        return host_cookie_jar.get_cookies(url)
+
+
+cookie_jar = _CookieJarFacade()

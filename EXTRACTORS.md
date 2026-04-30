@@ -244,3 +244,22 @@ Plugins implement the `extractor-plugin` WIT world declared at `crates/rdlp-plug
 Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fallback) and dropped into the user's plugin directory (defaults to `~/.config/rdlp/plugins/<name>/`). On first run, rdlp shows the plugin's declared capabilities and asks the user to confirm trust.
 
 Reference plugin example (in Rust + cargo-component) and full plugin author guide are tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213) — pending Task 28. For the design rationale and security model, see `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local).
+
+## Policy: yt-dlp-ported plugins stay byte-identical
+
+Plugins built via `rdlp plugin build-from-ytdlp` MUST keep their `.py` source byte-identical to the upstream `yt_dlp/extractor/<name>.py` they were ported from. Local edits (regex broadening, helper substitution, behavior tweaks) are explicitly forbidden, even when the upstream source has a known defect.
+
+Rationale:
+
+- Drop-in compatibility is the value proposition. As soon as we modify a port we own a permanent fork of that file and lose the "paste an upstream `.py` and rebuild" property.
+- yt-dlp benefits from the bug report. Upstream is the right place to fix `_VALID_URL` regex defects, missing field handling, or stale CSS selectors. Filing the issue / PR there returns the fix to ~1,800 other consumers, not just rdlp users.
+- Attribution + maintenance. A locally-patched extractor becomes invisible work that we now have to keep current against upstream changes. That cost is per-extractor and compounds with every site we port.
+
+If a ported plugin fails because of an upstream defect, the response is:
+
+1. **Confirm the defect is upstream** — reproduce against `yt-dlp` itself if possible, or read the upstream `.py` source carefully.
+2. **File the issue / PR at `yt-dlp/yt-dlp`** — link to it from the rdlp issue tracker.
+3. **If the gap is on rdlp's side instead** (missing host helper, incomplete `traverse_obj` semantics, dispatcher behaviour), fix it inside rdlp — not inside the port.
+4. **If a user needs the fix immediately**, they can keep a local fork of the `.py` outside the rdlp tree and run `build-from-ytdlp` on it. The plugin sandbox treats that the same as any other plugin.
+
+The corollary: when adding a NEW in-tree (Rust-native) extractor, we are NOT prohibited from coding any site we want — that's the existing extractor authoring workflow and is fully under our control. The policy only constrains the `examples/plugins/<name>/<name>.py` files that `build-from-ytdlp` is meant to consume verbatim.
