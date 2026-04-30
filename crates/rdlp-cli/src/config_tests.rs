@@ -291,7 +291,7 @@ fn test_merge_config_defaults() {
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
-    assert_eq!(config.output_template, "%(title)s.%(ext)s");
+    assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
     assert!(!config.quiet);
     assert!(!config.verbose);
 }
@@ -428,7 +428,7 @@ fn test_merge_config_stdout_does_not_set_output_template() {
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
 
     // output_template should remain the default, not "-"
-    assert_eq!(config.output_template, "%(title)s.%(ext)s");
+    assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
 }
 
 #[test]

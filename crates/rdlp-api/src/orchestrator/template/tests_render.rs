@@ -57,6 +57,45 @@ fn test_render_missing_field_defaults_to_na() {
     assert_eq!(result, "NA");
 }
 
+/// godresource regression: API returns `title: null` and the plugin's
+/// `_real_extract` sets `'title': ''` (empty string). `lookup_field`
+/// previously returned `Some("")` for empty strings — so the
+/// `|Unknown` pipe-default never fired and the rendered filename was
+/// `mp4.mkv` (empty title + dot + ext, leading dot stripped). yt-dlp
+/// treats empty strings as missing for default-fallback purposes; we
+/// must match.
+#[test]
+fn test_render_empty_title_triggers_pipe_default() {
+    let mut info = test_info();
+    info.title = String::new();
+    let t = OutputTemplate::parse("%(title|Unknown)s.%(ext)s").unwrap();
+    let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+    assert_eq!(result, "Unknown.mp4");
+}
+
+/// Companion to the above: empty title with NO pipe-default falls
+/// through to the unconditional "NA" sentinel — also yt-dlp parity.
+#[test]
+fn test_render_empty_title_no_default_falls_to_na() {
+    let mut info = test_info();
+    info.title = String::new();
+    let t = OutputTemplate::parse("%(title)s.%(ext)s").unwrap();
+    let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+    assert_eq!(result, "NA.mp4");
+}
+
+/// Whitespace-only string is also "missing" — yt-dlp's heuristic is
+/// stricter than just `len == 0`, but we match the practical case
+/// (titles like "   " from misconfigured extractors).
+#[test]
+fn test_render_whitespace_title_falls_to_default() {
+    let mut info = test_info();
+    info.title = "   ".to_string();
+    let t = OutputTemplate::parse("%(title|Unknown)s").unwrap();
+    let result = t.render(&info, &test_format(), "mp4", &test_ctx()).unwrap();
+    assert_eq!(result, "Unknown");
+}
+
 #[test]
 fn test_render_numeric_padding() {
     let t = OutputTemplate::parse("%(playlist_index)03d").unwrap();

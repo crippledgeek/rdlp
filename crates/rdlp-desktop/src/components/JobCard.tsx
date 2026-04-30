@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DownloadJob } from "../types";
-import { cn } from "@/lib/utils";
+import { cn, displayTitle as resolveTitle } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -43,7 +43,11 @@ function statusClasses(status: string): string {
 /** Displays a single download job with status, progress, and action buttons. */
 export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
     const [revealError, setRevealError] = useState<string | null>(null);
-    const displayTitle = job.title ?? job.url;
+    // Empty/null/whitespace titles render as the shared "Unknown"
+    // placeholder. Without the empty-string check, godresource-style
+    // jobs (API returned `title: null`) showed as a blank line next
+    // to the URL — see `lib/utils.ts:displayTitle`.
+    const displayTitle = resolveTitle(job.title);
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isTerminal =

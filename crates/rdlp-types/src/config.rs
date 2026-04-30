@@ -298,7 +298,14 @@ impl Default for Config {
         Self {
             // Output options
             output_to_stdout: false,
-            output_template: "%(title)s.%(ext)s".to_string(),
+            // yt-dlp parity. The pipe-default + ID suffix protects
+            // against extractors that produce empty/null titles
+            // (e.g. godresource API returning `title: null`) — without
+            // the fallback, the filename is `.mp4` (sanitised to `mp4`)
+            // and downloads from the same extractor collide on stem.
+            // The bracketed `[id]` suffix is always present so even
+            // anonymous URLs land at distinguishable paths.
+            output_template: "%(title|Unknown)s [%(id)s].%(ext)s".to_string(),
             output_directory: PathBuf::from("."),
             restrict_filenames: false,
             overwrite: false,

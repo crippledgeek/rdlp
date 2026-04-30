@@ -32,9 +32,23 @@ describe("JobCard", () => {
         expect(screen.getByText("My Video")).toBeInTheDocument();
     });
 
-    it("falls back to URL when title is null", () => {
+    it("falls back to 'Unknown' placeholder when title is null", () => {
+        // Updated from URL fallback in Task 39 — godresource port
+        // surfaced the empty-title case (API returns null), and the
+        // standardised UX is "Unknown" everywhere rather than a mix
+        // of URL / 'Untitled' / blank space across views. URL is
+        // still visible elsewhere in the JobCard layout, so we
+        // don't lose the information.
         render(<JobCard job={makeJob({ title: null, url: "https://example.com/fallback" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
-        expect(screen.getByText("https://example.com/fallback")).toBeInTheDocument();
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' when title is empty string (godresource case)", () => {
+        // Plugin's _real_extract sets `'title': ''` when API returns
+        // null; without empty-string handling the rendered text was
+        // a blank line.
+        render(<JobCard job={makeJob({ title: "", url: "https://x.com/y" })} onCancel={noop} onRemove={noop} onRetry={noop} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
     });
 
     it("renders status badge", () => {

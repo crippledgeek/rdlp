@@ -173,9 +173,13 @@ fn test_generate_output_path() {
     let format = create_test_format("720p", "720p", Some(1000000));
 
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
+    // Default template is `%(title|Unknown)s [%(id)s].%(ext)s` —
+    // see `Config::default` in `rdlp-types/src/config.rs`. The
+    // `[id]` suffix is always present so empty-title extracts
+    // (e.g. godresource) still land at distinguishable filenames.
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "Test Video.mp4"
+        "Test Video [test123].mp4"
     );
 }
 
@@ -194,7 +198,7 @@ fn test_generate_output_path_sanitizes_invalid_chars() {
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "Invalid_Characters_In_Title__.mp4.mp4"
+        "Invalid_Characters_In_Title__.mp4 [test123].mp4"
     );
 }
 
@@ -217,7 +221,7 @@ fn test_generate_output_path_hls_extension() {
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "HLS Test Video.mp4"
+        "HLS Test Video [test123].mp4"
     );
 
     // HLS with MPEG-TS segments (detected from segment metadata)
@@ -225,7 +229,7 @@ fn test_generate_output_path_hls_extension() {
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "HLS Test Video.ts"
+        "HLS Test Video [test123].ts"
     );
 
     // HLS with explicit container field
@@ -234,7 +238,7 @@ fn test_generate_output_path_hls_extension() {
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "HLS Test Video.mp4"
+        "HLS Test Video [test123].mp4"
     );
 
     // HLS with container suffix (e.g., "mp4_dash")
@@ -242,7 +246,7 @@ fn test_generate_output_path_hls_extension() {
     let path = orchestrator.generate_output_path(&info, &format).unwrap();
     assert_eq!(
         path.file_name().unwrap().to_str().unwrap(),
-        "HLS Test Video.mp4"
+        "HLS Test Video [test123].mp4"
     );
 }
 

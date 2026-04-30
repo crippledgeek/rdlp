@@ -92,7 +92,14 @@ impl OutputTemplate {
     }
 
     /// Look up a single field reference, applying accessors/arithmetic/date format.
-    /// Returns `None` if the field doesn't exist or is null.
+    /// Returns `None` if the field doesn't exist, is null, or is an
+    /// effectively-empty string. Empty/whitespace-only strings are
+    /// treated as missing so the `|default` pipe fallback fires for
+    /// them — matching yt-dlp's behaviour. Without this, godresource-
+    /// style extractors that produce `title: ""` (because the upstream
+    /// API returned null) render as a literal empty segment in the
+    /// output filename and the user gets `.mp4` instead of `NA.mp4`
+    /// or `Unknown.mp4`.
     fn lookup_field(
         &self,
         field_ref: &FieldRef,
@@ -110,7 +117,7 @@ impl OutputTemplate {
                 // Priority: InfoDict → Format
                 let val = lookup_key(info_json, &field_ref.name)
                     .or_else(|| lookup_key(format_json, &field_ref.name));
-                val.filter(|v| !v.is_null())
+                val.filter(|v| !is_missing(v))
             }
         };
 
@@ -174,6 +181,27 @@ impl OutputTemplate {
 }
 
 // === Helper functions ===
+
+/// Returns `true` for JSON values that should be treated as "missing"
+/// for `|default` pipe-fallback purposes:
+///
+/// - `null`
+/// - `""` (empty string)
+/// - any whitespace-only string (`"   "`, `"\t\n"`, etc.)
+///
+/// Without the empty/whitespace check, an extractor that produces a
+/// blank title (the godresource case: API returns `title: null` and
+/// the plugin sets `'title': ''`) renders into the filename as a
+/// literal empty segment — `.mp4` instead of `NA.mp4` or
+/// `Unknown.mp4`. yt-dlp's `_NO_DEFAULT` sentinel handling treats
+/// empty strings the same as missing fields; this matches that.
+fn is_missing(val: &serde_json::Value) -> bool {
+    match val {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(s) => s.trim().is_empty(),
+        _ => false,
+    }
+}
 
 /// Look up a key in a JSON value (object field lookup)
 fn lookup_key(val: &serde_json::Value, key: &str) -> Option<serde_json::Value> {

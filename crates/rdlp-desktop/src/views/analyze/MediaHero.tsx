@@ -4,6 +4,7 @@
 import { Thumbnail } from "@/components/Thumbnail";
 import { StreamBadge } from "@/components/StreamBadge";
 import type { FormatListResponse, FormatInfo } from "@/types";
+import { displayTitle } from "@/lib/utils";
 
 interface MediaHeroProps {
     data: FormatListResponse;
@@ -50,7 +51,7 @@ export function MediaHero({ data, url }: MediaHeroProps) {
             <div className="w-20 h-[52px] shrink-0 rounded-[4px] overflow-hidden bg-[#0e0e1e]">
                 <Thumbnail
                     src={data.thumbnail_url}
-                    alt={isPlaylist ? (data.playlist?.title ?? data.title) : data.title}
+                    alt={isPlaylist ? displayTitle(data.playlist?.title) : displayTitle(data.title)}
                     className="w-full h-full object-cover"
                 />
             </div>
@@ -67,8 +68,8 @@ export function MediaHero({ data, url }: MediaHeroProps) {
                     }}
                 >
                     {isPlaylist
-                        ? (data.playlist?.title ?? "Untitled Playlist")
-                        : (data.title || "Untitled")}
+                        ? (data.playlist?.title?.trim() || "Unknown Playlist")
+                        : displayTitle(data.title)}
                 </h1>
 
                 <div className="flex items-center gap-2 flex-wrap mt-0.5">
