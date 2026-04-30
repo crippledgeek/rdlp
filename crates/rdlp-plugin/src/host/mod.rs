@@ -2,6 +2,7 @@
 
 pub mod cookie_jar;
 pub mod fetch;
+pub mod fetch_fixtures;
 pub mod html_select;
 pub mod js_eval;
 pub mod log;

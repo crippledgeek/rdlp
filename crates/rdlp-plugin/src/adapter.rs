@@ -37,6 +37,11 @@ pub struct HostResources {
     pub cookie_jar: Option<Arc<rdlp_cookies::SimpleCookieJar>>,
     /// Sled DB used to namespace the `host:store-kv` capability per plugin.
     pub kv_db: Option<Arc<sled::Db>>,
+    /// Test-only fixture map for `host:fetch`. When set, requests
+    /// matching a fixture URL bypass the network and return the canned
+    /// response. Production hosts leave this `None`. See
+    /// [`crate::host::fetch_fixtures`].
+    pub fetch_fixtures: crate::host::fetch_fixtures::SharedFixtures,
 }
 
 /// Adapter wrapping a loaded WASM plugin to look like a built-in extractor.
@@ -277,7 +282,10 @@ impl PluginExtractor {
         if caps.iter().any(|c| c == "fetch")
             && let Some(client) = self.host_resources.fetch_client.clone()
         {
-            data.fetch = Some(FetchCtx { client });
+            data.fetch = Some(FetchCtx {
+                client,
+                fixtures: self.host_resources.fetch_fixtures.clone(),
+            });
         }
         if caps.iter().any(|c| c == "cookie-jar")
             && let Some(jar) = self.host_resources.cookie_jar.clone()
