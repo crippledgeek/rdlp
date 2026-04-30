@@ -424,7 +424,7 @@ pub fn extract_url_path(url: &str) -> String {
 /// CDN signing parameters (`sig`, `hmac`, `X-Amz-Signature`), and the
 /// `user:pass@` URL authority form. Matching is case-insensitive on the
 /// parameter name so `?Token=` / `?ACCESS_TOKEN=` are also redacted.
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 13]> = LazyLock::new(|| {
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 16]> = LazyLock::new(|| {
     [
         (
             Regex::new(r"(?i)token=[^&\s]+").expect("valid regex"),
@@ -476,6 +476,19 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 13]> = LazyLock::new(|| {
         ),
         // Strip user:pass@ from proxy/URL authority (e.g. http://user:pass@host:port)
         (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
+        // Additional auth-related query parameters (L1).
+        (
+            Regex::new(r"(?i)auth=[^&\s]+").expect("valid regex"),
+            "auth=***",
+        ),
+        (
+            Regex::new(r"(?i)authorization=[^&\s]+").expect("valid regex"),
+            "authorization=***",
+        ),
+        (
+            Regex::new(r"(?i)session=[^&\s]+").expect("valid regex"),
+            "session=***",
+        ),
     ]
 });
 
@@ -734,5 +747,82 @@ mod tests {
         // Parameter name case-insensitive (CDN URLs sometimes use TitleCase).
         let out = sanitize_for_logging("url?TOKEN=hideme");
         assert!(!out.contains("hideme"), "expected redaction, got: {out}");
+    }
+
+    // ── L1 regression guard: auth=, authorization=, session= must be redacted ─
+
+    /// Before L1 was fixed, `auth=`, `authorization=`, and `session=` query
+    /// parameters were not covered by `sanitize_for_logging`, so their values
+    /// leaked verbatim into log output.
+    #[test]
+    fn sanitize_redacts_auth_param() {
+        let input = "https://api.example.com/resource?auth=secret_auth_token&other=value";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("auth=***"),
+            "auth= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("secret_auth_token"),
+            "auth value leaked into output: {output}"
+        );
+        assert!(
+            output.contains("other=value"),
+            "unrelated param was incorrectly altered: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_authorization_param() {
+        let input = "https://api.example.com/resource?authorization=Bearer%20xyz789&q=1";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("authorization=***"),
+            "authorization= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("xyz789"),
+            "authorization value leaked into output: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_session_param() {
+        let input = "https://cdn.example.com/video.m3u8?session=sess_abc123&quality=720p";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("session=***"),
+            "session= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("sess_abc123"),
+            "session value leaked into output: {output}"
+        );
+        assert!(
+            output.contains("quality=720p"),
+            "unrelated param was incorrectly altered: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_new_patterns_case_insensitive() {
+        // Verify case-insensitive matching for all three new patterns.
+        let auth_upper = sanitize_for_logging("url?AUTH=val1");
+        assert!(
+            !auth_upper.contains("val1"),
+            "AUTH= (uppercase) not redacted"
+        );
+
+        let authz_mixed = sanitize_for_logging("url?Authorization=val2");
+        assert!(
+            !authz_mixed.contains("val2"),
+            "Authorization= (mixed case) not redacted"
+        );
+
+        let sess_upper = sanitize_for_logging("url?SESSION=val3");
+        assert!(
+            !sess_upper.contains("val3"),
+            "SESSION= (uppercase) not redacted"
+        );
     }
 }

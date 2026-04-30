@@ -21,6 +21,9 @@ uuid = { version = "1", features = ["v4"] }
 # MP4 iTunes metadata (covr atom for Windows Explorer thumbnails)
 mp4ameta = "0.13"
 
+# Advisory file locking for TempRegistry crash-safe cleanup (same version as rdlp-api)
+fs4 = "0.13"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }

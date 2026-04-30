@@ -94,6 +94,12 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
         });
     }
 
+    // SSRF gate: block requests to private/internal hosts.
+    rdlp_security::validate_url_security(&url).map_err(|e| AppError::InvalidInput {
+        field: "url".to_owned(),
+        message: format!("Thumbnail URL failed security validation: {e}"),
+    })?;
+
     let referer = derive_referer(&url).unwrap_or_default();
 
     // Route through HttpClientFactory so the default browser emulation
@@ -204,6 +210,74 @@ mod tests {
     #[test]
     fn test_derive_referer_invalid_url() {
         assert!(derive_referer("not-a-url").is_none());
+    }
+
+    // ── SSRF regression guard (H1) ──────────────────────────────────────────
+
+    /// Before the SSRF gate was added, proxy_thumbnail would issue a real HTTP
+    /// request to any URL that started with `https://`, including private hosts.
+    /// These tests assert the gate blocks both link-local and RFC-1918 addresses.
+    #[tokio::test]
+    async fn test_rejects_link_local_ssrf() {
+        let result = proxy_thumbnail("https://169.254.169.254/latest/meta-data/".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for link-local address, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rejects_private_ip_ssrf() {
+        let result = proxy_thumbnail("https://10.0.0.1/image.jpg".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for private IP, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rejects_localhost_ssrf() {
+        let result = proxy_thumbnail("https://localhost/image.jpg".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for localhost, got Ok"),
+        }
+    }
+
+    /// A public hostname passes the SSRF gate (network failure is acceptable
+    /// in unit-test context — the important signal is that no InvalidInput
+    /// error was returned at the validation stage).
+    #[tokio::test]
+    async fn test_public_host_passes_ssrf_gate() {
+        let result = proxy_thumbnail("https://www.example.com/image.jpg".to_owned()).await;
+        // Any error other than InvalidInput(security) means the SSRF gate passed.
+        match result {
+            Err(AppError::InvalidInput { message, .. }) if message.contains("security") => {
+                panic!("Public host was rejected by security gate: {message}");
+            }
+            _ => {} // Ok, NetworkError, Internal — all acceptable
+        }
     }
 
     #[tokio::test]

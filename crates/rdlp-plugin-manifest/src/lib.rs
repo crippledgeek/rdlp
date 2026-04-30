@@ -57,6 +57,20 @@ pub enum ManifestError {
         reason: String,
     },
 
+    /// A `claims_override` entry does not match any host in the `matches` patterns.
+    ///
+    /// Each `claims_override` entry must be the host (or an ancestor domain) of
+    /// at least one `matches` URL pattern. Declaring a claims_override host that
+    /// has no corresponding match pattern is a manifest authoring error — the
+    /// override would be silently ignored during dispatch.
+    #[error(
+        "claims_override entry '{host}' does not correspond to any host in the matches patterns"
+    )]
+    ClaimsOverrideOutsideMatches {
+        /// The `claims_override` host that has no match in the `matches` list.
+        host: String,
+    },
+
     /// TOML deserialisation error from `parse_manifest_str`.
     #[error("toml parse error: {0}")]
     Toml(#[from] toml::de::Error),
@@ -245,6 +259,45 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
     if has_tld_wildcard && !m.capabilities.iter().any(|c| c == "claim-all-urls") {
         return invalid("TLD-wildcard match pattern requires 'claim-all-urls' capability");
     }
+
+    // Validate claims_override: every entry must be the host (or an ancestor
+    // domain) of at least one URL in the matches list. This ensures that
+    // declared overrides are always load-bearing — a claims_override entry
+    // with no corresponding match pattern is a manifest authoring error.
+    let match_hosts: Vec<&str> = m
+        .matches
+        .iter()
+        .filter_map(|p| {
+            let after_scheme = p.split_once("://")?.1;
+            let host_and_port = after_scheme.split('/').next()?;
+            let host = if let Some((h, _)) = host_and_port.rsplit_once(':') {
+                if h.contains(':') { host_and_port } else { h }
+            } else {
+                host_and_port
+            };
+            let host = host.strip_prefix("*.").unwrap_or(host);
+            if host.is_empty() || host == "*" {
+                None
+            } else {
+                Some(host)
+            }
+        })
+        .collect();
+
+    for override_host in &m.claims_override {
+        let covered = match_hosts.iter().any(|mh| {
+            mh.eq_ignore_ascii_case(override_host.as_str())
+                || mh
+                    .to_lowercase()
+                    .ends_with(&format!(".{}", override_host.to_lowercase()))
+        });
+        if !covered {
+            return Err(ManifestError::ClaimsOverrideOutsideMatches {
+                host: override_host.clone(),
+            });
+        }
+    }
+
     Ok(())
 }
 

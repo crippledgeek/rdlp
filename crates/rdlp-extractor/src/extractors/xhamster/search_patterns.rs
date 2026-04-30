@@ -4,6 +4,7 @@
 
 use regex::Regex;
 use std::sync::LazyLock;
+use url::form_urlencoded;
 
 use super::patterns::DOMAINS;
 
@@ -26,8 +27,12 @@ pub fn is_search_url(url: &str) -> bool {
 /// Build a search URL from a `SearchQuery`.
 ///
 /// Format: `https://xhamster.com/search/{encoded_query}?{filter_params}`
+///
+/// The query is percent-encoded via `form_urlencoded::byte_serialize` so that
+/// characters such as `&`, `#`, `=`, and `+` cannot splice into the URL
+/// structure (H4 fix).
 pub fn build_search_url(query: &rdlp_types::SearchQuery) -> String {
-    let encoded_query = query.query.split_whitespace().collect::<Vec<_>>().join("+");
+    let encoded_query: String = form_urlencoded::byte_serialize(query.query.as_bytes()).collect();
 
     let mut url = format!("https://xhamster.com/search/{encoded_query}");
 
@@ -263,6 +268,39 @@ mod tests {
         };
         let url = build_search_url(&query);
         assert!(!url.contains(' '), "URL must not contain raw spaces");
+    }
+
+    /// Regression guard for H4: the query must be percent-encoded so that
+    /// characters like `&`, `=`, `#`, and `+` cannot splice into URL structure.
+    ///
+    /// Before the fix `query.split_whitespace().join("+")` was used, which left
+    /// `&`, `#`, `=` raw and allowed values like `"foo&page=1#bar"` to inject
+    /// extra query parameters.
+    #[test]
+    fn test_build_search_url_percent_encodes_special_chars_regression() {
+        let query = rdlp_types::SearchQuery {
+            query: "foo&page=1#bar".to_string(),
+            filters: vec![],
+            max_results: None,
+            page: None,
+        };
+        let url = build_search_url(&query);
+        // The injected `&page=1` must NOT appear as a raw parameter separator.
+        assert!(
+            !url.contains("&page=1"),
+            "raw '&page=1' must not appear in URL; got: {url}"
+        );
+        // The `#` fragment separator must be encoded, not left raw.
+        let path_part = url.split('?').next().unwrap_or(&url);
+        assert!(
+            !path_part.contains('#'),
+            "raw '#' must not appear in path; got: {url}"
+        );
+        // The encoded form of `&` is `%26`; confirm it's in the path segment.
+        assert!(
+            url.contains("%26"),
+            "ampersand must be percent-encoded as %26; got: {url}"
+        );
     }
 
     #[test]

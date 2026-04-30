@@ -8,12 +8,24 @@ fn manifest_for_test(priority: u32, claims_override: &[&str]) -> Manifest {
         .map(|h| format!("\"{h}\""))
         .collect::<Vec<_>>()
         .join(", ");
+
+    // Include each claims_override host in the matches list so the new M4
+    // validation (claims_override must correspond to a matches host) passes.
+    // The tests verify priority logic, not manifest validation, so this is the
+    // correct fix — a real plugin declaring claims_override["youtube.com"] would
+    // also match on youtube.com URLs.
+    let mut match_patterns: Vec<String> = vec!["\"https://example.com/*\"".to_string()];
+    for h in claims_override {
+        match_patterns.push(format!("\"https://{h}/*\""));
+    }
+    let matches_str = match_patterns.join(", ");
+
     let toml = format!(
         r#"
 name = "test"
 version = "1.0.0"
 wit_version = "0.1.0"
-matches = ["https://example.com/*"]
+matches = [{matches_str}]
 priority = {priority}
 claims_override = [{claims_str}]
 capabilities = ["log"]

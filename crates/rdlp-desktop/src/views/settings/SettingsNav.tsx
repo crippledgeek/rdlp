@@ -25,7 +25,13 @@ export function SettingsNav() {
     const observerRef = useRef<IntersectionObserver | null>(null);
 
     useEffect(() => {
-        // Use a threshold — when top of a section enters the upper 30% of viewport, mark it active
+        // Use a threshold — when top of a section enters the upper 30% of viewport, mark it active.
+        // TODO(L6): IntersectionObserver may miss sections that mount *after* this effect fires
+        // (e.g. if SettingsView ever lazy-loads sections). Currently all sections are synchronously
+        // rendered so `document.getElementById` reliably finds them on first mount. If sections
+        // become lazily rendered, switch to a MutationObserver on the scroll container that
+        // re-calls `observe()` for each newly added section element, or have each section register
+        // itself via a ref-callback into a shared context that this nav reads.
         observerRef.current = new IntersectionObserver(
             (entries) => {
                 // Find the topmost intersecting section

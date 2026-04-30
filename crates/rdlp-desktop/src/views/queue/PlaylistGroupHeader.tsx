@@ -85,7 +85,7 @@ export function PlaylistGroupHeader({
                     {playlistTitle}
                 </span>
 
-                <span className="text-[11px] text-[#888888] tabular-nums shrink-0" aria-live="polite">
+                <span className="text-[11px] text-[var(--text-muted)] tabular-nums shrink-0" aria-live="polite">
                     {stats.completed}/{stats.total} completed
                 </span>
 
@@ -136,7 +136,7 @@ export function PlaylistGroupHeader({
                     <span className="text-[#EF4444]">{stats.failed} failed</span>
                 )}
                 {stats.cancelled > 0 && (
-                    <span className="text-[#888888]">{stats.cancelled} cancelled</span>
+                    <span className="text-[var(--text-muted)]">{stats.cancelled} cancelled</span>
                 )}
             </div>
         </div>

@@ -125,7 +125,7 @@ impl<'a> Loader<'a> {
     }
 
     /// Run the full trust-store / prompt workflow for one plugin. Mutates the
-    /// trust store on approval.
+    /// trust store on `ApprovePersist`; session-only on `ApproveOnce`.
     fn check_trust(
         &mut self,
         manifest: &Manifest,
@@ -155,19 +155,28 @@ impl<'a> Loader<'a> {
                         new_capabilities: new_caps.clone(),
                     });
 
-                    if matches!(resp, ConfirmResponse::Deny) {
-                        return Err(PluginError::CapabilityCreep {
-                            plugin: manifest.name.clone(),
-                            cap: new_caps.join(", "),
-                        });
+                    match resp {
+                        ConfirmResponse::Deny => {
+                            return Err(PluginError::CapabilityCreep {
+                                plugin: manifest.name.clone(),
+                                cap: new_caps.join(", "),
+                            });
+                        }
+                        ConfirmResponse::ApprovePersist => {
+                            // Persist the expanded capability set so subsequent
+                            // loads of the same version don't prompt again.
+                            self.trust_store.record(TrustEntry {
+                                name: manifest.name.clone(),
+                                identity: identity.to_string(),
+                                approved_capabilities: requested.clone(),
+                            })?;
+                        }
+                        ConfirmResponse::ApproveOnce => {
+                            // Allow the current load but do NOT update the
+                            // trust store — user will be prompted again on the
+                            // next startup.
+                        }
                     }
-
-                    // Approved — update the stored capability set.
-                    self.trust_store.record(TrustEntry {
-                        name: manifest.name.clone(),
-                        identity: identity.to_string(),
-                        approved_capabilities: requested.clone(),
-                    })?;
                 }
             }
             IdentityCheck::Mismatch {
@@ -190,18 +199,25 @@ impl<'a> Loader<'a> {
                     claims_override: manifest.claims_override.clone(),
                 });
 
-                if matches!(resp, ConfirmResponse::Deny) {
-                    return Err(PluginError::Internal(format!(
-                        "user declined trust for plugin {}",
-                        manifest.name
-                    )));
+                match resp {
+                    ConfirmResponse::Deny => {
+                        return Err(PluginError::Internal(format!(
+                            "user declined trust for plugin {}",
+                            manifest.name
+                        )));
+                    }
+                    ConfirmResponse::ApprovePersist => {
+                        self.trust_store.record(TrustEntry {
+                            name: manifest.name.clone(),
+                            identity: identity.to_string(),
+                            approved_capabilities: requested.clone(),
+                        })?;
+                    }
+                    ConfirmResponse::ApproveOnce => {
+                        // Allow this session load but do NOT record in trust
+                        // store — user will be prompted again next startup.
+                    }
                 }
-
-                self.trust_store.record(TrustEntry {
-                    name: manifest.name.clone(),
-                    identity: identity.to_string(),
-                    approved_capabilities: requested.clone(),
-                })?;
             }
         }
 

@@ -10,7 +10,7 @@ import email.utils
 import html as _html
 import json as _json
 import re as _re
-from urllib.parse import urljoin as _stdlib_urljoin
+from urllib.parse import urljoin as _stdlib_urljoin, urlparse as _stdlib_urlparse
 
 from rdlp_ytdlp_compat import _host
 
@@ -86,7 +86,16 @@ def urljoin(base, path):
     if path.startswith(("http://", "https://")):
         return path
     if path.startswith("//"):
-        return "https:" + path
+        # Inherit scheme from base when present; default to https when base
+        # is missing or has no parseable scheme. Matches yt-dlp behaviour.
+        if isinstance(base, bytes):
+            base = base.decode("utf-8", errors="replace")
+        scheme = "https"
+        if isinstance(base, str) and base:
+            parsed_scheme = _stdlib_urlparse(base).scheme
+            if parsed_scheme:
+                scheme = parsed_scheme
+        return scheme + ":" + path
     if isinstance(base, bytes):
         base = base.decode("utf-8", errors="replace")
     if not isinstance(base, str):
@@ -97,12 +106,84 @@ def urljoin(base, path):
     return _stdlib_urljoin(base, path)
 
 
+# strptime formats covering the bulk of human-written date strings encountered
+# by yt-dlp extractors. Order matters: the first format that parses wins.
+# `_DAY_FIRST` and `_MONTH_FIRST` are the ambiguous numeric forms; `day_first`
+# controls which list runs first. `_UNAMBIGUOUS` runs after both.
+_DATE_FORMATS_DAY_FIRST = (
+    "%d-%m-%Y",
+    "%d.%m.%Y",
+    "%d/%m/%Y",
+    "%d/%m/%y",
+    "%d/%m/%Y %H:%M:%S",
+    "%d-%m-%Y %H:%M",
+    "%d.%m.%Y %H:%M",
+    "%d.%m.%Y %H.%M",
+)
+_DATE_FORMATS_MONTH_FIRST = (
+    "%m-%d-%Y",
+    "%m.%d.%Y",
+    "%m/%d/%Y",
+    "%m/%d/%y",
+    "%m/%d/%Y %H:%M:%S",
+)
+_DATE_FORMATS_UNAMBIGUOUS = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d.",
+    "%Y%m%d",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S:%f",
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%dT%H:%M:%S.%fZ",
+    "%Y-%m-%dT%H:%M:%S.%f0Z",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%dT%H:%M",
+    "%b %d %Y",
+    "%b %dst %Y %I:%M",
+    "%b %dnd %Y %I:%M",
+    "%b %drd %Y %I:%M",
+    "%b %dth %Y %I:%M",
+    "%B %d %Y",
+    "%B %dst %Y",
+    "%B %dnd %Y",
+    "%B %drd %Y",
+    "%B %dth %Y",
+    "%B %d %Y at %H:%M",
+    "%B %d %Y at %H:%M:%S",
+    "%B %d, %Y",
+    "%B %d, %Y %H:%M",
+    "%B %d, %Y, %H:%M",
+    "%B %d, %Y, %H:%M:%S",
+    "%B %d, %Y %H:%M:%S",
+    "%B %d, %Y at %H:%M",
+    "%B %d, %Y at %H:%M:%S",
+    "%b %d, %Y",
+    "%b %d %Y at %H:%M",
+    "%b %d %Y at %H:%M:%S",
+    "%b %d, %Y at %H:%M",
+    "%b %d, %Y at %H:%M:%S",
+    "%H:%M %d-%b-%Y",
+    "%d %b %Y",
+    "%d %b %Y %H:%M",
+    "%d %b %Y %H:%M:%S",
+    "%d %B %Y",
+    "%d %B %Y %H:%M",
+    "%d %B %Y %H:%M:%S",
+    "%d-%b-%Y",
+    "%d-%B-%Y",
+)
+
+
 def unified_timestamp(date_str, day_first=True, tz_offset=0):
     """yt-dlp's unified_timestamp. day_first=True is yt-dlp's default — controls
     DD/MM vs MM/DD ambiguity. tz_offset shifts the parsed timestamp.
 
-    Slice-1 implementation handles ISO 8601 and RFC 2822. Full yt-dlp date_formats
-    table is deferred to Slice 2.
+    Tries (in order): ISO 8601, RFC 2822, then a yt-dlp-style DATE_FORMATS
+    table. Returns int epoch seconds or None.
     """
     if date_str is None or not isinstance(date_str, str):
         return None
@@ -123,6 +204,18 @@ def unified_timestamp(date_str, day_first=True, tz_offset=0):
             return int(dt.timestamp()) + tz_offset
     except (TypeError, ValueError):
         pass
+    # DATE_FORMATS sweep
+    if day_first:
+        formats = _DATE_FORMATS_DAY_FIRST + _DATE_FORMATS_MONTH_FIRST + _DATE_FORMATS_UNAMBIGUOUS
+    else:
+        formats = _DATE_FORMATS_MONTH_FIRST + _DATE_FORMATS_DAY_FIRST + _DATE_FORMATS_UNAMBIGUOUS
+    for fmt in formats:
+        try:
+            dt = datetime.datetime.strptime(s, fmt)
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return int(dt.timestamp()) + tz_offset
+        except ValueError:
+            continue
     return None
 
 
@@ -719,7 +812,26 @@ class InfoExtractor:
             self, m3u8_url, video_id, *, ext=None, entry_protocol="m3u8_native",
             preference=None, quality=None, m3u8_id=None, note=None, errnote=None,
             fatal=True, live=False, data=None, headers=None, query=None):
-        """Slice-2.5 passthrough to host-extract-helpers.extract-m3u8."""
+        """Slice-2.5 passthrough to host-extract-helpers.extract-m3u8.
+
+        WIT v0.1.0 limitation: the host signature does not yet accept
+        `data` / `headers` / `query`, so passing any of these would silently
+        fetch the manifest unauthenticated. Until WIT v0.2 lifts this, we
+        fail loud rather than silently dropping per-request credentials.
+        `live=True` is accepted but processed identically to on-demand.
+        """
+        if data is not None or headers is not None or query is not None:
+            raise NotImplementedError(
+                "_extract_m3u8_formats_and_subtitles: data/headers/query are not "
+                "yet plumbed through WIT v0.1.0; track in Slice 2.5"
+            )
+        if live:
+            _host.log(
+                "warn",
+                "_extract_m3u8_formats_and_subtitles: live=True accepted but "
+                "treated as on-demand; live segment-window handling is not yet "
+                "implemented",
+            )
         if note is not None:
             _host.log("info", f"{note}: {m3u8_url}")
         try:

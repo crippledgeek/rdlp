@@ -22,6 +22,13 @@ impl From<ManifestError> for PluginError {
             ManifestError::InvalidPluginName { name, reason } => {
                 PluginError::InvalidPluginName { name, reason }
             }
+            ManifestError::ClaimsOverrideOutsideMatches { host } => PluginError::InvalidManifest {
+                path: std::path::PathBuf::new(),
+                reason: format!(
+                    "claims_override entry '{host}' does not correspond \
+                         to any host in the matches patterns"
+                ),
+            },
             ManifestError::Toml(e) => PluginError::Toml(e),
             ManifestError::Io(e) => PluginError::Io(e),
         }
