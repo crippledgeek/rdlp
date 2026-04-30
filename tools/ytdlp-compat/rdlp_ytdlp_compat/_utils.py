@@ -284,6 +284,23 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def unified_strdate(date_str, day_first=True):
+    """yt-dlp's `unified_strdate` (utils/_utils.py). Parses common date
+    formats and returns 'YYYYMMDD' or None. Builds on
+    `unified_timestamp` then formats to date-only."""
+    if date_str is None or not isinstance(date_str, str):
+        return None
+    s = date_str.strip()
+    if len(s) == 8 and s.isdigit():
+        return s
+    from rdlp_ytdlp_compat.info_extractor import unified_timestamp
+    ts = unified_timestamp(s, day_first=day_first)
+    if ts is None:
+        return None
+    import datetime
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y%m%d")
+
+
 def merge_dicts(*dicts):
     """yt-dlp's `merge_dicts` (utils/_utils.py). Merge dicts left-to-
     right; later values override, but None values from later dicts do

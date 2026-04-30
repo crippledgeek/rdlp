@@ -29,6 +29,7 @@ from rdlp_ytdlp_compat._utils import (
     sanitize_filename,
     sanitize_path,
     str_to_int,
+    unified_strdate,
     url_or_none,
     variadic,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "parse_duration",
     "require",
     "str_to_int",
+    "unified_strdate",
     "url_or_none",
     "variadic",
 ]
