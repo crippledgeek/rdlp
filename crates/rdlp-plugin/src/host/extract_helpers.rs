@@ -292,6 +292,29 @@ hi.m3u8\n";
         assert_eq!(r.formats.len(), 1);
         assert_eq!(r.formats[0].width, Some(1920));
     }
+
+    #[tokio::test]
+    async fn extract_m3u8_non_fatal_swallows_fetch_failure() {
+        // No FetchCtx installed → fetch returns Err("fetch capability not granted").
+        // fatal=false should swallow the error and return an empty extraction.
+        let mut c = ctx();
+        let opts = crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options {
+            ext: None,
+            protocol: None,
+            m3u8_id: None,
+            fatal: false,
+        };
+        let r = c
+            .extract_m3u8(
+                "https://x.com/never-resolved.m3u8".to_string(),
+                "vid".to_string(),
+                opts,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.formats.len(), 0);
+        assert_eq!(r.subtitles.len(), 0);
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -446,50 +469,62 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         };
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
 
-        let req = Request {
-            url: url.clone(),
-            method: "GET".to_string(),
-            headers: vec![],
-            body: None,
-            timeout_ms: Some(30_000),
-        };
-        let resp = self.fetch(req).await?;
-        let body = String::from_utf8(resp.body)
-            .map_err(|e| FetchError::Network(e.to_string()))?;
-        let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
-            .map_err(FetchError::Network)?;
-        let formats: Vec<M3u8Format> = variants
-            .into_iter()
-            .map(|v| M3u8Format {
-                format_id: opts
-                    .m3u8_id
-                    .as_deref()
-                    .map(|p| format!("{p}-{}", v.format_id))
-                    .unwrap_or(v.format_id),
-                url: v.url,
-                ext: opts.ext.clone().unwrap_or(v.ext),
-                protocol: opts.protocol.clone().unwrap_or(v.protocol),
-                tbr: v.tbr,
-                width: v.width,
-                height: v.height,
-                fps: v.fps,
-                vcodec: v.vcodec,
-                acodec: v.acodec,
-                vbr: v.vbr,
-                abr: v.abr,
-                language: v.language,
-                format_note: v.format_note,
-                format_index: v.format_index,
-                manifest_url: v.manifest_url,
-                has_drm: v.has_drm,
-                preference: v.preference,
-                quality: v.quality,
+        let result: Result<M3u8Extraction, FetchError> = async {
+            let req = Request {
+                url: url.clone(),
+                method: "GET".to_string(),
+                headers: vec![],
+                body: None,
+                timeout_ms: Some(30_000),
+            };
+            let resp = self.fetch(req).await?;
+            let body = String::from_utf8(resp.body)
+                .map_err(|e| FetchError::Network(e.to_string()))?;
+            let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
+                .map_err(FetchError::Network)?;
+            let formats: Vec<M3u8Format> = variants
+                .into_iter()
+                .map(|v| M3u8Format {
+                    format_id: opts
+                        .m3u8_id
+                        .as_deref()
+                        .map(|p| format!("{p}-{}", v.format_id))
+                        .unwrap_or(v.format_id),
+                    url: v.url,
+                    ext: opts.ext.clone().unwrap_or(v.ext),
+                    protocol: opts.protocol.clone().unwrap_or(v.protocol),
+                    tbr: v.tbr,
+                    width: v.width,
+                    height: v.height,
+                    fps: v.fps,
+                    vcodec: v.vcodec,
+                    acodec: v.acodec,
+                    vbr: v.vbr,
+                    abr: v.abr,
+                    language: v.language,
+                    format_note: v.format_note,
+                    format_index: v.format_index,
+                    manifest_url: v.manifest_url,
+                    has_drm: v.has_drm,
+                    preference: v.preference,
+                    quality: v.quality,
+                })
+                .collect();
+            Ok(M3u8Extraction {
+                formats,
+                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
             })
-            .collect();
-        Ok(M3u8Extraction {
-            formats,
-            subtitles: Vec::<ExtractHelpersSubtitle>::new(),
-        })
+        }
+        .await;
+
+        match (result, opts.fatal) {
+            (Ok(x), _) => Ok(x),
+            (Err(e), true) => Err(e),
+            (Err(_), false) => Ok(M3u8Extraction {
+                formats: vec![],
+                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
+            }),
+        }
     }
 
     async fn extract_json_ld(
