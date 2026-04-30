@@ -218,6 +218,39 @@ mod tests {
         let r = c.rta_search("<html><body>nothing</body></html>".to_string()).await;
         assert_eq!(r, None);
     }
+
+    #[tokio::test]
+    async fn search_json_extracts_simple_object() {
+        let mut c = ctx();
+        let r = c.search_json(
+            r"var data\s*=".to_string(),
+            ";".to_string(),
+            r#"var data = {"key": "value"};"#.to_string(),
+        ).await;
+        assert_eq!(r, Some(r#"{"key": "value"}"#.to_string()));
+    }
+
+    #[tokio::test]
+    async fn search_json_handles_nested() {
+        let mut c = ctx();
+        let r = c.search_json(
+            r"var x\s*=".to_string(),
+            ";".to_string(),
+            r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
+        ).await;
+        assert_eq!(r, Some(r#"{"a": {"b": [1,2,3]}}"#.to_string()));
+    }
+
+    #[tokio::test]
+    async fn search_json_no_match_returns_none() {
+        let mut c = ctx();
+        let r = c.search_json(
+            r"NOPE".to_string(),
+            "".to_string(),
+            "irrelevant".to_string(),
+        ).await;
+        assert_eq!(r, None);
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -343,11 +376,19 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
 
     async fn search_json(
         &mut self,
-        _start_pattern: String,
-        _end_pattern: String,
-        _haystack: String,
+        start_pattern: String,
+        end_pattern: String,
+        haystack: String,
     ) -> Option<String> {
-        unimplemented!("Task 8")
+        // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
+        // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
+        let full = format!(
+            r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})"
+        );
+        let re = regex::Regex::new(&full).ok()?;
+        let cap = re.captures(&haystack)?;
+        let json = cap.name("json")?.as_str();
+        Some(json.to_string())
     }
 
     async fn extract_m3u8(
