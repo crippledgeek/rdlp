@@ -81,8 +81,8 @@ pub mod pipeline;
 
 // Re-export pipeline types for use by rdlp-api
 pub use pipeline::stages::{
-    AudioExtractStage, FixupStage, MergeStage, MetadataStage, NormalizeStage, RecodeStage,
-    RemuxStage, SubtitleStage, ThumbnailStage,
+    AudioExtractStage, FinalizeMetadataStage, FixupStage, MergeStage, MetadataStage,
+    NormalizeStage, RecodeStage, RemuxStage, SubtitleStage, ThumbnailStage,
 };
 pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
 
