@@ -6,8 +6,21 @@
 //! All functions sync (pure CPU) except `extract_m3u8` which fetches
 //! via the existing `host:fetch` wreq client.
 
+use std::sync::LazyLock;
+
 use crate::instance::PluginStoreData;
 use wasmtime::component::Linker;
+
+static RE_WHITESPACE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\s+").expect("valid whitespace pattern"));
+static RE_BR: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"\s?<\s?br\s?/?\s?>\s?").expect("valid <br> pattern")
+});
+static RE_P: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"<\s?/\s?p\s?>\s?<\s?p[^>]*>").expect("valid <p> pattern")
+});
+static RE_TAGS: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"<.*?>").expect("valid tag-strip pattern"));
 
 fn build_regex(
     pattern: &str,
@@ -25,14 +38,10 @@ fn build_regex(
 /// Strip HTML tags + collapse whitespace + unescape entities.
 /// Mirrors yt-dlp's `clean_html` (`utils/_utils.py:527-540`).
 fn clean_html(html: &str) -> String {
-    let collapsed = regex::Regex::new(r"\s+").unwrap().replace_all(html, " ");
-    let no_br = regex::Regex::new(r"\s?<\s?br\s?/?\s?>\s?")
-        .unwrap()
-        .replace_all(&collapsed, "\n");
-    let no_p = regex::Regex::new(r"<\s?/\s?p\s?>\s?<\s?p[^>]*>")
-        .unwrap()
-        .replace_all(&no_br, "\n");
-    let no_tags = regex::Regex::new(r"<.*?>").unwrap().replace_all(&no_p, "");
+    let collapsed = RE_WHITESPACE.replace_all(html, " ");
+    let no_br = RE_BR.replace_all(&collapsed, "\n");
+    let no_p = RE_P.replace_all(&no_br, "\n");
+    let no_tags = RE_TAGS.replace_all(&no_p, "");
     html_escape::decode_html_entities(&no_tags).trim().to_string()
 }
 
