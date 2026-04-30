@@ -336,8 +336,7 @@ signature = "ZA"
 
     #[test]
     fn multiple_match_patterns_or_together() {
-        let m =
-            manifest_with_matches(&["https://a.example.com/*", "https://b.example.com/*"]);
+        let m = manifest_with_matches(&["https://a.example.com/*", "https://b.example.com/*"]);
         assert!(claims_url(&m, "https://a.example.com/x"));
         assert!(claims_url(&m, "https://b.example.com/x"));
         assert!(!claims_url(&m, "https://c.example.com/x"));
