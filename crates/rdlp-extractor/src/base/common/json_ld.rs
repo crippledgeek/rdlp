@@ -37,7 +37,7 @@ struct JsonLdGraph {
 /// Used by both site-specific extractors (TNAFlix, RedTube) and the
 /// generic fallback extractor.
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonLdVideo {
+pub struct JsonLdVideo {
     /// `@type` field — must be "VideoObject" (or array containing it)
     #[serde(rename = "@type")]
     pub json_type: Option<JsonLdType>,
@@ -88,7 +88,7 @@ pub(crate) struct JsonLdVideo {
 /// `@type` can be a single string or an array of strings.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdType {
+pub enum JsonLdType {
     Single(String),
     Multiple(Vec<String>),
 }
@@ -106,7 +106,7 @@ impl JsonLdType {
 /// Thumbnail can be a string, array of strings, or an ImageObject.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdThumbnail {
+pub enum JsonLdThumbnail {
     Single(String),
     Multiple(Vec<String>),
     Object(JsonLdImageObject),
@@ -114,7 +114,7 @@ pub(crate) enum JsonLdThumbnail {
 
 /// ImageObject with a `url` field.
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonLdImageObject {
+pub struct JsonLdImageObject {
     pub url: Option<String>,
 }
 
@@ -135,13 +135,13 @@ impl JsonLdThumbnail {
 /// Author can be a string or an object.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdAuthor {
+pub enum JsonLdAuthor {
     String(String),
     Object(JsonLdAuthorObject),
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonLdAuthorObject {
+pub struct JsonLdAuthorObject {
     #[serde(rename = "@type")]
     #[allow(dead_code)]
     pub author_type: Option<String>,
@@ -177,13 +177,13 @@ impl JsonLdAuthor {
 /// Interaction statistics — single or multiple entries.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdInteractionStatistic {
+pub enum JsonLdInteractionStatistic {
     Single(JsonLdInteraction),
     Multiple(Vec<JsonLdInteraction>),
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonLdInteraction {
+pub struct JsonLdInteraction {
     #[serde(rename = "@type")]
     pub interaction_type: String,
     #[serde(rename = "interactionType")]
@@ -195,7 +195,7 @@ pub(crate) struct JsonLdInteraction {
 /// Keywords — comma-separated string or array.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdKeywords {
+pub enum JsonLdKeywords {
     Single(String),
     Multiple(Vec<String>),
 }
@@ -203,7 +203,7 @@ pub(crate) enum JsonLdKeywords {
 /// Genre — string or array.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum JsonLdGenre {
+pub enum JsonLdGenre {
     Single(String),
     Multiple(Vec<String>),
 }
@@ -216,7 +216,7 @@ pub(crate) enum JsonLdGenre {
 ///
 /// Searches all `<script type="application/ld+json">` blocks for a
 /// `VideoObject`, including inside `@graph` arrays.
-pub(crate) fn extract_json_ld(html: &Html) -> Option<JsonLdVideo> {
+pub fn extract_json_ld(html: &Html) -> Option<JsonLdVideo> {
     for script_elem in html.select(&JSONLD_SELECTOR) {
         let json_text = script_elem.text().collect::<String>();
         if let Some(video) = parse_video_object(&json_text) {
@@ -247,7 +247,7 @@ fn parse_video_object(json_text: &str) -> Option<JsonLdVideo> {
 }
 
 /// Get the first thumbnail URL from a parsed `JsonLdVideo`.
-pub(crate) fn get_thumbnail_url(json_ld: &JsonLdVideo) -> Option<String> {
+pub fn get_thumbnail_url(json_ld: &JsonLdVideo) -> Option<String> {
     json_ld
         .thumbnail_url
         .as_ref()
@@ -256,7 +256,7 @@ pub(crate) fn get_thumbnail_url(json_ld: &JsonLdVideo) -> Option<String> {
 }
 
 /// Create a thumbnail list from the `thumbnailUrl` field.
-pub(crate) fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_types::Thumbnail>> {
+pub fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_types::Thumbnail>> {
     json_ld.thumbnail_url.as_ref().map(|thumb| {
         let urls: Vec<&str> = match thumb {
             JsonLdThumbnail::Single(url) => vec![url.as_str()],
@@ -279,7 +279,7 @@ pub(crate) fn extract_thumbnails(json_ld: &JsonLdVideo) -> Option<Vec<rdlp_types
 }
 
 /// Extract interaction count by action type (e.g., "WatchAction", "LikeAction").
-pub(crate) fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str) -> Option<u64> {
+pub fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str) -> Option<u64> {
     json_ld.interaction_statistic.as_ref().and_then(|stats| {
         let interactions = match stats {
             JsonLdInteractionStatistic::Single(interaction) => vec![interaction],
@@ -302,17 +302,17 @@ pub(crate) fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str
 }
 
 /// Extract view count from JSON-LD interaction statistics.
-pub(crate) fn extract_view_count(json_ld: &JsonLdVideo) -> Option<u64> {
+pub fn extract_view_count(json_ld: &JsonLdVideo) -> Option<u64> {
     extract_interaction_count(json_ld, "WatchAction")
 }
 
 /// Extract like count from JSON-LD interaction statistics.
-pub(crate) fn extract_like_count(json_ld: &JsonLdVideo) -> Option<u64> {
+pub fn extract_like_count(json_ld: &JsonLdVideo) -> Option<u64> {
     extract_interaction_count(json_ld, "LikeAction")
 }
 
 /// Extract tags/keywords from JSON-LD.
-pub(crate) fn extract_tags(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
+pub fn extract_tags(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
     json_ld.keywords.as_ref().map(|keywords| match keywords {
         JsonLdKeywords::Single(s) => s
             .split(',')
@@ -324,7 +324,7 @@ pub(crate) fn extract_tags(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
 }
 
 /// Extract categories/genres from JSON-LD.
-pub(crate) fn extract_categories(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
+pub fn extract_categories(json_ld: &JsonLdVideo) -> Option<Vec<String>> {
     json_ld.genre.as_ref().map(|genre| match genre {
         JsonLdGenre::Single(s) => vec![s.clone()],
         JsonLdGenre::Multiple(vec) => vec.clone(),

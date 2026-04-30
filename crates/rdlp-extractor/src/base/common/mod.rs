@@ -33,7 +33,7 @@
 //! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
 //! ```
 
-pub(crate) mod json_ld;
+pub mod json_ld;
 mod metadata;
 mod parsing;
 mod selectors;

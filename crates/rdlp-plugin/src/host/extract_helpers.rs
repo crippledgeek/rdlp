@@ -294,6 +294,17 @@ hi.m3u8\n";
     }
 
     #[tokio::test]
+    async fn extract_json_ld_returns_typed_video() {
+        let mut c = ctx();
+        let html = r#"<script type="application/ld+json">
+        {"@type":"VideoObject","name":"Test","description":"d","thumbnailUrl":"https://x/t.jpg","duration":"PT5M","uploadDate":"2024-01-01"}
+        </script>"#;
+        let r = c.extract_json_ld(html.to_string()).await.unwrap();
+        assert_eq!(r.title, Some("Test".to_string()));
+        assert_eq!(r.duration, Some(300));
+    }
+
+    #[tokio::test]
     async fn extract_m3u8_non_fatal_swallows_fetch_failure() {
         // No FetchCtx installed → fetch returns Err("fetch capability not granted").
         // fatal=false should swallow the error and return an empty extraction.
@@ -529,8 +540,35 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
 
     async fn extract_json_ld(
         &mut self,
-        _html: String,
+        html: String,
     ) -> Option<crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo> {
-        unimplemented!("Task 11")
+        use crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo;
+        let parsed = scraper::Html::parse_document(&html);
+        let v = rdlp_extractor::base::common::json_ld::extract_json_ld(&parsed)?;
+        // Duration: parse ISO 8601 string via BaseExtractor, convert f64 → u32
+        let duration = v
+            .duration
+            .as_deref()
+            .and_then(rdlp_extractor::base::common::BaseExtractor::parse_iso8601_duration)
+            .map(|d| d as u32);
+        // Thumbnails: extract_thumbnails returns Option<Vec<rdlp_types::Thumbnail>>;
+        // Thumbnail.url is String (not Option<String>), so map, not filter_map.
+        let thumbnails = rdlp_extractor::base::common::json_ld::extract_thumbnails(&v)
+            .map(|ts| ts.into_iter().map(|t| t.url).collect())
+            .unwrap_or_default();
+        Some(JsonLdVideo {
+            title: v.name.clone(),
+            description: v.description.clone(),
+            thumbnail: rdlp_extractor::base::common::json_ld::get_thumbnail_url(&v),
+            thumbnails,
+            upload_date: v.upload_date.clone(),
+            duration,
+            view_count: rdlp_extractor::base::common::json_ld::extract_view_count(&v),
+            like_count: rdlp_extractor::base::common::json_ld::extract_like_count(&v),
+            tags: rdlp_extractor::base::common::json_ld::extract_tags(&v)
+                .unwrap_or_default(),
+            categories: rdlp_extractor::base::common::json_ld::extract_categories(&v)
+                .unwrap_or_default(),
+        })
     }
 }
