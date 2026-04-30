@@ -180,6 +180,9 @@ fn build_host_resources(config: &Config) -> anyhow::Result<HostResources> {
         fetch_client,
         cookie_jar: Some(cookie_jar),
         kv_db,
+        // Production never injects fixtures; the field exists for the
+        // golden-test harness in `crates/rdlp-plugin/tests/`.
+        fetch_fixtures: None,
     })
 }
 

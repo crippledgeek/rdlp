@@ -28,6 +28,22 @@ componentize-py only resolves `import` / `from x import y` at module top level (
 
 The package's exception hierarchy mirrors yt-dlp's exactly so ported extractor source can be substituted with no code changes. `ExtractorError`, `UnsupportedError`, `RegexNotFoundError`, `GeoRestrictedError`, `UserNotLive`, `DownloadError`, `UnavailableVideoError`, `ContentTooShortError`, `PostProcessingError`, `DownloadCancelled`, and `YoutubeDLError` all match upstream's class names and constructor signatures (see `_errors.py` for the upstream-citation table).
 
+## Slice-2 surface (SVT support — 2026-04-30)
+
+Helper additions verified against yt-dlp tag `2026.03.17`:
+
+- **Utility helpers** (`_utils.py`): `determine_ext`, `dict_get` (with `skip_false_values=`), `require`, `variadic`. Plus `RequiredError` exception subclass for `traverse_obj` propagation.
+- **`traverse_obj` rewrite** (`info_extractor.py`): now supports `{type}` / `{type, type, ...}` / `{callable}` set-syntax segments, `(branch_a, branch_b)` tuple sub-paths, two-arg `lambda k, v: ...` predicates, and `any` / `all` / `filter` builtin terminators. Drops upstream support for `re.Match`, `xml.etree`, `http.cookies.Morsel`, `slice`, and `traverse_string` — none exercised by SVT or any plausible Slice-2 plugin. Add when a port needs them.
+- **`InfoExtractor` methods**: `_match_valid_url`, `_match_id`, `suitable`, `ie_key` (classmethods); `url_result`, `playlist_result` (statics); `_og_search_title`, `_og_search_thumbnail`, `_og_search_property`, `_og_regexes`; `_search_json` (regex + brace-balanced + parse_json), `_search_nextjs_data`; `_merge_subtitles` (+ `_merge_subtitle_items` dedupe); `_download_json`; `geo_verification_headers` (returns `{}` since shim has no YoutubeDL params surface). `_extract_f4m_formats` and `_extract_mpd_formats_and_subtitles` are stubs (F4M is dead; DASH unimplemented in rdlp-downloader — see `project_dash-protocol-missing` memory).
+- **Multi-class plugin support** (`_dispatch.py`): `discover_ie_classes` + `dispatch_url` honour SVT-style sibling `suitable()` overrides. Build-from-ytdlp's `extract_valid_urls` (Rust) captures every `_VALID_URL` (single + triple-quoted), skips docstring examples, and emits a deduped match-pattern union into the manifest.
+
+## Limitations (deferred to Slice 2.5)
+
+- Pure-data helpers (`traverse_obj`, `dict_get`, `int_or_none`, …) MUST stay Python — they take Python callables / type objects which can't cross the WIT boundary. Slice 2.5 will move I/O helpers (`_extract_m3u8_formats_and_subtitles`, `_search_regex`, etc.) host-side via a v0.2 WIT bump. See memory `project_ytdlp-shim-slice2_5-host-helpers`.
+- `_parse_json` filters yt-dlp's `LenientJSONDecoder`-only kwargs (`ignore_extra` / `strict` / `lenient`) before forwarding to stdlib `json.loads`. Lenient parsing semantics (trailing data, control chars) are NOT supported. SVT's payloads are well-formed.
+- The Next.js / `urqlState` extraction path needs a hydrated HTML fixture to test (the SSR snapshot lacks `urqlState`). The svt:short-form test URL exercises everything else end-to-end.
+- DASH (`_extract_mpd_formats_and_subtitles`) is a stub returning `([], {})` — the rdlp downloader has no DASH segment downloader yet (`DownloadProtocol::HttpDashSegments` exists as a type-level variant only).
+
 ## Regenerating requirements-dev.txt
 
 When bumping `componentize-py` (or any dep) and re-pinning hashes:

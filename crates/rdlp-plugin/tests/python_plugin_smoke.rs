@@ -137,6 +137,7 @@ async fn python_hello_world_loads_and_signs() {
         fetch_client: Some(HttpClientFactory::default().build()),
         cookie_jar: None,
         kv_db: None,
+        fetch_fixtures: None,
     };
     let _adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
         .expect("adapter construction must succeed");
@@ -216,6 +217,7 @@ async fn python_hello_world_extract_succeeds() {
         fetch_client: Some(HttpClientFactory::default().build()),
         cookie_jar: None,
         kv_db: None,
+        fetch_fixtures: None,
     };
     let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
         .expect("adapter construction must succeed");

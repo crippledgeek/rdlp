@@ -1,4 +1,7 @@
-"""Filesystem-safe filename / path helpers mirroring yt-dlp.
+"""Utility helpers mirroring yt-dlp's `utils/_utils.py` and
+`utils/traversal.py` — filesystem-safe filename / path helpers PLUS the
+small pure helpers ported in Slice 2 (`determine_ext`, `dict_get`,
+`require`, `variadic`).
 
 Verified against `yt_dlp/utils/_utils.py:631-733` at tag `2026.03.17`.
 The implementations don't try to be byte-identical (yt-dlp's full-width-
@@ -27,6 +30,184 @@ Plus `sanitize_path(s, force=False)` for full path-string sanitisation
 """
 import re
 import unicodedata
+
+from rdlp_ytdlp_compat._errors import RequiredError
+
+
+# Mirrors yt-dlp's MEDIA_EXTENSIONS namespace (_utils.py:5091-5102 @ tag
+# 2026.03.17). `determine_ext` falls back to this set when the URL has a
+# trailing slash that masks the real extension. Trimmed to the tuples
+# yt-dlp populates by default; full namespace also has subtitles + images
+# but extractors classifying those typically don't go through `determine_ext`.
+_KNOWN_EXTENSIONS = frozenset((
+    # video
+    "3g2", "3gp", "avi", "divx", "f4v", "flv", "m4v", "mk3d", "mkv",
+    "mov", "mp4", "mpg", "ogv", "webm", "wmv",
+    # audio
+    "aac", "aiff", "alac", "ape", "asf", "f4a", "f4b", "flac", "m4a",
+    "m4b", "m4r", "mka", "mp3", "oga", "ogg", "ogx", "opus", "spx",
+    "vorbis", "wav", "weba", "wma",
+    # streaming manifests
+    "f4f", "f4m", "m3u8", "mpd", "smil",
+))
+
+
+def variadic(x, allowed_types=(str, bytes, dict)):
+    """yt-dlp's `variadic` (`_utils.py:2673-2677` @ tag 2026.03.17): wrap a
+    scalar in a 1-tuple; pass iterables through unchanged.
+
+    `allowed_types` are the types that should NEVER be unwrapped (so a
+    string `key` doesn't get iterated character-by-character). Real
+    yt-dlp uses a NO_DEFAULT sentinel and emits a deprecation warning;
+    we hardcode the (str, bytes, dict) default since every call site in
+    the shim relies on it.
+    """
+    if isinstance(x, allowed_types):
+        return (x,)
+    if hasattr(x, "__iter__"):
+        return x
+    return (x,)
+
+
+def determine_ext(url, default_ext="unknown_video"):
+    """yt-dlp's `determine_ext` (`_utils.py:1304-1314` @ tag 2026.03.17).
+
+    Returns the extension parsed from a URL's path: strips the query
+    string at `?`, takes the suffix after the last `.`. Returns
+    `default_ext` when:
+      - URL is None, or
+      - URL contains no `.`, or
+      - The suffix is non-alphanumeric AND not in `_KNOWN_EXTENSIONS`
+        (handles trailing-slash URLs like `…/foo.mp4/?download`).
+    """
+    if url is None or "." not in url:
+        return default_ext
+    guess = url.partition("?")[0].rpartition(".")[2]
+    if re.match(r"^[A-Za-z0-9]+$", guess):
+        return guess
+    if guess.rstrip("/") in _KNOWN_EXTENSIONS:
+        return guess.rstrip("/")
+    return default_ext
+
+
+def dict_get(d, key_or_keys, default=None, skip_false_values=True):
+    """yt-dlp's `dict_get` (`utils/traversal.py:473-477` @ tag 2026.03.17).
+
+    Iterate `key_or_keys` (single key or iterable of keys), returning
+    the first dict value that is non-None. When `skip_false_values=True`
+    (the default), also skip falsy-but-not-None values (empty string, 0,
+    empty list). Pass `skip_false_values=False` when the caller needs to
+    distinguish "key absent" from "key present with value 0/'' " — SVT
+    `_extract_video` does this for the `inappropriateForChildren` /
+    `blockedForChildren` fields where `False` is a meaningful signal.
+
+    `None` is ALWAYS skipped regardless of `skip_false_values` — that's
+    the key invariant separating "absent" from "explicitly None".
+    """
+    for val in map(d.get, variadic(key_or_keys)):
+        if val is not None and (val or not skip_false_values):
+            return val
+    return default
+
+
+def clean_html(html):
+    """yt-dlp's `clean_html` (`_utils.py:527-540` @ tag 2026.03.17).
+    Strip HTML tags, collapse whitespace, convert `<br>` to newlines,
+    convert `</p><p>` to newlines, unescape entities. `None` passes
+    through (callers pass `_search_regex(..., default=None)` results)."""
+    import html as _stdlib_html
+    if html is None:
+        return html
+    html = re.sub(r"\s+", " ", html)
+    html = re.sub(r"(?u)\s?<\s?br\s?/?\s?>\s?", "\n", html)
+    html = re.sub(r"(?u)<\s?/\s?p\s?>\s?<\s?p[^>]*>", "\n", html)
+    html = re.sub(r"<.*?>", "", html)
+    html = _stdlib_html.unescape(html)
+    return html.strip()
+
+
+def parse_duration(s):
+    """yt-dlp's `parse_duration` (`_utils.py:2082-2136` @ tag 2026.03.17).
+    Three-tier matcher: colon-separated (DD:HH:MM:SS / HH:MM:SS / MM:SS
+    / SS), letter-suffixed (`1h2m3s` / ISO-8601 PT-form), and verbose
+    English (`1 hour 2 mins`). Returns float seconds or `None`."""
+    if not isinstance(s, str):
+        return None
+    s = s.strip()
+    if not s:
+        return None
+
+    days = hours = mins = secs = ms = None
+    m = re.match(
+        r"""(?x)
+            (?P<before_secs>
+                (?:(?:(?P<days>[0-9]+):)?(?P<hours>[0-9]+):)?(?P<mins>[0-9]+):)?
+            (?P<secs>(?(before_secs)[0-9]{1,2}|[0-9]+))
+            (?P<ms>[.:][0-9]+)?Z?$
+        """,
+        s,
+    )
+    if m:
+        days, hours, mins, secs, ms = m.group(
+            "days", "hours", "mins", "secs", "ms",
+        )
+    else:
+        m = re.match(
+            r"""(?ix)(?:P?
+                (?:[0-9]+\s*y(?:ears?)?,?\s*)?
+                (?:[0-9]+\s*m(?:onths?)?,?\s*)?
+                (?:[0-9]+\s*w(?:eeks?)?,?\s*)?
+                (?:(?P<days>[0-9]+)\s*d(?:ays?)?,?\s*)?
+                T)?
+                (?:(?P<hours>[0-9]+)\s*h(?:(?:ou)?rs?)?,?\s*)?
+                (?:(?P<mins>[0-9]+)\s*m(?:in(?:ute)?s?)?,?\s*)?
+                (?:(?P<secs>[0-9]+)(?P<ms>\.[0-9]+)?\s*s(?:ec(?:ond)?s?)?\s*)?Z?$
+            """,
+            s,
+        )
+        if m:
+            days, hours, mins, secs, ms = m.groups()
+        else:
+            m = re.match(
+                r"(?i)(?:(?P<hours>[0-9.]+)\s*(?:hours?)|"
+                r"(?P<mins>[0-9.]+)\s*(?:mins?\.?|minutes?)\s*)Z?$",
+                s,
+            )
+            if m:
+                hours, mins = m.groups()
+            else:
+                return None
+
+    if ms:
+        ms = ms.replace(":", ".")
+    return sum(
+        float(part or 0) * mult
+        for part, mult in (
+            (days, 86400), (hours, 3600), (mins, 60), (secs, 1), (ms, 1),
+        )
+    )
+
+
+def require(name, *, expected=False):
+    """yt-dlp's `require` (`utils/traversal.py:320-327` @ tag 2026.03.17).
+
+    Returns a callable that raises `RequiredError` when its input is
+    None, otherwise passes the input through unchanged. Designed for use
+    as a transformer inside `traverse_obj` paths:
+
+        traverse_obj(data, ('video', 'svtId', {str}, {require('SVT ID')}))
+
+    The traversal engine catches `RequiredError` thrown by intermediate
+    paths so the next path can be tried, and re-raises as a plain
+    `ExtractorError(expected=...)` once the last path is exhausted. The
+    `expected` flag rides through to the surfaced ExtractorError.
+    """
+    def _check(value):
+        if value is None:
+            raise RequiredError(f"Unable to extract {name}", expected=expected)
+        return value
+    return _check
+
 
 
 # Mirrors yt-dlp's `ACCENT_CHARS` (`_utils.py:580-628` at tag 2026.03.17),

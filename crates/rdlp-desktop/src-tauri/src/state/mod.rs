@@ -14,6 +14,7 @@ pub use download_queue::{DownloadJob, DownloadQueue, JobStatus, SavedDownloadOpt
 use std::sync::{Arc, Mutex};
 
 use rdlp_api::RdlpClient;
+use rdlp_core::config_io;
 use rdlp_postprocess::TempRegistry;
 use rdlp_types::Config;
 
@@ -52,8 +53,36 @@ impl AppState {
         // pipeline instances register their temp files in the same registry.
         let temp_registry = Arc::new(TempRegistry::new());
 
+        // Load the user config file so installed plugins are picked up by
+        // the desktop the same way they are by the CLI. Without this load
+        // step, `Config::default()` ships an empty `plugin_directories`
+        // and `RdlpClient::builder()` runs with zero discovered plugins —
+        // the GUI would then fall back to built-in extractors only, even
+        // when `~/.config/rdlp/plugins/<name>` is populated. Failure to
+        // read or parse the file is non-fatal: we log and continue with
+        // defaults so a corrupt config doesn't lock the user out of the
+        // app.
+        let config = match config_io::load_config(None) {
+            Ok(Some((cfg, path))) => {
+                log::info!(
+                    "Loaded config from {} ({} plugin dir(s))",
+                    path.display(),
+                    cfg.plugin_directories.len(),
+                );
+                cfg
+            }
+            Ok(None) => {
+                log::debug!("No config file found; using Config::default()");
+                Config::default()
+            }
+            Err(e) => {
+                log::warn!("Config load failed ({e}); using Config::default()");
+                Config::default()
+            }
+        };
+
         let client = RdlpClient::builder()
-            .config(Config::default())
+            .config(config)
             .temp_registry(Arc::clone(&temp_registry))
             .build()
             .expect("Failed to create RdlpClient");

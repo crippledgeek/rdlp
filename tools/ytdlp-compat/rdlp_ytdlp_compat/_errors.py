@@ -260,6 +260,22 @@ class NetworkError(ExtractorError):
         super().__init__(msg, **kwargs)
 
 
+class RequiredError(ExtractorError):
+    """Raised by `require(name)` when a `traverse_obj` path produces None
+    where a value is required. Mirrors yt-dlp's private `_RequiredError`
+    (`utils/traversal.py:330-331` @ tag 2026.03.17).
+
+    `traverse_obj` catches `RequiredError` thrown by intermediate paths
+    (so the next path can be tried) and re-raises as
+    `ExtractorError(msg, expected=...)` from the LAST path. Subclassing
+    `ExtractorError` keeps `except ExtractorError:` clauses in ported
+    code working identically.
+    """
+
+    def __init__(self, msg, *, expected=False):
+        super().__init__(msg, expected=expected)
+
+
 # Network exceptions yt-dlp's ExtractorError auto-wraps (`_utils.py:986`).
 # We don't ship the actual urllib/http.client classes, but exposing the
 # tuple lets caller code do `isinstance(e, network_exceptions)` symmetrically.

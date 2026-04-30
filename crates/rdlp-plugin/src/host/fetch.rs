@@ -9,6 +9,7 @@
 //! 4. Body size cap (32 MB) — prevents adversarial servers from exhausting plugin memory.
 
 use crate::PluginError;
+use crate::host::fetch_fixtures::SharedFixtures;
 use crate::instance::PluginStoreData;
 use rdlp_http::wreq;
 use rdlp_security::validate_url_security;
@@ -18,11 +19,18 @@ use wasmtime::component::Linker;
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 
-/// Per-plugin fetch context. Owns a clone of the shared `wreq::Client`.
+/// Per-plugin fetch context. Owns a clone of the shared `wreq::Client`
+/// plus an optional fixture-replay map for golden tests.
 #[derive(Clone)]
 pub struct FetchCtx {
     /// The HTTP client used for all plugin fetch requests.
     pub client: wreq::Client,
+    /// Optional URL → canned-response map. When `Some` and a request URL
+    /// matches an entry, the canned response is returned WITHOUT making
+    /// a real HTTP call. Production callers leave this `None`; it's
+    /// populated by the test harness for plugin golden tests against
+    /// geo-restricted or otherwise non-CI-friendly endpoints.
+    pub fixtures: SharedFixtures,
 }
 
 impl FetchCtx {
@@ -33,7 +41,10 @@ impl FetchCtx {
         let client = wreq::Client::builder()
             .build()
             .map_err(|e| PluginError::Internal(format!("wreq client init: {e}")))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            fixtures: None,
+        })
     }
 }
 
@@ -55,6 +66,23 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
         let Some(ctx) = self.fetch.as_ref() else {
             return Err(FetchError::Network("fetch capability not granted".into()));
         };
+
+        // Fixture-replay: in tests, an injected URL → canned-response
+        // map intercepts requests BEFORE any network call. Production
+        // builds leave `fixtures` as None so this is a single Option
+        // check on the hot path. We deliberately bypass
+        // `validate_url_security` for fixture matches because tests
+        // routinely use private-network or loopback URLs.
+        if let Some(fixtures) = ctx.fixtures.as_ref()
+            && let Some(canned) = fixtures.get(&req.url)
+        {
+            return Ok(Response {
+                status: canned.status,
+                headers: canned.headers.clone(),
+                body: canned.body.clone(),
+                final_url: req.url.clone(),
+            });
+        }
 
         if let Err(e) = validate_url_security(&req.url) {
             return Err(FetchError::Network(format!("url security: {e}")));

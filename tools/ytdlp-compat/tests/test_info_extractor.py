@@ -197,13 +197,17 @@ class TestParseJson:
         with pytest.raises((ValueError, TypeError)):
             ie._parse_json("not json", "x", fatal=True)
 
-    def test_lenient_kwarg_does_not_exist(self):
-        # yt-dlp doesn't have a lenient kwarg; **parser_kwargs will pass it to
-        # json.loads which rejects unknown kwargs. This test pins the negative.
+    def test_lenient_kwarg_silently_dropped(self):
+        # Slice-2 update: `lenient`, `ignore_extra`, and `strict` are
+        # yt-dlp `LenientJSONDecoder` kwargs that don't exist on stdlib
+        # `json.loads`. Slice-1 let them propagate (raised TypeError);
+        # Slice-2 silently drops them so ported extractors that do
+        # `_parse_json(..., ignore_extra=True)` upstream-style don't
+        # break at the boundary. See `_parse_json` doc + Slice-2
+        # spec/code-review fix commit 955bd86.
         ie = InfoExtractor()
-        with pytest.raises(TypeError):
-            # `lenient=True` is not a valid kwarg for json.loads
-            ie._parse_json('{"a": 1}', "x", lenient=True)
+        result = ie._parse_json('{"a": 1}', "x", lenient=True)
+        assert result == {"a": 1}
 
 
 class TestSearchRegex:
@@ -332,8 +336,15 @@ class TestTraverseObj:
         assert traverse_obj(d, "title", casesense=False) == "Hello"
 
     def test_callable_filter(self):
-        # Keep only ints
-        result = traverse_obj([1, "x", 2, "y"], (lambda v: isinstance(v, int),))
+        # Keep only ints. Slice-2 conforms to yt-dlp's two-arg callable
+        # signature `(key_or_index, value)` per
+        # `yt_dlp/utils/traversal.py:157-178`. Real extractors rely on
+        # the key arg (e.g. SVT line 268: `lambda _, v: v['accessibility']
+        # == 'Default'`); the Slice-1 single-arg form was an over-simplified
+        # shim API that this test now corrects.
+        result = traverse_obj(
+            [1, "x", 2, "y"], (lambda _, v: isinstance(v, int),),
+        )
         assert result == [1, 2]
 
     def test_multiple_paths_first_hit(self):

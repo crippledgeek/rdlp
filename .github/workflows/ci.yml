@@ -157,6 +157,11 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          # NOTE: built-in `cache: 'npm'` requires a TRACKED lockfile.
+          # `crates/rdlp-desktop/package-lock.json` is in .gitignore by
+          # project policy, so setup-node's cache hash fails to resolve
+          # and the action errors out. Re-enable IF the project ever
+          # tracks its lockfile.
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -237,12 +242,18 @@ jobs:
               - 'crates/rdlp-plugin/wit/**'
               - 'crates/rdlp-plugin/src/host/**'
               - 'crates/rdlp-plugin-manifest/src/**'
-              - 'examples/plugins/ytdlp-golden/**'
-              - 'examples/plugins/ytdlp-hello-world/**'
+              # Glob-everything so each new ported plugin (Slice 2.5+)
+              # auto-triggers without per-plugin CI edits. Plugins live
+              # under examples/plugins/<name>/, fixtures under
+              # crates/rdlp-plugin/tests/fixtures/<name>/, and the
+              # integration golden at tests/<name>_golden.rs.
+              - 'examples/plugins/**'
+              - 'crates/rdlp-plugin/tests/*_golden.rs'
+              - 'crates/rdlp-plugin/tests/fixtures/**'
               - '.github/workflows/ci.yml'
 
   ytdlp-plugin-golden:
-    name: yt-dlp Plugin Golden Build
+    name: Run Golden Build
     needs: [build-and-test, golden-filter]
     # Always run on push (merges into develop) and on workflow_dispatch
     # (manual reruns must exercise the golden — that's the one case where
@@ -292,13 +303,33 @@ jobs:
           enable-cache: true
           cache-dependency-glob: tools/ytdlp-compat/requirements-dev.txt
 
+      # Cache the Python venv itself (not just uv's download cache).
+      # uv's cache lives at ~/.cache/uv and is handled by setup-uv's
+      # enable-cache. The venv directory under tools/ytdlp-compat/.venv
+      # is a separate concern — it holds the symlinked/installed
+      # `componentize-py` binary + the editable rdlp_ytdlp_compat
+      # package. Caching it keyed on the lockfile hash skips the venv
+      # creation + install steps when deps haven't changed.
+      - name: Cache venv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: tools/ytdlp-compat/.venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt') }}
+
       - name: Install componentize-py-pin@0.17.2 via uv
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         working-directory: tools/ytdlp-compat
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python \
             --require-hashes -r requirements-dev.txt
           .venv/bin/componentize-py --version
+
+      - name: Verify cached venv (cache-hit fast path)
+        if: steps.venv-cache.outputs.cache-hit == 'true'
+        working-directory: tools/ytdlp-compat
+        run: .venv/bin/componentize-py --version
 
       - name: Run rdlp_ytdlp_compat unit tests
         working-directory: tools/ytdlp-compat
@@ -312,6 +343,26 @@ jobs:
         with:
           shared-key: rust-ubuntu-22.04
 
-      - name: Build golden plugins
-        run: cargo test -p rdlp-plugin --test ytdlp_golden -- --ignored --nocapture
-        timeout-minutes: 20
+      - name: Run all goldens
+        # Iterates every `crates/rdlp-plugin/tests/*_golden.rs` file —
+        # each new ported plugin (Slice 2.5+) auto-runs without CI
+        # edits. Tests inside golden files are `#[ignore]` (slow:
+        # ~30s componentize-py wasm build per plugin), so we explicitly
+        # pass --ignored. Sequential execution (one cargo test
+        # invocation per file) avoids parallel wasm builds saturating
+        # disk + CPU on the runner.
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          goldens=(crates/rdlp-plugin/tests/*_golden.rs)
+          if [ ${#goldens[@]} -eq 0 ]; then
+            echo "::error::no *_golden.rs files found"
+            exit 1
+          fi
+          for f in "${goldens[@]}"; do
+            name=$(basename "$f" .rs)
+            echo "::group::Run $name"
+            cargo test -p rdlp-plugin --test "$name" -- --ignored --nocapture
+            echo "::endgroup::"
+          done

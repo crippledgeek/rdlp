@@ -45,9 +45,15 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
         .with_context(|| format!("plugin filename '{raw_stem}' not a valid plugin name"))?;
 
     let source = std::fs::read_to_string(&py_path)?;
-    let valid_url =
-        extract_valid_url(&source).context("could not find _VALID_URL in plugin source")?;
-    let matches = valid_url_to_match_patterns(&valid_url);
+    let valid_urls = extract_valid_urls(&source);
+    if valid_urls.is_empty() {
+        bail!(
+            "could not find any `_VALID_URL` declaration in plugin source — \
+             at least one `class FooIE(InfoExtractor): _VALID_URL = r'...'` \
+             must exist"
+        );
+    }
+    let matches = valid_urls_to_match_patterns(&valid_urls);
     // The fallback pattern `*://*/*` matches the entire internet at priority
     // 150, shadowing every built-in extractor that doesn't explicitly opt-in
     // to override-claiming. Authors who hit it on a complex `_VALID_URL` (e.g.
@@ -148,38 +154,128 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
     Ok(())
 }
 
-fn extract_valid_url(source: &str) -> Option<String> {
-    // Match: _VALID_URL = r'...' / "..."  (single or double quotes, raw or not).
-    let re = Regex::new(r#"(?m)^\s*_VALID_URL\s*=\s*r?['"]([^'"]+)['"]"#).unwrap();
-    re.captures(source).map(|c| c[1].to_string())
+/// Find every `_VALID_URL = r'...'` (or `r'''...'''` / `r"""..."""`)
+/// declaration in `source`. Returns one entry per concrete IE class.
+///
+/// Triple-quoted regexes are required for SVT — yt-dlp's `(?x)` verbose
+/// mode is line-broken across many physical lines and the single-quote
+/// form (`[^'"]+`) cannot capture that. Triple-quote support is a Slice-2
+/// requirement, NOT a future enhancement.
+///
+/// Filters out matches that occur INSIDE a docstring or other
+/// triple-quoted string literal. Detection is heuristic: count
+/// occurrences of `"""` and `'''` before each candidate match position;
+/// if either count is odd, we're inside an unclosed triple-quote (a
+/// docstring) and skip. This handles yt-dlp's pattern of putting
+/// `_VALID_URL = r'...'` examples inside class/module docstrings.
+fn extract_valid_urls(source: &str) -> Vec<String> {
+    let triple =
+        Regex::new(r#"(?ms)^\s*_VALID_URL\s*=\s*r?(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")"#).unwrap();
+    let single = Regex::new(r#"(?m)^\s*_VALID_URL\s*=\s*r?['"]([^'"\n]+)['"]"#).unwrap();
+
+    let mut out: Vec<String> = Vec::new();
+    let mut consumed_ranges: Vec<(usize, usize)> = Vec::new();
+
+    for cap in triple.captures_iter(source) {
+        let m = cap.get(0).unwrap();
+        if is_inside_triple_quote(source, m.start()) {
+            // Triple-quoted `_VALID_URL` example inside a docstring.
+            // Mark the range as consumed so the single-quote pass
+            // doesn't pick up a sub-fragment, but DON'T add to output.
+            consumed_ranges.push((m.start(), m.end()));
+            continue;
+        }
+        consumed_ranges.push((m.start(), m.end()));
+        let body = cap
+            .get(1)
+            .or_else(|| cap.get(2))
+            .map(|g| g.as_str().to_string())
+            .unwrap_or_default();
+        out.push(body);
+    }
+    for cap in single.captures_iter(source) {
+        let m = cap.get(0).unwrap();
+        // Skip captures inside a triple-quoted range we already saw.
+        if consumed_ranges
+            .iter()
+            .any(|&(s, e)| m.start() >= s && m.start() < e)
+        {
+            continue;
+        }
+        if is_inside_triple_quote(source, m.start()) {
+            continue;
+        }
+        out.push(cap[1].to_string());
+    }
+    out
 }
 
-/// Convert a yt-dlp regex `_VALID_URL` to Chrome-style match patterns
-/// parseable by `rdlp_plugin::dispatch::MatchPattern::parse`.
+/// Returns true when `position` falls inside an unclosed triple-quoted
+/// string literal. Counts `"""` and `'''` occurrences in the prefix; an
+/// odd count of either means we're inside a still-open string.
+///
+/// Heuristic: ignores the case of mixed nested triple-quote chars
+/// (e.g. `'''...""".....'''` would count `"""` as 1). yt-dlp source
+/// files don't exercise that pattern; if a real plugin does, the
+/// author can hand-edit the manifest.
+fn is_inside_triple_quote(source: &str, position: usize) -> bool {
+    let prefix = &source[..position];
+    let triple_double = prefix.matches("\"\"\"").count();
+    let triple_single = prefix.matches("'''").count();
+    triple_double % 2 == 1 || triple_single % 2 == 1
+}
+
+/// Convert a slice of yt-dlp `_VALID_URL` regex strings to Chrome-style
+/// match patterns parseable by `rdlp_plugin::dispatch::MatchPattern::parse`.
+///
+/// Multi-class plugins (e.g. SVT with Play/Series/Page IEs in one file)
+/// produce N regexes; this fn unions their host-prefix patterns and
+/// dedupes so the manifest's `matches=[...]` doesn't repeat itself when
+/// every class shares the same host.
 ///
 /// `MatchPattern` only accepts:
 /// - scheme: http | https | * | file
 /// - host: * | *.example.com | example.com (no regex chars)
 /// - path: anything after `/`
-fn valid_url_to_match_patterns(regex: &str) -> Vec<String> {
-    // Capture host between the scheme and the first `/`.
-    // Handle optional `(?:www\.)?` prefix.
+fn valid_urls_to_match_patterns(regexes: &[String]) -> Vec<String> {
+    if regexes.is_empty() {
+        return vec!["*://*/*".to_string()];
+    }
+    // Capture host between the scheme and the first `/`. Handle the
+    // optional `(?:www\.)?` prefix yt-dlp uses pervasively.
     let with_www = Regex::new(
-        r"^https\??(?:s\?)?://(?:\(\?:www\\\.\)\?)([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)",
+        r"https\??(?:s\?)?://(?:\(\?:www\\\.\)\?)([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)",
     )
     .unwrap();
-    let bare = Regex::new(r"^https\??(?:s\?)?://([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)").unwrap();
+    let bare = Regex::new(r"https\??(?:s\?)?://([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)").unwrap();
 
-    if let Some(c) = with_www.captures(regex) {
-        let host = c[1].replace(r"\.", ".");
-        return vec![format!("https://*.{host}/*"), format!("https://{host}/*")];
+    let mut out: Vec<String> = Vec::new();
+    let mut any_extracted = false;
+    for regex in regexes {
+        let extracted = if let Some(c) = with_www.captures(regex) {
+            let host = c[1].replace(r"\.", ".");
+            any_extracted = true;
+            vec![format!("https://*.{host}/*"), format!("https://{host}/*")]
+        } else if let Some(c) = bare.captures(regex) {
+            let host = c[1].replace(r"\.", ".");
+            any_extracted = true;
+            vec![format!("https://{host}/*")]
+        } else {
+            // This particular regex is unparseable; skip it. Other
+            // regexes in the slice may still extract — only fall back
+            // to the wildcard when EVERY regex fails.
+            vec![]
+        };
+        for p in extracted {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
     }
-    if let Some(c) = bare.captures(regex) {
-        let host = c[1].replace(r"\.", ".");
-        return vec![format!("https://{host}/*")];
+    if !any_extracted {
+        return vec!["*://*/*".to_string()];
     }
-    // Fallback: over-broad. Authors should hand-edit before publishing.
-    vec!["*://*/*".to_string()]
+    out
 }
 
 fn locate_workspace_root() -> Result<PathBuf> {
@@ -250,10 +346,13 @@ fn stage_build_dir(
 /// 3. Errors raise via `Err(<variant>)`, NOT return, because the WIT
 ///    Protocol method signature is the `Ok` payload only — see
 ///    `extractor_plugin/types.py::Err` (a frozen-dataclass Exception).
-/// 4. Multiple `InfoExtractor` subclasses in `user_plugin` are an explicit
-///    error: alphabetical-first selection silently dropped sibling
-///    extractors before this commit. Per-file plugins must declare exactly
-///    one extractor; multi-class sites should ship one .py per extractor.
+/// 4. Multi-class plugin support (Slice 2): `_entry.py` walks every
+///    concrete `InfoExtractor` subclass in `user_plugin` at extract time
+///    and dispatches by `cls.suitable(url)`. SVT-style siblings
+///    (SVTPlayIE / SVTSeriesIE / SVTPageIE) ship in one .py and the
+///    `suitable()` overrides decide which class claims a given URL.
+///    Discovery + dispatch live in `rdlp_ytdlp_compat._dispatch` so they
+///    are unit-testable in plain CPython.
 /// 5. info_dict shape is validated per yt-dlp's documented contract
 ///    (`yt_dlp/extractor/common.py:107-498` at upstream tag 2026.03.17):
 ///    `id` and `title` are required strs; either `formats` or `url` must
@@ -299,37 +398,31 @@ from rdlp_ytdlp_compat import (
     NetworkError as _NetworkError,
 )
 from rdlp_ytdlp_compat._host import HostHttpError as _HostHttpError
+from rdlp_ytdlp_compat._dispatch import (
+    DispatchError as _DispatchError,
+    discover_ie_classes as _discover_ie_classes,
+    dispatch_url as _dispatch_url,
+)
 
 
-def _discover_ie_class():
-    """Find the user's InfoExtractor subclass. Multiple matches are an error
-    (alphabetical-first selection silently drops siblings); zero matches is
-    also an error.
-    """
-    candidates = []
-    for _name in dir(user_plugin):
-        _v = getattr(user_plugin, _name)
-        if (isinstance(_v, type)
-                and issubclass(_v, _CompatInfoExtractor)
-                and _v is not _CompatInfoExtractor):
-            candidates.append(_v)
-    if not candidates:
-        raise RuntimeError(
-            "no InfoExtractor subclass found in plugin — declare "
-            "`class FooIE(InfoExtractor):` at module top level"
-        )
-    if len(candidates) > 1:
-        names = ", ".join(c.__name__ for c in candidates)
-        raise RuntimeError(
-            "multiple InfoExtractor subclasses found in plugin: "
-            f"[{names}]. build-from-ytdlp supports exactly one extractor "
-            "per .py file; split each into its own file or build separately."
-        )
-    return candidates[0]
+# Discover all concrete InfoExtractor subclasses at module load. Exactly
+# zero candidates = plugin-authoring error (raised loudly at first call
+# below). Multi-class plugins (e.g. SVT with Play/Series/Page IEs in one
+# file) keep all classes — extract-time dispatch picks the right one
+# per URL via cls.suitable().
+try:
+    _IE_CLASSES = _discover_ie_classes(user_plugin)
+except _DispatchError as _e:
+    # Surface at extract() / metadata() rather than here — componentize-py
+    # init errors crash the whole instance.
+    _IE_CLASSES = []
+    _DISCOVERY_ERROR = _e
+else:
+    _DISCOVERY_ERROR = None
 
-
-_IE_CLASS = _discover_ie_class()
-_IE = _IE_CLASS()
+# Pre-instantiate one IE per class. Slice-1 used a single `_IE` instance;
+# Slice-2 keeps a dict so dispatch can route URLs to the right object.
+_IE_INSTANCES = {cls: cls() for cls in _IE_CLASSES}
 
 
 def _format_payload(e):
@@ -443,13 +536,13 @@ def _extractor_error_to_variant(e):
         return ExtractError_Internal(msg)
 
     # === Catch-all — extractor bug ========================================
-    # Flatten Python's __cause__ if present (re-raised exceptions from
-    # buggy plugin code).
-    msg = str(e)
-    cause = getattr(e, "__cause__", None)
-    if cause is not None:
-        msg = f"{msg} (cause: {type(cause).__name__}: {cause})"
-    return ExtractError_Internal(msg)
+    # Reuse `_format_payload` so the legacy `cause` attribute (yt-dlp's
+    # own convention via `ExtractorError(msg, cause=e)`) is also
+    # flattened, not just `__cause__`. Earlier this branch duplicated
+    # the cause-flattening inline and dropped the legacy attr — found
+    # in code review as a debug-info regression for unknown exception
+    # types.
+    return ExtractError_Internal(_format_payload(e))
 
 
 def _validate_id(d):
@@ -500,18 +593,37 @@ def _validate_id(d):
 # PascalCase) for componentize-py-pin@0.17.2 to discover and instantiate it.
 class ExtractorPlugin(_ExtractorPluginProtocol):
     def metadata(self) -> PluginInfo:
+        if _DISCOVERY_ERROR is not None:
+            raise Err(ExtractError_Internal(str(_DISCOVERY_ERROR)))
+        # When multiple IE classes ship in one plugin, the manifest's
+        # plugin name is determined by the `.py` filename (kebab-cased
+        # at build time). For metadata reporting we use the first class
+        # purely for the `url_regex` hint shown in `rdlp plugin info`;
+        # actual matching still walks every class via `suitable()`.
+        primary = _IE_CLASSES[0]
         return PluginInfo(
-            name=_IE_CLASS.__name__.lower(),
+            name=primary.__name__.lower(),
             version="0.1.0",
             wit_version="0.1.0",
             matches=[],  # populated from manifest at install time
-            url_regex=getattr(_IE_CLASS, "_VALID_URL", None),
+            url_regex=getattr(primary, "_VALID_URL", None),
             priority=150,
             claims_override=[],
             supports_search=False,
         )
 
     def extract(self, url: str) -> InfoDict:
+        if _DISCOVERY_ERROR is not None:
+            raise Err(ExtractError_Internal(str(_DISCOVERY_ERROR)))
+        # Walk every IE class in the plugin and pick the first whose
+        # `suitable(url)` is True. Sibling-override classes (e.g.
+        # SVTSeriesIE.suitable yields when SVTPlayIE.suitable matches)
+        # are honoured because dispatch_url respects each class's own
+        # suitable() implementation.
+        ie_class = _dispatch_url(_IE_CLASSES, url)
+        if ie_class is None:
+            raise Err(ExtractError_UnsupportedUrl(url))
+        ie = _IE_INSTANCES[ie_class]
         # All extraction logic — including _dict_to_info_dict's _opt_str
         # type-check on each format field — runs INSIDE the try. Otherwise
         # _opt_str's _ExtractorError on a bad format dict would propagate
@@ -519,7 +631,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         # which componentize-py surfaces as a wasm trap (instance killed,
         # epoch fuel lost) instead of the graceful WIT variant.
         try:
-            d = _IE._real_extract(url)
+            d = ie._real_extract(url)
             _validate_id(d)
             return _dict_to_info_dict(d)
         except Exception as e:
@@ -552,6 +664,35 @@ def _opt_str(v, where=""):
     )
 
 
+def _opt_uint(v, where=""):
+    """Coerce optional unsigned-int fields to Python int. yt-dlp helpers
+    (`parse_duration`, `int_or_none`) often return floats — passing a
+    float to a WIT `option<u32>` / `option<u64>` field crashes the
+    componentize-py canonical-ABI marshaller (`ToCanonU32`). Round-to-int
+    here so plugin authors don't have to remember which fields require
+    integer values; bool guarded explicitly because Python `bool` is an
+    `int` subclass and silently coercing `True`→`1` is surprising."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        locus = f" at {where}" if where else ""
+        raise _ExtractorError(
+            f"[validate] info-dict field{locus} is bool, "
+            f"expected number or None",
+            expected=False,
+        )
+    if isinstance(v, int):
+        return max(0, v)
+    if isinstance(v, float):
+        return max(0, int(round(v)))
+    locus = f" at {where}" if where else ""
+    raise _ExtractorError(
+        f"[validate] info-dict field{locus} has invalid type: "
+        f"expected number/None, got {type(v).__name__}",
+        expected=False,
+    )
+
+
 def _dict_to_info_dict(d: dict) -> InfoDict:
     # Build formats with index-aware error messages so a malformed
     # `formats[4].format_id` surfaces with that exact path, not just
@@ -577,6 +718,27 @@ def _dict_to_info_dict(d: dict) -> InfoDict:
             filesize=f.get("filesize"),
             format_note=_opt_str(f.get("format_note"), f"formats[{i}].format_note"),
         ))
+    # Single-format-via-`url` canonicalisation. yt-dlp extractors
+    # frequently return `{'id': ..., 'url': video_url, ...}` with no
+    # explicit `formats[]` (xxxymovies, alphaporno, hellporno, many
+    # others). Without this synthesis the WIT info-dict ships an empty
+    # `formats[]` list and the URL is silently lost on the host side
+    # (`adapter.rs::convert_info_dict` consumes it as `webpage_url` only).
+    # Mirrors yt-dlp's internal `_check_formats` canonicalisation.
+    if not formats and isinstance(d.get("url"), str) and d["url"]:
+        formats.append(Format(
+            format_id=_opt_str(d.get("format_id"), "format_id") or "0",
+            url=d["url"],
+            ext=_opt_str(d.get("ext"), "ext") or "mp4",
+            protocol=_opt_str(d.get("protocol"), "protocol") or "https",
+            width=d.get("width"), height=d.get("height"), fps=d.get("fps"),
+            tbr=d.get("tbr"), vbr=d.get("vbr"), abr=d.get("abr"),
+            vcodec=_opt_str(d.get("vcodec"), "vcodec"),
+            acodec=_opt_str(d.get("acodec"), "acodec"),
+            container=_opt_str(d.get("container"), "container"),
+            filesize=d.get("filesize"),
+            format_note=_opt_str(d.get("format_note"), "format_note"),
+        ))
     # Use defensive .get with explicit default ("") — _validate_id already
     # ran and rejected non-str id/title, but keeping the .get makes the
     # coupling resilient to future refactors that might bypass the
@@ -591,8 +753,9 @@ def _dict_to_info_dict(d: dict) -> InfoDict:
         uploader=_opt_str(d.get("uploader"), "uploader"),
         uploader_id=_opt_str(d.get("uploader_id"), "uploader_id"),
         upload_date=_opt_str(d.get("upload_date"), "upload_date"),
-        duration=d.get("duration"), view_count=d.get("view_count"),
-        like_count=d.get("like_count"),
+        duration=_opt_uint(d.get("duration"), "duration"),
+        view_count=_opt_uint(d.get("view_count"), "view_count"),
+        like_count=_opt_uint(d.get("like_count"), "like_count"),
         tags=list(d.get("tags") or []),
         categories=list(d.get("categories") or []),
     )
@@ -637,13 +800,21 @@ fn write_manifest(path: &Path, name: &str, matches: &[String]) -> Result<()> {
          priority = 150\n\
          claims_override = []\n\
          supports_search = false\n\
-         capabilities = [\"fetch\", \"log\"]\n\
+         # componentize-py-pin@0.17.2 emits IMPORTS for every interface in\n\
+         # the WIT world regardless of which the plugin actually uses, so\n\
+         # the manifest MUST declare all six host capabilities or the host\n\
+         # linker rejects the wasm at instantiation time. Capability-gating\n\
+         # still happens at runtime via populate_capability_contexts: a\n\
+         # capability declared here but not granted by the host returns\n\
+         # \"denied\" when the plugin actually calls it. Hand-edit this list\n\
+         # down only if the plugin demonstrably never imports a capability.\n\
+         capabilities = [\"fetch\", \"cookie-jar\", \"js-eval\", \"html-select\", \"log\", \"store-kv\"]\n\
          \n\
          # PLACEHOLDER — run `rdlp plugin sign {name}` to populate.\n\
          [signature]\n\
          type = \"ed25519\"\n\
-         pubkey = \"REPLACE_WITH_BASE64_PUBKEY\"\n\
-         signature = \"REPLACE_WITH_BASE64_SIGNATURE\"\n"
+         pubkey = \"PLACEHOLDER_PUBKEY\"\n\
+         signature = \"PLACEHOLDER_SIGNATURE\"\n"
     );
     std::fs::write(path, body)?;
     Ok(())
@@ -655,9 +826,9 @@ mod tests {
 
     #[test]
     fn valid_url_to_match_emits_chrome_style_patterns() {
-        let patterns = valid_url_to_match_patterns(
-            r"https?://(?:www\.)?pornhub\.com/view_video\.php\?viewkey=(?P<id>[^&]+)",
-        );
+        let patterns = valid_urls_to_match_patterns(&[
+            r"https?://(?:www\.)?pornhub\.com/view_video\.php\?viewkey=(?P<id>[^&]+)".to_string(),
+        ]);
         assert!(
             patterns.iter().any(|p| p == "https://*.pornhub.com/*"),
             "expected '*.pornhub.com' pattern, got: {patterns:?}"
@@ -675,14 +846,16 @@ mod tests {
 
     #[test]
     fn valid_url_bare_host_no_www_prefix() {
-        let patterns = valid_url_to_match_patterns(r"https?://example\.com/(?P<id>\d+)");
+        let patterns =
+            valid_urls_to_match_patterns(&[r"https?://example\.com/(?P<id>\d+)".to_string()]);
         assert_eq!(patterns, vec!["https://example.com/*".to_string()]);
         rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
     }
 
     #[test]
     fn valid_url_unparseable_falls_back_to_wildcard() {
-        let patterns = valid_url_to_match_patterns(r"some-weird-regex-without-host");
+        let patterns =
+            valid_urls_to_match_patterns(&[r"some-weird-regex-without-host".to_string()]);
         assert_eq!(patterns, vec!["*://*/*".to_string()]);
         rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
     }
@@ -713,12 +886,137 @@ mod tests {
     }
 
     #[test]
-    fn extract_valid_url_finds_pattern() {
+    fn extract_valid_urls_finds_single_pattern() {
         let src = "\nclass Foo:\n    _VALID_URL = r'https?://example\\.com/(?P<id>\\d+)'\n";
         assert_eq!(
-            extract_valid_url(src),
-            Some(r"https?://example\.com/(?P<id>\d+)".to_string())
+            extract_valid_urls(src),
+            vec![r"https?://example\.com/(?P<id>\d+)".to_string()],
         );
+    }
+
+    #[test]
+    fn extract_valid_urls_finds_multiple_classes() {
+        // SVT-like file: 3 concrete IE classes each with their own
+        // `_VALID_URL`. All three MUST be captured so the manifest's
+        // `matches=[...]` covers every class.
+        let src = "\
+class APlayIE(Base):
+    _VALID_URL = r'https?://a\\.example/play/(?P<id>\\w+)'
+
+class ASeriesIE(Base):
+    _VALID_URL = r'https?://a\\.example/series/(?P<id>\\w+)'
+
+class APageIE(Base):
+    _VALID_URL = r'https?://a\\.example/page/(?P<id>\\w+)'
+";
+        let urls = extract_valid_urls(src);
+        assert_eq!(urls.len(), 3, "expected 3 _VALID_URL captures");
+        assert!(urls.iter().any(|u| u.contains("/play/")));
+        assert!(urls.iter().any(|u| u.contains("/series/")));
+        assert!(urls.iter().any(|u| u.contains("/page/")));
+    }
+
+    #[test]
+    fn extract_valid_urls_handles_triple_quoted() {
+        // SVT uses r'''...''' for verbose regex. Single-line capture
+        // would miss this — test triple-quote support explicitly.
+        let src = r#"
+class SVTPlayIE(SVTBaseIE):
+    _VALID_URL = r'''(?x)
+                    (?:
+                        svt:|
+                        https?://(?:www\.)?svt\.se/foo/
+                    )
+                    (?P<id>[^/?#&]+)
+                    '''
+"#;
+        let urls = extract_valid_urls(src);
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].contains("svt\\.se"), "got: {:?}", urls[0]);
+    }
+
+    #[test]
+    fn extract_valid_urls_skips_docstring_examples() {
+        // A `_VALID_URL = r'...'` literal appearing inside a docstring
+        // (or any triple-quoted string that ISN'T itself the assignment)
+        // MUST NOT be captured. Otherwise the manifest's `matches=[...]`
+        // gets polluted with example URLs that don't reflect any real
+        // class. yt-dlp's own extractor docstrings sometimes show such
+        // examples — this is real-world risk.
+        let src = r#"
+class FooIE:
+    """Documents the IE.
+
+    Example:
+        _VALID_URL = r'https?://docstring-example\.com/(?P<id>\w+)'
+    """
+    _VALID_URL = r'https?://real-foo\.com/(?P<id>\w+)'
+"#;
+        let urls = extract_valid_urls(src);
+        // Exactly one match — the real assignment. The docstring
+        // example must be skipped.
+        assert_eq!(urls.len(), 1, "got {urls:?}");
+        assert!(urls[0].contains("real-foo"), "got {urls:?}");
+    }
+
+    #[test]
+    fn extract_valid_urls_skips_single_quote_docstring_example() {
+        // Same scenario, single-quoted docstring.
+        let src = r#"
+class FooIE:
+    '''Single-quoted docstring with example:
+        _VALID_URL = r'https?://docstring\.example/(?P<id>\w+)'
+    '''
+    _VALID_URL = r'https?://real\.example/(?P<id>\w+)'
+"#;
+        let urls = extract_valid_urls(src);
+        assert_eq!(urls.len(), 1, "got {urls:?}");
+        assert!(urls[0].contains(r"real\.example"), "got {urls:?}");
+    }
+
+    #[test]
+    fn extract_valid_urls_returns_empty_when_none_present() {
+        // Plain helper module without any `_VALID_URL` declaration —
+        // returns empty Vec rather than an error sentinel.
+        let src = "def helper(): return 42\n";
+        assert!(extract_valid_urls(src).is_empty());
+    }
+
+    #[test]
+    fn valid_url_to_match_patterns_unions_multiple_hosts() {
+        // Three IEs against the same host produce one deduped match
+        // pattern, not three duplicates.
+        let urls = vec![
+            r"https?://(?:www\.)?example\.com/play/(?P<id>\w+)".to_string(),
+            r"https?://(?:www\.)?example\.com/series/(?P<id>\w+)".to_string(),
+            r"https?://(?:www\.)?example\.com/page/(?P<id>\w+)".to_string(),
+        ];
+        let patterns = valid_urls_to_match_patterns(&urls);
+        // Deduped — both *.example.com and example.com appear once each
+        // even though three input URLs share the same host shape.
+        assert!(patterns.contains(&"https://*.example.com/*".to_string()));
+        assert!(patterns.contains(&"https://example.com/*".to_string()));
+        assert_eq!(patterns.len(), 2);
+    }
+
+    #[test]
+    fn valid_url_to_match_patterns_handles_distinct_hosts() {
+        let urls = vec![
+            r"https?://alpha\.example/(?P<id>\w+)".to_string(),
+            r"https?://beta\.example/(?P<id>\w+)".to_string(),
+        ];
+        let patterns = valid_urls_to_match_patterns(&urls);
+        assert!(patterns.contains(&"https://alpha.example/*".to_string()));
+        assert!(patterns.contains(&"https://beta.example/*".to_string()));
+        assert_eq!(patterns.len(), 2);
+    }
+
+    #[test]
+    fn valid_url_to_match_patterns_empty_input_returns_wildcard() {
+        // No `_VALID_URL` found anywhere — fall back to wildcard so the
+        // author gets the same warning path as before, not a panic.
+        let patterns = valid_urls_to_match_patterns(&[]);
+        assert_eq!(patterns, vec!["*://*/*".to_string()]);
     }
 
     #[test]
@@ -741,7 +1039,21 @@ mod tests {
         assert_eq!(manifest.name, "test-plugin");
         assert_eq!(manifest.matches, vec!["https://example.com/*".to_string()]);
         assert_eq!(manifest.priority, 150);
-        assert_eq!(manifest.capabilities, vec!["fetch", "log"]);
+        // The default capability set MUST cover every interface
+        // componentize-py emits in the WIT world (instantiation fails
+        // otherwise — see the capabilities-line doc-comment in
+        // `write_manifest`).
+        assert_eq!(
+            manifest.capabilities,
+            vec![
+                "fetch",
+                "cookie-jar",
+                "js-eval",
+                "html-select",
+                "log",
+                "store-kv"
+            ],
+        );
         assert!(matches!(
             manifest.signature,
             rdlp_plugin_manifest::Signature::Ed25519 { .. }
