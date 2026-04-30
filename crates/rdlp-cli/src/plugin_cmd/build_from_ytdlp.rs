@@ -1045,7 +1045,14 @@ class FooIE:
         // `write_manifest`).
         assert_eq!(
             manifest.capabilities,
-            vec!["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+            vec![
+                "fetch",
+                "cookie-jar",
+                "js-eval",
+                "html-select",
+                "log",
+                "store-kv"
+            ],
         );
         assert!(matches!(
             manifest.signature,

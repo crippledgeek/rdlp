@@ -39,8 +39,7 @@ use tempfile::TempDir;
 // Live site issues a 301 to a slug-renamed path; the extractor still
 // matches the original via `_VALID_URL` regex which captures the numeric
 // ID portion only.
-const TEST_URL: &str =
-    "http://xxxymovies.com/videos/138669/ecstatic-orgasm-sofcore/";
+const TEST_URL: &str = "http://xxxymovies.com/videos/138669/ecstatic-orgasm-sofcore/";
 const FOLLOWED_URL: &str =
     "https://xxxymovies.com/videos/138669/ecstatic-orgasm-sofcore-with-sunny-leone/";
 const EXPECTED_VIDEO_ID: &str = "138669";
@@ -178,7 +177,14 @@ async fn xxxymovies_extract_returns_complete_info_dict() {
         // componentize-py emits IMPORTS for every interface in the WIT
         // world; the manifest must declare all six caps so the linker
         // wires every import the wasm references.
-        &["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+        &[
+            "fetch",
+            "cookie-jar",
+            "js-eval",
+            "html-select",
+            "log",
+            "store-kv",
+        ],
     );
 
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
