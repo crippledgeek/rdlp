@@ -260,6 +260,20 @@ class TestSearchJson:
         result = ie._search_json(r"var x\s*=", html, "x", "vid")
         assert result == {"a": {"b": [1, 2, 3]}, "c": "d"}
 
+    def test_no_default_no_match_returns_empty_dict(self):
+        """Pin upstream's `default=NO_DEFAULT, fatal=False` behaviour:
+        when no default is supplied, miss returns `{}` (not None). The
+        empty-dict choice lets ported code do `if data:` checks safely.
+        Upstream `extractor/common.py:1356` rebinds `default = {}` when
+        NO_DEFAULT is passed in.
+        """
+        ie = _ExampleIE()
+        # fatal=False and no default → no raise, return is {} per upstream
+        result = ie._search_json(
+            r"NOPE", "irrelevant", "x", "vid", fatal=False,
+        )
+        assert result == {}
+
 
 class TestSearchNextjsData:
     def test_extracts_next_data(self):
@@ -334,6 +348,36 @@ class TestGeoVerificationHeaders:
         # we don't ship YoutubeDL params, so always empty in shim.
         result = ie.geo_verification_headers()
         assert isinstance(result, dict)
+
+
+class TestParseJsonKwargFiltering:
+    """yt-dlp's `_parse_json` upstream uses `LenientJSONDecoder` which
+    accepts `ignore_extra=True` and `strict=False`. Our shim wraps
+    stdlib `json.loads` which has neither kwarg. Forwarding them
+    blindly causes TypeError at the boundary; the shim must silently
+    drop yt-dlp-specific decoder kwargs while still honouring stdlib
+    `json.loads` ones."""
+
+    def test_ignore_extra_silently_dropped(self):
+        ie = _ExampleIE()
+        # MUST NOT raise TypeError("unexpected keyword 'ignore_extra'").
+        result = ie._parse_json('{"a": 1}', "vid", ignore_extra=True)
+        assert result == {"a": 1}
+
+    def test_strict_silently_dropped(self):
+        ie = _ExampleIE()
+        result = ie._parse_json('{"a": 1}', "vid", strict=False)
+        assert result == {"a": 1}
+
+    def test_real_kwargs_still_forwarded(self):
+        # `parse_float` is a real `json.loads` kwarg — verify it still
+        # reaches the underlying call after our filter.
+        ie = _ExampleIE()
+        result = ie._parse_json(
+            '{"x": 1.5}', "vid",
+            parse_float=lambda s: f"FLOAT({s})",
+        )
+        assert result == {"x": "FLOAT(1.5)"}
 
 
 class TestDownloadWebpageQuery:

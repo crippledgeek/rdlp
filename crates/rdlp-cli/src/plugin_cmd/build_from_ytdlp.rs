@@ -161,12 +161,14 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
 /// mode is line-broken across many physical lines and the single-quote
 /// form (`[^'"]+`) cannot capture that. Triple-quote support is a Slice-2
 /// requirement, NOT a future enhancement.
+///
+/// Filters out matches that occur INSIDE a docstring or other
+/// triple-quoted string literal. Detection is heuristic: count
+/// occurrences of `"""` and `'''` before each candidate match position;
+/// if either count is odd, we're inside an unclosed triple-quote (a
+/// docstring) and skip. This handles yt-dlp's pattern of putting
+/// `_VALID_URL = r'...'` examples inside class/module docstrings.
 fn extract_valid_urls(source: &str) -> Vec<String> {
-    // Two passes: triple-quoted FIRST (otherwise the single-quote regex
-    // would match the opening triple-quote pair as an empty string).
-    // `(?s)` enables dot-matches-newline for the body of the triple
-    // string. Each capture group greedy-matches up to the closing
-    // triple delimiter.
     let triple = Regex::new(
         r#"(?ms)^\s*_VALID_URL\s*=\s*r?(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")"#,
     )
@@ -179,6 +181,13 @@ fn extract_valid_urls(source: &str) -> Vec<String> {
 
     for cap in triple.captures_iter(source) {
         let m = cap.get(0).unwrap();
+        if is_inside_triple_quote(source, m.start()) {
+            // Triple-quoted `_VALID_URL` example inside a docstring.
+            // Mark the range as consumed so the single-quote pass
+            // doesn't pick up a sub-fragment, but DON'T add to output.
+            consumed_ranges.push((m.start(), m.end()));
+            continue;
+        }
         consumed_ranges.push((m.start(), m.end()));
         let body = cap
             .get(1)
@@ -189,17 +198,34 @@ fn extract_valid_urls(source: &str) -> Vec<String> {
     }
     for cap in single.captures_iter(source) {
         let m = cap.get(0).unwrap();
-        // Skip captures that overlap a triple-quoted range we already
-        // consumed (the opening `r'` of `r'''` would otherwise be hit).
+        // Skip captures inside a triple-quoted range we already saw.
         if consumed_ranges
             .iter()
             .any(|&(s, e)| m.start() >= s && m.start() < e)
         {
             continue;
         }
+        if is_inside_triple_quote(source, m.start()) {
+            continue;
+        }
         out.push(cap[1].to_string());
     }
     out
+}
+
+/// Returns true when `position` falls inside an unclosed triple-quoted
+/// string literal. Counts `"""` and `'''` occurrences in the prefix; an
+/// odd count of either means we're inside a still-open string.
+///
+/// Heuristic: ignores the case of mixed nested triple-quote chars
+/// (e.g. `'''...""".....'''` would count `"""` as 1). yt-dlp source
+/// files don't exercise that pattern; if a real plugin does, the
+/// author can hand-edit the manifest.
+fn is_inside_triple_quote(source: &str, position: usize) -> bool {
+    let prefix = &source[..position];
+    let triple_double = prefix.matches("\"\"\"").count();
+    let triple_single = prefix.matches("'''").count();
+    triple_double % 2 == 1 || triple_single % 2 == 1
 }
 
 /// Convert a slice of yt-dlp `_VALID_URL` regex strings to Chrome-style
@@ -854,6 +880,45 @@ class SVTPlayIE(SVTBaseIE):
         let urls = extract_valid_urls(src);
         assert_eq!(urls.len(), 1);
         assert!(urls[0].contains("svt\\.se"), "got: {:?}", urls[0]);
+    }
+
+    #[test]
+    fn extract_valid_urls_skips_docstring_examples() {
+        // A `_VALID_URL = r'...'` literal appearing inside a docstring
+        // (or any triple-quoted string that ISN'T itself the assignment)
+        // MUST NOT be captured. Otherwise the manifest's `matches=[...]`
+        // gets polluted with example URLs that don't reflect any real
+        // class. yt-dlp's own extractor docstrings sometimes show such
+        // examples — this is real-world risk.
+        let src = r#"
+class FooIE:
+    """Documents the IE.
+
+    Example:
+        _VALID_URL = r'https?://docstring-example\.com/(?P<id>\w+)'
+    """
+    _VALID_URL = r'https?://real-foo\.com/(?P<id>\w+)'
+"#;
+        let urls = extract_valid_urls(src);
+        // Exactly one match — the real assignment. The docstring
+        // example must be skipped.
+        assert_eq!(urls.len(), 1, "got {urls:?}");
+        assert!(urls[0].contains("real-foo"), "got {urls:?}");
+    }
+
+    #[test]
+    fn extract_valid_urls_skips_single_quote_docstring_example() {
+        // Same scenario, single-quoted docstring.
+        let src = r#"
+class FooIE:
+    '''Single-quoted docstring with example:
+        _VALID_URL = r'https?://docstring\.example/(?P<id>\w+)'
+    '''
+    _VALID_URL = r'https?://real\.example/(?P<id>\w+)'
+"#;
+        let urls = extract_valid_urls(src);
+        assert_eq!(urls.len(), 1, "got {urls:?}");
+        assert!(urls[0].contains(r"real\.example"), "got {urls:?}");
     }
 
     #[test]

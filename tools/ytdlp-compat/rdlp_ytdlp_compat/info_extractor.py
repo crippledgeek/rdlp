@@ -495,11 +495,26 @@ class InfoExtractor:
 
     def _parse_json(self, json_string, video_id, transform_source=None,
                     fatal=True, errnote=None, **parser_kwargs):
-        """yt-dlp's _parse_json. NOTE: yt-dlp has no `lenient` kwarg — it always
-        uses LenientJSONDecoder with strict=False. **parser_kwargs lets callers
-        pass `ignore_extra=True` etc. to the underlying decoder."""
+        """yt-dlp's _parse_json. NOTE: yt-dlp's upstream impl wraps
+        `LenientJSONDecoder` which accepts `ignore_extra=True` (allow
+        trailing data) and `strict=False` (allow control chars). Our
+        shim defers to stdlib `json.loads` which has NEITHER kwarg —
+        forwarding them blindly raises TypeError at the boundary.
+
+        Filter the yt-dlp-specific decoder kwargs out before forwarding
+        so callers from ported extractors don't break. The trade-off:
+        we lose the "lenient" behaviour, so an extractor relying on
+        trailing-data tolerance will fail. SVT's JSON payloads are
+        well-formed, so the loss is acceptable for Slice 2; a Slice
+        2.5 fix could reimplement LenientJSONDecoder in pure Python."""
         if transform_source is not None:
             json_string = transform_source(json_string)
+        # Drop yt-dlp's LenientJSONDecoder-only kwargs. List them
+        # explicitly so a typo'd kwarg still surfaces as TypeError
+        # (the goal is to shield callers from yt-dlp idioms, not to
+        # silently swallow every unknown kwarg).
+        for k in ("ignore_extra", "strict", "lenient"):
+            parser_kwargs.pop(k, None)
         try:
             return _json.loads(json_string, **parser_kwargs)
         except (TypeError, ValueError) as e:
