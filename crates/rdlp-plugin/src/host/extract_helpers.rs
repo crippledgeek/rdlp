@@ -13,12 +13,10 @@ use wasmtime::component::Linker;
 
 static RE_WHITESPACE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+").expect("valid whitespace pattern"));
-static RE_BR: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"\s?<\s?br\s?/?\s?>\s?").expect("valid <br> pattern")
-});
-static RE_P: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"<\s?/\s?p\s?>\s?<\s?p[^>]*>").expect("valid <p> pattern")
-});
+static RE_BR: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\s?<\s?br\s?/?\s?>\s?").expect("valid <br> pattern"));
+static RE_P: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"<\s?/\s?p\s?>\s?<\s?p[^>]*>").expect("valid <p> pattern"));
 static RE_TAGS: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"<.*?>").expect("valid tag-strip pattern"));
 
@@ -42,7 +40,9 @@ fn clean_html(html: &str) -> String {
     let no_br = RE_BR.replace_all(&collapsed, "\n");
     let no_p = RE_P.replace_all(&no_br, "\n");
     let no_tags = RE_TAGS.replace_all(&no_p, "");
-    html_escape::decode_html_entities(&no_tags).trim().to_string()
+    html_escape::decode_html_entities(&no_tags)
+        .trim()
+        .to_string()
 }
 
 /// Wire `host:extract-helpers` into a linker.
@@ -84,14 +84,15 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         // Tries content-after AND content-before patterns.
         let escaped = regex::escape(&name);
         let attrs = "(?:itemprop|name|property|id|http-equiv)";
-        let pat1 = format!(
-            r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#
-        );
-        let pat2 = format!(
-            r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#
-        );
+        let pat1 =
+            format!(r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#);
+        let pat2 =
+            format!(r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#);
         for pat in [&pat1, &pat2] {
-            let re = regex::RegexBuilder::new(pat).case_insensitive(true).build().ok()?;
+            let re = regex::RegexBuilder::new(pat)
+                .case_insensitive(true)
+                .build()
+                .ok()?;
             if let Some(m) = re.captures(&html)
                 && let Some(g) = m.get(1)
             {
@@ -114,9 +115,8 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         // does not support lookaheads, so this is the correct no-lookahead form.
         let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)'|([^\s"'=<>`]+))"#;
         let sep = r"(?:&#x3A;|[:-])";
-        let property_re = format!(
-            r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#
-        );
+        let property_re =
+            format!(r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#);
         let templates = [
             format!(r#"<meta[^>]+?{property_re}[^>]+?{content_re}"#),
             format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
@@ -159,7 +159,9 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         ];
         let mut age_limit: Option<u8> = None;
         for m in markers {
-            let Some(re) = regex::Regex::new(m).ok() else { continue };
+            let Some(re) = regex::Regex::new(m).ok() else {
+                continue;
+            };
             if let Some(cap) = re.captures(&html) {
                 let val: u8 = cap
                     .get(1)
@@ -179,9 +181,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
     ) -> Option<String> {
         // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
         // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
-        let full = format!(
-            r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})"
-        );
+        let full = format!(r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})");
         let re = regex::Regex::new(&full).ok()?;
         let cap = re.captures(&haystack)?;
         let json = cap.name("json")?.as_str();
@@ -211,8 +211,8 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                 timeout_ms: Some(30_000),
             };
             let resp = self.fetch(req).await?;
-            let body = String::from_utf8(resp.body)
-                .map_err(|e| FetchError::Network(e.to_string()))?;
+            let body =
+                String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
             let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
                 .map_err(FetchError::Network)?;
             let formats: Vec<M3u8Format> = variants
@@ -293,8 +293,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             duration,
             view_count: rdlp_extractor::base::common::json_ld::extract_view_count(&v),
             like_count: rdlp_extractor::base::common::json_ld::extract_like_count(&v),
-            tags: rdlp_extractor::base::common::json_ld::extract_tags(&v)
-                .unwrap_or_default(),
+            tags: rdlp_extractor::base::common::json_ld::extract_tags(&v).unwrap_or_default(),
             categories: rdlp_extractor::base::common::json_ld::extract_categories(&v)
                 .unwrap_or_default(),
         })
@@ -378,128 +377,147 @@ mod tests {
     #[tokio::test]
     async fn html_search_meta_property_form() {
         let mut c = ctx();
-        let r = c.html_search_meta(
-            "og:title".to_string(),
-            r#"<meta property="og:title" content="Hello"/>"#.to_string(),
-        ).await;
+        let r = c
+            .html_search_meta(
+                "og:title".to_string(),
+                r#"<meta property="og:title" content="Hello"/>"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("Hello".to_string()));
     }
 
     #[tokio::test]
     async fn html_search_meta_name_form() {
         let mut c = ctx();
-        let r = c.html_search_meta(
-            "description".to_string(),
-            r#"<meta name="description" content="Page text"/>"#.to_string(),
-        ).await;
+        let r = c
+            .html_search_meta(
+                "description".to_string(),
+                r#"<meta name="description" content="Page text"/>"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("Page text".to_string()));
     }
 
     #[tokio::test]
     async fn html_search_meta_missing_returns_none() {
         let mut c = ctx();
-        let r = c.html_search_meta(
-            "nope".to_string(),
-            "<html></html>".to_string(),
-        ).await;
+        let r = c
+            .html_search_meta("nope".to_string(), "<html></html>".to_string())
+            .await;
         assert_eq!(r, None);
     }
 
     #[tokio::test]
     async fn og_search_property_extracts_title() {
         let mut c = ctx();
-        let r = c.og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="My Video"/>"#.to_string(),
-        ).await;
+        let r = c
+            .og_search_property(
+                "title".to_string(),
+                r#"<meta property="og:title" content="My Video"/>"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("My Video".to_string()));
     }
 
     #[tokio::test]
     async fn og_search_property_extracts_image() {
         let mut c = ctx();
-        let r = c.og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
-        ).await;
+        let r = c
+            .og_search_property(
+                "image".to_string(),
+                r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
     }
 
     #[tokio::test]
     async fn og_search_property_unescapes_entities() {
         let mut c = ctx();
-        let r = c.og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
-        ).await;
+        let r = c
+            .og_search_property(
+                "title".to_string(),
+                r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("A & B".to_string()));
     }
 
     #[tokio::test]
     async fn og_search_property_extracts_unquoted_value() {
         let mut c = ctx();
-        let r = c.og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
-        ).await;
+        let r = c
+            .og_search_property(
+                "image".to_string(),
+                r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
     }
 
     #[tokio::test]
     async fn rta_search_official_meta_returns_18() {
         let mut c = ctx();
-        let r = c.rta_search(
-            r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string(),
-        ).await;
+        let r = c
+            .rta_search(r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string())
+            .await;
         assert_eq!(r, Some(18));
     }
 
     #[tokio::test]
     async fn rta_search_2257_marker_returns_18() {
         let mut c = ctx();
-        let r = c.rta_search(
-            "footer text > 18 U.S.C. § 2257 statement".to_string(),
-        ).await;
+        let r = c
+            .rta_search("footer text > 18 U.S.C. § 2257 statement".to_string())
+            .await;
         assert_eq!(r, Some(18));
     }
 
     #[tokio::test]
     async fn rta_search_no_marker_returns_none() {
         let mut c = ctx();
-        let r = c.rta_search("<html><body>nothing</body></html>".to_string()).await;
+        let r = c
+            .rta_search("<html><body>nothing</body></html>".to_string())
+            .await;
         assert_eq!(r, None);
     }
 
     #[tokio::test]
     async fn search_json_extracts_simple_object() {
         let mut c = ctx();
-        let r = c.search_json(
-            r"var data\s*=".to_string(),
-            ";".to_string(),
-            r#"var data = {"key": "value"};"#.to_string(),
-        ).await;
+        let r = c
+            .search_json(
+                r"var data\s*=".to_string(),
+                ";".to_string(),
+                r#"var data = {"key": "value"};"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some(r#"{"key": "value"}"#.to_string()));
     }
 
     #[tokio::test]
     async fn search_json_handles_nested() {
         let mut c = ctx();
-        let r = c.search_json(
-            r"var x\s*=".to_string(),
-            ";".to_string(),
-            r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
-        ).await;
+        let r = c
+            .search_json(
+                r"var x\s*=".to_string(),
+                ";".to_string(),
+                r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
+            )
+            .await;
         assert_eq!(r, Some(r#"{"a": {"b": [1,2,3]}}"#.to_string()));
     }
 
     #[tokio::test]
     async fn search_json_no_match_returns_none() {
         let mut c = ctx();
-        let r = c.search_json(
-            r"NOPE".to_string(),
-            "".to_string(),
-            "irrelevant".to_string(),
-        ).await;
+        let r = c
+            .search_json(
+                r"NOPE".to_string(),
+                "".to_string(),
+                "irrelevant".to_string(),
+            )
+            .await;
         assert_eq!(r, None);
     }
 
@@ -514,12 +532,10 @@ mod tests {
 #EXTM3U\n\
 #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n\
 hi.m3u8\n";
-        let fixtures = Arc::new(
-            FetchFixtures::new().with(
-                "https://x.com/master.m3u8",
-                FixtureResponse::ok(master.as_bytes().to_vec()),
-            ),
-        );
+        let fixtures = Arc::new(FetchFixtures::new().with(
+            "https://x.com/master.m3u8",
+            FixtureResponse::ok(master.as_bytes().to_vec()),
+        ));
         c.fetch = Some(crate::host::fetch::FetchCtx {
             client: rdlp_http::wreq::Client::builder()
                 .build()

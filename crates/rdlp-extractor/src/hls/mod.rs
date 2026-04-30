@@ -95,13 +95,10 @@ pub struct M3u8Variant {
 /// `master_url`. Returns an empty Vec if `text` is a media playlist
 /// (yt-dlp's `_extract_m3u8_formats_and_subtitles` handles media
 /// playlists via a different code path).
-pub fn parse_master_playlist(
-    master_url: &str,
-    text: &str,
-) -> Result<Vec<M3u8Variant>, String> {
+pub fn parse_master_playlist(master_url: &str, text: &str) -> Result<Vec<M3u8Variant>, String> {
     use m3u8_rs::Playlist;
-    let parsed = m3u8_rs::parse_playlist_res(text.as_bytes())
-        .map_err(|e| format!("parse m3u8: {e:?}"))?;
+    let parsed =
+        m3u8_rs::parse_playlist_res(text.as_bytes()).map_err(|e| format!("parse m3u8: {e:?}"))?;
     let master = match parsed {
         Playlist::MasterPlaylist(m) => m,
         Playlist::MediaPlaylist(_) => return Ok(Vec::new()),
@@ -147,9 +144,7 @@ fn split_codecs(codecs: Option<&str>) -> (Option<String>, Option<String>) {
     let mut a = None;
     for tok in s.split(',') {
         let t = tok.trim();
-        if v.is_none()
-            && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp"))
-        {
+        if v.is_none() && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp")) {
             v = Some(t.to_string());
         } else if a.is_none()
             && (t.starts_with("mp4a") || t.starts_with("opus") || t.starts_with("aac"))
