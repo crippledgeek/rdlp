@@ -992,6 +992,45 @@ class InfoExtractor:
         )
         return [], {}
 
+    def _search_json_ld(self, html, video_id, expected_type=None, *,
+                        fatal=True, default=NO_DEFAULT):
+        """Slice-2.5 passthrough to host-extract-helpers.extract-json-ld.
+        Returns yt-dlp's typed dict shape directly from the host-side
+        rdlp_extractor::base::common::json_ld extractor."""
+        try:
+            result = _host.extract_json_ld(html)
+        except RuntimeError:
+            # Outside componentize-py runtime.
+            if default is NO_DEFAULT:
+                if fatal:
+                    from rdlp_ytdlp_compat._errors import ExtractorError
+                    raise ExtractorError("Unable to extract JSON-LD",
+                                         video_id=video_id)
+                return {}
+            return default
+        if result is None:
+            if default is NO_DEFAULT:
+                if fatal:
+                    from rdlp_ytdlp_compat._errors import ExtractorError
+                    raise ExtractorError("Unable to extract JSON-LD",
+                                         video_id=video_id)
+                return {}
+            return default
+        # Convert WIT JsonLdVideo record to yt-dlp dict shape
+        out = {}
+        for attr in ("title", "description", "thumbnail", "upload_date",
+                     "duration", "view_count", "like_count"):
+            v = getattr(result, attr, None)
+            if v is not None:
+                out[attr] = v
+        if result.thumbnails:
+            out["thumbnails"] = [{"url": u} for u in result.thumbnails]
+        if result.tags:
+            out["tags"] = list(result.tags)
+        if result.categories:
+            out["categories"] = list(result.categories)
+        return out
+
     def _set_cookie(self, domain, name, value, path="/", expires=None,
                     secure=False, http_only=False):
         """Slice-2.5 passthrough to existing host-cookie-jar capability.

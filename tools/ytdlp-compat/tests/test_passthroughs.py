@@ -96,6 +96,20 @@ def test_set_cookie_calls_host_cookie_jar(monkeypatch, ie):
     assert captured["cookie"].value == "abc123"
 
 
+def test_search_json_ld_calls_host(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+    class FakeJsonLd:
+        title = "T"; description = "d"
+        thumbnail = "https://x/t.jpg"; thumbnails = []
+        upload_date = "20240101"; duration = 300
+        view_count = 100; like_count = 5
+        tags = []; categories = []
+    monkeypatch.setattr(_host, "extract_json_ld", lambda html: FakeJsonLd())
+    result = ie._search_json_ld("<html/>", "vid")
+    assert result["title"] == "T"
+    assert result["duration"] == 300
+
+
 def test_extract_m3u8_calls_host(monkeypatch, ie):
     from rdlp_ytdlp_compat import _host
     class FakeFormat:
