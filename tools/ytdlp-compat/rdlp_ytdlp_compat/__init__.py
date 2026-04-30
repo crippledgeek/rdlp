@@ -27,6 +27,7 @@ from rdlp_ytdlp_compat._utils import (
     require,
     sanitize_filename,
     sanitize_path,
+    str_to_int,
     url_or_none,
     variadic,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "dict_get",
     "parse_duration",
     "require",
+    "str_to_int",
     "url_or_none",
     "variadic",
 ]

@@ -284,6 +284,30 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def str_to_int(s):
+    """yt-dlp's `str_to_int` (utils/_utils.py). Parses 'human' integer
+    strings: '1,234' / '1.5K' / '2M' / '3B' / plain digits. Truncates
+    decimals (yt-dlp's behaviour). Returns None on parse failure."""
+    if s is None:
+        return None
+    if not isinstance(s, str):
+        try:
+            return int(s)
+        except (TypeError, ValueError):
+            return None
+    cleaned = s.replace(",", "").strip()
+    if not cleaned:
+        return None
+    multiplier = 1
+    if cleaned[-1].upper() in ("K", "M", "B"):
+        multiplier = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[cleaned[-1].upper()]
+        cleaned = cleaned[:-1]
+    try:
+        return int(float(cleaned) * multiplier)
+    except (ValueError, TypeError):
+        return None
+
+
 def url_or_none(s):
     """yt-dlp's `url_or_none` (utils/_utils.py). Returns the input if
     it's a usable URL (http/https/protocol-relative/data:), else None.
