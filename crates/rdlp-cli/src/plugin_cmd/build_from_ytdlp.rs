@@ -357,8 +357,7 @@ fn stage_build_dir(
 const YT_DLP_INIT_PY: &str = "\"\"\"rdlp shim — fake yt_dlp package staged by \
 build-from-ytdlp.\"\"\"\n__version__ = \"rdlp-shim/0.2\"\n";
 
-const EXTRACTOR_COMMON_PY: &str =
-    "from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n";
+const EXTRACTOR_COMMON_PY: &str = "from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n";
 
 const UTILS_INIT_PY: &str = "\
 from .traversal import *  # noqa: F401, F403
