@@ -991,3 +991,21 @@ class InfoExtractor:
             "returning empty pair",
         )
         return [], {}
+
+    def _set_cookie(self, domain, name, value, path="/", expires=None,
+                    secure=False, http_only=False):
+        """Slice-2.5 passthrough to existing host-cookie-jar capability.
+        Constructs a cookie record from yt-dlp's flat-arg API and calls
+        `_host.cookie_jar.set_cookie(url, cookie)`."""
+        url = f"https://{domain}/"
+        cookie = _host.Cookie(
+            name=name, value=value, domain=domain, path=path,
+            secure=secure, http_only=http_only, expires=expires,
+        )
+        _host.cookie_jar.set_cookie(url, cookie)
+
+    def _set_age_cookies(self, domain):
+        """Convenience wrapper — many adult sites require an age-gate
+        cookie. Sets a generic 'is_adult=1' / 'age_verified=1' cookie."""
+        for name in ("is_adult", "age_verified"):
+            self._set_cookie(domain, name, "1")

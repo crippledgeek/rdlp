@@ -81,6 +81,21 @@ def test_search_json_calls_host(monkeypatch, ie):
     assert result == {"x": 1}
 
 
+def test_set_cookie_calls_host_cookie_jar(monkeypatch, ie):
+    captured = {}
+    def fake_set_cookie(url, cookie):
+        captured["url"] = url; captured["cookie"] = cookie
+    from rdlp_ytdlp_compat import _host
+    fake_jar = type("J", (), {"set_cookie": staticmethod(fake_set_cookie)})()
+    monkeypatch.setattr(_host, "cookie_jar", fake_jar, raising=False)
+
+    ie._set_cookie("example.com", "sessionid", "abc123")
+
+    assert captured["url"] == "https://example.com/"
+    assert captured["cookie"].name == "sessionid"
+    assert captured["cookie"].value == "abc123"
+
+
 def test_extract_m3u8_calls_host(monkeypatch, ie):
     from rdlp_ytdlp_compat import _host
     class FakeFormat:

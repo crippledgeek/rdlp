@@ -214,3 +214,32 @@ def extract_json_ld(html):
     if not _HXH_AVAILABLE:
         raise RuntimeError("_host.extract_json_ld called outside componentize-py runtime")
     return _hxh.extract_json_ld(html)
+
+
+class Cookie:
+    """Simple cookie record — used by `_set_cookie` to avoid importing the
+    WIT-generated Cookie type in unit tests (outside componentize-py)."""
+
+    def __init__(self, *, name, value, domain, path="/",
+                 secure=False, http_only=False, expires=None):
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.secure = secure
+        self.http_only = http_only
+        self.expires = expires
+
+
+class _CookieJarFacade:
+    """Lazy facade — actual cookie-jar bindings live at extractor_plugin.imports.host_cookie_jar."""
+    def set_cookie(self, url, cookie):
+        from extractor_plugin.imports import host_cookie_jar
+        return host_cookie_jar.set_cookie(url, cookie)
+
+    def get_cookies(self, url):
+        from extractor_plugin.imports import host_cookie_jar
+        return host_cookie_jar.get_cookies(url)
+
+
+cookie_jar = _CookieJarFacade()
