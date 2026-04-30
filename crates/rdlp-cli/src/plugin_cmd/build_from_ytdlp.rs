@@ -324,14 +324,69 @@ fn stage_build_dir(
     let compat_dst = build_dir.join("rdlp_ytdlp_compat");
     copy_dir_all(&compat_pkg, &compat_dst)?;
 
-    // Copy user plugin
-    std::fs::copy(plugin_py, build_dir.join("user_plugin.py"))?;
+    // Slice-2.5: stage the user's plugin into a fake yt_dlp/ package
+    // so upstream relative imports (`from .common import InfoExtractor`,
+    // `from ..utils import ...`) resolve unchanged.
+    let yt_dlp_root = build_dir.join("yt_dlp");
+    std::fs::create_dir_all(yt_dlp_root.join("extractor"))?;
+    std::fs::create_dir_all(yt_dlp_root.join("utils"))?;
 
-    // _entry.py — auto-generated wrapper
+    std::fs::write(yt_dlp_root.join("__init__.py"), YT_DLP_INIT_PY)?;
+    std::fs::write(yt_dlp_root.join("extractor/__init__.py"), b"")?;
+    std::fs::write(yt_dlp_root.join("extractor/common.py"), EXTRACTOR_COMMON_PY)?;
+    std::fs::write(yt_dlp_root.join("utils/__init__.py"), UTILS_INIT_PY)?;
+    std::fs::write(yt_dlp_root.join("utils/_utils.py"), UTILS_HELPERS_PY)?;
+    std::fs::write(yt_dlp_root.join("utils/traversal.py"), UTILS_TRAVERSAL_PY)?;
+
+    let stem = plugin_py
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("invalid plugin filename")?;
+    std::fs::copy(
+        plugin_py,
+        yt_dlp_root.join("extractor").join(format!("{stem}.py")),
+    )?;
+
+    // _entry.py — auto-generated wrapper (stem substituted in Task 29)
     std::fs::write(build_dir.join("_entry.py"), ENTRY_TEMPLATE)?;
 
     Ok(())
 }
+
+const YT_DLP_INIT_PY: &str = "\"\"\"rdlp shim — fake yt_dlp package staged by \
+build-from-ytdlp.\"\"\"\n__version__ = \"rdlp-shim/0.2\"\n";
+
+const EXTRACTOR_COMMON_PY: &str =
+    "from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n";
+
+const UTILS_INIT_PY: &str = "\
+from .traversal import *  # noqa: F401, F403
+from ._utils import *     # noqa: F401, F403
+";
+
+/// `yt_dlp/utils/_utils.py` — re-exports the helpers that live in
+/// `rdlp_ytdlp_compat._utils`. Note: `traverse_obj`, `require`,
+/// `int_or_none`, `try_get`, `urljoin`, `unified_timestamp` live in
+/// `rdlp_ytdlp_compat.info_extractor` (not `_utils`).
+const UTILS_HELPERS_PY: &str = "\
+from rdlp_ytdlp_compat._utils import (  # noqa: F401
+    clean_html, determine_ext, dict_get, format_field,
+    merge_dicts, parse_duration, sanitize_filename, sanitize_path,
+    str_to_int, unified_strdate, url_or_none, variadic,
+)
+from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
+    int_or_none, try_get, unified_timestamp, urljoin,
+)
+";
+
+/// `yt_dlp/utils/traversal.py` — re-exports traversal helpers.
+/// Both `traverse_obj` and `require` live in `rdlp_ytdlp_compat.info_extractor`.
+const UTILS_TRAVERSAL_PY: &str = "\
+from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
+    traverse_obj, require,
+)
+from rdlp_ytdlp_compat._utils import dict_get  # noqa: F401
+";
 
 /// Auto-generated `_entry.py` body — wraps the user's yt-dlp-style
 /// `InfoExtractor` subclass and adapts it to the WIT `extractor-plugin`
@@ -1017,6 +1072,29 @@ class FooIE:
         // author gets the same warning path as before, not a panic.
         let patterns = valid_urls_to_match_patterns(&[]);
         assert_eq!(patterns, vec!["*://*/*".to_string()]);
+    }
+
+    #[test]
+    fn stage_build_dir_creates_fake_yt_dlp_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin = tmp.path().join("foo.py");
+        std::fs::write(&plugin, "from rdlp_ytdlp_compat import InfoExtractor\n").unwrap();
+        let workspace = locate_workspace_root().unwrap();
+        let wit = workspace.join("crates/rdlp-plugin/wit");
+        let build = tmp.path().join("build");
+        std::fs::create_dir(&build).unwrap();
+        stage_build_dir(&build, &plugin, &workspace, &wit).unwrap();
+        // The fake yt-dlp tree must exist.
+        assert!(build.join("yt_dlp/__init__.py").exists());
+        assert!(build.join("yt_dlp/extractor/__init__.py").exists());
+        assert!(build.join("yt_dlp/extractor/common.py").exists());
+        assert!(build.join("yt_dlp/extractor/foo.py").exists());
+        assert!(build.join("yt_dlp/utils/__init__.py").exists());
+        assert!(build.join("yt_dlp/utils/_utils.py").exists());
+        assert!(build.join("yt_dlp/utils/traversal.py").exists());
+        let plugin_staged = std::fs::read(build.join("yt_dlp/extractor/foo.py")).unwrap();
+        let plugin_orig = std::fs::read(&plugin).unwrap();
+        assert_eq!(plugin_staged, plugin_orig);
     }
 
     #[test]
