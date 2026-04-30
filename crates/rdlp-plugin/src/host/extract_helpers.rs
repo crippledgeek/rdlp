@@ -362,7 +362,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         ];
         let mut age_limit: Option<u8> = None;
         for m in markers {
-            let re = regex::Regex::new(m).ok()?;
+            let Some(re) = regex::Regex::new(m).ok() else { continue };
             if let Some(cap) = re.captures(&html) {
                 let val: u8 = cap
                     .get(1)
