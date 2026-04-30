@@ -255,7 +255,7 @@ jobs:
               - '.github/workflows/ci.yml'
 
   ytdlp-plugin-golden:
-    name: yt-dlp Plugin Golden Build
+    name: Run Golden Build
     needs: [build-and-test, golden-filter]
     # Always run on push (merges into develop) and on workflow_dispatch
     # (manual reruns must exercise the golden — that's the one case where
