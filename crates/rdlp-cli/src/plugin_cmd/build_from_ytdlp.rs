@@ -366,9 +366,15 @@ from ._utils import *     # noqa: F401, F403
 ";
 
 /// `yt_dlp/utils/_utils.py` — re-exports the helpers that live in
-/// `rdlp_ytdlp_compat._utils`. Note: `traverse_obj`, `require`,
-/// `int_or_none`, `try_get`, `urljoin`, `unified_timestamp` live in
-/// `rdlp_ytdlp_compat.info_extractor` (not `_utils`).
+/// `rdlp_ytdlp_compat._utils` and `rdlp_ytdlp_compat.info_extractor`.
+///
+/// Module mapping (verified against the shim source):
+/// - `rdlp_ytdlp_compat._utils`: `clean_html`, `determine_ext`, `dict_get`,
+///   `format_field`, `merge_dicts`, `parse_duration`, `sanitize_filename`,
+///   `sanitize_path`, `str_to_int`, `unified_strdate`, `url_or_none`,
+///   `variadic`
+/// - `rdlp_ytdlp_compat.info_extractor`: `int_or_none`, `try_get`,
+///   `unified_timestamp`, `urljoin`
 const UTILS_HELPERS_PY: &str = "\
 from rdlp_ytdlp_compat._utils import (  # noqa: F401
     clean_html, determine_ext, dict_get, format_field,
@@ -381,12 +387,17 @@ from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
 ";
 
 /// `yt_dlp/utils/traversal.py` — re-exports traversal helpers.
-/// Both `traverse_obj` and `require` live in `rdlp_ytdlp_compat.info_extractor`.
+///
+/// Module mapping (verified against the shim source):
+/// - `rdlp_ytdlp_compat.info_extractor`: `traverse_obj`
+/// - `rdlp_ytdlp_compat._utils`: `dict_get`, `require`
 const UTILS_TRAVERSAL_PY: &str = "\
 from rdlp_ytdlp_compat.info_extractor import (  # noqa: F401
-    traverse_obj, require,
+    traverse_obj,
 )
-from rdlp_ytdlp_compat._utils import dict_get  # noqa: F401
+from rdlp_ytdlp_compat._utils import (  # noqa: F401
+    dict_get, require,
+)
 ";
 
 /// Auto-generated `_entry.py` body — wraps the user's yt-dlp-style
@@ -1098,6 +1109,16 @@ class FooIE:
         let plugin_staged = std::fs::read(build.join("yt_dlp/extractor/foo.py")).unwrap();
         let plugin_orig = std::fs::read(&plugin).unwrap();
         assert_eq!(plugin_staged, plugin_orig);
+        // The _entry.py placeholder must be substituted with the plugin stem.
+        let entry = std::fs::read_to_string(build.join("_entry.py")).unwrap();
+        assert!(
+            entry.contains("yt_dlp.extractor.foo"),
+            "stem not substituted in _entry.py"
+        );
+        assert!(
+            !entry.contains("{{PLUGIN_MODULE}}"),
+            "placeholder still present in _entry.py"
+        );
     }
 
     #[test]
