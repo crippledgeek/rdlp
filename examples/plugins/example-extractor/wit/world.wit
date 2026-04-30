@@ -1,5 +1,5 @@
 package example:extractor@0.1.0;
 
 world example {
-    include rdlp:plugin/extractor-plugin@0.1.0;
+    include rdlp:plugin/extractor-plugin@0.2.0;
 }
