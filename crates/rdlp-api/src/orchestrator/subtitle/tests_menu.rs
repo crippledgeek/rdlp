@@ -1,4 +1,5 @@
 //! Tests for subtitle menu building, display, and preselection
+#![allow(clippy::indexing_slicing)]
 
 use super::*;
 use rdlp_types::{InfoDict, Subtitle};

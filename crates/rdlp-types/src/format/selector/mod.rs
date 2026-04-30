@@ -1,12 +1,15 @@
 //! Format selection DSL -- yt-dlp-compatible expression parser and selector.
 //!
+//! Grammar notation uses `"..."` for literal tokens and backticks for identifiers.
+//! Double-quoted strings in the grammar below are literal tokens, not doc links.
+//!
 //! Grammar (operator precedence: `+` > `/` > `,`):
-//!   selector_list = selector ("," selector)*        -- comma: multiple format sets
+//!   `selector_list` = selector ("," selector)*        -- comma: multiple format sets
 //!   selector      = stream ("/" stream)*            -- fallback chain
 //!   stream        = atom ("+" atom)?                -- video+audio merge
-//!   atom          = (token | "(" selector_list ")") filter*
+//!   atom          = (token | "(" `selector_list` ")") filter*
 //!                 | filter+                          -- implicit "best"
-//!   token         = keyword [".N"] | extension | format_id
+//!   token         = keyword [`.N`] | extension | `format_id`
 //!   keyword       = "best" | "worst" | "b" | "w"
 //!                 | "bestvideo" | "bv" | "bv*"
 //!                 | "bestaudio" | "ba" | "ba*"
@@ -15,16 +18,16 @@
 //!                 | "all" | "mergeall"
 //!   extension     = "mp4" | "webm" | "flv" | "3gp" | "m4a"
 //!                 | "mp3" | "ogg" | "wav" | "aac"   -- bare `mp4` = best[ext=mp4]
-//!   filter        = "[" field op value "]"
+//!   filter        = `[` field op value `]`
 //!   field         = "height" | "width" | "ext" | "vcodec" | "acodec"
 //!                 | "fps" | "tbr" | "vbr" | "abr" | "asr"
-//!                 | "filesize" | "protocol" | "format_id"
-//!                 | <any_field_name>        -- arbitrary fields via Other(String)
+//!                 | "filesize" | "protocol" | "`format_id`"
+//!                 | <`any_field_name`>        -- arbitrary fields via Other(String)
 //!   op            = "<=" | ">=" | "!=" | "<" | ">" | "="
 //!                 | "^=" | "$=" | "*=" | "~="               -- string ops
 //!                 | "!^=" | "!$=" | "!*=" | "!~="           -- negated string ops
 //!                 | "<=?" | ">=?" | "!=?" | "<?" | ">?" | "=?"  -- non-fatal ops
-//!   value         = size_literal | number | string
+//!   value         = `size_literal` | number | string
 
 mod error;
 mod eval;
@@ -237,6 +240,11 @@ impl FormatSelector {
     /// Parse a format selection expression.
     ///
     /// Returns an error if the expression is empty or contains invalid syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FormatSelectError::Parse`] if the expression is empty or
+    /// contains unrecognised syntax.
     pub fn parse(expression: &str) -> Result<Self, FormatSelectError> {
         let expression = expression.trim();
         if expression.is_empty() {
@@ -283,11 +291,9 @@ impl FormatSelector {
     ///
     /// Use [`select_all`] to evaluate every comma-separated node.
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
-        if let Some(node) = self.selectors.first() {
-            eval_node(node, formats)
-        } else {
-            Vec::new()
-        }
+        self.selectors
+            .first()
+            .map_or_else(Vec::new, |node| eval_node(node, formats))
     }
 
     /// Select formats for **all** comma-separated nodes.
@@ -336,14 +342,12 @@ impl FormatSelector {
 
         let sorted_owned: Vec<Format> = sorted_refs.iter().map(|f| (*f).clone()).collect();
 
-        if let Some(node) = self.selectors.first() {
+        self.selectors.first().map_or_else(Vec::new, |node| {
             eval_node(node, &sorted_owned)
                 .into_iter()
                 .filter_map(|sf| formats.iter().find(|f| f.format_id == sf.format_id))
                 .collect()
-        } else {
-            Vec::new()
-        }
+        })
     }
 }
 
@@ -391,6 +395,13 @@ pub fn format_select<'a>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod integration_tests {
     use super::*;
     use crate::format::Codec;

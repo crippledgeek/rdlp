@@ -21,6 +21,18 @@
 //!
 //! This prevents one rdlp process from deleting another process's in-progress
 //! temp files during startup cleanup.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::case_sensitive_file_extension_comparisons`: `.lock` and `.rdlp-tmp-`
+//!   are always lowercase on all supported platforms; case-insensitive comparison
+//!   would be misleading noise here.
+//! - `clippy::unnecessary_literal_bound`: `fn name()` trait method returns literals.
+
+#![allow(
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::unnecessary_literal_bound
+)]
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -92,7 +104,7 @@ impl TempRegistry {
                 };
                 self.active
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(
                         path.to_path_buf(),
                         TempEntry {
@@ -110,7 +122,7 @@ impl TempRegistry {
         }
         self.active
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 path.to_path_buf(),
                 TempEntry {
@@ -129,7 +141,7 @@ impl TempRegistry {
         let entry = self
             .active
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(path);
         // Drop the TempEntry here → advisory lock released, fd closed.
         drop(entry);
@@ -143,7 +155,7 @@ impl TempRegistry {
     pub fn contains(&self, path: &Path) -> bool {
         self.active
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains_key(path)
     }
 
@@ -159,7 +171,7 @@ impl TempRegistry {
         let entries: Vec<(PathBuf, TempEntry)> = self
             .active
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .drain()
             .collect();
         for (path, entry) in entries {

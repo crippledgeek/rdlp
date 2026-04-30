@@ -1,4 +1,23 @@
 //! Container/codec issue detection and repair.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::indexing_slicing`: `stream_mapping[ist_index]` and
+//!   `ist_time_bases[ist_index]` are pre-allocated to `ictx.streams().count()`
+//!   and indexed only during iteration over those same streams, so bounds are
+//!   guaranteed by construction.
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types. All casts are
+//!   audited and within valid FFmpeg-returned value ranges.
+//! - `clippy::expect_used`: `octx.stream_mut(idx)` after just-added stream is
+//!   guaranteed valid by construction.
+
+#![allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::expect_used
+)]
 
 use std::path::Path;
 
@@ -49,7 +68,7 @@ pub enum FixupIssue {
 impl FixupIssue {
     /// Returns `true` if this issue can be repaired via a re-mux pass.
     #[must_use]
-    pub fn is_repairable(&self) -> bool {
+    pub const fn is_repairable(&self) -> bool {
         matches!(
             self,
             Self::StretchedVideo { .. } | Self::MissingMoovAtom | Self::ZeroDurationStream { .. }
@@ -110,7 +129,8 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
                 || den == 0
                 || (num > 0
                     && den > 0
-                    && (num as f64 / den as f64 > 10.0 || den as f64 / num as f64 > 10.0));
+                    && (f64::from(num) / f64::from(den) > 10.0
+                        || f64::from(den) / f64::from(num) > 10.0));
 
             if is_broken {
                 issues.push(FixupIssue::StretchedVideo {
@@ -154,6 +174,11 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
 
 impl FFmpegRunner {
     /// Repair detected issues via a single re-mux pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` fails to open the input file, create the
+    /// output container, or write packets (including I/O errors and mux failures).
     pub async fn fixup_repair(
         &self,
         input: impl AsRef<Path>,

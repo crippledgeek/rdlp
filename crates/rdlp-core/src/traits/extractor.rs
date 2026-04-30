@@ -11,7 +11,7 @@ use rdlp_types::{
 /// Core trait for all site extractors
 ///
 /// Extractors are responsible for parsing website URLs and extracting video metadata.
-/// Each extractor typically handles one or more related sites (e.g., YouTube, YouTube Music).
+/// Each extractor typically handles one or more related sites (e.g., `YouTube`, `YouTube` Music).
 ///
 /// # Lifetime Semantics
 ///
@@ -24,7 +24,7 @@ use rdlp_types::{
 /// which is required for `Send + Sync` trait bounds in async contexts.
 #[async_trait]
 pub trait InfoExtractor: Send + Sync {
-    /// Human-readable name of the extractor (e.g., "YouTube", "Vimeo")
+    /// Human-readable name of the extractor (e.g., "`YouTube`", "Vimeo")
     ///
     /// **Lifetime:** Returns `&str` with lifetime tied to `&self` (elided: `<'a>`).
     /// The string is borrowed from the extractor struct, avoiding allocation.
@@ -60,7 +60,7 @@ pub trait InfoExtractor: Send + Sync {
     /// This method returns **owned** `InfoDict` (not `&InfoDict`) because:
     /// - Async functions must return `Send` types that can cross thread boundaries
     /// - Borrowed data (&str) cannot be held across `.await` points
-    /// - InfoDict must outlive the HTML parsing scope and async operations
+    /// - `InfoDict` must outlive the HTML parsing scope and async operations
     ///
     /// **Common Pattern** (pseudocode showing ownership flow):
     /// ```text
@@ -99,7 +99,7 @@ pub trait InfoExtractor: Send + Sync {
 
     /// Check if this extractor can handle the given URL
     ///
-    /// The default implementation checks against the valid_url() regex.
+    /// The default implementation checks against the `valid_url()` regex.
     /// Override this for more complex URL validation logic.
     fn suitable(&self, url: &str) -> bool {
         self.valid_url().is_match(url)
@@ -199,7 +199,7 @@ pub trait SearchExtractor: Send + Sync {
     ///
     /// # Default
     /// Returns the input unchanged. Sites whose search-card markup is
-    /// already complete (e.g. XHamster's JSON `videoThumbProps`) need no
+    /// already complete (e.g. `XHamster`'s JSON `videoThumbProps`) need no
     /// override.
     ///
     /// # Arguments
@@ -241,7 +241,7 @@ pub trait SearchExtractor: Send + Sync {
 /// | **Use Case** | Shared services, parallel tasks | Unique ownership, trait objects |
 ///
 /// **When to use Arc:**
-/// - Sharing data across async tasks (tokio::spawn)
+/// - Sharing data across async tasks (`tokio::spawn`)
 /// - Sharing clients/connections (HTTP, database)
 /// - Caching expensive-to-create objects
 /// - Trait objects that need Clone (Arc<dyn Trait>)

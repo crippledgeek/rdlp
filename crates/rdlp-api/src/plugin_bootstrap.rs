@@ -28,14 +28,14 @@ use std::sync::Arc;
 /// Plugin loading errors are non-fatal: each failed plugin emits a `WARN`-level
 /// log message and is skipped. The returned registry always contains the
 /// complete set of built-in extractors.
-pub(crate) fn build_registry_with_plugins(config: &Config) -> ExtractorRegistry {
+pub fn build_registry_with_plugins(config: &Config) -> ExtractorRegistry {
     let mut registry = ExtractorRegistry::new();
 
     match bootstrap_plugins(config, &mut registry) {
         Ok(count) if count > 0 => log::info!("plugin bootstrap: loaded {count} plugin(s)"),
         Ok(_) => log::debug!("plugin bootstrap: no plugins discovered"),
         Err(e) => {
-            log::warn!("plugin bootstrap failed: {e:#}; continuing with built-in extractors only")
+            log::warn!("plugin bootstrap failed: {e:#}; continuing with built-in extractors only");
         }
     }
 
@@ -73,8 +73,9 @@ fn bootstrap_plugins(
         Ok(s) => s,
         Err(e) => {
             log::error!(
-                "plugin trust store at {trust_path:?} failed to open: {e}; \
-                 trust decisions made this run WILL NOT PERSIST across restarts"
+                "plugin trust store at {} failed to open: {e}; \
+                 trust decisions made this run WILL NOT PERSIST across restarts",
+                trust_path.display()
             );
             return Err(e).context("trust store open");
         }
@@ -96,12 +97,12 @@ fn bootstrap_plugins(
     //
     // AlwaysDeny is the safe default: an unattended CLI run must NOT silently
     // auto-trust unknown publishers.
-    let prompter: Arc<dyn Prompter> = if !config.plugin_trusted_publishers.is_empty() {
+    let prompter: Arc<dyn Prompter> = if config.plugin_trusted_publishers.is_empty() {
+        Arc::new(AlwaysDeny)
+    } else {
         Arc::new(PreTrustedIdentities {
             trusted: config.plugin_trusted_publishers.clone(),
         })
-    } else {
-        Arc::new(AlwaysDeny)
     };
 
     // Build the shared host resources once. Each plugin's adapter
@@ -114,16 +115,16 @@ fn bootstrap_plugins(
     for dir in &config.plugin_directories {
         for outcome in loader.discover(dir) {
             match outcome {
-                Ok(loaded) => {
-                    if disabled.contains(&loaded.manifest.name) {
+                Ok(plugin) => {
+                    if disabled.contains(&plugin.manifest.name) {
                         log::info!(
                             "plugin '{}' is in the disabled list; skipping load",
-                            loaded.manifest.name
+                            plugin.manifest.name
                         );
                         continue;
                     }
-                    let plugin_name = loaded.manifest.name.clone();
-                    match PluginExtractor::new(loaded, Arc::clone(&engine), host_resources.clone())
+                    let plugin_name = plugin.manifest.name.clone();
+                    match PluginExtractor::new(plugin, Arc::clone(&engine), host_resources.clone())
                     {
                         Ok(extractor) => {
                             log::debug!("plugin bootstrap: registered plugin '{plugin_name}'");
@@ -136,7 +137,7 @@ fn bootstrap_plugins(
                     }
                 }
                 Err((plugin_dir, e)) => {
-                    log::warn!("plugin {plugin_dir:?} failed to load: {e}");
+                    log::warn!("plugin {} failed to load: {e}", plugin_dir.display());
                 }
             }
         }
@@ -148,6 +149,7 @@ fn bootstrap_plugins(
 /// Build the shared per-host resources that the plugin adapters use to
 /// populate per-call capability contexts. Failure here is non-fatal at the
 /// per-resource level — the corresponding capability is simply not granted.
+#[allow(clippy::unnecessary_wraps)] // may return Err in future when resource init can fail
 fn build_host_resources(config: &Config) -> anyhow::Result<HostResources> {
     let cookie_jar = Arc::new(SimpleCookieJar::new());
     let raw_jar = cookie_jar.jar();

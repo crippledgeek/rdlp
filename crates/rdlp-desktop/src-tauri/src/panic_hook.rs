@@ -27,10 +27,10 @@ pub fn install_panic_hook() {
     let prev_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         let backtrace = Backtrace::capture();
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "<unknown>".into());
+        let location = info.location().map_or_else(
+            || "<unknown>".into(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
         let payload = panic_payload_str(info.payload());
 
         log::error!("Tauri app panicked at {location}: {payload}\nbacktrace:\n{backtrace}");
@@ -39,6 +39,9 @@ pub fn install_panic_hook() {
     }));
 }
 
+// Clippy's option_if_let_else suggestion here produces a harder-to-read
+// nested map_or_else chain. The explicit if-let chain is clearer.
+#[allow(clippy::option_if_let_else)]
 fn panic_payload_str(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()

@@ -3,6 +3,25 @@
 //! Provides `MuxTimingState` for tracking DTS monotonicity across drain
 //! calls, `fix_audio_timestamps` for correcting non-monotonic or
 //! zero-duration packets, and diagnostic helpers for mux write failures.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: Timestamp arithmetic requires `i64`/`i128` conversions for
+//!   overflow-safe intermediate calculations. All casts are audited.
+//! - `clippy::redundant_pub_crate`: `pub(crate)` items accessed from sibling
+//!   transcode modules via `crate::` path.
+//! - `clippy::slicing_may_panic`: The `diagnose_mux_io` function slices a string
+//!   buffer at a length returned by `FFmpeg`, which guarantees it fits in the buffer.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::redundant_pub_crate,
+    clippy::indexing_slicing
+)]
 
 use log::warn;
 
@@ -12,7 +31,7 @@ use log::warn;
 /// so that DTS monotonicity is enforced across call boundaries, not just within
 /// a single drain call.
 #[derive(Default, Debug)]
-pub(crate) struct MuxTimingState {
+pub struct MuxTimingState {
     /// Last DTS written to the muxer (in output stream timebase).
     pub last_dts: Option<i64>,
     /// Duration of the last packet written (output stream timebase).
@@ -38,7 +57,7 @@ pub(crate) struct MuxTimingState {
     /// File size on disk at last watchdog check (secondary progress signal).
     pub last_file_size: i64,
     /// Cumulative samples written. Primary clock for audio-only outputs.
-    /// DTS = rescale_q(samples_written, 1/sample_rate, ost_tb).
+    /// DTS = `rescale_q(samples_written`, `1/sample_rate`, `ost_tb`).
     pub samples_written: i64,
     /// Audio sample rate (Hz). Set once during init.
     pub sample_rate: u32,
@@ -59,7 +78,7 @@ pub(crate) struct MuxTimingState {
 /// accumulating an unbounded cluster cache due to artificially dense timestamps.
 ///
 /// Returns `(corrected_dts, corrected_pts, duration, updated_last_dts)`.
-pub(crate) fn fix_audio_timestamps(
+pub fn fix_audio_timestamps(
     dts: Option<i64>,
     pts: Option<i64>,
     duration: i64,
@@ -97,13 +116,13 @@ pub(crate) fn fix_audio_timestamps(
     (Some(d), p, dur, Some(d))
 }
 
-/// Convert an FFmpeg error code to a human-readable string via `av_strerror`.
-pub(crate) fn av_strerror_string(errnum: i32) -> String {
+/// Convert an `FFmpeg` error code to a human-readable string via `av_strerror`.
+pub fn av_strerror_string(errnum: i32) -> String {
     let mut buf = [0u8; 256];
     // SAFETY: buf is a stack-allocated array with known size; av_strerror
     // writes at most errbuf_size bytes including the NUL terminator.
     unsafe {
-        ffmpeg_the_third::ffi::av_strerror(errnum, buf.as_mut_ptr() as *mut _, buf.len());
+        ffmpeg_the_third::ffi::av_strerror(errnum, buf.as_mut_ptr().cast(), buf.len());
     }
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     String::from_utf8_lossy(&buf[..end]).into_owned()
@@ -115,7 +134,7 @@ pub(crate) fn av_strerror_string(errnum: i32) -> String {
 /// the muxer to flush any buffered packets in the interleave queue.
 /// Only needed for the interleaved write path; the direct `av_write_frame`
 /// path bypasses the queue entirely.
-pub(crate) fn flush_interleave_queue(octx: &mut ffmpeg_the_third::format::context::Output) {
+pub fn flush_interleave_queue(octx: &mut ffmpeg_the_third::format::context::Output) {
     // SAFETY: octx is a valid output format context; passing a null packet
     // signals the muxer to flush its internal interleave queue.
     let ret = unsafe {
@@ -132,9 +151,7 @@ pub(crate) fn flush_interleave_queue(octx: &mut ffmpeg_the_third::format::contex
 /// # Safety
 ///
 /// `octx_ptr` must point to a valid `AVFormatContext`.
-pub(crate) unsafe fn diagnose_mux_io(
-    octx_ptr: *mut ffmpeg_the_third::ffi::AVFormatContext,
-) -> String {
+pub unsafe fn diagnose_mux_io(octx_ptr: *mut ffmpeg_the_third::ffi::AVFormatContext) -> String {
     // SAFETY: caller guarantees octx_ptr is valid; all field reads are from
     // FFmpeg-allocated structs whose layout is defined by the C ABI.
     unsafe {
@@ -155,7 +172,7 @@ pub(crate) unsafe fn diagnose_mux_io(
 }
 
 /// Get current process RSS in KB. Returns 0 if unavailable.
-pub(crate) fn get_process_rss_kb() -> u64 {
+pub fn get_process_rss_kb() -> u64 {
     #[cfg(target_os = "windows")]
     {
         use std::mem;

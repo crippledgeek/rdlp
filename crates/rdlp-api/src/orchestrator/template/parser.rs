@@ -10,6 +10,7 @@ use super::{
 
 impl OutputTemplate {
     /// Parse a template string into a ready-to-render `OutputTemplate`.
+    #[allow(clippy::indexing_slicing)] // all accesses guarded by bounds checks within the parsing loop
     pub(in crate::orchestrator) fn parse(template: &str) -> Result<Self, TemplateError> {
         let mut segments = Vec::new();
         let chars: Vec<char> = template.chars().collect();
@@ -121,6 +122,9 @@ impl OutputTemplate {
     }
 
     /// Parse a single field reference: `name[.keys][+/-arith][>strf]`
+    #[allow(clippy::too_many_lines, clippy::indexing_slicing)]
+    // parser: all indexing bounded by `i < len` guard; `unnecessarily_wraps` future-proofed
+    #[allow(clippy::unnecessary_wraps)]
     fn parse_field_ref(s: &str) -> Result<FieldRef, TemplateError> {
         let chars: Vec<char> = s.chars().collect();
         let len = chars.len();
@@ -250,6 +254,7 @@ impl OutputTemplate {
     }
 
     /// Parse the format specifier after `)` — e.g. `s`, `#05d`, `.2f`, `#j`
+    #[allow(clippy::indexing_slicing)] // all accesses guarded by `*i < chars.len()` checks
     fn parse_format_specifier(chars: &[char], i: &mut usize) -> Result<FormatSpec, TemplateError> {
         let spec_start = *i;
 

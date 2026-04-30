@@ -288,7 +288,7 @@ fn test_limiter_boost_limit_linear() {
     let ceiling = -1.0 - ALIMITER_TP_HEADROOM_DB;
     let limit = 10f64.powf(ceiling / 20.0);
     assert!(
-        (limit - 0.749894).abs() < 0.001,
+        (limit - 0.749_894).abs() < 0.001,
         "default limit={limit}, expected ~0.749894"
     );
 

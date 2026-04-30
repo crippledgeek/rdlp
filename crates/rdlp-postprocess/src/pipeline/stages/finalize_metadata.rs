@@ -1,7 +1,7 @@
-//! FinalizeMetadataStage — post-download probe to backfill or correct
+//! `FinalizeMetadataStage` — post-download probe to backfill or correct
 //! `info_dict` fields against the ground-truth bytes on disk.
 //!
-//! Runs LAST in the pipeline (after FixupStage), so it sees the final
+//! Runs LAST in the pipeline (after `FixupStage`), so it sees the final
 //! container — including any repair, remux, or recode the prior stages
 //! applied. Calls `FFmpegRunner::probe()` (a libavformat header read,
 //! not a subprocess) on the primary file, then:
@@ -10,8 +10,8 @@
 //!   existing duration is `None` OR differs by more than 5% (catches
 //!   manifest lies — godresource's playlist had no duration entry; the
 //!   site's player UI claimed 2:01:38 against the actual 1h39m56s).
-//! - **Logs and pushes warnings for width / height / fps / video_codec /
-//!   audio_codec** so GUI and CLI consumers can see the ground-truth values
+//! - **Logs and pushes warnings for width / height / fps / `video_codec` /
+//!   `audio_codec`** so GUI and CLI consumers can see the ground-truth values
 //!   (audit finding M7: previously only logged, not visible in `msg.warnings`).
 //!
 //! **Non-fatal.** A probe failure here is informational only — the
@@ -23,6 +23,13 @@
 //! multi-GB files; not worth a flag until someone reports it. If
 //! that changes, add `PostProcess.finalize_metadata: bool` defaulting
 //! to true and wire it through `should_run`.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `f64`-to-`u32` cast for percentage formatting. The
+//!   threshold is `0.05 * 100.0 = 5.0`, always positive and within `u32` range.
+
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
 use std::sync::Arc;
 
@@ -49,14 +56,14 @@ pub struct FinalizeMetadataStage {
 impl FinalizeMetadataStage {
     /// Create a new `FinalizeMetadataStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 }
 
 #[async_trait]
 impl PipelineStage for FinalizeMetadataStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "FinalizeMetadataStage"
     }
 

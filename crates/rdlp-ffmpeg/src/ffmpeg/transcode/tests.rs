@@ -1,5 +1,7 @@
 //! Tests for transcode pipeline components.
 
+#![allow(clippy::cast_possible_truncation)] // i128→i64 in sample_clock_rescale: values are within DTS range
+
 use super::mux_timing::{MuxTimingState, fix_audio_timestamps};
 
 #[test]
@@ -303,8 +305,8 @@ fn sample_clock_rescale(samples: i64, sample_rate: i32, ost_tb_num: i32, ost_tb_
     // av_rescale_q(a, bq, cq) = a * bq.num * cq.den / (bq.den * cq.num)
     // bq = {1, sample_rate}, cq = {ost_tb_num, ost_tb_den}
     // = samples * 1 * ost_tb_den / (sample_rate * ost_tb_num)
-    let num = samples as i128 * ost_tb_den as i128;
-    let den = sample_rate as i128 * ost_tb_num as i128;
+    let num = i128::from(samples) * i128::from(ost_tb_den);
+    let den = i128::from(sample_rate) * i128::from(ost_tb_num);
     // Round to nearest (matching av_rescale_q behavior)
     ((num + den / 2) / den) as i64
 }

@@ -25,7 +25,7 @@ pub struct RetryConfig {
 impl RetryConfig {
     /// Create a new retry configuration
     #[must_use]
-    pub fn new(
+    pub const fn new(
         max_retries: usize,
         initial_delay: Duration,
         max_delay: Duration,
@@ -42,7 +42,7 @@ impl RetryConfig {
 
     /// Create default retry configuration (10 retries, 1s-60s backoff, jitter enabled)
     #[must_use]
-    pub fn default_config() -> Self {
+    pub const fn default_config() -> Self {
         Self {
             max_retries: 10,
             initial_delay: Duration::from_secs(1),
@@ -54,14 +54,14 @@ impl RetryConfig {
 
     /// Enable or disable jitter
     #[must_use]
-    pub fn with_jitter(mut self, enabled: bool) -> Self {
+    pub const fn with_jitter(mut self, enabled: bool) -> Self {
         self.jitter = enabled;
         self
     }
 
-    /// Convert to backon ExponentialBuilder
+    /// Convert to backon `ExponentialBuilder`
     ///
-    /// This allows using the RetryConfig with backon's `.retry()` trait extension.
+    /// This allows using the `RetryConfig` with backon's `.retry()` trait extension.
     ///
     /// # Example
     /// ```rust,no_run
@@ -122,7 +122,7 @@ impl Default for RetryConfig {
 /// }
 /// ```
 #[must_use]
-pub fn is_retryable_error(error: &RdlpError) -> bool {
+pub const fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
         // Structured HTTP errors: retry 5xx and 429, not other 4xx
         RdlpError::Http { status, .. } => *status == 429 || *status >= 500,
@@ -133,6 +133,13 @@ pub fn is_retryable_error(error: &RdlpError) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
     use std::sync::Arc;

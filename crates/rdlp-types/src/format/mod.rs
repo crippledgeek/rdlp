@@ -83,7 +83,7 @@ pub struct Format {
     /// Download protocol
     pub protocol: DownloadProtocol,
 
-    /// Container format (e.g., "mp4", "webm", "mp4_dash")
+    /// Container format (e.g., "mp4", "webm", "`mp4_dash`")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
 
@@ -217,6 +217,9 @@ impl fmt::Debug for Format {
         if let Some(v) = &self.language {
             d.field("language", v);
         }
+        if let Some(v) = &self.audio_group_id {
+            d.field("audio_group_id", v);
+        }
         if let Some(v) = &self.dynamic_range {
             d.field("dynamic_range", v);
         }
@@ -230,7 +233,8 @@ impl fmt::Debug for Format {
             d.field("fallback_urls", &format!("[{} URLs]", v.len()));
         }
 
-        d.finish()
+        // cached_description is an internal lazy cache; intentionally excluded.
+        d.finish_non_exhaustive()
     }
 }
 
@@ -276,12 +280,12 @@ impl Format {
     }
 
     /// Check if this format has video
-    pub fn has_video(&self) -> bool {
+    pub const fn has_video(&self) -> bool {
         self.vcodec.is_present()
     }
 
     /// Check if this format has audio
-    pub fn has_audio(&self) -> bool {
+    pub const fn has_audio(&self) -> bool {
         self.acodec.is_present()
     }
 
@@ -301,13 +305,15 @@ impl Format {
     /// Format file size as human-readable string
     /// Returns exact size if known, approximate size with ~ prefix, or "Unknown"
     pub fn filesize_string(&self) -> String {
-        if let Some(size) = self.filesize {
-            format_bytes(size)
-        } else if let Some(size) = self.filesize_approx {
-            format!("~{}", format_bytes(size))
-        } else {
-            "Unknown".to_string()
-        }
+        self.filesize.map_or_else(
+            || {
+                self.filesize_approx.map_or_else(
+                    || "Unknown".to_string(),
+                    |size| format!("~{}", format_bytes(size)),
+                )
+            },
+            format_bytes,
+        )
     }
 
     /// Check if this is a DASH format
@@ -339,6 +345,8 @@ impl fmt::Display for Format {
         }
 
         // Show exact size or approximate size with ~ prefix
+        // u64 as f64: MB display tolerates precision loss on very large sizes
+        #[allow(clippy::cast_precision_loss)]
         if let Some(size) = self.filesize {
             let mb = size as f64 / (1024.0 * 1024.0);
             write!(f, " {mb:.1}MB")?;
@@ -354,7 +362,7 @@ impl fmt::Display for Format {
 /// Fragment of a segmented download
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fragment {
-    /// Fragment URL (absolute or relative to fragment_base_url)
+    /// Fragment URL (absolute or relative to `fragment_base_url`)
     pub url: String,
 
     /// Fragment duration in seconds
@@ -378,10 +386,17 @@ fn format_bytes(bytes: u64) -> String {
         return "0 B".to_string();
     }
 
+    // u64 as f64: precision loss acceptable for display; bytes ≤ u64::MAX ≈ 1.8×10¹⁹
+    #[allow(clippy::cast_precision_loss)]
     let bytes_f = bytes as f64;
-    // log2 / 10 == log_1024
+    // log2 / 10 == log_1024. The floor is finite and non-negative for bytes > 0.
+    // cast to usize: exponent is at most 4 (≤ UNITS.len() - 1), never wraps.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let exponent = ((bytes_f.log2() / 10.0).floor() as usize).min(UNITS.len() - 1);
+    // exponent ≤ 4, fits in i32.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let value = bytes_f / 1024_f64.powi(exponent as i32);
+    #[allow(clippy::indexing_slicing)] // exponent is bounded by UNITS.len() - 1 above
     let unit = UNITS[exponent];
 
     format!("{value:.1} {unit}")

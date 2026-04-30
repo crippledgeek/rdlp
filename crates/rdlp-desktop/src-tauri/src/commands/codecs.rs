@@ -9,7 +9,7 @@ use rdlp_types::ContainerFormat;
 /// List available video codecs and their encoders.
 ///
 /// Returns only codecs with at least one available encoder in the
-/// linked FFmpeg build.
+/// linked `FFmpeg` build.
 #[tauri::command]
 #[must_use]
 pub fn get_available_codecs() -> Vec<VideoCodecInfo> {

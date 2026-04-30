@@ -77,6 +77,9 @@ pub struct RdlpClient {
     downloader_registry: Arc<rdlp_downloader::DownloaderRegistry>,
 }
 
+// The Debug impl intentionally omits `temp_registry`, `extractor_registry`, and
+// `downloader_registry` to avoid printing thousands of lines of internals.
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for RdlpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RdlpClient")
@@ -105,7 +108,7 @@ impl RdlpClient {
     /// when the process is about to exit so any in-flight temp files created
     /// by aborted downloads are removed.
     #[must_use]
-    pub fn temp_registry(&self) -> &Arc<TempRegistry> {
+    pub const fn temp_registry(&self) -> &Arc<TempRegistry> {
         &self.temp_registry
     }
 
@@ -124,6 +127,7 @@ impl RdlpClient {
     ///
     /// * `request` - Download configuration for this specific download.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // single async state machine; extracting sub-tasks would hide the retry logic
     pub fn download(&self, request: DownloadRequest) -> DownloadHandle {
         let id = DownloadId::next();
         let (tx, rx) = mpsc::channel::<Event>(256);
@@ -131,7 +135,7 @@ impl RdlpClient {
 
         let config = Arc::new(self.build_config(&request));
         let interactive_flag = request.format.interactive;
-        let url = request.url.clone();
+        let url = request.url;
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
         let registry = Arc::clone(&self.temp_registry);
@@ -189,7 +193,10 @@ impl RdlpClient {
             let mut last_err: Option<RdlpApiError> = None;
             for attempt in 0..=MAX_REEXTRACT_RETRIES {
                 if attempt > 0 {
-                    let delay = REEXTRACT_DELAYS_SECS[(attempt - 1) as usize];
+                    let delay = REEXTRACT_DELAYS_SECS
+                        .get((attempt - 1) as usize)
+                        .copied()
+                        .unwrap_or(15); // fallback: use max delay if index out of range
                     let reason = match &last_err {
                         Some(RdlpApiError::NetworkError {
                             status: Some(403), ..
@@ -265,7 +272,7 @@ impl RdlpClient {
             }
             // All retries exhausted (unreachable in practice, but
             // satisfies the compiler)
-            let err = last_err.unwrap_or(RdlpApiError::NetworkError {
+            let err = last_err.unwrap_or_else(|| RdlpApiError::NetworkError {
                 message: "All re-extraction attempts failed".into(),
                 status: None,
             });
@@ -499,6 +506,10 @@ impl RdlpClient {
     ///
     /// Alias for [`search()`](Self::search) — only scrapes search result
     /// pages, does not fetch individual video pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if site unknown, filters invalid, or network fails.
     pub async fn search_preview(
         &self,
         site: &str,

@@ -3,13 +3,13 @@
 use serde::{Deserialize, Serialize};
 
 /// A search request with query text and optional filters.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchQuery {
     /// The free-text search term.
     pub query: String,
     /// Active filter key-value pairs.
     pub filters: Vec<SearchFilter>,
-    /// Maximum number of results to return. `None` uses the site default / MAX_PLAYLIST_SIZE cap.
+    /// Maximum number of results to return. `None` uses the site default / `MAX_PLAYLIST_SIZE` cap.
     pub max_results: Option<usize>,
     /// Specific page to fetch. None = fetch all pages (CLI behavior).
     pub page: Option<u32>,
@@ -25,7 +25,7 @@ pub struct SearchFilter {
 }
 
 /// Describes a filter a site supports (for CLI help / UI construction).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchFilterDescriptor {
     /// Machine-readable key used in `SearchFilter::key`.
     pub key: String,
@@ -76,7 +76,7 @@ pub struct SearchResultPreview {
 pub struct SearchSiteInfo {
     /// Machine-readable name (e.g. "xhamster").
     pub name: String,
-    /// Human-readable display name (e.g. "XHamster").
+    /// Human-readable display name (e.g. "`XHamster`").
     pub display_name: String,
 }
 

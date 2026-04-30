@@ -187,6 +187,8 @@ impl DownloadProgress {
         let eta = if speed > 1.0 {
             total_bytes.and_then(|total| {
                 let remaining = total.saturating_sub(bytes_downloaded);
+                // ETA estimation: precision loss is acceptable for display.
+                #[allow(clippy::cast_precision_loss)]
                 let secs = remaining as f64 / speed;
                 // Cap at 24 hours — anything larger is not a useful estimate
                 if secs <= 86_400.0 {
@@ -234,6 +236,8 @@ impl DownloadProgress {
                 .checked_div(segments_downloaded)
                 .unwrap_or(2 * 1024 * 1024);
             let remaining_bytes = remaining_segments * avg_segment_size;
+            // ETA estimation: precision loss is acceptable for display.
+            #[allow(clippy::cast_precision_loss)]
             let secs = remaining_bytes as f64 / speed;
             if secs <= 86_400.0 {
                 Some(Duration::from_secs_f64(secs))
@@ -283,7 +287,15 @@ impl DownloadProgress {
             } else {
                 1.0
             };
+            // ETA estimation: precision loss and truncation are acceptable for display.
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
             let estimated_remaining_bytes = (bytes_downloaded as f64 * duration_ratio) as u64;
+            // ETA estimation: precision loss is acceptable for display.
+            #[allow(clippy::cast_precision_loss)]
             let secs = estimated_remaining_bytes as f64 / speed;
             if secs <= 86_400.0 {
                 Some(Duration::from_secs_f64(secs))
@@ -309,7 +321,7 @@ impl DownloadProgress {
 
     /// Check if this is a segment-based progress (HLS)
     #[must_use]
-    pub fn is_segmented(&self) -> bool {
+    pub const fn is_segmented(&self) -> bool {
         self.total_segments.is_some()
     }
 
@@ -329,8 +341,7 @@ impl DownloadProgress {
     #[must_use]
     pub fn total_string(&self) -> String {
         self.total_bytes
-            .map(format_bytes)
-            .unwrap_or_else(|| "Unknown".to_string())
+            .map_or_else(|| "Unknown".to_string(), format_bytes)
     }
 }
 
@@ -373,6 +384,8 @@ impl DownloadStats {
     /// Create new download statistics
     #[must_use]
     pub fn new(bytes_downloaded: u64, duration: Duration, retries: usize) -> Self {
+        // Average speed: precision loss is acceptable for display.
+        #[allow(clippy::cast_precision_loss)]
         let average_speed = if duration.as_secs_f64() > 0.0 {
             bytes_downloaded as f64 / duration.as_secs_f64()
         } else {
@@ -390,7 +403,7 @@ impl DownloadStats {
 
     /// Create new stats with fragment information
     #[must_use]
-    pub fn with_fragments(mut self, fragments: usize) -> Self {
+    pub const fn with_fragments(mut self, fragments: usize) -> Self {
         self.fragments = Some(fragments);
         self
     }
@@ -421,6 +434,12 @@ impl fmt::Display for DownloadStats {
 }
 
 /// Format bytes as human-readable string using binary units (1024-based)
+#[allow(
+    clippy::cast_precision_loss,   // u64 as f64: MB display tolerates precision loss
+    clippy::cast_possible_truncation, // floor() usize: exponent bounded by UNITS.len()-1
+    clippy::cast_sign_loss,        // floor() usize: log2 result is non-negative
+    clippy::cast_possible_wrap     // exponent as i32: value is at most 4
+)]
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
 
@@ -432,17 +451,28 @@ fn format_bytes(bytes: u64) -> String {
     let exponent = ((bytes_f.log2() / 10.0).floor() as usize).min(UNITS.len() - 1);
 
     let value = bytes_f / 1024_f64.powi(exponent as i32);
+    #[allow(clippy::indexing_slicing)] // exponent is bounded by UNITS.len() - 1 above
     let unit = UNITS[exponent];
 
     format!("{value:.1} {unit}")
 }
 
 /// Format bytes per second as human-readable string
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // f64 as u64: display only
 fn format_bytes_per_second(bytes_per_sec: f64) -> String {
     format!("{}/s", format_bytes(bytes_per_sec as u64))
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unnecessary_literal_bound
+)]
 mod tests {
     use super::*;
 
@@ -451,8 +481,8 @@ mod tests {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(500), "500.0 B");
         assert_eq!(format_bytes(1536), "1.5 KiB"); // 1.5 * 1024
-        assert_eq!(format_bytes(1572864), "1.5 MiB"); // 1.5 * 1024^2
-        assert_eq!(format_bytes(1610612736), "1.5 GiB"); // 1.5 * 1024^3
+        assert_eq!(format_bytes(1_572_864), "1.5 MiB"); // 1.5 * 1024^2
+        assert_eq!(format_bytes(1_610_612_736), "1.5 GiB"); // 1.5 * 1024^3
     }
 
     #[test]

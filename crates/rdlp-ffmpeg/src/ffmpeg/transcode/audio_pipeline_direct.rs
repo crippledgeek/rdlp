@@ -4,6 +4,19 @@
 //! and `drain_encoder_packets_direct` for the direct-write audio pipeline
 //! used by audio normalization. Primary path for audio-only normalization
 //! to avoid interleave queue ENOMEM.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` timestamp arithmetic requires `usize`/`i32`/`i64`/`u64`
+//!   conversions. All casts are audited and within valid ranges.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::similar_names,  // enc_ctx / dec_ctx / ofmt_ctx are standard FFmpeg naming
+)]
 
 use std::path::Path;
 
@@ -206,14 +219,13 @@ impl FFmpegRunner {
             if timing.pkt_count < 5 {
                 let pb_pos = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
-                    if !pb.is_null() { (*pb).pos } else { 0 }
+                    if pb.is_null() { 0 } else { (*pb).pos }
                 };
                 // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
                 #[allow(clippy::disallowed_methods)]
                 let file_sz = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                    .map_or(0, |m| m.len());
                 info!(
                     "[audio_only_mux] pkt#{}: dts={:?}, pts={:?}, dur={}, \
                      samples_written={}, sr={}, ost_tb={}/{}, pb_pos={}, file={}B",
@@ -242,7 +254,7 @@ impl FFmpegRunner {
             // SAFETY: octx and packet are valid; av_write_frame writes the
             // packet directly without buffering in an interleave queue.
             let ret = unsafe {
-                ffmpeg_the_third::ffi::av_write_frame(octx.as_mut_ptr(), packet.as_ptr() as *mut _)
+                ffmpeg_the_third::ffi::av_write_frame(octx.as_mut_ptr(), packet.as_ptr().cast_mut())
             };
             // Unref immediately: frees encoded data before next receive_packet.
             // av_write_frame unrefs on success in FFmpeg 8.0, but NOT on failure.
@@ -278,14 +290,13 @@ impl FFmpegRunner {
             if timing.pkt_count.is_multiple_of(10_000) {
                 let pb_pos = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
-                    if !pb.is_null() { (*pb).pos } else { 0 }
+                    if pb.is_null() { 0 } else { (*pb).pos }
                 };
                 // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
                 #[allow(clippy::disallowed_methods)]
                 let file_sz = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                    .map_or(0, |m| m.len());
                 let rss_kb = get_process_rss_kb();
                 info!(
                     "[mux progress] pkt={}, dts={:?}, dur={}, samples={}, pos={}, file={}KB, rss={}KB",
@@ -315,15 +326,14 @@ impl FFmpegRunner {
 
                 let current_pos = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
-                    if !pb.is_null() { (*pb).pos } else { 0 }
+                    if pb.is_null() { 0 } else { (*pb).pos }
                 };
 
                 // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
                 #[allow(clippy::disallowed_methods)]
                 let file_size = output_path
                     .and_then(|p| std::fs::metadata(p).ok())
-                    .map(|m| m.len() as i64)
-                    .unwrap_or(-1);
+                    .map_or(-1, |m| m.len() as i64);
 
                 let progressing = current_pos > timing.last_pos_check
                     || (file_size > 0 && file_size > timing.last_file_size);

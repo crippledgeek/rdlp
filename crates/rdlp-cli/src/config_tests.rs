@@ -535,7 +535,9 @@ fn test_merge_config_browser_env_fallback() {
     // `cargo test`'s default parallel runner.
     use std::sync::Mutex;
     static ENV_GUARD: Mutex<()> = Mutex::new(());
-    let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // SAFETY: `cargo test` runs tests in threads; we serialise env mutation
     // via the Mutex above, and the other test that reads this var takes

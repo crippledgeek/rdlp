@@ -1,4 +1,9 @@
 //! Tests for session state persistence
+#![allow(
+    clippy::indexing_slicing,
+    clippy::match_wildcard_for_single_variants,
+    unused_variables
+)]
 
 use super::*;
 use tempfile::TempDir;

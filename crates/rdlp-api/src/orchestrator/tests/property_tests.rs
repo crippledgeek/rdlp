@@ -1,6 +1,6 @@
 //! Property-based tests for filename sanitization
 
-use super::create_test_orchestrator;
+use super::super::Orchestrator;
 use proptest::prelude::*;
 
 proptest! {
@@ -8,8 +8,7 @@ proptest! {
     fn test_sanitize_filename_never_produces_invalid_chars(
         filename in "[a-zA-Z0-9 /\\\\:*?\"<>|.-]{0,100}"
     ) {
-        let orchestrator = create_test_orchestrator();
-        let sanitized = orchestrator.sanitize_filename(&filename);
+        let sanitized = Orchestrator::sanitize_filename(&filename);
 
         // No invalid filesystem characters should remain
         prop_assert!(!sanitized.contains('/'));
@@ -39,8 +38,7 @@ proptest! {
     fn test_sanitize_filename_never_empty(
         filename in ".{0,50}"  // Any string up to 50 chars
     ) {
-        let orchestrator = create_test_orchestrator();
-        let sanitized = orchestrator.sanitize_filename(&filename);
+        let sanitized = Orchestrator::sanitize_filename(&filename);
 
         // Result should never be empty
         prop_assert!(!sanitized.is_empty(), "Sanitized filename should never be empty");
@@ -51,8 +49,7 @@ proptest! {
         // Generate filenames with only alphanumeric chars and underscore (no edge cases)
         filename in "[a-zA-Z][a-zA-Z0-9_]{0,50}"
     ) {
-        let orchestrator = create_test_orchestrator();
-        let sanitized = orchestrator.sanitize_filename(&filename);
+        let sanitized = Orchestrator::sanitize_filename(&filename);
 
         // For simple alphanumeric filenames, content should be preserved
         prop_assert_eq!(sanitized, filename, "Simple alphanumeric filenames should be unchanged");

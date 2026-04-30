@@ -27,7 +27,7 @@ pub enum LoudnormPreset {
 impl LoudnormPreset {
     /// Returns `(target_i, target_tp, target_lra)` for this preset.
     #[must_use]
-    pub fn targets(self) -> (f64, f64, f64) {
+    pub const fn targets(self) -> (f64, f64, f64) {
         match self {
             Self::Broadcast => (-23.0, -2.0, 7.0),
             Self::Streaming => (-14.0, -1.0, 11.0),
@@ -65,6 +65,14 @@ impl std::fmt::Display for LoudnormPreset {
 }
 
 /// Options for audio normalization.
+///
+/// # Lint allowances
+///
+/// - `clippy::struct_excessive_bools`: the four boolean fields (`salvage`,
+///   `force_dynamic`, `precompress`, `boost_enabled`) are independent feature
+///   flags, each with a distinct effect. A bitflags/enum refactor would reduce
+///   expressiveness without eliminating the need for per-flag documentation.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizeOptions {
     /// Normalization mode (peak or loudnorm).
@@ -85,7 +93,7 @@ pub struct NormalizeOptions {
     pub salvage: bool,
     /// Force dynamic (per-frame compression) mode in loudnorm pass 2.
     ///
-    /// By default, loudnorm uses `linear=true` (letting FFmpeg fall back to
+    /// By default, loudnorm uses `linear=true` (letting `FFmpeg` fall back to
     /// dynamic internally if needed). This flag forces `linear=false` for users
     /// who explicitly want dynamic compression. Corresponds to `--loudnorm-dynamic`.
     pub force_dynamic: bool,

@@ -5,6 +5,7 @@
 //! frontend.
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 /// Tauri IPC command handlers.
 pub mod commands;
@@ -25,13 +26,22 @@ use tauri::Manager;
 ///
 /// Initialises plugins, registers managed state, binds all IPC
 /// command handlers, and starts the event loop.
+///
+/// # Panics
+///
+/// Panics if the Tauri application cannot be built (e.g. invalid
+/// `tauri.conf.json`) or if the main webview window cannot be opened.
+/// These are unrecoverable startup failures.
 pub fn run() {
     // Install the global panic hook before any Tauri or Tokio code
     // runs so panics in async command handlers are captured to the log
     // rather than dying silently. See `panic_hook` module docs.
     panic_hook::install_panic_hook();
 
-    tauri::Builder::default()
+    // SAFETY (expect): startup-time fatal; tauri.conf.json is validated at
+    // build time and the application cannot function without the webview.
+    #[allow(clippy::expect_used)]
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
@@ -57,20 +67,21 @@ pub fn run() {
             commands::thumbnail::proxy_thumbnail,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app.state::<AppState>();
-                let output_dir = state
-                    .settings
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .output_dir
-                    .clone();
-                // Clean up temp files created by active downloads in this session.
-                state.temp_registry.cleanup_all();
-                // Also sweep for orphans left by a prior crash (SIGKILL, etc.).
-                TempRegistry::cleanup_stale(&output_dir);
-            }
-        });
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let state = app.state::<AppState>();
+            let output_dir = state
+                .settings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .output_dir
+                .clone();
+            // Clean up temp files created by active downloads in this session.
+            state.temp_registry.cleanup_all();
+            // Also sweep for orphans left by a prior crash (SIGKILL, etc.).
+            TempRegistry::cleanup_stale(&output_dir);
+        }
+    });
 }

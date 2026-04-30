@@ -35,15 +35,20 @@ pub struct EventDto {
     pub timestamp_ms: u64,
 }
 
-/// Returns the current time as milliseconds since Unix epoch.
+/// Returns the current time as milliseconds since Unix epoch, saturating at
+/// `u64::MAX` (year 584942417 — well past any plausible runtime).
 fn now_ms() -> u64 {
-    SystemTime::now()
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
 impl From<&Event> for EventDto {
+    // 17 Event variants → 17 match arms with structured payloads each;
+    // splitting per-variant helpers would just shift the matching cost.
+    #[allow(clippy::too_many_lines)]
     fn from(event: &Event) -> Self {
         let download_id = event.download_id().as_u64();
         let timestamp_ms = now_ms();
@@ -78,7 +83,7 @@ impl From<&Event> for EventDto {
                     "speed": progress.speed,
                     // Wire-compat: emit as 0.0..=100.0 so external JSON consumers
                     // see the same shape as before the Progress newtype migration.
-                    "percentage": progress.progress.map(|p| p.percent()),
+                    "percentage": progress.progress.map(rdlp_types::Progress::percent),
                     "segments_downloaded": progress.segments_downloaded,
                     "total_segments": progress.total_segments,
                 }),
@@ -171,6 +176,10 @@ impl From<&Event> for EventDto {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing, // serde_json::Value indexing is the test assertion form
+    clippy::float_cmp,        // exact-equality on lossless u64→f64 round-trips
+)]
 mod tests {
     use super::*;
     use crate::errors::RdlpApiError;

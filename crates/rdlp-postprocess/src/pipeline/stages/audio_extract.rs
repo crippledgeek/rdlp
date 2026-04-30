@@ -1,4 +1,4 @@
-//! AudioExtractStage — extracts audio from video files.
+//! `AudioExtractStage` — extracts audio from video files.
 //!
 //! This stage runs at index 1 when `config.extract_audio` is true.
 //! Uses `rdlp_ffmpeg::FFmpegRunner::extract_audio()`.
@@ -24,7 +24,7 @@ pub struct AudioExtractStage {
 impl AudioExtractStage {
     /// Create a new `AudioExtractStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -68,7 +68,7 @@ impl AudioExtractStage {
                     None
                 };
                 if let Some(s) = scale {
-                    opts.quality_scale = Some(s as i32);
+                    opts.quality_scale = Some(i32::from(s));
                 }
             }
         }
@@ -79,7 +79,7 @@ impl AudioExtractStage {
 
 #[async_trait]
 impl PipelineStage for AudioExtractStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "AudioExtractStage"
     }
 
@@ -104,12 +104,11 @@ impl PipelineStage for AudioExtractStage {
             return Err(PostProcessError::NoAudioStream.into());
         }
 
-        let target_format = match msg.config.audio_format {
-            Some(f) => f.codec_name(),
-            None => {
-                debug!("AudioExtractStage: no audio format configured; defaulting to MP3");
-                "mp3"
-            }
+        let target_format = if let Some(f) = msg.config.audio_format {
+            f.codec_name()
+        } else {
+            debug!("AudioExtractStage: no audio format configured; defaulting to MP3");
+            "mp3"
         };
 
         let codec_config =
@@ -124,10 +123,7 @@ impl PipelineStage for AudioExtractStage {
             .is_some_and(|c| c == target_format || (c == "aac" && target_format == "m4a"));
 
         if can_copy {
-            debug!(
-                "AudioExtractStage: audio codec matches target {}, copying stream",
-                target_format
-            );
+            debug!("AudioExtractStage: audio codec matches target {target_format}, copying stream");
         }
 
         let output_path = msg.tracker.temp_path(&input_file, codec_config.extension);

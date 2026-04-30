@@ -63,7 +63,7 @@ const AUDIO_CODEC_TIERS: &[&str] = &[
 ];
 
 /// Protocol preference order (lower index = better, matching yt-dlp ordering).
-/// https, http, m3u8_native, m3u8, http_dash_segments, everything else.
+/// https, http, `m3u8_native`, m3u8, `http_dash_segments`, everything else.
 const PROTOCOL_ORDER: &[&str] = &["https", "http", "m3u8_native", "m3u8", "http_dash_segments"];
 
 // ---------------------------------------------------------------------------
@@ -142,6 +142,11 @@ impl FormatSorter {
     /// Build a `FormatSorter` from a yt-dlp `-S` spec string.
     ///
     /// Returns `FormatSelectError::Parse` on invalid input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FormatSelectError::Parse` if the spec is empty, contains an
+    /// empty field name, or contains an unparseable numeric limit value.
     pub fn parse(spec: &str) -> Result<Self, FormatSelectError> {
         let spec = spec.trim();
         if spec.is_empty() {
@@ -161,11 +166,9 @@ impl FormatSorter {
             }
 
             // Detect ascending prefix (`+`).
-            let (ascending, rest) = if let Some(stripped) = token.strip_prefix('+') {
-                (true, stripped)
-            } else {
-                (false, token)
-            };
+            let (ascending, rest) = token
+                .strip_prefix('+')
+                .map_or((false, token), |stripped| (true, stripped));
 
             // Detect `~limit` (nearest) or `:limit` (preferred upper bound).
             let (field_name, limit, nearest) = if let Some(pos) = rest.find('~') {
@@ -270,7 +273,7 @@ impl FormatSorter {
     /// A sorter with no fields is effectively a no-op and is only produced
     /// programmatically (the `parse` constructor rejects empty specs).
     #[must_use]
-    pub fn fields_is_empty(&self) -> bool {
+    pub const fn fields_is_empty(&self) -> bool {
         self.fields.is_empty()
     }
 
@@ -334,7 +337,7 @@ struct SortKey {
 }
 
 impl SortKey {
-    fn missing() -> Self {
+    const fn missing() -> Self {
         Self {
             tier: -10,
             primary: 0.0,
@@ -359,24 +362,27 @@ fn sort_key(spec: &SortFieldSpec, f: &Format) -> SortKey {
         "hasaud" => bool_key(f.has_audio()),
 
         // ---- numeric fields -----------------------------------------------
-        "height" | "res" => numeric_key(f.height.map(|v| v as f64), spec),
-        "width" => numeric_key(f.width.map(|v| v as f64), spec),
+        "height" | "res" => numeric_key(f.height.map(f64::from), spec),
+        "width" => numeric_key(f.width.map(f64::from), spec),
         "fps" => numeric_key(f.fps, spec),
-        "quality" => numeric_key(f.quality.map(|v| v as f64), spec),
-        "size" | "filesize" => {
+        // ie_pref uses quality as a proxy — same field, same sort key.
+        "quality" | "ie_pref" => numeric_key(f.quality.map(f64::from), spec),
+        "size" | "filesize" =>
+        {
+            #[allow(clippy::cast_precision_loss)]
             numeric_key(f.filesize.or(f.filesize_approx).map(|v| v as f64), spec)
         }
         "br" | "tbr" => numeric_key(f.tbr, spec),
         "vbr" => numeric_key(f.vbr, spec),
         "abr" => numeric_key(f.abr, spec),
-        "asr" => numeric_key(f.asr.map(|v| v as f64), spec),
+        "asr" => numeric_key(f.asr.map(f64::from), spec),
         "channels" => numeric_key(f.channels_as_f64(), spec),
 
         // ---- HDR ----------------------------------------------------------
         "hdr" => {
             // yt-dlp assigns numeric scores to HDR dynamic range strings.
             let score = hdr_score(f.dynamic_range.as_deref());
-            numeric_key(Some(score as f64), spec)
+            numeric_key(Some(f64::from(score)), spec)
         }
 
         // ---- codec fields (tier-based) ------------------------------------
@@ -393,9 +399,9 @@ fn sort_key(spec: &SortFieldSpec, f: &Format) -> SortKey {
             SortKey {
                 tier: 0,
                 primary: if spec.ascending {
-                    -(score as f64)
+                    -f64::from(score)
                 } else {
-                    score as f64
+                    f64::from(score)
                 },
                 tiebreak: 0,
             }
@@ -405,9 +411,6 @@ fn sort_key(spec: &SortFieldSpec, f: &Format) -> SortKey {
         "id" => string_rank_key(Some(f.format_id.as_str()), spec),
         "lang" | "language" => string_rank_key(f.language.as_deref(), spec),
         "source" => string_rank_key(f.container.as_deref(), spec),
-
-        // ---- ie_pref: use quality field as proxy -------------------------
-        "ie_pref" => numeric_key(f.quality.map(|v| v as f64), spec),
 
         // ---- unknown fields: treat as absent -----------------------------
         _ => SortKey::missing(),
@@ -419,7 +422,7 @@ fn sort_key(spec: &SortFieldSpec, f: &Format) -> SortKey {
 // ---------------------------------------------------------------------------
 
 /// Key for a boolean field: `true` → tier 0 primary 1, `false` → tier -10.
-fn bool_key(value: bool) -> SortKey {
+const fn bool_key(value: bool) -> SortKey {
     if value {
         SortKey {
             tier: 0,
@@ -511,9 +514,9 @@ fn codec_key(codec: Option<&str>, tiers: &[&str], spec: &SortFieldSpec) -> SortK
     SortKey {
         tier: 0,
         primary: if spec.ascending {
-            -(tier_score as f64)
+            -f64::from(tier_score)
         } else {
-            tier_score as f64
+            f64::from(tier_score)
         },
         tiebreak: if spec.ascending { -1 } else { 1 },
     }
@@ -532,17 +535,19 @@ fn string_rank_key(value: Option<&str>, spec: &SortFieldSpec) -> SortKey {
     let bytes = v.as_bytes();
     let mut score: i64 = 0;
     for (i, &b) in bytes.iter().take(8).enumerate() {
-        score |= (b as i64) << (8 * (7 - i));
+        score |= i64::from(b) << (8 * (7 - i));
     }
     // Descending: primary = score (higher lexicographic = higher key).
     // Ascending: primary = -score (lower lexicographic = higher key).
+    #[allow(clippy::cast_precision_loss)]
+    let primary = if spec.ascending {
+        -(score as f64)
+    } else {
+        score as f64
+    };
     SortKey {
         tier: 1,
-        primary: if spec.ascending {
-            -(score as f64)
-        } else {
-            score as f64
-        },
+        primary,
         tiebreak: 0,
     }
 }
@@ -563,6 +568,8 @@ fn match_codec_tier(codec: &str, tiers: &[&str]) -> i32 {
             && re.is_match(codec)
         {
             // Tier 0 = best = highest score. Score = (len - i).
+            // SAFETY: tiers is a small compile-time constant slice (≤ 9 entries).
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             return (tiers.len() as i32) - (i as i32);
         }
     }
@@ -599,12 +606,14 @@ fn hdr_score(dynamic_range: Option<&str>) -> u32 {
 /// Return a preference score for a protocol string.
 ///
 /// Higher score = better (matches yt-dlp's preference order).
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 fn protocol_score(proto: &str) -> i32 {
+    // PROTOCOL_ORDER is a small compile-time constant slice (≤ 5 entries); casts are safe.
+    let len = PROTOCOL_ORDER.len() as i32;
     PROTOCOL_ORDER
         .iter()
         .position(|&p| p == proto)
-        .map(|i| (PROTOCOL_ORDER.len() as i32) - (i as i32))
-        .unwrap_or(0)
+        .map_or(0, |i| len - i as i32)
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +626,7 @@ fn protocol_score(proto: &str) -> i32 {
 fn parse_limit_value(s: &str, original_spec: &str) -> Result<f64, FormatSelectError> {
     // Try size literal first.
     if let Some(bytes) = parse_size(s) {
+        #[allow(clippy::cast_precision_loss)]
         return Ok(bytes as f64);
     }
     // Fall back to plain number.
@@ -648,6 +658,14 @@ impl FormatSortExt for Format {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing,
+    clippy::cast_lossless
+)]
 mod tests {
     use super::*;
     use crate::format::Codec;

@@ -1,6 +1,9 @@
 //! Video information extraction
 
-use super::{Orchestrator, errors::*};
+use super::{
+    Orchestrator,
+    errors::{OrchestratorError, Result},
+};
 use log::{debug, info};
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
@@ -43,7 +46,10 @@ impl Orchestrator {
             debug!("Channel: {channel}");
         }
         if let Some(duration) = info.duration {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // duration is a non-negative seconds value; values up to ~136 years fit u32
             let mins = (duration / 60.0) as u32;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let secs = (duration % 60.0) as u32;
             debug!("Duration: {mins}:{secs:02}");
         }
@@ -116,11 +122,11 @@ impl Orchestrator {
     /// Extract playlist information from URL
     ///
     /// Finds the appropriate extractor and attempts playlist extraction.
-    /// Returns a vector of InfoDict - one for each video in the playlist.
+    /// Returns a vector of `InfoDict` - one for each video in the playlist.
     ///
     /// # Returns
-    /// - Single video: Vec with one InfoDict
-    /// - Playlist: Vec with multiple InfoDict entries
+    /// - Single video: Vec with one `InfoDict`
+    /// - Playlist: Vec with multiple `InfoDict` entries
     ///
     /// # Errors
     /// Returns an error if:
@@ -148,11 +154,13 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         if infos.len() == 1 {
-            debug!("Single video: {}", infos[0].title);
+            if let Some(first) = infos.first() {
+                debug!("Single video: {}", first.title);
+            }
         } else {
-            let playlist_title = infos[0]
-                .playlist_title
-                .as_deref()
+            let playlist_title = infos
+                .first()
+                .and_then(|i| i.playlist_title.as_deref())
                 .unwrap_or("Unnamed Playlist");
             info!("Playlist: {playlist_title}");
             debug!("Found {} videos", infos.len());

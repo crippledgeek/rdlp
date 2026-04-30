@@ -4,12 +4,16 @@
 //! traversal vector in `run_uninstall` (which used to do `dir.join(name)`
 //! → `remove_dir_all` on raw user input).
 
-// `clippy::disallowed_methods` — test fixture I/O is allowed.
-// `clippy::await_holding_lock` — XDG_CONFIG_HOME and HOME are process-global,
-// so each async test holds `xdg_lock()` for the full body, including across
-// `.await`, to prevent a concurrent test yanking the env var out from under
-// it. A `tokio::sync::Mutex` would force CLI helpers to be test-aware.
-#![allow(clippy::disallowed_methods, clippy::await_holding_lock)]
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs
+)]
 
 use rdlp_plugin::disabled_list::read_disabled_list;
 use rdlp_plugin::manifest::validate_plugin_name;
@@ -77,27 +81,27 @@ fn validate_plugin_name_rejects_empty_and_oversize() {
     assert!(validate_plugin_name(&just_at_limit).is_ok());
 }
 
-#[tokio::test]
-async fn disable_then_enable_round_trips() {
+#[test]
+fn disable_then_enable_round_trips() {
     let _guard = xdg_lock();
     let tempdir = tempfile::tempdir().unwrap();
     isolate_xdg(tempdir.path());
 
-    rdlp_cli::plugin_cmd::run_disable("plugin-a").await.unwrap();
-    rdlp_cli::plugin_cmd::run_disable("plugin-b").await.unwrap();
+    rdlp_cli::plugin_cmd::run_disable("plugin-a").unwrap();
+    rdlp_cli::plugin_cmd::run_disable("plugin-b").unwrap();
     let path = rdlp_cli::plugin_cmd::disabled_list_path().unwrap();
     let list = read_disabled_list(&path).expect("read disabled list");
     assert!(list.contains(&"plugin-a".to_string()));
     assert!(list.contains(&"plugin-b".to_string()));
 
-    rdlp_cli::plugin_cmd::run_enable("plugin-a").await.unwrap();
+    rdlp_cli::plugin_cmd::run_enable("plugin-a").unwrap();
     let list = read_disabled_list(&path).expect("read disabled list");
     assert!(!list.contains(&"plugin-a".to_string()));
     assert!(list.contains(&"plugin-b".to_string()));
 }
 
-#[tokio::test]
-async fn run_uninstall_rejects_path_traversal_name() {
+#[test]
+fn run_uninstall_rejects_path_traversal_name() {
     let _guard = xdg_lock();
     let tempdir = tempfile::tempdir().unwrap();
     isolate_xdg(tempdir.path());
@@ -114,7 +118,6 @@ async fn run_uninstall_rejects_path_traversal_name() {
     std::fs::write(&canary, "must survive").unwrap();
 
     let err = rdlp_cli::plugin_cmd::run_uninstall("../canary.txt", &config)
-        .await
         .expect_err("uninstall must reject traversal name");
     let msg = format!("{err:#}");
     assert!(
@@ -124,15 +127,14 @@ async fn run_uninstall_rejects_path_traversal_name() {
     assert!(canary.exists(), "canary file MUST NOT be deleted");
 }
 
-#[tokio::test]
-async fn run_disable_rejects_invalid_name() {
+#[test]
+fn run_disable_rejects_invalid_name() {
     let _guard = xdg_lock();
     let tempdir = tempfile::tempdir().unwrap();
     isolate_xdg(tempdir.path());
 
     for bad in ["..", "/abs", "Capital", "a b"] {
         let err = rdlp_cli::plugin_cmd::run_disable(bad)
-            .await
             .expect_err(&format!("disable must reject {bad:?}"));
         let msg = format!("{err:#}");
         assert!(msg.contains("invalid plugin name"));

@@ -4,12 +4,12 @@
 //!
 //! This crate provides cryptographic primitives used by extractors:
 //!
-//! - **PRNG-based decryption**: Used by XHamster for format URL obfuscation
+//! - **PRNG-based decryption**: Used by `XHamster` for format URL obfuscation
 //! - **Hex encoding/decoding**: Utilities for handling hex-encoded ciphertext
 //!
-//! ## XHamster URL Decryption
+//! ## `XHamster` URL Decryption
 //!
-//! XHamster encrypts video format URLs by embedding hex-encoded ciphertext
+//! `XHamster` encrypts video format URLs by embedding hex-encoded ciphertext
 //! in the URL path. The encryption uses one of 7 PRNG algorithms:
 //!
 //! ```rust
@@ -22,6 +22,7 @@
 //! ```
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 pub mod prng;
 pub mod xhamster;

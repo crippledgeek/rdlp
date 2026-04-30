@@ -8,11 +8,12 @@
 //! - Safari (macOS)
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
-mod chrome;
-mod firefox;
-mod netscape;
-mod util;
+pub(crate) mod chrome;
+pub(crate) mod firefox;
+pub(crate) mod netscape;
+pub(crate) mod util;
 
 use async_trait::async_trait;
 use log::{debug, warn};
@@ -143,6 +144,13 @@ impl CookieJar for SimpleCookieJar {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -169,7 +177,7 @@ mod tests {
         fn log(&self, record: &log::Record<'_>) {
             self.messages
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(record.args().to_string());
         }
 
@@ -198,7 +206,10 @@ mod tests {
             })
             .clone();
         // Clear previous test entries so assertions are isolated.
-        messages.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        messages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         messages
     }
 
@@ -224,7 +235,10 @@ mod tests {
         .await
         .unwrap();
 
-        let logs = captured.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let logs = captured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let combined = logs.join("\n");
 
         // If log capture is active (combined is non-empty), assert no leakage.

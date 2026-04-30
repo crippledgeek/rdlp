@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 /// Plugin management subcommands.
 #[derive(Subcommand, Debug)]
-pub(crate) enum PluginCmd {
+pub enum PluginCmd {
     /// List installed plugins.
     List,
     /// Show details for a specific plugin.
@@ -41,18 +41,21 @@ pub(crate) enum PluginCmd {
     BuildFromYtdlp {
         /// Path to the yt-dlp extractor .py file.
         plugin_py: std::path::PathBuf,
-        /// Output directory (defaults to the parent of plugin_py).
+        /// Output directory (defaults to the parent of `plugin_py`).
         #[arg(short = 'o', long)]
         output_dir: Option<std::path::PathBuf>,
     },
 }
 
 /// CLI arguments parsed by clap.
+// Clap CLI structs naturally accumulate flag fields; refactoring into bitfields
+// would obscure the one-to-one correspondence with CLI flags.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
 #[command(name = "rdlp")]
 #[command(about = "Rust Download Program - A video downloader", long_about = None)]
 #[command(version)]
-pub(crate) struct Args {
+pub struct Args {
     /// Video URL to download
     pub url: Option<String>,
 
@@ -115,7 +118,7 @@ pub(crate) struct Args {
     pub interactive: bool,
 
     // === Post-processing options ===
-    /// Extract audio only (requires FFmpeg)
+    /// Extract audio only (requires `FFmpeg`)
     #[arg(short = 'x', long)]
     pub extract_audio: bool,
 
@@ -158,7 +161,7 @@ pub(crate) struct Args {
     #[arg(long, alias = "sub-format")]
     pub sub_format: Option<String>,
 
-    /// Embed subtitles in video file (requires FFmpeg)
+    /// Embed subtitles in video file (requires `FFmpeg`)
     #[arg(long, alias = "embed-subs")]
     pub embed_subtitles: bool,
 
@@ -258,7 +261,7 @@ pub(crate) struct Args {
     #[arg(long, allow_hyphen_values = true)]
     pub normalize_boost_db: Option<f64>,
 
-    /// Fixup policy: never, warn, detect_or_warn (default: detect_or_warn)
+    /// Fixup policy: never, warn, `detect_or_warn` (default: `detect_or_warn`)
     #[arg(long, default_value = "detect_or_warn")]
     pub fixup: String,
 
@@ -266,20 +269,20 @@ pub(crate) struct Args {
     #[arg(long)]
     pub keep_video: bool,
 
-    /// Path to FFmpeg executable (if not in PATH)
+    /// Path to `FFmpeg` executable (if not in PATH)
     #[arg(long)]
     pub ffmpeg_location: Option<PathBuf>,
 
     // === Network options ===
-    /// HTTP/HTTPS/SOCKS proxy URL (e.g., socks5://127.0.0.1:1080)
+    /// HTTP/HTTPS/SOCKS proxy URL (e.g., <socks5://127.0.0.1:1080>)
     #[arg(long)]
     pub proxy: Option<String>,
 
     /// Browser emulation profile for the TLS / HTTP stack
     /// (chrome-latest, firefox-latest, safari-latest, or a pinned
     /// identifier like chrome-137). Controls JA4 / JA4H fingerprint.
-    /// Falls back to the RDLP_BROWSER_EMULATION env var, then
-    /// ChromeLatest.
+    /// Falls back to the `RDLP_BROWSER_EMULATION` env var, then
+    /// `ChromeLatest`.
     #[arg(long, value_name = "PROFILE")]
     pub browser: Option<String>,
 
@@ -301,7 +304,7 @@ pub(crate) struct Args {
     pub download_archive: Option<PathBuf>,
 
     /// Filter videos by metadata (yt-dlp syntax). Repeatable (OR logic between filters).
-    /// Examples: "duration > 60", "!is_live", "title *= cats", "like_count >? 100"
+    /// Examples: "duration > 60", "!`is_live`", "title *= cats", "`like_count` >? 100"
     #[arg(long = "match-filter", action = clap::ArgAction::Append)]
     pub match_filter: Vec<String>,
 
@@ -341,14 +344,14 @@ pub(crate) struct Args {
 
 /// Top-level subcommand wrapper for plugin management.
 #[derive(Subcommand, Debug)]
-pub(crate) enum PluginSubcommand {
+pub enum PluginSubcommand {
     /// Manage installed WASM plugins.
     Plugin(PluginCmdArgs),
 }
 
 /// Argument holder for plugin subcommand (required by clap's subcommand+subcommand nesting).
 #[derive(clap::Args, Debug)]
-pub(crate) struct PluginCmdArgs {
+pub struct PluginCmdArgs {
     /// Plugin management action.
     #[command(subcommand)]
     pub cmd: PluginCmd,

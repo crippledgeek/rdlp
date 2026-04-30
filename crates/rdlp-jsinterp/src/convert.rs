@@ -21,9 +21,7 @@ pub fn js_to_json(value: &JsValue, ctx: &mut Context) -> JsResult<JsonValue> {
     }
 
     if let Some(n) = value.as_number() {
-        return Ok(serde_json::Number::from_f64(n)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null));
+        return Ok(serde_json::Number::from_f64(n).map_or(JsonValue::Null, JsonValue::Number));
     }
 
     if value.is_string()
@@ -75,13 +73,7 @@ pub fn json_to_js(value: &JsonValue, ctx: &mut Context) -> JsResult<JsValue> {
     match value {
         JsonValue::Null => Ok(JsValue::null()),
         JsonValue::Bool(b) => Ok(JsValue::from(*b)),
-        JsonValue::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                Ok(JsValue::from(f))
-            } else {
-                Ok(JsValue::from(0.0))
-            }
-        }
+        JsonValue::Number(n) => Ok(n.as_f64().map_or_else(|| JsValue::from(0.0), JsValue::from)),
         JsonValue::String(s) => Ok(JsValue::from(boa_engine::JsString::from(s.as_str()))),
         JsonValue::Array(_) | JsonValue::Object(_) => {
             // Use JSON.parse for complex types

@@ -1,18 +1,35 @@
-//! Thread-safe FFmpeg log capture via `av_log_set_callback`.
+//! Thread-safe `FFmpeg` log capture via `av_log_set_callback`.
 //!
-//! Provides an RAII guard that installs a custom FFmpeg log callback to capture
+//! Provides an RAII guard that installs a custom `FFmpeg` log callback to capture
 //! log messages (e.g., loudnorm JSON output). On drop, restores the default
 //! callback and error-only log level.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `usize`→`i32` cast for `av_log_format_line2` buffer length
+//!   argument is safe: the buffer is 2048 bytes, well within `i32::MAX`.
+//! - `clippy::borrow_as_ptr`: `buf.as_mut_ptr() as *mut c_char` required by the
+//!   `av_log_format_line2` C signature.
+//! - `clippy::redundant_pub_crate`: `pub(crate)` items in this private module are
+//!   accessed from sibling modules via `crate::ffmpeg::log_capture::*`.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::borrow_as_ptr,
+    clippy::redundant_pub_crate
+)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::{Arc, Mutex};
 
 use crate::error::PostProcessError;
 
-/// Platform-specific `va_list` parameter type for FFmpeg log callbacks.
+/// Platform-specific `va_list` parameter type for `FFmpeg` log callbacks.
 ///
-/// On Linux x86_64, `va_list` is `[__va_list_tag; 1]` (a fixed-size array),
-/// but FFmpeg 7+ bindgen generates callback function pointer signatures with
+/// On Linux `x86_64`, `va_list` is `[__va_list_tag; 1]` (a fixed-size array),
+/// but `FFmpeg` 7+ bindgen generates callback function pointer signatures with
 /// `*mut __va_list_tag` (pointer to first element). These are ABI-compatible
 /// in C (array decays to pointer) but Rust treats them as distinct types.
 ///
@@ -24,7 +41,7 @@ type VaListParam = *mut ffmpeg_the_third::ffi::__va_list_tag;
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 type VaListParam = ffmpeg_the_third::ffi::va_list;
 
-/// RAII guard that suppresses FFmpeg's internal C log messages.
+/// RAII guard that suppresses `FFmpeg`'s internal C log messages.
 ///
 /// Saves the current log level on creation, sets the requested suppression
 /// level, then restores the saved level on drop. Used during audio
@@ -71,7 +88,7 @@ impl Drop for LogSuppressGuard {
 
 /// Process-wide serialization flag for `av_log_set_callback`.
 ///
-/// FFmpeg's `av_log_set_callback` + `capture_callback` share two process-global
+/// `FFmpeg`'s `av_log_set_callback` + `capture_callback` share two process-global
 /// pointers (`LOG_BUFFER`, `LOG_FORWARDER`) and a single global C callback
 /// slot. Two concurrent callers to `bridge_ffmpeg_logs` (or two independent
 /// `LogCaptureGuard::begin()` calls) would race on all three.
@@ -121,7 +138,7 @@ impl Drop for FfmpegLogLockGuard {
 
 // ── end H2 fix ─────────────────────────────────────────────────────────────
 
-/// Global buffer for captured FFmpeg log messages.
+/// Global buffer for captured `FFmpeg` log messages.
 ///
 /// Protected by a Mutex. Only populated when a `LogCaptureGuard` is active.
 ///
@@ -148,7 +165,7 @@ static LOG_FORWARDER: Mutex<Option<LogForwarder>> = Mutex::new(None);
 
 /// Install a real-time log forwarder.
 ///
-/// While active, each FFmpeg log message captured by `capture_callback` is also
+/// While active, each `FFmpeg` log message captured by `capture_callback` is also
 /// forwarded through `cb(level, message)`. The callback is called while the
 /// `LOG_FORWARDER` mutex is held — it must not block or panic.
 pub fn set_log_forwarder(cb: Arc<dyn Fn(i32, String) + Send + Sync>) {
@@ -186,16 +203,16 @@ impl Drop for LogForwarderGuard {
 /// Opaque guard that holds both a `LogCaptureGuard` (installs `capture_callback`)
 /// and a `LogForwarderGuard` (routes messages through `PostProcessCallback::on_log`).
 ///
-/// Hold this until the FFmpeg operation completes. Both guards are dropped together.
+/// Hold this until the `FFmpeg` operation completes. Both guards are dropped together.
 pub struct FfmpegLogBridge {
     _capture: LogCaptureGuard,
     _forwarder: LogForwarderGuard,
 }
 
-/// Activate both FFmpeg log capture and real-time forwarding to a
+/// Activate both `FFmpeg` log capture and real-time forwarding to a
 /// `PostProcessCallback`.
 ///
-/// Returns an opaque `FfmpegLogBridge` — hold it until the FFmpeg operation
+/// Returns an opaque `FfmpegLogBridge` — hold it until the `FFmpeg` operation
 /// completes. Internally creates a `LogCaptureGuard` (installs
 /// `capture_callback`) and a `LogForwarderGuard` (routes messages through
 /// `cb.on_log()`).
@@ -204,6 +221,11 @@ pub struct FfmpegLogBridge {
 /// - `AV_LOG_ERROR` / `AV_LOG_FATAL` → `[ERROR] message`
 /// - `AV_LOG_WARNING` → `[WARN] message`
 /// - `AV_LOG_INFO` → `message` (no prefix)
+///
+/// # Errors
+///
+/// Returns an error if the `FFmpeg` log lock is already held by another capture
+/// session on the same thread (re-entrancy is not supported).
 pub fn bridge_ffmpeg_logs(
     cb: &Arc<dyn rdlp_core::PostProcessCallback>,
 ) -> std::result::Result<FfmpegLogBridge, PostProcessError> {
@@ -227,9 +249,9 @@ pub fn bridge_ffmpeg_logs(
     })
 }
 
-/// RAII guard for FFmpeg log capture.
+/// RAII guard for `FFmpeg` log capture.
 ///
-/// While active, FFmpeg log messages at `AV_LOG_INFO` level and below (i.e.,
+/// While active, `FFmpeg` log messages at `AV_LOG_INFO` level and below (i.e.,
 /// more important) are captured into a global buffer. On drop, the default
 /// callback is restored and log level is set back to error-only.
 ///
@@ -237,12 +259,12 @@ pub fn bridge_ffmpeg_logs(
 /// concurrent `bridge_ffmpeg_logs` / `begin()` calls from racing on the global
 /// callback and buffer state (audit finding H2).
 pub(crate) struct LogCaptureGuard {
-    /// Serializes all concurrent FFmpeg log capture sessions process-wide.
+    /// Serializes all concurrent `FFmpeg` log capture sessions process-wide.
     _lock: FfmpegLogLockGuard,
 }
 
 impl LogCaptureGuard {
-    /// Begin capturing FFmpeg log messages.
+    /// Begin capturing `FFmpeg` log messages.
     ///
     /// Acquires `FFMPEG_LOG_LOCKED` (spinlock) and installs a custom
     /// `av_log_set_callback` that buffers messages. Holding the spinlock
@@ -278,6 +300,11 @@ impl LogCaptureGuard {
     }
 
     /// Take all captured log lines, draining the buffer.
+    ///
+    /// `&self` is used intentionally: the caller must hold the guard alive
+    /// (keeping `FFMPEG_LOG_LOCKED` locked) for the full duration of the
+    /// capture session. The method accesses `LOG_BUFFER` global state.
+    #[allow(clippy::unused_self)]
     pub(crate) fn take_captured(&self) -> Result<Vec<String>, PostProcessError> {
         let mut buf = LOG_BUFFER
             .lock()
@@ -307,12 +334,12 @@ impl Drop for LogCaptureGuard {
     }
 }
 
-/// Custom FFmpeg log callback that captures messages into the global buffer.
+/// Custom `FFmpeg` log callback that captures messages into the global buffer.
 ///
 /// # Safety
 ///
-/// Called by FFmpeg's internal logging system. All pointer parameters are
-/// guaranteed valid by FFmpeg for the duration of the call. Uses
+/// Called by `FFmpeg`'s internal logging system. All pointer parameters are
+/// guaranteed valid by `FFmpeg` for the duration of the call. Uses
 /// `av_log_format_line2` to safely format the `va_list` arguments.
 ///
 /// The `vl` parameter uses `VaListParam` to handle platform differences
@@ -338,15 +365,15 @@ unsafe extern "C" fn capture_callback(
             level,
             fmt,
             vl,
-            buf.as_mut_ptr() as *mut c_char,
+            buf.as_mut_ptr().cast::<c_char>(),
             buf.len() as c_int,
-            &mut prefix,
+            &raw mut prefix,
         )
     };
 
     if len > 0 {
         // SAFETY: av_log_format_line2 null-terminates the buffer
-        let msg = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        let msg = unsafe { CStr::from_ptr(buf.as_ptr().cast::<c_char>()) }
             .to_string_lossy()
             .to_string();
         if let Ok(mut guard) = LOG_BUFFER.lock()
@@ -364,6 +391,11 @@ unsafe extern "C" fn capture_callback(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,        // msgs[0] is guarded by assert!(!msgs.is_empty())
+    clippy::items_after_statements,  // use Arc inside test fn body is intentional for clarity
+    clippy::significant_drop_tightening, // _lock must stay alive for full test scope
+)]
 mod tests {
     use super::*;
 
@@ -374,15 +406,13 @@ mod tests {
     /// Note: `TEST_MUTEX` must be acquired BEFORE `LogCaptureGuard::begin()`
     /// so it is held for the full duration of each test. `LogCaptureGuard`
     /// acquires `FFMPEG_LOG_LOCKED` internally; the test mutex is an extra
-    /// layer that prevents test-level interference (e.g. stale LOG_FORWARDER
+    /// layer that prevents test-level interference (e.g. stale `LOG_FORWARDER`
     /// from a prior test leaking into the next).
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_log_forwarder_receives_messages() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -426,8 +456,6 @@ mod tests {
     #[test]
     fn test_clear_log_forwarder_stops_forwarding() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -465,8 +493,6 @@ mod tests {
     #[test]
     fn test_bridge_ffmpeg_logs_captures_and_forwards() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let received_clone = received.clone();
 
@@ -514,10 +540,8 @@ mod tests {
     #[test]
     fn test_log_forwarder_guard_drop_clears() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
-        let received_clone = received.clone();
+        let received_clone = received;
 
         {
             let _guard = LogForwarderGuard::new(Arc::new(move |level, msg| {

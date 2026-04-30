@@ -20,7 +20,7 @@ pub enum ContainerFormat {
     /// Web-optimized, VP8/VP9/AV1 + Opus/Vorbis
     #[strum(serialize = "webm")]
     WebM,
-    /// Apple QuickTime, good for editing
+    /// Apple `QuickTime`, good for editing
     #[strum(serialize = "mov", serialize = "quicktime")]
     Mov,
     /// MPEG Transport Stream, broadcast/streaming
@@ -53,7 +53,7 @@ pub enum ContainerFormat {
     /// Digital Video
     #[strum(serialize = "dv")]
     Dv,
-    /// NUT (FFmpeg native container)
+    /// NUT (`FFmpeg` native container)
     #[strum(serialize = "nut")]
     Nut,
     /// On2 IVF (VP8/VP9/AV1 raw)
@@ -88,7 +88,7 @@ pub enum ContainerFormat {
     /// Matroska Audio
     #[strum(serialize = "mka")]
     Mka,
-    /// WavPack lossless
+    /// `WavPack` lossless
     #[strum(serialize = "wv", serialize = "wavpack")]
     Wv,
     /// Core Audio Format (Apple)
@@ -103,7 +103,7 @@ impl ContainerFormat {
     /// File extension for this container format.
     #[inline]
     #[must_use]
-    pub fn as_ext(&self) -> &'static str {
+    pub const fn as_ext(&self) -> &'static str {
         match self {
             Self::Mp4 => "mp4",
             Self::Mkv => "mkv",
@@ -139,14 +139,14 @@ impl ContainerFormat {
     /// Whether this container supports faststart (moov atom at beginning).
     #[inline]
     #[must_use]
-    pub fn supports_faststart(&self) -> bool {
+    pub const fn supports_faststart(&self) -> bool {
         matches!(self, Self::Mp4 | Self::Mov | Self::F4v)
     }
 
     /// Whether this is an audio-only container format.
     #[inline]
     #[must_use]
-    pub fn is_audio_only(&self) -> bool {
+    pub const fn is_audio_only(&self) -> bool {
         matches!(
             self,
             Self::Ogg

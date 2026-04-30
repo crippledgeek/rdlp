@@ -3,6 +3,29 @@
 //! Copies stream properties essential for proper Matroska playback:
 //! `avg_frame_rate`, `r_frame_rate`, `time_base`, `sample_aspect_ratio`,
 //! plus `cluster_time_limit=500` for VLC-compatible seeking.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::borrow_as_ptr`: `&mut (*ctx).field` is required for `FFmpeg` C APIs
+//!   that take `**AVDictionary`. There is no safe wrapper.
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (`i32`/`u64`/etc.).
+//!   Each cast is manually audited: none can panic; all are within valid ranges
+//!   for the values `FFmpeg` returns (stream counts, timestamps, codec params).
+//! - `clippy::expect_used`: `CString::new("static literal")` cannot fail (NUL-free
+//!   compile-time constant); `av_packet_alloc` OOM is unrecoverable anyway.
+//! - `clippy::redundant_pub_crate`: functions are `pub(crate)` so the parent merge
+//!   module can call them via `crate::` path; the `pub(crate)` is intentional.
+
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::redundant_pub_crate
+)]
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -15,7 +38,7 @@ use crate::error::{PostProcessError, Result};
 use super::super::FFmpegRunner;
 use super::raw_ffi_helpers::{dts_in_us, read_next_raw, rescale_and_write_raw};
 
-/// RAII owner for a heap-allocated AVPacket.
+/// RAII owner for a heap-allocated `AVPacket`.
 ///
 /// Dropping frees the packet via `av_packet_free`, so any `?` early-return
 /// from the merge loop releases the allocation deterministically. This is
@@ -36,7 +59,7 @@ impl AvPacketOwned {
         Ok(Self(p))
     }
 
-    fn as_ptr(&self) -> *mut ffi::AVPacket {
+    const fn as_ptr(&self) -> *mut ffi::AVPacket {
         self.0
     }
 }

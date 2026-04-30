@@ -1,4 +1,4 @@
-//! Configuration option types for FFmpeg operations.
+//! Configuration option types for `FFmpeg` operations.
 //!
 //! Provides `RemuxOptions`, `AudioExtractOptions`, `VideoConvertOptions`,
 //! and `ChapterEntry` used across remux, merge, transcode, and metadata modules.
@@ -50,12 +50,12 @@ pub struct VideoConvertOptions {
     /// Takes precedence over `audio_codec`. When `audio_copy` is true and
     /// `audio_codec` is `Some`, audio is still copied unchanged.
     pub audio_copy: bool,
-    /// Audio encoder name to use for audio re-encoding (e.g., "libfdk_aac", "libopus").
+    /// Audio encoder name to use for audio re-encoding (e.g., "`libfdk_aac`", "libopus").
     ///
     /// Only used when `audio_copy` is false. When `None` and `audio_copy` is false,
     /// the existing behavior is preserved (implementation decides the encoder).
     pub audio_codec: Option<String>,
-    /// When true, capture FFmpeg C-level log messages and forward them via
+    /// When true, capture `FFmpeg` C-level log messages and forward them via
     /// the log callback. Enables verbose encoder output in the UI log viewer.
     pub verbose: bool,
 }

@@ -1,6 +1,6 @@
 //! Matroska/WebM container corruption detection and salvage remux.
 //!
-//! Detects structurally corrupt Matroska/WebM containers by capturing FFmpeg
+//! Detects structurally corrupt Matroska/WebM containers by capturing `FFmpeg`
 //! demuxer log output during packet iteration and checking for known EBML
 //! error markers. When corruption is detected, a salvage remux (stream copy)
 //! produces a structurally valid container that can be processed normally.
@@ -18,7 +18,7 @@
 //!
 //! ## Why salvage remux fixes it deterministically
 //!
-//! FFmpeg's Matroska demuxer is resilient to many structural errors — it logs
+//! `FFmpeg`'s Matroska demuxer is resilient to many structural errors — it logs
 //! warnings but continues reading. A stream-copy remux reads all recoverable
 //! packets from the corrupt input and writes them into a fresh container with
 //! valid EBML structure, monotonic timestamps, and correct cluster boundaries.
@@ -38,7 +38,7 @@ use super::{FFmpegRunner, ensure_init};
 
 /// EBML corruption marker substrings that indicate malformed Matroska/WebM containers.
 ///
-/// These are emitted by FFmpeg's Matroska demuxer at WARNING/ERROR level when
+/// These are emitted by `FFmpeg`'s Matroska demuxer at WARNING/ERROR level when
 /// it encounters structural problems in the EBML byte stream.
 const EBML_CORRUPTION_MARKERS: &[&str] = &[
     "invalid as first byte of an EBML number",
@@ -48,16 +48,14 @@ const EBML_CORRUPTION_MARKERS: &[&str] = &[
 
 /// Open an input file with resilient format flags (`discardcorrupt+genpts`).
 ///
-/// This is the library-equivalent of FFmpeg CLI's `-fflags +discardcorrupt+genpts`.
+/// This is the library-equivalent of `FFmpeg` CLI's `-fflags +discardcorrupt+genpts`.
 /// The flags instruct the demuxer to skip corrupt packets and regenerate PTS/DTS
 /// timestamps, allowing decode of partially corrupt containers that would otherwise
 /// produce invalid packets and cascade into muxer failures.
 ///
 /// Used as Tier 3 recovery in [`super::normalize::helpers::with_mux_retry`] when
 /// both normal encode and salvage remux fail.
-pub(crate) fn open_input_resilient(
-    path: &Path,
-) -> Result<ffmpeg_the_third::format::context::Input> {
+pub fn open_input_resilient(path: &Path) -> Result<ffmpeg_the_third::format::context::Input> {
     ensure_init()?;
 
     let mut opts = ffmpeg_the_third::Dictionary::new();
@@ -83,7 +81,7 @@ pub(crate) fn open_input_resilient(
 ///
 /// Returns `Ok(())` if the container is clean or not Matroska/WebM.
 /// Returns `Err(InputCorrupt { kind: MatroskaEbml, .. })` if corruption is detected.
-pub(crate) fn check_matroska_integrity(input: &Path) -> Result<()> {
+pub fn check_matroska_integrity(input: &Path) -> Result<()> {
     ensure_init()?;
 
     let guard = LogCaptureGuard::begin()?;
@@ -152,7 +150,7 @@ pub(crate) fn check_matroska_integrity(input: &Path) -> Result<()> {
 ///
 /// Returns the path to the salvaged temporary file. The caller is responsible
 /// for cleaning up this file when done.
-pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
+pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     ensure_init()?;
 
     // Always use MKV for salvage output. Matroska writes metadata
@@ -165,9 +163,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
         .unwrap_or("salvage");
     let salvage_path = {
         let base = input.with_file_name(format!("{stem}.salvage.{ext}"));
-        if !base.exists() {
-            base
-        } else {
+        if base.exists() {
             // Find unique path to avoid reusing partially written files
             let mut attempt = 1u32;
             loop {
@@ -177,6 +173,8 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
                 }
                 attempt += 1;
             }
+        } else {
+            base
         }
     };
 
@@ -188,7 +186,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
 
     // Suppress FFmpeg log output during salvage — the corrupt input will
     // generate many EBML warnings that we've already captured and reported.
-    let _log_suppress = LogSuppressGuard::new();
+    let log_suppress = LogSuppressGuard::new();
 
     // Open corrupt input — FFmpeg will log warnings but continue reading
     let mut ictx = ffmpeg_the_third::format::input(input)
@@ -241,12 +239,11 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
                 }
 
                 let in_tb = stream.time_base();
-                let out_tb = match octx.stream(in_idx) {
-                    Some(s) => s.time_base(),
-                    None => {
-                        skipped += 1;
-                        continue;
-                    }
+                let out_tb = if let Some(s) = octx.stream(in_idx) {
+                    s.time_base()
+                } else {
+                    skipped += 1;
+                    continue;
                 };
 
                 packet.rescale_ts(in_tb, out_tb);
@@ -267,7 +264,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Drop suppress guard before write_trailer so any trailer errors are visible
-    drop(_log_suppress);
+    drop(log_suppress);
 
     octx.write_trailer()
         .map_err(PostProcessError::from)
@@ -296,7 +293,7 @@ pub(crate) fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
 ///
 /// If `salvage_enabled` is false and corruption is detected, returns the
 /// `InputCorrupt` error directly.
-pub(crate) fn prepare_input_with_salvage(
+pub fn prepare_input_with_salvage(
     input: &Path,
     salvage_enabled: bool,
 ) -> Result<(PathBuf, Option<PathBuf>)> {

@@ -122,7 +122,7 @@ impl FFmpegRunner {
 
     /// Common dispatch for normalize encode → merge with optional salvage retry.
     ///
-    /// Both peak and loudnorm share this pattern: check has_video → audio-only
+    /// Both peak and loudnorm share this pattern: check `has_video` → audio-only
     /// encode to temp → merge with original video → cleanup.  When `salvage` is
     /// true, wraps the encode with `with_mux_retry` for three-tier recovery
     /// (salvage remux → resilient open) on mux write failures.

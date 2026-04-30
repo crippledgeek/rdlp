@@ -47,6 +47,7 @@
 //! 4. **Pattern-based sanitization** - Redacts common sensitive patterns
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 use regex::Regex;
 use std::borrow::Cow;
@@ -105,6 +106,11 @@ pub type Result<T> = std::result::Result<T, SecurityError>;
 ///
 /// # Arguments
 /// * `url` - The URL to validate
+///
+/// # Errors
+///
+/// Returns [`SecurityError`] if the URL is too long, uses a non-HTTP scheme, or
+/// targets a private/internal host.
 ///
 /// # Returns
 /// `Ok(())` if the URL is safe, otherwise a `SecurityError`
@@ -200,7 +206,8 @@ pub fn is_private_host(host: &str) -> bool {
         return true;
     }
 
-    // Check for common internal hostnames
+    // Check for common internal hostnames (`lower` is already ASCII-lowercased above).
+    #[allow(clippy::case_sensitive_file_extension_comparisons)] // `lower` is already lowercased
     if lower.ends_with(".local") || lower.ends_with(".internal") {
         return true;
     }
@@ -232,19 +239,19 @@ pub fn is_private_host(host: &str) -> bool {
 
 /// IPv6 link-local: `fe80::/10`. First 10 bits == `1111111010`.
 #[inline]
-fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
 /// IPv6 Unique Local Address: `fc00::/7`. First 7 bits == `1111110`.
 #[inline]
-fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// IPv6 multicast: `ff00::/8`.
 #[inline]
-fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xff00) == 0xff00
 }
 
@@ -253,16 +260,14 @@ fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
 /// `[::ffff:127.0.0.1]` and bypasses the IPv4 gate.
 #[inline]
 fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
-    if let Some(v4) = ip.to_ipv4_mapped() {
+    ip.to_ipv4_mapped().is_some_and(|v4| {
         v4.is_loopback()
             || v4.is_private()
             || v4.is_link_local()
             || v4.is_unspecified()
             || v4.is_broadcast()
             || v4.is_multicast()
-    } else {
-        false
-    }
+    })
 }
 
 /// Validate a proxy URL for security concerns.
@@ -273,6 +278,11 @@ fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
 /// # Arguments
 ///
 /// * `proxy` - The proxy URL string to validate.
+///
+/// # Errors
+///
+/// Returns [`SecurityError`] if the URL is too long, uses a disallowed scheme, or
+/// targets a private/internal host.
 ///
 /// # Returns
 ///
@@ -356,18 +366,18 @@ pub fn validate_proxy_url(proxy: &str) -> Result<()> {
 /// ```
 #[must_use]
 pub fn normalize_url(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut parsed) => {
+    url::Url::parse(url).map_or_else(
+        |_| {
+            // If URL parsing fails, fall back to simple query string stripping
+            url.split('?').next().unwrap_or(url).to_string()
+        },
+        |mut parsed| {
             // Strip query and fragment, keep everything else
             parsed.set_query(None);
             parsed.set_fragment(None);
             parsed.into()
-        }
-        Err(_) => {
-            // If URL parsing fails, fall back to simple query string stripping
-            url.split('?').next().unwrap_or(url).to_string()
-        }
-    }
+        },
+    )
 }
 
 /// Extract the path portion of a URL for CDN-agnostic comparison
@@ -400,9 +410,8 @@ pub fn normalize_url(url: &str) -> String {
 /// ```
 #[must_use]
 pub fn extract_url_path(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(parsed) => parsed.path().to_string(),
-        Err(_) => {
+    url::Url::parse(url).map_or_else(
+        |_| {
             // Fallback: find path after scheme://host
             url.split('?')
                 .next()
@@ -410,8 +419,9 @@ pub fn extract_url_path(url: &str) -> String {
                 .and_then(|s| s.find('/').map(|i| &s[i..]))
                 .unwrap_or(url)
                 .to_string()
-        }
-    }
+        },
+        |parsed| parsed.path().to_string(),
+    )
 }
 
 // ============================================================================
@@ -424,6 +434,7 @@ pub fn extract_url_path(url: &str) -> String {
 /// CDN signing parameters (`sig`, `hmac`, `X-Amz-Signature`), and the
 /// `user:pass@` URL authority form. Matching is case-insensitive on the
 /// parameter name so `?Token=` / `?ACCESS_TOKEN=` are also redacted.
+#[allow(clippy::expect_used)] // LazyLock<Regex>: 16 hardcoded literals; panic = programming error caught at first use
 static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 16]> = LazyLock::new(|| {
     [
         (

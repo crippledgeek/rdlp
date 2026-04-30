@@ -68,15 +68,16 @@ fn evaluate_comparison(op: ComparisonOp, actual: &Value, filter_val: &FilterValu
 
         // Equality
         ComparisonOp::Eq | ComparisonOp::Ne => {
-            let equal = if let Some(actual_num) = as_number(actual) {
-                if let FilterValue::Number(filter_num) = filter_val {
-                    (actual_num - *filter_num).abs() < f64::EPSILON
-                } else {
-                    as_string(actual) == filter_value_as_string(filter_val)
-                }
-            } else {
-                as_string(actual) == filter_value_as_string(filter_val)
-            };
+            let equal = as_number(actual).map_or_else(
+                || as_string(actual) == filter_value_as_string(filter_val),
+                |actual_num| {
+                    if let FilterValue::Number(filter_num) = filter_val {
+                        (actual_num - *filter_num).abs() < f64::EPSILON
+                    } else {
+                        as_string(actual) == filter_value_as_string(filter_val)
+                    }
+                },
+            );
             match op {
                 ComparisonOp::Eq => equal,
                 ComparisonOp::Ne => !equal,

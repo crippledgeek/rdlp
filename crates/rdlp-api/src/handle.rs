@@ -32,7 +32,7 @@ impl DownloadId {
 
     /// Get the raw numeric value.
     #[must_use]
-    pub fn as_u64(&self) -> u64 {
+    pub const fn as_u64(&self) -> u64 {
         self.0
     }
 }
@@ -62,7 +62,7 @@ pub struct DownloadHandle {
 
 impl DownloadHandle {
     /// Create a new handle (crate-internal).
-    pub(crate) fn new(
+    pub(crate) const fn new(
         id: DownloadId,
         events_rx: mpsc::Receiver<Event>,
         cancel_token: CancellationToken,
@@ -78,14 +78,14 @@ impl DownloadHandle {
 
     /// The download ID for this handle.
     #[must_use]
-    pub fn id(&self) -> DownloadId {
+    pub const fn id(&self) -> DownloadId {
         self.id
     }
 
     /// Mutable reference to the event receiver for polling.
     ///
     /// Use `recv().await` to get the next event, or use in a `tokio::select!`.
-    pub fn events(&mut self) -> &mut mpsc::Receiver<Event> {
+    pub const fn events(&mut self) -> &mut mpsc::Receiver<Event> {
         &mut self.events_rx
     }
 

@@ -95,7 +95,7 @@ pub enum Event {
     /// Download completed successfully.
     ///
     /// Carries only the output file paths. Consumers needing full metadata
-    /// (InfoDict, stats) should use the return value from `download()`.
+    /// (`InfoDict`, stats) should use the return value from `download()`.
     Completed {
         /// The download this event belongs to.
         id: DownloadId,
@@ -175,7 +175,7 @@ pub enum Event {
 impl Event {
     /// Returns the [`DownloadId`] associated with this event.
     #[must_use]
-    pub fn download_id(&self) -> DownloadId {
+    pub const fn download_id(&self) -> DownloadId {
         match self {
             Self::Started { id, .. }
             | Self::MetadataReady { id, .. }
@@ -228,10 +228,7 @@ mod tests {
                 format_id: "hls-720".into(),
                 quality: "720p".into(),
             },
-            Event::Progress {
-                id,
-                progress: progress.clone(),
-            },
+            Event::Progress { id, progress },
             Event::PostProcessing {
                 id,
                 stage: "remux".into(),
@@ -324,7 +321,7 @@ mod tests {
             id,
             output_files: vec![std::path::PathBuf::from("/tmp/a.mp4")],
         };
-        let cloned = event.clone();
+        let cloned = event;
         assert_eq!(cloned.download_id(), id);
     }
 }

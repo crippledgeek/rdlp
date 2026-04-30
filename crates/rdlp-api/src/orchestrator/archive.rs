@@ -167,7 +167,7 @@ mod tests {
     /// the bug-fix-requires-failing-test rule asks for.
     ///
     /// We launch many threads that each write a long marker line. With
-    /// `O_APPEND` alone, glibc is allowed to split write() into multiple
+    /// `O_APPEND` alone, glibc is allowed to split `write()` into multiple
     /// system calls under load — historically this is the source of torn
     /// lines. With `flock`, every line lands atomically.
     #[test]
@@ -175,15 +175,15 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
+        const THREADS: usize = 32;
+        const PER_THREAD: usize = 50;
+
         let dir = tempfile::tempdir().unwrap();
         let path = Arc::new(dir.path().join("archive.txt"));
-
         // Long-ish per-line payload increases the chance that an unprotected
         // write would tear. Using `extractor` as a fixed prefix and `id` as
         // a marker makes interleavings detectable: every recorded line MUST
         // be `SiteA <numeric-id>` exactly.
-        const THREADS: usize = 32;
-        const PER_THREAD: usize = 50;
 
         let mut handles = Vec::with_capacity(THREADS);
         for t in 0..THREADS {

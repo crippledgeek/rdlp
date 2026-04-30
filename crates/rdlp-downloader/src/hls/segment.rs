@@ -35,7 +35,7 @@ use crate::http::HttpDownloader;
 /// * `Ok((index, path, bytes))` - Successfully downloaded segment
 /// * `Err(_)` - Failed after all retries
 #[instrument(skip(http_downloader, retry_config, progress), fields(segment = idx))]
-pub(crate) async fn download_segment_with_retry(
+pub async fn download_segment_with_retry(
     http_downloader: &HttpDownloader,
     retry_config: &rdlp_core::RetryConfig,
     buffer_size: usize,
@@ -159,7 +159,7 @@ pub(crate) async fn download_segment_with_retry(
 /// EXT-X-MAP may specify a `BYTERANGE` when the init data lives inside a
 /// larger resource.  When present we send an HTTP `Range` header so we only
 /// fetch the relevant bytes.
-pub(crate) async fn download_init_segment(
+pub async fn download_init_segment(
     http_downloader: &HttpDownloader,
     retry_config: &rdlp_core::RetryConfig,
     init: &InitSegmentInfo,

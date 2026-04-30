@@ -91,7 +91,12 @@ pub fn chunk_size_for_file(file_size: u64) -> usize {
 
 /// Calculate chunk information for a file
 ///
-/// Returns (chunk_size, total_chunks)
+/// Returns (`chunk_size`, `total_chunks`)
+///
+/// # Panics
+///
+/// Panics if `strategy` is [`ChunkSizeStrategy::Fixed`] and the provided size is not a
+/// power of two.
 #[must_use]
 pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, usize) {
     let chunk_size = match strategy {

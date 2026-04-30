@@ -3,6 +3,25 @@
 //! Provides `convert_video` (async entry point) plus synchronous helpers for
 //! video transcoding with filter graph pixel format conversion, and video
 //! encoder packet writing.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (`u32`/`i32`/`i64`/`f64`).
+//!   Each cast is audited: codec properties like width, height, bit rate are within
+//!   valid ranges and the conversions are intentional.
+//! - `clippy::expect_used`: `Option`-returning accessors after just-opened contexts
+//!   are guaranteed non-null by construction.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::similar_names,      // dec_ctx / enc_ctx / vid_ctx are standard FFmpeg naming
+    clippy::option_if_let_else, // complex closures are clearer as if let
+)]
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,7 +36,7 @@ use super::super::salvage::prepare_input_with_salvage;
 use super::super::{FFmpegRunner, RemuxOptions, VideoConvertOptions, ensure_init};
 use super::mux_timing::flush_interleave_queue;
 
-/// Callback type for forwarding FFmpeg log lines to the UI.
+/// Callback type for forwarding `FFmpeg` log lines to the UI.
 type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 
 impl FFmpegRunner {
@@ -29,6 +48,12 @@ impl FFmpegRunner {
     ///
     /// Automatically detects and salvages corrupt Matroska/WebM containers
     /// before conversion to prevent EBML-induced muxer failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probing, decoding, encoding, or muxing fails —
+    /// including I/O errors, unsupported codec errors, and ENOMEM during
+    /// mux write.
     pub async fn convert_video(
         &self,
         input: impl AsRef<Path>,
@@ -159,7 +184,7 @@ impl FFmpegRunner {
             // Prefer avg_frame_rate, but fall back to r_frame_rate if avg looks wrong
             // (zero, negative, or unreasonably high like 100+ fps for non-HFR content)
             let avg_fps = if avg.denominator() > 0 {
-                avg.numerator() as f64 / avg.denominator() as f64
+                f64::from(avg.numerator()) / f64::from(avg.denominator())
             } else {
                 0.0
             };
@@ -305,10 +330,10 @@ impl FFmpegRunner {
         // - audio_copy=true → stream copy (existing path)
         // - audio_codec=Some → re-encode with specified encoder
         // - neither → no audio output stream
-        let audio_encode_codec: Option<&str> = if !opts.audio_copy {
-            opts.audio_codec.as_deref()
-        } else {
+        let audio_encode_codec: Option<&str> = if opts.audio_copy {
             None
+        } else {
+            opts.audio_codec.as_deref()
         };
 
         // Add audio output stream (stream copy) if audio exists and copy requested
@@ -720,7 +745,7 @@ impl FFmpegRunner {
     /// Build audio filter graph for format/rate conversion in transcode path.
     ///
     /// Uses `abuffer → aformat → abuffersink` via `parse_and_validate_filter_graph`.
-    /// The buffersink frame_size is set to match the encoder's required frame size.
+    /// The buffersink `frame_size` is set to match the encoder's required frame size.
     fn build_audio_transcode_filter(
         decoder: &ffmpeg_the_third::decoder::Audio,
         encoder: &ffmpeg_the_third::encoder::audio::Encoder,
@@ -812,8 +837,8 @@ impl FFmpegRunner {
     /// jump produces a burst of near-identical DTS values in the output,
     /// causing audible desync.
     ///
-    /// The counter is in sample units (1/sample_rate) and rescaled to the
-    /// filter graph's input time_base via `Rescale::rescale`.
+    /// The counter is in sample units (`1/sample_rate`) and rescaled to the
+    /// filter graph's input `time_base` via `Rescale::rescale`.
     #[allow(clippy::too_many_arguments)]
     fn drain_audio_transcode_filtered(
         decoder: &mut ffmpeg_the_third::decoder::Audio,

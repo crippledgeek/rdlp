@@ -25,6 +25,11 @@ impl Orchestrator {
         info: &rdlp_types::InfoDict,
         media_file: &Path,
     ) -> Option<PathBuf> {
+        // Streaming size cap (20 MB) — adversarial CDN can't OOM the host
+        // by sending a 1 GB image before the cap fires.
+        const MAX_THUMBNAIL_BYTES: usize = 20 * 1024 * 1024;
+        use futures_util::StreamExt;
+
         // Get best thumbnail URL
         let thumbnail_url = info.thumbnail.as_deref().or_else(|| {
             info.thumbnails
@@ -49,8 +54,7 @@ impl Orchestrator {
                     .iter()
                     .any(|known| ext.eq_ignore_ascii_case(known))
             })
-            .map(str::to_lowercase)
-            .unwrap_or_else(|| "jpg".to_owned());
+            .map_or_else(|| "jpg".to_owned(), str::to_lowercase);
 
         // Build output path: {media_stem}.{ext}
         let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
@@ -91,10 +95,6 @@ impl Orchestrator {
             return None;
         }
 
-        // Streaming size cap (20 MB) — adversarial CDN can't OOM the host
-        // by sending a 1 GB image before the cap fires.
-        const MAX_THUMBNAIL_BYTES: usize = 20 * 1024 * 1024;
-        use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
         let mut bytes: Vec<u8> = Vec::new();
         loop {

@@ -24,5 +24,18 @@ backon = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 
-[lints]
-workspace = true
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Workspace baseline
+must_use_candidate = "warn"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+disallowed_methods = "deny"
+# Security lints
+unwrap_used = "warn"
+expect_used = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"

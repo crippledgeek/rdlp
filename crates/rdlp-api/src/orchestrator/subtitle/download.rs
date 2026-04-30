@@ -110,7 +110,7 @@ impl Orchestrator {
         }
 
         // Generate output path from video title using resolved container
-        let sanitized = self.sanitize_filename(&info.title);
+        let sanitized = Self::sanitize_filename(&info.title);
         let output_stub = super::super::container_resolver::output_stub(
             &self.config,
             &self.config.output_directory,
@@ -127,7 +127,7 @@ impl Orchestrator {
 
     /// Download subtitles using the structured pipeline with status reporting.
     ///
-    /// Normalizes InfoDict subtitles into [`SubtitleResult`], optionally
+    /// Normalizes `InfoDict` subtitles into [`SubtitleResult`], optionally
     /// validates URLs, applies policy (language filtering, strict mode),
     /// and downloads. Returns downloaded paths and any warnings.
     pub(in crate::orchestrator) async fn download_subtitles_with_pipeline(
@@ -226,6 +226,7 @@ impl Orchestrator {
         output: &Path,
     ) -> std::result::Result<(), anyhow::Error> {
         const MAX_SUBTITLE_BYTES: usize = 5 * 1024 * 1024;
+        use futures_util::StreamExt;
 
         rdlp_security::validate_url_security(url)
             .map_err(|e| anyhow::anyhow!("subtitle URL rejected: {e}"))?;
@@ -239,7 +240,6 @@ impl Orchestrator {
         // Streaming size check — abort the moment cumulative bytes
         // exceed MAX_SUBTITLE_BYTES rather than buffer the full body
         // before checking.
-        use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = stream.next().await {

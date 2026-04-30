@@ -35,14 +35,14 @@ const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 /// Downloader configuration (shared across clones via Arc)
 ///
 /// This struct consolidates all config fields into a single Arc,
-/// making HttpDownloader clones truly zero-cost (~5ns Arc clone vs ~24 bytes field copies).
+/// making `HttpDownloader` clones truly zero-cost (~5ns Arc clone vs ~24 bytes field copies).
 ///
 /// **Memory optimization:**
 /// - Before: 591 clones × 24 bytes = ~14 KB copied
 /// - After: 591 Arc clones × 8 bytes = ~5 KB pointers
 /// - **Savings: ~9 KB per download**
 #[derive(Clone)]
-pub(crate) struct DownloaderConfig {
+pub struct DownloaderConfig {
     pub buffer_size: usize,
     pub retry_config: RetryConfig,
     pub concurrent_fragments: usize,

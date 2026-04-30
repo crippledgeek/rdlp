@@ -1,7 +1,20 @@
-//! MetadataStage — embeds metadata (title, artist, chapters, etc.) into media files.
+//! `MetadataStage` — embeds metadata (title, artist, chapters, etc.) into media files.
 //!
 //! This stage runs at index 6 when `config.embed_metadata` is true.
 //! Non-fatal: metadata failure logs a warning and passes through.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::indexing_slicing`: chapter index accesses use pre-validated slice bounds.
+//! - `clippy::cast_*`: `f64`-to-`i64`/`usize` conversions for `FFmpeg` timestamp
+//!   arithmetic. Values are within valid range (duration in seconds, chapter positions).
+
+#![allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +38,7 @@ pub struct MetadataStage {
 impl MetadataStage {
     /// Create a new `MetadataStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -106,7 +119,7 @@ impl MetadataStage {
 
 #[async_trait]
 impl PipelineStage for MetadataStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "MetadataStage"
     }
 
@@ -346,10 +359,10 @@ mod tests {
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].id, 0);
         assert_eq!(chapters[0].start_ms, 0);
-        assert_eq!(chapters[0].end_ms, 30000);
+        assert_eq!(chapters[0].end_ms, 30_000);
         assert_eq!(chapters[0].title, "Intro");
-        assert_eq!(chapters[1].start_ms, 30000);
-        assert_eq!(chapters[1].end_ms, 120000);
+        assert_eq!(chapters[1].start_ms, 30_000);
+        assert_eq!(chapters[1].end_ms, 120_000);
     }
 
     #[test]

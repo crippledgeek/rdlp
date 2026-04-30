@@ -3,6 +3,24 @@
 //! Each stage is a `tokio::spawn` task connected by bounded `mpsc` channels.
 //! [`FileTracker`] owns all file lifecycle decisions — no stage ever deletes
 //! files directly. [`TempRegistry`] handles crash cleanup.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::indexing_slicing`: `txs[0]` and `txs[i + 1]` are accessed only
+//!   within iteration over `stages`, where `txs` has `stages.len() + 1` elements.
+//! - `clippy::expect_used`: `rxs_iter.next().expect(…)` at the end of the
+//!   channel-construction loop is guaranteed by construction — `rxs` contains
+//!   `stages.len() + 1` elements.
+//! - `clippy::literal_string_with_formatting_args`: `{i}` in the expect string
+//!   is documentation context, not a formatting argument.
+
+#![allow(
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::literal_string_with_formatting_args,
+    clippy::unnecessary_literal_bound,  // `fn name() -> &str` on a trait method returning literals
+    clippy::option_if_let_else,         // map_or_else refactors reduce readability here
+)]
 
 pub mod registry;
 pub mod stages;
@@ -56,7 +74,7 @@ pub struct PipelineMessage {
     pub original_stem: String,
     /// Whether the source was HLS (triggers auto-remux in `RemuxStage`).
     pub is_hls: bool,
-    /// Enable verbose FFmpeg logging in stages.
+    /// Enable verbose `FFmpeg` logging in stages.
     pub verbose: bool,
     /// Factory for creating per-stage progress callbacks.
     pub callback_factory: Option<PostProcessCallbackFactory>,
@@ -134,6 +152,12 @@ impl Pipeline {
     /// Run the full pipeline for a single video.
     ///
     /// Returns the final `current_files` from the tracker on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] if any fatal stage fails (merge, audio extract,
+    /// normalize, remux, or recode). Non-fatal stages (subtitle, metadata,
+    /// thumbnail, fixup) log warnings and continue.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
@@ -245,7 +269,7 @@ impl Pipeline {
 
     /// Spawn the stage chain and return the final receiver.
     ///
-    /// The chain is: initial_msg → [stage_0] → [stage_1] → ... → final_rx
+    /// The chain is: `initial_msg` → [`stage_0`] → [`stage_1`] → ... → `final_rx`
     ///
     /// Each stage task reads from `in_rx`, may process or pass-through,
     /// then sends to `out_tx`. When a fatal stage fails, it drops `out_tx`
@@ -290,9 +314,8 @@ impl Pipeline {
 
             tokio::spawn(async move {
                 let mut in_rx = in_rx_i;
-                let msg = match in_rx.recv().await {
-                    Some(m) => m,
-                    None => return, // upstream cascade
+                let Some(msg) = in_rx.recv().await else {
+                    return; // upstream cascade
                 };
 
                 if !stage.should_run(&msg) {

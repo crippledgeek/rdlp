@@ -96,7 +96,7 @@ pub struct DownloadOptions {
     /// `None` = use default (Copy).
     #[serde(default)]
     pub recode_audio: Option<RecodeAudioMode>,
-    /// Enable verbose FFmpeg log capture for this download.
+    /// Enable verbose `FFmpeg` log capture for this download.
     /// `None` = use settings default.
     #[serde(default)]
     pub verbose: Option<bool>,
@@ -139,8 +139,10 @@ pub struct PlaylistContext {
 ///
 /// # Errors
 ///
-/// Returns [`AppError::InvalidInput`] if URL validation fails.
+/// Returns [`AppError::InvalidInput`] if URL validation or proxy URL
+/// validation fails.
 #[tauri::command]
+#[allow(clippy::too_many_lines)]
 pub async fn start_download(
     url: String,
     options: DownloadOptions,
@@ -162,7 +164,7 @@ pub async fn start_download(
     let settings = state
         .settings
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
 
     // Validate proxy URL at the boundary if provided per-download.
@@ -189,8 +191,7 @@ pub async fn start_download(
     // Build the download request from options + settings
     let output_dir = options
         .output_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| settings.output_dir.clone());
+        .map_or_else(|| settings.output_dir.clone(), PathBuf::from);
 
     let remux = options.remux.or(settings.default_remux);
     let extract_audio = options.extract_audio.or(settings.default_extract_audio);
@@ -225,7 +226,10 @@ pub async fn start_download(
 
     // Add job to queue as Pending and immediately attach the options snapshot.
     {
-        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = state
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         queue.add_job(&job_id, &url, title, playlist_context);
         if let Some(job) = queue.get_job_mut(&job_id) {
             job.options = saved_options;
@@ -233,7 +237,7 @@ pub async fn start_download(
     }
 
     let request = DownloadRequest {
-        url: url.clone(),
+        url,
         output: OutputOptions {
             output_dir: Some(output_dir),
             template: output_template,
@@ -267,7 +271,9 @@ pub async fn start_download(
             write_thumbnail: write_thumbnail_resolved.then_some(true),
             normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
             loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
-            loudnorm_preset: options.loudnorm_preset.or(settings.loudnorm_preset.clone()),
+            loudnorm_preset: options
+                .loudnorm_preset
+                .or_else(|| settings.loudnorm_preset.clone()),
             loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
             loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
             loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
@@ -285,7 +291,7 @@ pub async fn start_download(
             normalize_boost_db: options
                 .normalize_boost_db
                 .or(settings.normalize_boost_db)
-                .or(options.audio_gain_target.or(settings.audio_gain_target)),
+                .or_else(|| options.audio_gain_target.or(settings.audio_gain_target)),
             ..PostProcessOptions::default()
         },
         network: NetworkOptions {
@@ -313,7 +319,10 @@ pub async fn start_download(
     let cancel_token = handle.cancel_token();
     let now = chrono::Utc::now().timestamp();
     {
-        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = state
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         queue.start_job(&job_id, Box::new(move || cancel_token.cancel()), now);
     }
 
@@ -334,7 +343,9 @@ pub async fn start_download(
             events::emit_event(&app, &id, &event);
 
             // Update queue state based on event
-            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            let mut q = queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(job) = q.get_job_mut(&id) {
                 match &event {
                     Event::Progress { progress, .. } => {
@@ -404,7 +415,7 @@ mod tests {
             loudnorm_preset: options
                 .loudnorm_preset
                 .clone()
-                .or(settings.loudnorm_preset.clone()),
+                .or_else(|| settings.loudnorm_preset.clone()),
             loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
             loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
             loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
@@ -747,7 +758,10 @@ mod tests {
 #[tauri::command]
 pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
     let cancel_fn = {
-        let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut queue = state
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         queue
             .take_cancel(&job_id)
             .ok_or_else(|| AppError::DownloadFailed {
@@ -774,13 +788,25 @@ pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Resu
 ///
 /// * `state` - Managed application state.
 ///
+/// # Errors
+///
+/// This function currently does not return errors but uses `Result` for
+/// a forward-compatible IPC signature.
+///
 /// # Returns
 ///
 /// A vector of all [`DownloadJob`]s, cloned from the queue.
 #[tauri::command]
 pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, AppError> {
-    let queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(queue.all_jobs().into_iter().cloned().collect())
+    let jobs = state
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .all_jobs()
+        .into_iter()
+        .cloned()
+        .collect();
+    Ok(jobs)
 }
 
 /// Remove a completed, failed, or cancelled download from the queue.
@@ -799,9 +825,13 @@ pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, A
 /// (not found or still active).
 #[tauri::command]
 pub async fn remove_job(job_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let removed = state
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove_job(&job_id);
 
-    if !queue.remove_job(&job_id) {
+    if !removed {
         return Err(AppError::DownloadFailed {
             job_id,
             message: "Job not found or still active".to_owned(),
@@ -820,13 +850,22 @@ pub async fn remove_job(job_id: String, state: State<'_, AppState>) -> Result<()
 ///
 /// * `state` - Managed application state.
 ///
+/// # Errors
+///
+/// This function currently does not return errors but uses `Result` for
+/// a forward-compatible IPC signature.
+///
 /// # Returns
 ///
 /// The number of jobs removed.
 #[tauri::command]
 pub async fn clear_completed_jobs(state: State<'_, AppState>) -> Result<usize, AppError> {
-    let mut queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(queue.clear_completed())
+    let count = state
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear_completed();
+    Ok(count)
 }
 
 /// Retrieve the options used when a job was originally started.
@@ -851,15 +890,20 @@ pub async fn get_job_options(
     job_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<serde_json::Value>, AppError> {
-    let queue = state.queue.lock().unwrap_or_else(|e| e.into_inner());
-    let job = queue
+    let options = state
+        .queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_job(&job_id)
         .ok_or_else(|| AppError::DownloadFailed {
             job_id: job_id.clone(),
             message: "Job not found".to_owned(),
             retryable: false,
-        })?;
-    Ok(job.options.as_ref().map(|o| o.json.clone()))
+        })?
+        .options
+        .as_ref()
+        .map(|o| o.json.clone());
+    Ok(options)
 }
 
 // ============================================================================

@@ -2,6 +2,14 @@
 //!
 //! Provides low-level packet reading, timestamp rescaling, and DTS
 //! comparison helpers used by both the standard and MKV merge paths.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `av_find_stream` returns `i32` stream indices which are
+//!   then used as `usize` for pointer arithmetic. The values are validated as
+//!   non-negative before conversion.
+
+#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 
 use crate::error::{PostProcessError, Result};
 

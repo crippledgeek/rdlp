@@ -27,6 +27,7 @@ struct NetscapeCookie {
 /// Parse a Netscape-format cookie file and insert cookies into the jar.
 ///
 /// Returns the number of cookies successfully loaded.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn load_cookie_file(
     path: &Path,
     jar: &impl CookieStore,
@@ -74,6 +75,7 @@ fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
 }
 
 /// Parse a single Netscape cookie line.
+#[allow(clippy::indexing_slicing)] // all accesses guarded by the len() < 7 check above
 fn parse_cookie_line(line: &str) -> Option<NetscapeCookie> {
     let fields: Vec<&str> = line.split('\t').collect();
     if fields.len() < 7 {
@@ -128,11 +130,10 @@ mod tests {
     }
 
     /// Flatten a `Cookies` result to a single string for assertions.
-    fn cookies_string(cookies: wreq::cookie::Cookies) -> Option<String> {
-        let parts: Vec<&wreq::header::HeaderValue> = match &cookies {
+    fn cookies_string(cookies: &wreq::cookie::Cookies) -> Option<String> {
+        let parts: Vec<&wreq::header::HeaderValue> = match cookies {
             wreq::cookie::Cookies::Compressed(hv) => vec![hv],
             wreq::cookie::Cookies::Uncompressed(v) => v.iter().collect(),
-            wreq::cookie::Cookies::Empty => return None,
             _ => return None,
         };
         let joined: Vec<String> = parts
@@ -155,7 +156,7 @@ mod tests {
 
         let uri: Uri = "https://example.com/".parse().unwrap();
         let cookies = jar.cookies(&uri);
-        let cookie_str = cookies_string(cookies).expect("cookies present");
+        let cookie_str = cookies_string(&cookies).expect("cookies present");
         assert!(cookie_str.contains("session=abc123"));
     }
 
@@ -204,7 +205,7 @@ mod tests {
 
         let uri: Uri = "https://example.com/".parse().unwrap();
         let cookies = jar.cookies(&uri);
-        let cookie_str = cookies_string(cookies).expect("cookies present");
+        let cookie_str = cookies_string(&cookies).expect("cookies present");
         assert!(cookie_str.contains("httponly_cookie=secret"));
     }
 }

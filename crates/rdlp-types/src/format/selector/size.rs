@@ -12,7 +12,7 @@
 /// - `1.5GiB` → 1.5 * 1,073,741,824 = 1,610,612,736 (binary)
 ///
 /// Returns `None` if the string is not a valid size literal.
-pub(crate) fn parse_size(input: &str) -> Option<u64> {
+pub fn parse_size(input: &str) -> Option<u64> {
     if input.is_empty() {
         return None;
     }
@@ -51,11 +51,17 @@ pub(crate) fn parse_size(input: &str) -> Option<u64> {
         _ => return None,
     };
 
+    // multiplier is at most 2^50 (1024^5); f64 precision loss is acceptable for size parsing.
+    #[allow(clippy::cast_precision_loss)]
     let bytes = number * multiplier as f64;
+    // Overflow guard: u64::MAX as f64 is an approximation but sufficient as an upper bound.
+    #[allow(clippy::cast_precision_loss)]
     if bytes > u64::MAX as f64 {
         return None;
     }
 
+    // bytes is finite, non-negative, and ≤ u64::MAX; truncation is intentional.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     Some(bytes as u64)
 }
 

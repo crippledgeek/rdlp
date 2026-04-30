@@ -9,7 +9,7 @@ use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
 
 /// Print all supported codecs
-pub(crate) fn print_codecs() {
+pub fn print_codecs() {
     println!("Audio codecs (14):");
     let audio_codecs = [
         ("mp3", "libmp3lame", "MPEG Layer 3"),
@@ -55,8 +55,8 @@ pub(crate) fn print_codecs() {
     }
 }
 
-/// Print specific fields from an InfoDict
-pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
+/// Print specific fields from an `InfoDict`
+pub fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
     let value = serde_json::to_value(info).context("failed to serialize InfoDict to JSON value")?;
     let map = value
         .as_object()
@@ -80,7 +80,7 @@ pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
     Ok(())
 }
 
-/// Map RdlpApiError to a structured process exit code.
+/// Map `RdlpApiError` to a structured process exit code.
 ///
 /// Exit codes:
 ///   0 -- success (handled by Ok paths)
@@ -89,7 +89,7 @@ pub(crate) fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
 ///   3 -- extraction failed (unsupported URL, extraction error)
 ///   4 -- download/network failed (network error)
 ///   5 -- configuration/format error (invalid input, builder error)
-pub(crate) fn exit_code_for(e: &RdlpApiError) -> i32 {
+pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
     match e {
         RdlpApiError::UserCancelled => 2,
         RdlpApiError::UnsupportedUrl { .. } | RdlpApiError::ExtractError { .. } => 3,
@@ -102,11 +102,11 @@ pub(crate) fn exit_code_for(e: &RdlpApiError) -> i32 {
     }
 }
 
-/// Log an RdlpApiError and exit with the appropriate structured code.
-pub(crate) fn fail_with(e: RdlpApiError, verbose: bool) -> ! {
+/// Log an `RdlpApiError` and exit with the appropriate structured code.
+pub fn fail_with(e: &RdlpApiError, verbose: bool) -> ! {
     error!("Error: {e}");
     if verbose {
         error!("Debug info: {e:?}");
     }
-    std::process::exit(exit_code_for(&e))
+    std::process::exit(exit_code_for(e))
 }

@@ -5,6 +5,7 @@
 //! hiding, Unicode-aware truncation, and configurable styles.
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 pub mod column;
 pub mod truncate;
@@ -28,9 +29,7 @@ pub struct TableOpts {
 
 /// Detect terminal width, falling back to 120 if unavailable.
 fn detect_width() -> usize {
-    terminal_size::terminal_size()
-        .map(|(w, _)| w.0 as usize)
-        .unwrap_or(120)
+    terminal_size::terminal_size().map_or(120, |(w, _)| w.0 as usize)
 }
 
 /// Render a responsive format table for terminal display.
@@ -45,6 +44,9 @@ fn detect_width() -> usize {
 ///
 /// # Returns
 /// A `String` containing the complete table, ready for printing.
+// Indexing budget.widths[i] / columns[col_idx]: both vecs are built together
+// and have consistent lengths; i is from enumerate() on the same vec.
+#[allow(clippy::indexing_slicing)]
 pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
     if formats.is_empty() {
         return String::new();
@@ -118,6 +120,7 @@ pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
 /// * `formats` - Format references to render
 /// * `opts` - Same options used for the header table
 #[must_use]
+#[allow(clippy::indexing_slicing)]
 pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> {
     if formats.is_empty() {
         return Vec::new();
@@ -164,6 +167,7 @@ pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> 
 /// # Returns
 /// A tuple of (header string, row strings). Both are empty if `formats` is empty.
 #[must_use]
+#[allow(clippy::indexing_slicing)]
 pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, Vec<String>) {
     if formats.is_empty() {
         return (String::new(), Vec::new());
@@ -221,6 +225,13 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
     use console::measure_text_width;

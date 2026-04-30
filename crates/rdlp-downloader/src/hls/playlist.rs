@@ -20,7 +20,7 @@ use crate::http::HttpDownloader;
 /// # Returns
 /// * `Ok(PlaylistParseResult)` - Segments and optional init segment URL
 /// * `Err(_)` - Network error, parse error, or empty playlist
-pub(crate) async fn parse_playlist(
+pub async fn parse_playlist(
     http_downloader: &HttpDownloader,
     m3u8_url: &str,
 ) -> Result<PlaylistParseResult> {
@@ -45,7 +45,12 @@ pub(crate) async fn parse_playlist(
     // Parse with m3u8-rs
     let playlist = m3u8_rs::parse_playlist_res(playlist_text.as_bytes()).map_err(|e| {
         // Show the actual response content when parsing fails (e.g. CDN error pages)
-        if !playlist_text.trim().starts_with("#EXTM3U") {
+        if playlist_text.trim().starts_with("#EXTM3U") {
+            RdlpError::Extraction {
+                message: format!("M3U8 parse error: {e:?}"),
+                url: Some(m3u8_url.to_string()),
+            }
+        } else {
             let preview: String = playlist_text.chars().take(200).collect();
             RdlpError::Extraction {
                 message: format!(
@@ -53,16 +58,11 @@ pub(crate) async fn parse_playlist(
                 ),
                 url: Some(m3u8_url.to_string()),
             }
-        } else {
-            RdlpError::Extraction {
-                message: format!("M3U8 parse error: {e:?}"),
-                url: Some(m3u8_url.to_string()),
-            }
         }
     })?;
 
     match playlist {
-        m3u8_rs::Playlist::MediaPlaylist(media) => parse_media_playlist(media, m3u8_url),
+        m3u8_rs::Playlist::MediaPlaylist(ref media) => parse_media_playlist(media, m3u8_url),
         m3u8_rs::Playlist::MasterPlaylist(master) => {
             parse_master_playlist(http_downloader, master, m3u8_url).await
         }
@@ -71,7 +71,7 @@ pub(crate) async fn parse_playlist(
 
 /// Parse a media playlist (direct segments)
 fn parse_media_playlist(
-    media: m3u8_rs::MediaPlaylist,
+    media: &m3u8_rs::MediaPlaylist,
     m3u8_url: &str,
 ) -> Result<PlaylistParseResult> {
     // Warn about encryption (not yet supported)
@@ -98,14 +98,12 @@ fn parse_media_playlist(
         .map(|seg| {
             let url = base_url
                 .join(&seg.uri)
-                .map(|u| u.to_string())
-                .unwrap_or_else(|_| seg.uri.clone());
+                .map_or_else(|_| seg.uri.clone(), |u| u.to_string());
 
             let init_segment = seg.map.as_ref().map(|map| {
                 let init_url = base_url
                     .join(&map.uri)
-                    .map(|u| u.to_string())
-                    .unwrap_or_else(|_| map.uri.clone());
+                    .map_or_else(|_| map.uri.clone(), |u| u.to_string());
                 InitSegmentInfo {
                     url: init_url,
                     byte_range: map.byte_range.as_ref().map(|br| (br.length, br.offset)),
@@ -114,7 +112,7 @@ fn parse_media_playlist(
 
             SegmentInfo {
                 url,
-                duration: seg.duration as f64,
+                duration: f64::from(seg.duration),
                 init_segment,
             }
         })
@@ -188,7 +186,10 @@ async fn parse_master_playlist(
         .filter(|v| !v.is_i_frame)
         .max_by_key(|v| v.bandwidth)
         .or_else(|| master.variants.iter().max_by_key(|v| v.bandwidth))
-        .expect("master playlist has at least one variant");
+        .ok_or_else(|| RdlpError::Extraction {
+            message: "Master playlist variants list unexpectedly empty".into(),
+            url: Some(m3u8_url.to_string()),
+        })?;
 
     let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
         message: format!("Invalid base URL: {e}"),
@@ -214,7 +215,7 @@ async fn parse_master_playlist(
 }
 
 /// Extract segment number from a URL matching patterns like:
-/// - `seg-1-v1-a1.ts` or `seg-3-v1-a1.m4s` (XHamster)
+/// - `seg-1-v1-a1.ts` or `seg-3-v1-a1.m4s` (`XHamster`)
 /// - `segment1.ts` or `segment-1.ts`
 /// - Other common segment numbering schemes
 fn extract_segment_number(url: &str) -> Option<u32> {

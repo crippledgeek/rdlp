@@ -3,8 +3,27 @@
 //! Container-specific strategies:
 //! - **MP4/MOV/M4A/M4V**: Map all streams + thumbnail as video with `ATTACHED_PIC`
 //! - **MKV/MKA**: Native Matroska attachment via raw FFI
-//! - **MP3**: Map audio only + thumbnail as video with ID3v2 metadata
+//! - **MP3**: Map audio only + thumbnail as video with `ID3v2` metadata
 //! - **FLAC/OGG/Opus**: Map all streams + thumbnail with `ATTACHED_PIC`
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types. All casts are
+//!   audited and within valid ranges for `FFmpeg`-returned values.
+//! - `clippy::expect_used`: post-construction stream access after `add_stream_copy`
+//!   is guaranteed valid by construction.
+//! - `clippy::indexing_slicing`: `stream_mapping[ist_index]` and `ist_time_bases[ist_index]`
+//!   are pre-allocated to stream count and indexed only during stream iteration.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::similar_names,      // ist_index/ost_index, thumb_ist/thumb_ost are FFmpeg convention
+    clippy::option_if_let_else, // ok_or_else pattern with complex closures is clearer as if let
+)]
 
 mod mkv_raw_ffi;
 
@@ -23,11 +42,17 @@ impl FFmpegRunner {
     ///
     /// Opens both the media file and thumbnail image, copies all media streams,
     /// and adds the thumbnail as a video stream with `ATTACHED_PIC` disposition.
-    /// Container-specific handling for MKV (attachment) and MP3 (ID3v2).
+    /// Container-specific handling for MKV (attachment) and MP3 (`ID3v2`).
     ///
-    /// When `callback` is provided, FFmpeg C-level log messages are captured
+    /// When `callback` is provided, `FFmpeg` C-level log messages are captured
     /// and forwarded via [`PostProcessCallback::on_log`] instead of being
     /// suppressed. When `None`, muxer trace is silently suppressed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` fails to open the media or thumbnail input,
+    /// create the output container, or write packets (including I/O errors
+    /// and mux failures).
     pub async fn embed_thumbnail(
         &self,
         media: impl AsRef<Path>,
@@ -59,8 +84,9 @@ impl FFmpegRunner {
     /// Strategy varies by container:
     /// - **MP4/MOV/M4A/M4V**: Map all streams + thumbnail as video with `ATTACHED_PIC`
     /// - **MKV/MKA**: Map all streams + thumbnail as attachment with mimetype metadata
-    /// - **MP3**: Map audio only + thumbnail as video with ID3v2 metadata
+    /// - **MP3**: Map audio only + thumbnail as video with `ID3v2` metadata
     /// - **FLAC/OGG/Opus**: Map all streams + thumbnail with `ATTACHED_PIC`
+    #[allow(clippy::too_many_lines)]
     fn embed_thumbnail_sync(
         media: &Path,
         thumbnail: &Path,
@@ -90,7 +116,7 @@ impl FFmpegRunner {
             let result =
                 Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output, encoding_tool_override);
             // Forward captured logs before returning
-            Self::forward_captured_logs(&capture, callback);
+            Self::forward_captured_logs(capture.as_ref(), callback);
             return Ok(result?);
         }
 
@@ -157,9 +183,7 @@ impl FFmpegRunner {
         let thumb_ist = thumb_ictx
             .streams()
             .best(ffmpeg_the_third::media::Type::Video)
-            .ok_or(PostProcessError::ffmpeg_failed(
-                "no video stream found in thumbnail",
-            ))?;
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("no video stream found in thumbnail"))?;
         let thumb_ist_index = thumb_ist.index();
         let thumb_ist_time_base = thumb_ist.time_base();
         let thumb_params = thumb_ist.parameters();
@@ -268,14 +292,14 @@ impl FFmpegRunner {
             .context("failed to write output trailer for thumbnail embed")?;
 
         // Forward captured FFmpeg logs to the callback
-        Self::forward_captured_logs(&capture, callback);
+        Self::forward_captured_logs(capture.as_ref(), callback);
 
         Ok(())
     }
 
-    /// Drain captured FFmpeg C-level log messages and forward via callback.
+    /// Drain captured `FFmpeg` C-level log messages and forward via callback.
     fn forward_captured_logs(
-        capture: &Option<super::log_capture::LogCaptureGuard>,
+        capture: Option<&super::log_capture::LogCaptureGuard>,
         callback: Option<&dyn PostProcessCallback>,
     ) {
         if let (Some(guard), Some(cb)) = (capture, callback)

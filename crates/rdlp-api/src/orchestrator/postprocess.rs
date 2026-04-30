@@ -1,6 +1,6 @@
 //! Post-processing pipeline for downloaded files
 //!
-//! Handles FFmpeg remuxing, metadata embedding, and audio extraction.
+//! Handles `FFmpeg` remuxing, metadata embedding, and audio extraction.
 
 use super::{Orchestrator, Result};
 use crate::events::Event;
@@ -99,18 +99,15 @@ impl Orchestrator {
             self.pipeline.is_some()
         );
 
-        let pipeline = match &self.pipeline {
-            Some(p) => p,
-            None => {
-                // No pipeline available — return files unchanged.
-                if self.needs_postprocessing() || is_hls {
-                    warn!("Post-processing unavailable (FFmpeg not found)");
-                    if is_hls {
-                        warn!("HLS downloads may have container issues without FFmpeg remux");
-                    }
+        let Some(pipeline) = &self.pipeline else {
+            // No pipeline available — return files unchanged.
+            if self.needs_postprocessing() || is_hls {
+                warn!("Post-processing unavailable (FFmpeg not found)");
+                if is_hls {
+                    warn!("HLS downloads may have container issues without FFmpeg remux");
                 }
-                return Ok(files);
             }
+            return Ok(files);
         };
 
         // For HLS downloads always run (RemuxStage handles TS → MP4 via is_hls flag).

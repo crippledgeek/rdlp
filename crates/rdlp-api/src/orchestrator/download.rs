@@ -3,7 +3,10 @@
 //! Consolidates the CDN fallback retry loop and token expiry check that were
 //! previously duplicated between `state.rs` and `playlist.rs`.
 
-use super::{Orchestrator, errors::*};
+use super::{
+    Orchestrator,
+    errors::{OrchestratorError, Result},
+};
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, RdlpError};
 use rdlp_security::validate_url_security;
@@ -52,7 +55,7 @@ impl Orchestrator {
 
         debug!(
             url = rdlp_security::sanitize_for_logging(&format.url).as_str(),
-            headers = format.http_headers.as_ref().map_or(0, |h| h.len()),
+            headers = format.http_headers.as_ref().map_or(0, std::collections::HashMap::len),
             protocol = format.protocol.to_string().as_str();
             "Dispatching download"
         );
@@ -74,7 +77,7 @@ impl Orchestrator {
             })?;
 
         // Validate CDN token expiry
-        self.check_cdn_token_expiry(&format.url)?;
+        Self::check_cdn_token_expiry(&format.url)?;
 
         // Build URL chain: primary + fallbacks (validate each fallback before use)
         let download_urls: Vec<&str> = std::iter::once(format.url.as_str())
@@ -127,6 +130,7 @@ impl Orchestrator {
         if let Some(e) = last_err {
             return Err(e);
         }
+        #[allow(clippy::expect_used)] // loop invariant: last_err is None iff stats was set
         let stats = stats.expect("stats is Some when no error occurred");
         debug!("Downloaded successfully: {}", output_path.display());
         debug!("   Stats: {stats:?}");
@@ -190,7 +194,7 @@ impl Orchestrator {
                 url: format.url.clone(),
             })?;
 
-        self.check_cdn_token_expiry(&format.url)?;
+        Self::check_cdn_token_expiry(&format.url)?;
 
         let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::stdout());
 
@@ -210,11 +214,11 @@ impl Orchestrator {
     /// Check if the CDN token in a URL has expired.
     ///
     /// Supports two URL token formats:
-    /// - `validto=TIMESTAMP` (PornHub direct MP4)
-    /// - `~exp=TIMESTAMP~` (PornHub HLS / Akamai)
+    /// - `validto=TIMESTAMP` (`PornHub` direct MP4)
+    /// - `~exp=TIMESTAMP~` (`PornHub` HLS / Akamai)
     ///
     /// Returns `Ok(())` if no token or token is still valid.
-    fn check_cdn_token_expiry(&self, url: &str) -> Result<()> {
+    fn check_cdn_token_expiry(url: &str) -> Result<()> {
         if let Some(expires) = parse_url_expiry(url) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -239,13 +243,13 @@ impl Orchestrator {
 /// Parse CDN token expiry timestamp from a URL.
 ///
 /// Supports two formats:
-/// - `validto=TIMESTAMP` (PornHub direct MP4)
-/// - `~exp=TIMESTAMP~` (PornHub HLS / Akamai)
+/// - `validto=TIMESTAMP` (`PornHub` direct MP4)
+/// - `~exp=TIMESTAMP~` (`PornHub` HLS / Akamai)
 fn parse_url_expiry(url: &str) -> Option<u64> {
     /// Extract a `u64` timestamp immediately following `prefix` in `url`.
     fn extract_ts_after(url: &str, prefix: &str) -> Option<u64> {
         let rest = &url[url.find(prefix)? + prefix.len()..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         digits.parse::<u64>().ok()
     }
 

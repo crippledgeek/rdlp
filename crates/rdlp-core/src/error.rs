@@ -51,7 +51,7 @@ pub enum RdlpError {
     #[error("Post-processing failed: {0}")]
     PostProcess(String),
 
-    /// FFmpeg related errors
+    /// `FFmpeg` related errors
     #[error("FFmpeg error: {0}")]
     FFmpeg(String),
 
@@ -135,6 +135,10 @@ pub type Result<T> = std::result::Result<T, RdlpError>;
 ///
 /// Returns `Ok(())` if the response has a 2xx status code, otherwise returns
 /// an `Err(RdlpError::Network)` with details about the HTTP error.
+///
+/// # Errors
+///
+/// Returns [`RdlpError::Http`] if the response status code is not 2xx.
 ///
 /// # Example
 ///

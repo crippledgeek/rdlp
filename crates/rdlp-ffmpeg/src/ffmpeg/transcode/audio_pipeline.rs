@@ -3,6 +3,18 @@
 //! Provides `receive_and_process_audio`, `drain_filter_to_encoder`, and
 //! `drain_encoder_packets` for the standard interleaved-write audio
 //! transcoding pipeline used by `extract_audio_transcode_sync`.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` timestamp arithmetic requires `usize`/`i32` conversions.
+//!   All casts are audited.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,  // enc_ctx / dec_ctx pairs are standard FFmpeg naming
+)]
 
 use log::{debug, warn};
 
@@ -82,6 +94,7 @@ impl FFmpegRunner {
     /// writes via direct FFI `av_interleaved_write_frame` to capture the raw
     /// return code and I/O diagnostics on failure. Appropriate for
     /// multi-stream output.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn drain_encoder_packets(
         encoder: &mut ffmpeg_the_third::encoder::audio::Audio,
         octx: &mut ffmpeg_the_third::format::context::Output,
@@ -146,7 +159,7 @@ impl FFmpegRunner {
             let ret = unsafe {
                 ffmpeg_the_third::ffi::av_interleaved_write_frame(
                     octx.as_mut_ptr(),
-                    packet.as_ptr() as *mut _,
+                    packet.as_ptr().cast_mut(),
                 )
             };
             // Unref immediately: frees encoded data before next receive_packet.
@@ -191,7 +204,7 @@ impl FFmpegRunner {
 
                 let current_pos = unsafe {
                     let pb = (*octx.as_mut_ptr()).pb;
-                    if !pb.is_null() { (*pb).pos } else { 0 }
+                    if pb.is_null() { 0 } else { (*pb).pos }
                 };
                 if current_pos > timing.last_pos_check {
                     timing.last_pos_check = current_pos;

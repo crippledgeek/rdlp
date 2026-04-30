@@ -3,7 +3,7 @@
 mod archive;
 mod container_resolver;
 mod download;
-pub(crate) mod errors;
+pub mod errors;
 mod execution;
 mod extraction;
 mod interactive;
@@ -58,7 +58,7 @@ use tracing::instrument;
 // Format is large but DownloadPlan is always stored as Box<DownloadPlan>
 // in DownloadPhase, so the enum's stack size doesn't affect the state machine.
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum DownloadPlan {
+pub enum DownloadPlan {
     /// Download a single combined format
     Single(Format),
     /// Download video and audio separately, then merge
@@ -171,6 +171,8 @@ impl Orchestrator {
         // otherwise fall back to the process-level cached built-in-only registry.
         // The static fallback exists for callers that construct Orchestrator
         // directly (tests, internal tooling) without going through RdlpClient.
+        #[allow(clippy::option_if_let_else)]
+        // else-branch contains a static — map_or_else would be less clear
         let extractor_registry: Arc<dyn ExtractorRegistryTrait> =
             if let Some(r) = extractor_registry {
                 r as Arc<dyn ExtractorRegistryTrait>
@@ -199,7 +201,7 @@ impl Orchestrator {
 
     /// Build the channel-based post-processing pipeline.
     ///
-    /// Returns `None` if FFmpeg is not available (graceful degradation).
+    /// Returns `None` if `FFmpeg` is not available (graceful degradation).
     fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
         let ffmpeg = match rdlp_ffmpeg::FFmpegRunner::with_location(
             config.postprocess.ffmpeg_location.as_deref(),
@@ -316,9 +318,15 @@ impl Orchestrator {
                 .map(|_| None);
         }
 
+        // Single video — guarded by the `infos.len() > 1` early return above
+        #[allow(clippy::expect_used)] // infos.len() == 1 guaranteed by the guard above
+        let single_info = infos
+            .first()
+            .expect("infos is non-empty after playlist guard");
+
         // Single video — check archive before downloading
         if let Some(ref archive_set) = archive {
-            let info = &infos[0];
+            let info = single_info;
             if archive::is_in_archive(archive_set, &info.extractor, &info.id) {
                 info!(
                     id = info.id.as_str(),
@@ -331,7 +339,7 @@ impl Orchestrator {
 
         // Single video — check match filters
         if !self.config.match_filters.is_empty() {
-            let info = &infos[0];
+            let info = single_info;
             if !check_match_filters(&self.config.match_filters, info) {
                 info!(
                     title = info.title.as_str();
@@ -352,12 +360,12 @@ impl Orchestrator {
             match phase {
                 DownloadPhase::Complete { path } => {
                     // Record in archive after successful download
-                    self.record_in_archive(&infos[0].extractor, &infos[0].id)
+                    self.record_in_archive(&single_info.extractor, &single_info.id)
                         .await;
                     return Ok(Some(path));
                 }
                 DownloadPhase::Cancelled => return Ok(None),
-                _ => continue, // Keep advancing through phases
+                _ => {} // Keep advancing through phases
             }
         }
     }
@@ -459,7 +467,7 @@ mod download_plan_tests {
                 assert_eq!(v.format_id, "v1");
                 assert_eq!(a.format_id, "a1");
             }
-            _ => panic!("Expected Merge variant"),
+            DownloadPlan::Single(_) => panic!("Expected Merge variant"),
         }
     }
 
@@ -482,7 +490,7 @@ mod download_plan_tests {
     }
 }
 
-/// Check if an InfoDict passes all match filters (OR logic: any filter passing = pass).
+/// Check if an `InfoDict` passes all match filters (OR logic: any filter passing = pass).
 ///
 /// Returns `true` if:
 /// - No filters configured (empty list)

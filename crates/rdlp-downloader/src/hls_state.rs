@@ -63,11 +63,11 @@ impl HlsDownloadState {
     /// The playlist URL is normalized (query parameters stripped) to handle
     /// dynamic tokens that change on each request.
     #[must_use]
-    pub fn new(playlist_url: String, segment_count: usize) -> Self {
+    pub fn new(playlist_url: &str, segment_count: usize) -> Self {
         let now = Utc::now();
         Self {
             version: STATE_VERSION,
-            playlist_url: extract_url_path(&playlist_url),
+            playlist_url: extract_url_path(playlist_url),
             segment_count,
             completed_segments: HashSet::new(),
             total_bytes_downloaded: 0,
@@ -80,10 +80,10 @@ impl HlsDownloadState {
     #[must_use]
     pub fn state_file_path(output_path: &Path) -> PathBuf {
         let mut state_path = output_path.to_path_buf();
-        let filename = state_path
-            .file_name()
-            .map(|f| format!("{}.hls_state.json", f.to_string_lossy()))
-            .unwrap_or_else(|| "download.hls_state.json".to_string());
+        let filename = state_path.file_name().map_or_else(
+            || "download.hls_state.json".to_string(),
+            |f| format!("{}.hls_state.json", f.to_string_lossy()),
+        );
         state_path.set_file_name(filename);
         state_path
     }
@@ -180,6 +180,10 @@ impl HlsDownloadState {
     /// Save state to file
     ///
     /// Uses atomic write pattern: write to temp file, then rename
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the state file cannot be written or renamed.
     pub async fn save(&self, output_path: &Path) -> Result<(), std::io::Error> {
         let state_path = Self::state_file_path(output_path);
         let temp_path = state_path.with_extension("json.tmp");
@@ -242,6 +246,10 @@ impl HlsDownloadState {
     }
 
     /// Delete the state file
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the state file exists but cannot be removed.
     pub async fn delete(output_path: &Path) -> Result<(), std::io::Error> {
         let state_path = Self::state_file_path(output_path);
         if state_path.exists() {
@@ -266,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_new_state() {
-        let state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 100);
+        let state = HlsDownloadState::new("https://example.com/playlist.m3u8", 100);
         assert_eq!(state.version, STATE_VERSION);
         assert_eq!(state.segment_count, 100);
         assert!(state.completed_segments.is_empty());
@@ -275,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_mark_completed() {
-        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 100);
+        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8", 100);
 
         state.mark_completed(5, 1024);
         state.mark_completed(10, 2048);
@@ -288,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_pending_segments() {
-        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 5);
+        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8", 5);
 
         state.mark_completed(1, 100);
         state.mark_completed(3, 100);
@@ -299,9 +307,12 @@ mod tests {
 
     #[test]
     fn test_progress() {
-        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 10);
+        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8", 10);
 
-        assert_eq!(state.progress(), 0.0);
+        assert!(
+            state.progress().abs() < f64::EPSILON,
+            "initial progress should be 0.0"
+        );
 
         state.mark_completed(0, 100);
         state.mark_completed(1, 100);
@@ -316,7 +327,7 @@ mod tests {
         let output_path = dir.path().join("video.mp4");
 
         // Create and save state
-        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 100);
+        let mut state = HlsDownloadState::new("https://example.com/playlist.m3u8", 100);
         state.mark_completed(0, 1000);
         state.mark_completed(5, 2000);
         state.save(&output_path).await.unwrap();
@@ -338,7 +349,7 @@ mod tests {
         let output_path = dir.path().join("video.mp4");
 
         // Create and save state
-        let state = HlsDownloadState::new("https://example.com/old.m3u8".to_string(), 100);
+        let state = HlsDownloadState::new("https://example.com/old.m3u8", 100);
         state.save(&output_path).await.unwrap();
 
         // Load with different URL should fail
@@ -354,7 +365,7 @@ mod tests {
         let output_path = dir.path().join("video.mp4");
 
         // Create and save state
-        let state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 100);
+        let state = HlsDownloadState::new("https://example.com/playlist.m3u8", 100);
         state.save(&output_path).await.unwrap();
 
         // Load with different segment count should fail
@@ -374,7 +385,7 @@ mod tests {
         let output_path = dir.path().join("video.mp4");
 
         // Create and save state
-        let state = HlsDownloadState::new("https://example.com/playlist.m3u8".to_string(), 100);
+        let state = HlsDownloadState::new("https://example.com/playlist.m3u8", 100);
         state.save(&output_path).await.unwrap();
 
         let state_path = HlsDownloadState::state_file_path(&output_path);
@@ -426,7 +437,7 @@ mod tests {
 
         // Create state with URL from one CDN edge server
         let mut state = HlsDownloadState::new(
-            "https://ev-h-ph.rdtcdn.com/hls/videos/123/master.m3u8?token=abc123".to_string(),
+            "https://ev-h-ph.rdtcdn.com/hls/videos/123/master.m3u8?token=abc123",
             100,
         );
         state.mark_completed(0, 1000);

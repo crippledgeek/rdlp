@@ -45,13 +45,13 @@ impl<'de> Deserialize<'de> for DownloadProtocol {
 impl DownloadProtocol {
     /// Check if this is an HLS protocol.
     #[must_use]
-    pub fn is_hls(&self) -> bool {
+    pub const fn is_hls(&self) -> bool {
         matches!(self, Self::M3u8 | Self::M3u8Native)
     }
 
     /// Check if this is a DASH protocol.
     #[must_use]
-    pub fn is_dash(&self) -> bool {
+    pub const fn is_dash(&self) -> bool {
         matches!(self, Self::HttpDashSegments)
     }
 

@@ -31,7 +31,7 @@ pub(super) fn parse_filter(input: &str) -> Result<Vec<Condition>, String> {
             continue;
         }
         let condition =
-            parse_condition(trimmed).map_err(|e| format!("in condition '{}': {}", trimmed, e))?;
+            parse_condition(trimmed).map_err(|e| format!("in condition '{trimmed}': {e}"))?;
         conditions.push(condition);
     }
 
@@ -43,6 +43,7 @@ pub(super) fn parse_filter(input: &str) -> Result<Vec<Condition>, String> {
 }
 
 /// Split input on `&` that is not preceded by `\`.
+#[allow(clippy::indexing_slicing)]
 fn split_on_unescaped_ampersand(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -121,11 +122,10 @@ fn try_parse_comparison(input: &mut &str) -> Result<Condition, String> {
     let raw_value = raw_value.replace("\\&", "&");
 
     // Determine if value is numeric
-    let value = if let Some(num) = try_parse_numeric(&raw_value) {
-        FilterValue::Number(num)
-    } else {
-        FilterValue::String(raw_value)
-    };
+    let value = try_parse_numeric(&raw_value).map_or_else(
+        || FilterValue::String(raw_value.clone()),
+        FilterValue::Number,
+    );
 
     // String operators can't be used with numeric values
     if matches!(
@@ -166,11 +166,9 @@ fn parse_unary(input: &str) -> Result<Condition, String> {
         return Err("empty condition".to_string());
     }
 
-    let (negated, key) = if let Some(rest) = trimmed.strip_prefix('!') {
-        (true, rest.trim())
-    } else {
-        (false, trimmed)
-    };
+    let (negated, key) = trimmed
+        .strip_prefix('!')
+        .map_or((false, trimmed), |rest| (true, rest.trim()));
 
     // Validate key format
     if !key
@@ -238,6 +236,8 @@ fn parse_bare_value(input: &mut &str) -> ModalResult<String> {
 /// Try to parse a string as a numeric value.
 ///
 /// Supports: integers, filesize suffixes (K/M/G), duration (H:M:S).
+// Duration parsing uses indexing guarded by `parts.len()` match arms.
+#[allow(clippy::indexing_slicing)]
 fn try_parse_numeric(s: &str) -> Option<f64> {
     // Plain number
     if let Ok(n) = s.parse::<f64>() {
@@ -274,12 +274,12 @@ fn try_parse_numeric(s: &str) -> Option<f64> {
             let h = parts[0].parse::<f64>().ok()?;
             let m = parts[1].parse::<f64>().ok()?;
             let sec = parts[2].parse::<f64>().ok()?;
-            Some(h * 3600.0 + m * 60.0 + sec)
+            Some(h.mul_add(3600.0, m * 60.0) + sec)
         }
         2 => {
             let m = parts[0].parse::<f64>().ok()?;
             let sec = parts[1].parse::<f64>().ok()?;
-            Some(m * 60.0 + sec)
+            Some(m.mul_add(60.0, sec))
         }
         _ => None,
     }

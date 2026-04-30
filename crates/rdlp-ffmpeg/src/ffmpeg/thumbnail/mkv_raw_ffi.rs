@@ -3,6 +3,28 @@
 //! Adds a thumbnail as a native Matroska attachment with proper
 //! stream property copying and `cluster_time_limit=500` for VLC
 //! compatibility.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::borrow_as_ptr`: `&mut (*ctx).field` required for `FFmpeg` C APIs
+//!   taking `**AVDictionary`. No safe abstraction exists.
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types. All casts are
+//!   manually audited and within valid ranges for FFmpeg-returned values.
+//! - `clippy::expect_used`: `CString::new("static literal")` cannot fail;
+//!   `av_packet_alloc` OOM is unrecoverable.
+//! - `clippy::indexing_slicing`: loop index comes from iterating the same
+//!   pre-allocated range, so bounds are guaranteed by construction.
+
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use std::ffi::CString;
 use std::ptr;
@@ -19,7 +41,7 @@ impl FFmpegRunner {
     /// Embed thumbnail in MKV using raw FFI with full stream property copying.
     ///
     /// Like `remux_mkv_raw_ffi`, this copies all essential stream properties
-    /// (avg_frame_rate, time_base, etc.) and sets cluster_time_limit=500 for VLC.
+    /// (`avg_frame_rate`, `time_base`, etc.) and sets `cluster_time_limit=500` for VLC.
     /// The thumbnail is added as a Matroska attachment stream.
     #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
     pub(super) fn embed_thumbnail_mkv_raw_ffi(
@@ -215,8 +237,12 @@ impl FFmpegRunner {
                     message: "Failed to allocate memory for thumbnail attachment".into(),
                 });
             }
-            ptr::copy_nonoverlapping(thumb_data.as_ptr(), extradata as *mut u8, thumb_data.len());
-            (*codecpar).extradata = extradata as *mut u8;
+            ptr::copy_nonoverlapping(
+                thumb_data.as_ptr(),
+                extradata.cast::<u8>(),
+                thumb_data.len(),
+            );
+            (*codecpar).extradata = extradata.cast::<u8>();
             (*codecpar).extradata_size = thumb_data.len() as i32;
 
             // Set mimetype and filename metadata (required by Matroska muxer)

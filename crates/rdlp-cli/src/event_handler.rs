@@ -24,7 +24,7 @@ impl CliEventHandler {
     /// * `multi_progress` - Shared `MultiProgress` for managing bars
     /// * `quiet` - Suppress non-essential output
     #[must_use]
-    pub fn new(multi_progress: Arc<MultiProgress>, quiet: bool) -> Self {
+    pub const fn new(multi_progress: Arc<MultiProgress>, quiet: bool) -> Self {
         Self {
             multi_progress,
             progress_bar: None,
@@ -33,6 +33,12 @@ impl CliEventHandler {
     }
 
     /// Process a single download event.
+    ///
+    /// # Panics
+    ///
+    /// Panics are statically unreachable; all `expect` calls inside operate on
+    /// static template strings and a field assigned earlier in the same branch.
+    #[allow(clippy::too_many_lines)] // event dispatch match; extracting arms would be less readable
     pub fn handle_event(&mut self, event: &Event) {
         match event {
             Event::Started { url, .. } => {
@@ -60,6 +66,7 @@ impl CliEventHandler {
                 if !self.quiet {
                     let pb = self.multi_progress.add(ProgressBar::new(1000));
                     pb.set_style(
+                        #[allow(clippy::expect_used)] // static template string — infallible
                         ProgressStyle::with_template(
                             "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
                         )
@@ -73,6 +80,8 @@ impl CliEventHandler {
             Event::PostProcessProgress {
                 stage, progress, ..
             } => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // fraction() is in [0.0, 1.0]; * 1000 gives [0, 1000] — fits u64
                 let position = (f64::from(progress.fraction()) * 1000.0) as u64;
                 if let Some(ref pb) = self.progress_bar {
                     pb.set_position(position);
@@ -80,6 +89,7 @@ impl CliEventHandler {
                 } else if !self.quiet {
                     let pb = self.multi_progress.add(ProgressBar::new(1000));
                     pb.set_style(
+                        #[allow(clippy::expect_used)] // static template string — infallible
                         ProgressStyle::with_template(
                             "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
                         )
@@ -141,6 +151,7 @@ impl CliEventHandler {
         } else {
             let pb = self.create_progress_bar(progress);
             self.progress_bar = Some(pb);
+            #[allow(clippy::expect_used)] // field was just assigned in the line above
             self.progress_bar
                 .as_ref()
                 .expect("progress bar was just assigned")
@@ -164,7 +175,10 @@ impl CliEventHandler {
     }
 
     /// Create a progress bar appropriate for the download type.
+    #[allow(clippy::option_if_let_else)] // nested if-let chain is clearer than map_or_else here
     fn create_progress_bar(&self, progress: &DownloadProgress) -> ProgressBar {
+        // All three `expect` calls below are on static template string literals — infallible.
+        #[allow(clippy::expect_used)]
         if let Some(total) = progress.total_bytes {
             // HTTP download with known size
             let pb = self.multi_progress.add(ProgressBar::new(total));
@@ -173,7 +187,7 @@ impl CliEventHandler {
                     "{wide_bar:.cyan/blue} {bytes}/{total_bytes} \
                      ({bytes_per_sec}) [{elapsed_precise}]",
                 )
-                .expect("valid progress template"),
+                .expect("static template string — infallible"),
             );
             pb
         } else if let Some(total) = progress.total_segments {
@@ -184,7 +198,7 @@ impl CliEventHandler {
                     "{wide_bar:.green/blue} {pos}/{len} segs | \
                      {msg} [{elapsed_precise}]",
                 )
-                .expect("valid progress template"),
+                .expect("static template string — infallible"),
             );
             pb
         } else {
@@ -194,7 +208,7 @@ impl CliEventHandler {
                 ProgressStyle::with_template(
                     "{spinner} {bytes} ({bytes_per_sec}) [{elapsed_precise}]",
                 )
-                .expect("valid progress template"),
+                .expect("static template string — infallible"),
             );
             pb.enable_steady_tick(Duration::from_millis(100));
             pb

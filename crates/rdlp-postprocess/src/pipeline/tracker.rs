@@ -29,7 +29,7 @@ pub struct FileTracker {
 
 impl FileTracker {
     /// Create a new tracker with the given initial files.
-    pub fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
+    pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
         Self {
             current_files: files,
             temp_files: Vec::new(),
@@ -56,7 +56,7 @@ impl FileTracker {
     /// crash before the stage completes will still clean it up.
     #[must_use]
     pub fn temp_path(&self, base: &Path, ext: &str) -> PathBuf {
-        let dir = base.parent().unwrap_or(Path::new("."));
+        let dir = base.parent().unwrap_or_else(|| Path::new("."));
         let raw_stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
         // Strip any existing .rdlp-tmp-{uuid} suffixes to prevent stacking
         let stem = raw_stem.split(".rdlp-tmp-").next().unwrap_or(raw_stem);

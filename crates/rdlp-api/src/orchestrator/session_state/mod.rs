@@ -143,7 +143,7 @@ impl SessionState {
     /// Returns `None` on any failure (missing file → debug-level; corrupt
     /// JSON / version mismatch / URL mismatch → warn-level). The user
     /// re-ran the same command expecting resume, so a corrupted-state
-    /// "starting fresh" path needs to be visible without RUST_LOG=debug.
+    /// "starting fresh" path needs to be visible without `RUST_LOG=debug`.
     pub async fn load(path: &Path, url: &str) -> Option<Self> {
         let content = match tokio::fs::read_to_string(path).await {
             Ok(c) => c,

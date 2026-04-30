@@ -53,7 +53,7 @@ pub enum RdlpApiError {
         message: String,
     },
 
-    /// FFmpeg processing failed.
+    /// `FFmpeg` processing failed.
     #[error("FFmpeg error: {message}")]
     FfmpegError {
         /// What went wrong during post-processing.
@@ -161,10 +161,12 @@ impl From<RdlpError> for RdlpApiError {
     /// of relying on this `From` impl.
     fn from(err: RdlpError) -> Self {
         match err {
-            RdlpError::Network { message, .. } => Self::NetworkError {
-                message,
-                status: None,
-            },
+            RdlpError::Network { message, .. } | RdlpError::Download { message, .. } => {
+                Self::NetworkError {
+                    message,
+                    status: None,
+                }
+            }
             RdlpError::Http { status, reason } => Self::NetworkError {
                 message: reason,
                 status: Some(status),
@@ -174,13 +176,12 @@ impl From<RdlpError> for RdlpApiError {
                 source_url: url.unwrap_or_default(),
             },
             RdlpError::NoExtractor(url) => Self::UnsupportedUrl { url },
-            RdlpError::InvalidUrl(msg) => Self::InvalidInput { message: msg },
-            RdlpError::Download { message, .. } => Self::NetworkError {
-                message,
-                status: None,
-            },
-            RdlpError::PostProcess(msg) => Self::FfmpegError { message: msg },
-            RdlpError::FFmpeg(msg) => Self::FfmpegError { message: msg },
+            RdlpError::InvalidUrl(msg) | RdlpError::FormatSelection(msg) => {
+                Self::InvalidInput { message: msg }
+            }
+            RdlpError::PostProcess(msg) | RdlpError::FFmpeg(msg) => {
+                Self::FfmpegError { message: msg }
+            }
             RdlpError::JavaScript(msg) => Self::ExtractError {
                 message: format!("JavaScript error: {msg}"),
                 source_url: String::new(),
@@ -191,7 +192,6 @@ impl From<RdlpError> for RdlpApiError {
             RdlpError::Plugin(msg) => Self::InvalidInput {
                 message: format!("Plugin error: {msg}"),
             },
-            RdlpError::FormatSelection(msg) => Self::InvalidInput { message: msg },
             RdlpError::Config(msg) => Self::BuilderError { message: msg },
             RdlpError::Io(err) => Self::IoError {
                 message: err.to_string(),
@@ -217,29 +217,29 @@ impl From<OrchestratorError> for RdlpApiError {
     fn from(err: OrchestratorError) -> Self {
         match err {
             OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl { url },
-            OrchestratorError::ExtractionFailed(rdlp_err) => Self::from(rdlp_err),
+            OrchestratorError::ExtractionFailed(rdlp_err)
+            | OrchestratorError::DownloadFailed(rdlp_err) => Self::from(rdlp_err),
             OrchestratorError::UserCancelled => Self::UserCancelled,
             OrchestratorError::NoFormat => Self::InvalidInput {
                 message: "No suitable format found".into(),
             },
-            OrchestratorError::InvalidFormatSelector(msg) => Self::InvalidInput { message: msg },
+            OrchestratorError::InvalidFormatSelector(msg)
+            | OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
             OrchestratorError::NoDownloader { url } => Self::InvalidInput {
                 message: format!("No downloader for: {url}"),
             },
-            OrchestratorError::DownloadFailed(rdlp_err) => Self::from(rdlp_err),
-            OrchestratorError::ResumeDetectionFailed(msg) => Self::IoError { message: msg },
+            OrchestratorError::ResumeDetectionFailed(msg)
+            | OrchestratorError::PathGenerationFailed(msg)
+            | OrchestratorError::IoError(msg) => Self::IoError { message: msg },
             OrchestratorError::MissingChunk { path } => Self::IoError {
                 message: format!("Missing chunk file: {}", path.display()),
             },
             OrchestratorError::ChunkMergeFailed(io_err) => Self::IoError {
                 message: format!("Chunk merge failed: {io_err}"),
             },
-            OrchestratorError::PathGenerationFailed(msg) => Self::IoError { message: msg },
-            OrchestratorError::IoError(msg) => Self::IoError { message: msg },
             OrchestratorError::Io(io_err) => Self::IoError {
                 message: io_err.to_string(),
             },
-            OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
             OrchestratorError::InteractiveNotConfigured => Self::InvalidInput {
                 message: "Interactive selection not configured".into(),
             },
