@@ -185,9 +185,7 @@ fn build_svt_fixtures() -> FetchFixtures {
     // reference need fixturing. The HTML page fixture is unused on
     // this path (see TEST_URL doc-comment).
     let mut fx = FetchFixtures::new().with(
-        format!(
-            "https://api.svt.se/videoplayer-api/video/{EXPECTED_VIDEO_ID}",
-        ),
+        format!("https://api.svt.se/videoplayer-api/video/{EXPECTED_VIDEO_ID}",),
         FixtureResponse::ok(api_json.clone()),
     );
 
@@ -246,14 +244,25 @@ async fn svt_play_extract_matches_upstream_test_dict() {
         // bypasses match-pattern dispatch by calling `adapter.extract`
         // directly. The `matches=` here exists for manifest validation,
         // not runtime routing.
-        &["https://*.svtplay.se/*", "https://svtplay.se/*",
-          "https://*.svt.se/*", "https://svt.se/*"],
+        &[
+            "https://*.svtplay.se/*",
+            "https://svtplay.se/*",
+            "https://*.svt.se/*",
+            "https://svt.se/*",
+        ],
         // componentize-py emits IMPORTS for every interface in the WIT
         // world (Phase-1 limitation; see python_plugin_smoke.rs:182-195).
         // The manifest MUST declare all six caps so the linker wires
         // every import the wasm references — the host still gates *use*
         // at runtime via populate_capability_contexts.
-        &["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+        &[
+            "fetch",
+            "cookie-jar",
+            "js-eval",
+            "html-select",
+            "log",
+            "store-kv",
+        ],
     );
 
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());

@@ -169,12 +169,9 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
 /// docstring) and skip. This handles yt-dlp's pattern of putting
 /// `_VALID_URL = r'...'` examples inside class/module docstrings.
 fn extract_valid_urls(source: &str) -> Vec<String> {
-    let triple = Regex::new(
-        r#"(?ms)^\s*_VALID_URL\s*=\s*r?(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")"#,
-    )
-    .unwrap();
-    let single =
-        Regex::new(r#"(?m)^\s*_VALID_URL\s*=\s*r?['"]([^'"\n]+)['"]"#).unwrap();
+    let triple =
+        Regex::new(r#"(?ms)^\s*_VALID_URL\s*=\s*r?(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")"#).unwrap();
+    let single = Regex::new(r#"(?m)^\s*_VALID_URL\s*=\s*r?['"]([^'"\n]+)['"]"#).unwrap();
 
     let mut out: Vec<String> = Vec::new();
     let mut consumed_ranges: Vec<(usize, usize)> = Vec::new();
@@ -771,8 +768,7 @@ mod tests {
     #[test]
     fn valid_url_to_match_emits_chrome_style_patterns() {
         let patterns = valid_urls_to_match_patterns(&[
-            r"https?://(?:www\.)?pornhub\.com/view_video\.php\?viewkey=(?P<id>[^&]+)"
-                .to_string(),
+            r"https?://(?:www\.)?pornhub\.com/view_video\.php\?viewkey=(?P<id>[^&]+)".to_string(),
         ]);
         assert!(
             patterns.iter().any(|p| p == "https://*.pornhub.com/*"),
@@ -791,18 +787,16 @@ mod tests {
 
     #[test]
     fn valid_url_bare_host_no_www_prefix() {
-        let patterns = valid_urls_to_match_patterns(&[
-            r"https?://example\.com/(?P<id>\d+)".to_string(),
-        ]);
+        let patterns =
+            valid_urls_to_match_patterns(&[r"https?://example\.com/(?P<id>\d+)".to_string()]);
         assert_eq!(patterns, vec!["https://example.com/*".to_string()]);
         rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
     }
 
     #[test]
     fn valid_url_unparseable_falls_back_to_wildcard() {
-        let patterns = valid_urls_to_match_patterns(&[
-            r"some-weird-regex-without-host".to_string(),
-        ]);
+        let patterns =
+            valid_urls_to_match_patterns(&[r"some-weird-regex-without-host".to_string()]);
         assert_eq!(patterns, vec!["*://*/*".to_string()]);
         rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
     }

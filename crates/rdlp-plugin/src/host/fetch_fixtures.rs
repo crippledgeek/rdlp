@@ -138,10 +138,7 @@ mod tests {
 
     #[test]
     fn url_miss_returns_none() {
-        let fx = FetchFixtures::new().with(
-            "https://api.example/v/abc",
-            FixtureResponse::ok(b""),
-        );
+        let fx = FetchFixtures::new().with("https://api.example/v/abc", FixtureResponse::ok(b""));
         assert!(fx.get("https://api.example/v/different").is_none());
     }
 

@@ -239,6 +239,9 @@ jobs:
               - 'crates/rdlp-plugin-manifest/src/**'
               - 'examples/plugins/ytdlp-golden/**'
               - 'examples/plugins/ytdlp-hello-world/**'
+              - 'examples/plugins/svt/**'
+              - 'crates/rdlp-plugin/tests/svt_golden.rs'
+              - 'crates/rdlp-plugin/tests/fixtures/svt/**'
               - '.github/workflows/ci.yml'
 
   ytdlp-plugin-golden:
@@ -315,3 +318,14 @@ jobs:
       - name: Build golden plugins
         run: cargo test -p rdlp-plugin --test ytdlp_golden -- --ignored --nocapture
         timeout-minutes: 20
+
+      - name: Run SVT end-to-end golden (Slice 2)
+        # Builds the real upstream yt-dlp svt.py via componentize-py,
+        # signs + loads the resulting wasm component, injects host:fetch
+        # fixtures, dispatches `extract("svt:ePBvGRq")`, and asserts the
+        # returned InfoDict (id, title, formats) matches the upstream
+        # _TEST golden. Regression guard for the entire Slice-2 surface
+        # (multi-class dispatch, traverse_obj set-syntax, _download_json,
+        # _extract_m3u8_formats_and_subtitles, fixture-replay harness).
+        run: cargo test -p rdlp-plugin --test svt_golden -- --ignored --nocapture
+        timeout-minutes: 10
