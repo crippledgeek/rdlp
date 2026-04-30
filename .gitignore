@@ -31,6 +31,21 @@ Thumbs.db
 
 # Plugin build artifacts
 plugins/*/target/
+
+# Plugin build artifacts produced by `rdlp plugin build-from-ytdlp`
+# (and signed via `scripts/sign-plugin.sh`). Each ported plugin lives at
+# `examples/plugins/<name>/<name>.py` (source — TRACKED, byte-identical
+# to upstream yt-dlp); the build output goes to a sibling directory
+# `examples/plugins/<name>/<name>/` containing `plugin.wasm` (~35 MB),
+# `plugin.toml.template` (unsigned manifest), and `plugin.toml` (signed
+# with the build host's Ed25519 key). All three regenerate on every
+# build and MUST NOT be committed — both because they're large binaries
+# and because the signed manifest carries a per-developer key. The
+# goldens build the wasm at test time from the .py source, so this
+# directory is purely an install-staging artefact.
+examples/plugins/*/*/plugin.wasm
+examples/plugins/*/*/plugin.toml
+examples/plugins/*/*/plugin.toml.template
 docs/
 CLAUDE.md
 debug_tnaflix.rs
