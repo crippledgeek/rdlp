@@ -54,3 +54,10 @@ def test_html_search_meta_calls_host(monkeypatch, ie):
     monkeypatch.setattr(_host, "html_search_meta", lambda name, html: "value")
     result = ie._html_search_meta("og:title", "<html/>")
     assert result == "value"
+
+
+def test_og_search_property_calls_host(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+    monkeypatch.setattr(_host, "og_search_property", lambda prop, html: "Title")
+    assert ie._og_search_title("<html/>") == "Title"
+    assert ie._og_search_thumbnail("<html/>") == "Title"

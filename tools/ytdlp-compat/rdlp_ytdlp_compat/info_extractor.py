@@ -829,47 +829,47 @@ class InfoExtractor:
 
     # --- OpenGraph helpers --------------------------------------------------
 
-    @staticmethod
-    def _og_regexes(prop):
-        """yt-dlp's `_og_regexes` (`extractor/common.py:1463-1473`).
-        Generates the two regex forms used to find an OpenGraph meta tag
-        (property-then-content and content-then-property orderings).
-        `&#x3A;` literal accepted as a `:` substitute for sites that
-        HTML-encode the property name."""
-        content_re = (
-            r'content=(?:"([^"]+?)"|\'([^\']+?)\'|\s*([^\s"\'=<>`]+?)(?=\s|/?>))'
-        )
-        sep = r'(?:&#x3A;|[:-])'
-        property_re = (
-            rf'(?:name|property)=(?:\'og{sep}{_re.escape(prop)}\'|'
-            rf'"og{sep}{_re.escape(prop)}"|\s*og{sep}{_re.escape(prop)}\b)'
-        )
-        template = r"<meta[^>]+?%s[^>]+?%s"
-        return [
-            template % (property_re, content_re),
-            template % (content_re, property_re),
-        ]
-
     def _og_search_property(self, prop, html_text, name=None, **kargs):
-        """yt-dlp's `_og_search_property` (`extractor/common.py:1480-1490`).
-        Iterates `_og_regexes` over a property name (or an iterable of
-        names), runs `_search_regex` with `re.DOTALL`, unescapes HTML
-        entities."""
+        """Slice-2.5 passthrough to host-extract-helpers.og-search-property."""
         from rdlp_ytdlp_compat._utils import variadic as _variadic
         props = _variadic(prop)
-        if name is None:
-            name = f"OpenGraph {props[0]}"
-        og_regexes = []
         for p in props:
-            og_regexes.extend(self._og_regexes(p))
-        escaped = self._search_regex(
-            og_regexes, html_text, name, flags=_re.DOTALL, **kargs,
-        )
-        if escaped is None:
-            return None
-        # `_search_regex` with multi-group regex returns the first
-        # non-None group (one of the three content-quote variants).
-        return _html.unescape(escaped)
+            try:
+                result = _host.og_search_property(p, html_text)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                if name is None:
+                    name = f"OpenGraph {props[0]}"
+                og_regexes = []
+                for pp in props:
+                    content_re = (
+                        r'content=(?:"([^"]+?)"|\'([^\']+?)\'|\s*([^\s"\'=<>`]+?)(?=\s|/?>))'
+                    )
+                    sep = r'(?:&#x3A;|[:-])'
+                    property_re = (
+                        rf'(?:name|property)=(?:\'og{sep}{_re.escape(pp)}\'|'
+                        rf'"og{sep}{_re.escape(pp)}"|\s*og{sep}{_re.escape(pp)}\b)'
+                    )
+                    template = r"<meta[^>]+?%s[^>]+?%s"
+                    og_regexes.extend([
+                        template % (property_re, content_re),
+                        template % (content_re, property_re),
+                    ])
+                escaped = self._search_regex(
+                    og_regexes, html_text, name, flags=_re.DOTALL, **kargs,
+                )
+                if escaped is None:
+                    return None
+                return _html.unescape(escaped)
+            if result is not None:
+                return result
+        # Mirror the existing default-handling
+        default = kargs.get("default", NO_DEFAULT)
+        if default is not NO_DEFAULT:
+            return default
+        if kargs.get("fatal", False):
+            raise ValueError(f"Unable to extract OpenGraph {props[0]}")
+        return None
 
     def _og_search_title(self, html_text, *, fatal=False, **kargs):
         """yt-dlp's `_og_search_title` (`extractor/common.py:1498-1499`).
