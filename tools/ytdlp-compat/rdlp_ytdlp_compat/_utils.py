@@ -284,6 +284,17 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def url_or_none(s):
+    """yt-dlp's `url_or_none` (utils/_utils.py). Returns the input if
+    it's a usable URL (http/https/protocol-relative/data:), else None.
+    Rejects relative paths and javascript: URIs."""
+    if not isinstance(s, str):
+        return None
+    if s.startswith(("http://", "https://", "//", "data:")):
+        return s
+    return None
+
+
 # Path-segment separator — POSIX uses `/`; Windows uses both. We split on
 # either to mirror yt-dlp's `_sanitize_path_parts` behaviour.
 _PATH_SEP_RE = re.compile(r"[/\\]")
