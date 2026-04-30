@@ -157,6 +157,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          # Cache the npm download cache (~/.npm) keyed by the desktop
+          # frontend's lockfile. Avoids re-downloading the same Tauri /
+          # Vite / shadcn dep tree every matrix run × 3 platforms.
+          # Uses the built-in setup-node cache (rather than actions/cache)
+          # because it auto-handles per-platform path differences.
+          cache: 'npm'
+          cache-dependency-path: crates/rdlp-desktop/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -242,6 +249,9 @@ jobs:
               - 'examples/plugins/svt/**'
               - 'crates/rdlp-plugin/tests/svt_golden.rs'
               - 'crates/rdlp-plugin/tests/fixtures/svt/**'
+              - 'crates/rdlp-plugin/tests/xxxymovies_golden.rs'
+              - 'crates/rdlp-plugin/tests/fixtures/xxxymovies/**'
+              - 'examples/plugins/xxxymovies/**'
               - '.github/workflows/ci.yml'
 
   ytdlp-plugin-golden:
@@ -295,13 +305,33 @@ jobs:
           enable-cache: true
           cache-dependency-glob: tools/ytdlp-compat/requirements-dev.txt
 
+      # Cache the Python venv itself (not just uv's download cache).
+      # uv's cache lives at ~/.cache/uv and is handled by setup-uv's
+      # enable-cache. The venv directory under tools/ytdlp-compat/.venv
+      # is a separate concern — it holds the symlinked/installed
+      # `componentize-py` binary + the editable rdlp_ytdlp_compat
+      # package. Caching it keyed on the lockfile hash skips the venv
+      # creation + install steps when deps haven't changed.
+      - name: Cache venv
+        id: venv-cache
+        uses: actions/cache@v4
+        with:
+          path: tools/ytdlp-compat/.venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt') }}
+
       - name: Install componentize-py-pin@0.17.2 via uv
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         working-directory: tools/ytdlp-compat
         run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv/bin/python \
             --require-hashes -r requirements-dev.txt
           .venv/bin/componentize-py --version
+
+      - name: Verify cached venv (cache-hit fast path)
+        if: steps.venv-cache.outputs.cache-hit == 'true'
+        working-directory: tools/ytdlp-compat
+        run: .venv/bin/componentize-py --version
 
       - name: Run rdlp_ytdlp_compat unit tests
         working-directory: tools/ytdlp-compat
@@ -328,4 +358,14 @@ jobs:
         # (multi-class dispatch, traverse_obj set-syntax, _download_json,
         # _extract_m3u8_formats_and_subtitles, fixture-replay harness).
         run: cargo test -p rdlp-plugin --test svt_golden -- --ignored --nocapture
+        timeout-minutes: 10
+
+      - name: Run xxxymovies end-to-end golden (Slice 2)
+        # Single-class plugin port covering a different code path from
+        # SVT: HTML scraping (no Next.js/urqlState), `_search_regex` +
+        # `_html_search_regex` + `_html_search_meta` + `_rta_search`,
+        # plus single-format `'url':` synthesis (extractor returns no
+        # formats[] but a top-level url string). Together with svt the
+        # two goldens cover both major yt-dlp extractor archetypes.
+        run: cargo test -p rdlp-plugin --test xxxymovies_golden -- --ignored --nocapture
         timeout-minutes: 10
