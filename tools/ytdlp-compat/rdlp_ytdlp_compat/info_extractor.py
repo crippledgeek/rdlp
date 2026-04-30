@@ -235,6 +235,34 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                 # Single-callable transformer. RequiredError propagates.
                 result = _try_call(item, args=(obj,))
 
+        elif isinstance(key, dict):
+            # Dict-of-paths form (`utils/traversal.py:179-184`):
+            # `{result_key: sub_path, ...}` produces a dict where each
+            # value comes from `traverse_obj(obj, sub_path)`. The outer
+            # `default` propagates into the recursive call so a nested
+            # dict-path failure fills in `{outer_key: {inner_key: default}}`
+            # rather than collapsing to `{}`. Sub-path results that are
+            # None or `{}` (from a fully-pruned nested dict) get treated
+            # as "missing" — pruned when no default, replaced with default
+            # otherwise. apply_path's `is_dict` flag tells the outer caller
+            # the empty-dict result is intentional and must not be pruned.
+            built = {}
+            for k, sub_path in key.items():
+                kwargs = {
+                    "expected_type": expected_type,
+                    "get_all": get_all,
+                    "casesense": casesense,
+                    "traverse_string": traverse_string,
+                }
+                if not sentinel_default:
+                    kwargs["default"] = default
+                v = traverse_obj(obj, sub_path, **kwargs)
+                if v is not None and v != {}:
+                    built[k] = v
+                elif not sentinel_default:
+                    built[k] = default
+            result = built
+
         elif isinstance(key, (list, tuple)):
             # Sub-path branching — recurse into each branch and chain.
             branching = True
@@ -329,7 +357,10 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                 new_objs.extend(results)
             objs = new_objs
 
-        return objs, has_branched, False  # Slice-2 doesn't support dict-segment
+        # `is_dict` flag tells the outer loop the terminal segment was a
+        # dict-of-paths — its `{}`-results are intentional and must NOT be
+        # pruned by the usual "drop None / drop {}" filter.
+        return objs, has_branched, isinstance(last_key, dict)
 
     sentinel_default = default is NO_DEFAULT
     last_index = len(paths) - 1
@@ -337,17 +368,24 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     for index, path in enumerate(paths):
         is_last = index == last_index
         try:
-            results, has_branched, _ = apply_path(obj, path, True)
+            results, has_branched, is_dict = apply_path(obj, path, True)
         except _RequiredError as e:
             if is_last:
                 raise _ExtractorError(e.orig_msg, expected=e.expected) from None
             continue
         last_has_branched = has_branched
-        # Drop None / {} — yt-dlp's "unhelpful values".
-        cleaned = [r for r in results if r not in (None, {})]
-        if expected_type is not None:
-            cleaned = [type_test(v) for v in cleaned]
-            cleaned = [v for v in cleaned if v is not None]
+        if is_dict:
+            # Dict-of-paths terminal segment — keep `{}` (it's a valid
+            # "all sub-keys pruned" result, not an unhelpful sentinel).
+            # `expected_type` was already applied per-value inside the
+            # recursive `traverse_obj` calls in `apply_key`'s dict branch.
+            cleaned = list(results)
+        else:
+            # Drop None / {} — yt-dlp's "unhelpful values".
+            cleaned = [r for r in results if r not in (None, {})]
+            if expected_type is not None:
+                cleaned = [type_test(v) for v in cleaned]
+                cleaned = [v for v in cleaned if v is not None]
 
         if get_all and has_branched:
             if cleaned:

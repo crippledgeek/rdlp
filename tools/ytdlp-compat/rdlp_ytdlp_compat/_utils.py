@@ -389,3 +389,9 @@ def sanitize_path(s: str, force: bool = False) -> str:
     parts = _PATH_SEP_RE.split(s)
     sanitised = [sanitize_filename(p) for p in parts if p]
     return "/".join(sanitised)
+
+
+def str_or_none(v, default=None):
+    """yt-dlp's `str_or_none` (utils/_utils.py:2027). Returns `str(v)` when
+    `v` is not None, else `default`."""
+    return default if v is None else str(v)
