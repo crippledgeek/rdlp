@@ -1,6 +1,7 @@
 //! Host capability implementations bridged to rdlp services.
 
 pub mod cookie_jar;
+pub mod extract_helpers;
 pub mod fetch;
 pub mod fetch_fixtures;
 pub mod html_select;
@@ -42,6 +43,11 @@ pub fn add_capability_imports(
     if caps.contains("fetch") {
         fetch::add_to_linker(linker)
             .map_err(|e| PluginError::Internal(format!("link fetch: {e}")))?;
+        // host-extract-helpers is granted alongside fetch — extract-m3u8
+        // is the only function that does I/O and it goes through the
+        // same fetch capability under the hood.
+        extract_helpers::add_to_linker(linker)
+            .map_err(|e| PluginError::Internal(format!("link extract-helpers: {e}")))?;
     }
     if caps.contains("cookie-jar") {
         cookie_jar::add_to_linker(linker)
