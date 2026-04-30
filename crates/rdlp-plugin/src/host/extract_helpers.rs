@@ -183,6 +183,16 @@ mod tests {
         ).await;
         assert_eq!(r, Some("A & B".to_string()));
     }
+
+    #[tokio::test]
+    async fn og_search_property_extracts_unquoted_value() {
+        let mut c = ctx();
+        let r = c.og_search_property(
+            "image".to_string(),
+            r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -238,11 +248,16 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
 
     async fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
         // Mirrors yt-dlp's `_og_regexes` + `_og_search_property` (common.py:1463-1490).
-        // The unquoted attribute-value branch from yt-dlp requires lookahead (unsupported by
-        // the `regex` crate); it is omitted here since real-world og: tags always quote content.
         let prop_escaped = regex::escape(&prop);
-        // content= with double-quote (group 1) or single-quote (group 2) value.
-        let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)')"#;
+        // content= with double-quote (group 1), single-quote (group 2),
+        // or unquoted HTML5 attribute value (group 3).
+        // The unquoted branch uses `[^\s"'=<>`]+` — excludes whitespace and the
+        // HTML5-forbidden characters (`"`, `'`, `=`, `<`, `>`, backtick) but allows
+        // `/` so URLs like `https://x.com/y.jpg` round-trip correctly.  In practice
+        // the value is terminated by the space that precedes `/>` (or the next
+        // attribute), so `/` inside the value is unambiguous.  The `regex` crate
+        // does not support lookaheads, so this is the correct no-lookahead form.
+        let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)'|([^\s"'=<>`]+))"#;
         let sep = r"(?:&#x3A;|[:-])";
         let property_re = format!(
             r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#
