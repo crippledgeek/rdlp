@@ -347,8 +347,9 @@ fn stage_build_dir(
         yt_dlp_root.join("extractor").join(format!("{stem}.py")),
     )?;
 
-    // _entry.py — auto-generated wrapper (stem substituted in Task 29)
-    std::fs::write(build_dir.join("_entry.py"), ENTRY_TEMPLATE)?;
+    // _entry.py — auto-generated wrapper; substitute plugin module name.
+    let entry_body = ENTRY_TEMPLATE.replace("{{PLUGIN_MODULE}}", stem);
+    std::fs::write(build_dir.join("_entry.py"), entry_body)?;
 
     Ok(())
 }
@@ -435,9 +436,11 @@ from extractor_plugin.imports.types import (
 )
 
 # User plugin imports — must be top-level (componentize-py #23).
-from user_plugin import *  # noqa: F401,F403
+# Plugin source is staged at yt_dlp/extractor/{{PLUGIN_MODULE}}.py
+# (Slice-2.5 fake-package layout for byte-identical drop-in).
+from yt_dlp.extractor.{{PLUGIN_MODULE}} import *  # noqa: F401,F403
 
-import user_plugin
+import yt_dlp.extractor.{{PLUGIN_MODULE}} as user_plugin
 from rdlp_ytdlp_compat import (
     InfoExtractor as _CompatInfoExtractor,
     ExtractorError as _ExtractorError,
