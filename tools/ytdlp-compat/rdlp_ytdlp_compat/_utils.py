@@ -284,6 +284,19 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def format_field(obj, field=None, template="%s", ignore=None, default="", func=None):
+    """yt-dlp's `format_field` (utils/_utils.py). Returns
+    `template % obj[field]` when the field is present and not None,
+    else `default`. `func` post-processes the value before
+    formatting."""
+    val = obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+    if val is None or (ignore is not None and val == ignore):
+        return default
+    if func is not None:
+        val = func(val)
+    return template % val
+
+
 def unified_strdate(date_str, day_first=True):
     """yt-dlp's `unified_strdate` (utils/_utils.py). Parses common date
     formats and returns 'YYYYMMDD' or None. Builds on
