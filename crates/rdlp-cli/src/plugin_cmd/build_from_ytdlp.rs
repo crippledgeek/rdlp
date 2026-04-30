@@ -664,6 +664,35 @@ def _opt_str(v, where=""):
     )
 
 
+def _opt_uint(v, where=""):
+    """Coerce optional unsigned-int fields to Python int. yt-dlp helpers
+    (`parse_duration`, `int_or_none`) often return floats — passing a
+    float to a WIT `option<u32>` / `option<u64>` field crashes the
+    componentize-py canonical-ABI marshaller (`ToCanonU32`). Round-to-int
+    here so plugin authors don't have to remember which fields require
+    integer values; bool guarded explicitly because Python `bool` is an
+    `int` subclass and silently coercing `True`→`1` is surprising."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        locus = f" at {where}" if where else ""
+        raise _ExtractorError(
+            f"[validate] info-dict field{locus} is bool, "
+            f"expected number or None",
+            expected=False,
+        )
+    if isinstance(v, int):
+        return max(0, v)
+    if isinstance(v, float):
+        return max(0, int(round(v)))
+    locus = f" at {where}" if where else ""
+    raise _ExtractorError(
+        f"[validate] info-dict field{locus} has invalid type: "
+        f"expected number/None, got {type(v).__name__}",
+        expected=False,
+    )
+
+
 def _dict_to_info_dict(d: dict) -> InfoDict:
     # Build formats with index-aware error messages so a malformed
     # `formats[4].format_id` surfaces with that exact path, not just
@@ -689,6 +718,27 @@ def _dict_to_info_dict(d: dict) -> InfoDict:
             filesize=f.get("filesize"),
             format_note=_opt_str(f.get("format_note"), f"formats[{i}].format_note"),
         ))
+    # Single-format-via-`url` canonicalisation. yt-dlp extractors
+    # frequently return `{'id': ..., 'url': video_url, ...}` with no
+    # explicit `formats[]` (xxxymovies, alphaporno, hellporno, many
+    # others). Without this synthesis the WIT info-dict ships an empty
+    # `formats[]` list and the URL is silently lost on the host side
+    # (`adapter.rs::convert_info_dict` consumes it as `webpage_url` only).
+    # Mirrors yt-dlp's internal `_check_formats` canonicalisation.
+    if not formats and isinstance(d.get("url"), str) and d["url"]:
+        formats.append(Format(
+            format_id=_opt_str(d.get("format_id"), "format_id") or "0",
+            url=d["url"],
+            ext=_opt_str(d.get("ext"), "ext") or "mp4",
+            protocol=_opt_str(d.get("protocol"), "protocol") or "https",
+            width=d.get("width"), height=d.get("height"), fps=d.get("fps"),
+            tbr=d.get("tbr"), vbr=d.get("vbr"), abr=d.get("abr"),
+            vcodec=_opt_str(d.get("vcodec"), "vcodec"),
+            acodec=_opt_str(d.get("acodec"), "acodec"),
+            container=_opt_str(d.get("container"), "container"),
+            filesize=d.get("filesize"),
+            format_note=_opt_str(d.get("format_note"), "format_note"),
+        ))
     # Use defensive .get with explicit default ("") — _validate_id already
     # ran and rejected non-str id/title, but keeping the .get makes the
     # coupling resilient to future refactors that might bypass the
@@ -703,8 +753,9 @@ def _dict_to_info_dict(d: dict) -> InfoDict:
         uploader=_opt_str(d.get("uploader"), "uploader"),
         uploader_id=_opt_str(d.get("uploader_id"), "uploader_id"),
         upload_date=_opt_str(d.get("upload_date"), "upload_date"),
-        duration=d.get("duration"), view_count=d.get("view_count"),
-        like_count=d.get("like_count"),
+        duration=_opt_uint(d.get("duration"), "duration"),
+        view_count=_opt_uint(d.get("view_count"), "view_count"),
+        like_count=_opt_uint(d.get("like_count"), "like_count"),
         tags=list(d.get("tags") or []),
         categories=list(d.get("categories") or []),
     )

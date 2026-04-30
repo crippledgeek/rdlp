@@ -563,6 +563,53 @@ class InfoExtractor:
             return None
         return default
 
+    def _html_search_regex(self, pattern, string, name, default=NO_DEFAULT,
+                           fatal=True, flags=0, group=None):
+        """yt-dlp's `_html_search_regex` (`extractor/common.py:1379-1386`).
+        Like `_search_regex` but the matched group is `clean_html`-ed
+        (HTML stripped, entities unescaped, whitespace normalised). Used
+        by extractors that capture text from inside HTML elements where
+        nested tags / character references need to be flattened."""
+        from rdlp_ytdlp_compat._utils import clean_html as _clean_html
+        res = self._search_regex(pattern, string, name, default, fatal, flags, group)
+        if isinstance(res, tuple):
+            return tuple(_clean_html(r) for r in res)
+        return _clean_html(res)
+
+    @staticmethod
+    def _rta_search(html):
+        """yt-dlp's `_rta_search` (`extractor/common.py:1525-1543`).
+        Returns 18 if the page has the official RTA-5042 meta label OR
+        any of three age-acknowledgement markers (proudly-labeled link,
+        "you acknowledge you are at least N years old", 18 U.S.C. 2257
+        statement). Otherwise returns `None`. Used by adult-content
+        extractors to populate `age_limit`."""
+        if _re.search(
+            r'(?ix)<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA"',
+            html,
+        ):
+            return 18
+        markers = [
+            r'Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>',
+            r">[^<]*you acknowledge you are at least (\d+) years old",
+            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
+        ]
+        age_limit = None
+        for marker in markers:
+            mobj = _re.search(marker, html)
+            if mobj is not None:
+                # Capture group 1 (when present) carries the age threshold;
+                # otherwise default to 18. Upstream uses `traverse_obj` for
+                # the safe extraction; `try / except IndexError` is the
+                # equivalent without the heavy-helper dependency here.
+                try:
+                    captured = mobj.group(1)
+                    val = int(captured) if captured else 18
+                except (IndexError, ValueError):
+                    val = 18
+                age_limit = max(age_limit or 0, val)
+        return age_limit
+
     def _html_search_meta(self, name, html, display_name=None, fatal=False, **kwargs):
         """yt-dlp's _html_search_meta. `name` accepts scalar or iterable of meta-tag
         names. Real yt-dlp matches FIVE attributes: itemprop|name|property|id|http-equiv

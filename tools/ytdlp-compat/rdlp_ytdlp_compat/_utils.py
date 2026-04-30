@@ -110,6 +110,84 @@ def dict_get(d, key_or_keys, default=None, skip_false_values=True):
     return default
 
 
+def clean_html(html):
+    """yt-dlp's `clean_html` (`_utils.py:527-540` @ tag 2026.03.17).
+    Strip HTML tags, collapse whitespace, convert `<br>` to newlines,
+    convert `</p><p>` to newlines, unescape entities. `None` passes
+    through (callers pass `_search_regex(..., default=None)` results)."""
+    import html as _stdlib_html
+    if html is None:
+        return html
+    html = re.sub(r"\s+", " ", html)
+    html = re.sub(r"(?u)\s?<\s?br\s?/?\s?>\s?", "\n", html)
+    html = re.sub(r"(?u)<\s?/\s?p\s?>\s?<\s?p[^>]*>", "\n", html)
+    html = re.sub(r"<.*?>", "", html)
+    html = _stdlib_html.unescape(html)
+    return html.strip()
+
+
+def parse_duration(s):
+    """yt-dlp's `parse_duration` (`_utils.py:2082-2136` @ tag 2026.03.17).
+    Three-tier matcher: colon-separated (DD:HH:MM:SS / HH:MM:SS / MM:SS
+    / SS), letter-suffixed (`1h2m3s` / ISO-8601 PT-form), and verbose
+    English (`1 hour 2 mins`). Returns float seconds or `None`."""
+    if not isinstance(s, str):
+        return None
+    s = s.strip()
+    if not s:
+        return None
+
+    days = hours = mins = secs = ms = None
+    m = re.match(
+        r"""(?x)
+            (?P<before_secs>
+                (?:(?:(?P<days>[0-9]+):)?(?P<hours>[0-9]+):)?(?P<mins>[0-9]+):)?
+            (?P<secs>(?(before_secs)[0-9]{1,2}|[0-9]+))
+            (?P<ms>[.:][0-9]+)?Z?$
+        """,
+        s,
+    )
+    if m:
+        days, hours, mins, secs, ms = m.group(
+            "days", "hours", "mins", "secs", "ms",
+        )
+    else:
+        m = re.match(
+            r"""(?ix)(?:P?
+                (?:[0-9]+\s*y(?:ears?)?,?\s*)?
+                (?:[0-9]+\s*m(?:onths?)?,?\s*)?
+                (?:[0-9]+\s*w(?:eeks?)?,?\s*)?
+                (?:(?P<days>[0-9]+)\s*d(?:ays?)?,?\s*)?
+                T)?
+                (?:(?P<hours>[0-9]+)\s*h(?:(?:ou)?rs?)?,?\s*)?
+                (?:(?P<mins>[0-9]+)\s*m(?:in(?:ute)?s?)?,?\s*)?
+                (?:(?P<secs>[0-9]+)(?P<ms>\.[0-9]+)?\s*s(?:ec(?:ond)?s?)?\s*)?Z?$
+            """,
+            s,
+        )
+        if m:
+            days, hours, mins, secs, ms = m.groups()
+        else:
+            m = re.match(
+                r"(?i)(?:(?P<hours>[0-9.]+)\s*(?:hours?)|"
+                r"(?P<mins>[0-9.]+)\s*(?:mins?\.?|minutes?)\s*)Z?$",
+                s,
+            )
+            if m:
+                hours, mins = m.groups()
+            else:
+                return None
+
+    if ms:
+        ms = ms.replace(":", ".")
+    return sum(
+        float(part or 0) * mult
+        for part, mult in (
+            (days, 86400), (hours, 3600), (mins, 60), (secs, 1), (ms, 1),
+        )
+    )
+
+
 def require(name, *, expected=False):
     """yt-dlp's `require` (`utils/traversal.py:320-327` @ tag 2026.03.17).
 

@@ -20,8 +20,10 @@ from rdlp_ytdlp_compat._errors import (
     network_exceptions,
 )
 from rdlp_ytdlp_compat._utils import (
+    clean_html,
     determine_ext,
     dict_get,
+    parse_duration,
     require,
     sanitize_filename,
     sanitize_path,
@@ -72,8 +74,10 @@ __all__ = [
     "sanitize_filename",
     "sanitize_path",
     # Slice-2 utility helpers (yt_dlp/utils/_utils.py + utils/traversal.py)
+    "clean_html",
     "determine_ext",
     "dict_get",
+    "parse_duration",
     "require",
     "variadic",
 ]
