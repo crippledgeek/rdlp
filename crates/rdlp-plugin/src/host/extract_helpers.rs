@@ -50,6 +50,257 @@ pub fn add_to_linker(linker: &mut Linker<PluginStoreData>) -> wasmtime::Result<(
     crate::bindings::rdlp::plugin::host_extract_helpers::add_to_linker(linker, |s| s)
 }
 
+impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
+    async fn search_regex(
+        &mut self,
+        pattern: String,
+        haystack: String,
+        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
+    ) -> Option<String> {
+        let pat = build_regex(&pattern, re_flags).ok()?;
+        let m = pat.captures(&haystack)?;
+        // Return the first non-None capture group, falling back to group 0.
+        for i in 1..m.len() {
+            if let Some(g) = m.get(i) {
+                return Some(g.as_str().to_string());
+            }
+        }
+        Some(m.get(0)?.as_str().to_string())
+    }
+
+    async fn html_search_regex(
+        &mut self,
+        pattern: String,
+        haystack: String,
+        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
+    ) -> Option<String> {
+        let raw = self.search_regex(pattern, haystack, re_flags).await?;
+        Some(clean_html(&raw))
+    }
+
+    async fn html_search_meta(&mut self, name: String, html: String) -> Option<String> {
+        // Mirrors yt-dlp's `_html_search_meta` (extractor/common.py:1492+).
+        // Tries 5 attribute names: itemprop / name / property / id / http-equiv.
+        // Tries content-after AND content-before patterns.
+        let escaped = regex::escape(&name);
+        let attrs = "(?:itemprop|name|property|id|http-equiv)";
+        let pat1 = format!(
+            r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#
+        );
+        let pat2 = format!(
+            r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#
+        );
+        for pat in [&pat1, &pat2] {
+            let re = regex::RegexBuilder::new(pat).case_insensitive(true).build().ok()?;
+            if let Some(m) = re.captures(&html)
+                && let Some(g) = m.get(1)
+            {
+                return Some(g.as_str().to_string());
+            }
+        }
+        None
+    }
+
+    async fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
+        // Mirrors yt-dlp's `_og_regexes` + `_og_search_property` (common.py:1463-1490).
+        let prop_escaped = regex::escape(&prop);
+        // content= with double-quote (group 1), single-quote (group 2),
+        // or unquoted HTML5 attribute value (group 3).
+        // The unquoted branch uses `[^\s"'=<>`]+` — excludes whitespace and the
+        // HTML5-forbidden characters (`"`, `'`, `=`, `<`, `>`, backtick) but allows
+        // `/` so URLs like `https://x.com/y.jpg` round-trip correctly.  In practice
+        // the value is terminated by the space that precedes `/>` (or the next
+        // attribute), so `/` inside the value is unambiguous.  The `regex` crate
+        // does not support lookaheads, so this is the correct no-lookahead form.
+        let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)'|([^\s"'=<>`]+))"#;
+        let sep = r"(?:&#x3A;|[:-])";
+        let property_re = format!(
+            r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#
+        );
+        let templates = [
+            format!(r#"<meta[^>]+?{property_re}[^>]+?{content_re}"#),
+            format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
+        ];
+        for pat in &templates {
+            let Ok(re) = regex::RegexBuilder::new(pat)
+                .dot_matches_new_line(true)
+                .case_insensitive(true)
+                .build()
+            else {
+                continue;
+            };
+            if let Some(m) = re.captures(&html) {
+                for i in 1..m.len() {
+                    if let Some(g) = m.get(i) {
+                        return Some(html_escape::decode_html_entities(g.as_str()).into_owned());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn rta_search(&mut self, html: String) -> Option<u8> {
+        // Mirrors yt-dlp's `_rta_search` (common.py:1525-1543).
+        let official = regex::RegexBuilder::new(
+            r#"<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA""#,
+        )
+        .case_insensitive(true)
+        .ignore_whitespace(true)
+        .build()
+        .ok()?;
+        if official.is_match(&html) {
+            return Some(18);
+        }
+        let markers = [
+            r#"Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>"#,
+            r">[^<]*you acknowledge you are at least (\d+) years old",
+            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
+        ];
+        let mut age_limit: Option<u8> = None;
+        for m in markers {
+            let Some(re) = regex::Regex::new(m).ok() else { continue };
+            if let Some(cap) = re.captures(&html) {
+                let val: u8 = cap
+                    .get(1)
+                    .and_then(|g| g.as_str().parse().ok())
+                    .unwrap_or(18);
+                age_limit = Some(age_limit.map_or(val, |x| x.max(val)));
+            }
+        }
+        age_limit
+    }
+
+    async fn search_json(
+        &mut self,
+        start_pattern: String,
+        end_pattern: String,
+        haystack: String,
+    ) -> Option<String> {
+        // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
+        // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
+        let full = format!(
+            r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})"
+        );
+        let re = regex::Regex::new(&full).ok()?;
+        let cap = re.captures(&haystack)?;
+        let json = cap.name("json")?.as_str();
+        Some(json.to_string())
+    }
+
+    async fn extract_m3u8(
+        &mut self,
+        url: String,
+        _video_id: String,
+        opts: crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options,
+    ) -> Result<
+        crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction,
+        crate::bindings::rdlp::plugin::host_fetch::FetchError,
+    > {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::{
+            ExtractHelpersSubtitle, M3u8Extraction, M3u8Format,
+        };
+        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
+
+        let result: Result<M3u8Extraction, FetchError> = async {
+            let req = Request {
+                url: url.clone(),
+                method: "GET".to_string(),
+                headers: vec![],
+                body: None,
+                timeout_ms: Some(30_000),
+            };
+            let resp = self.fetch(req).await?;
+            let body = String::from_utf8(resp.body)
+                .map_err(|e| FetchError::Network(e.to_string()))?;
+            let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
+                .map_err(FetchError::Network)?;
+            let formats: Vec<M3u8Format> = variants
+                .into_iter()
+                .map(|v| M3u8Format {
+                    format_id: opts
+                        .m3u8_id
+                        .as_deref()
+                        .map(|p| format!("{p}-{}", v.format_id))
+                        .unwrap_or(v.format_id),
+                    url: v.url,
+                    ext: opts.ext.clone().unwrap_or(v.ext),
+                    protocol: opts.protocol.clone().unwrap_or(v.protocol),
+                    tbr: v.tbr,
+                    width: v.width,
+                    height: v.height,
+                    fps: v.fps,
+                    vcodec: v.vcodec,
+                    acodec: v.acodec,
+                    vbr: v.vbr,
+                    abr: v.abr,
+                    language: v.language,
+                    format_note: v.format_note,
+                    format_index: v.format_index,
+                    manifest_url: v.manifest_url,
+                    has_drm: v.has_drm,
+                    preference: v.preference,
+                    quality: v.quality,
+                })
+                .collect();
+            Ok(M3u8Extraction {
+                formats,
+                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
+            })
+        }
+        .await;
+
+        match (result, opts.fatal) {
+            (Ok(x), _) => Ok(x),
+            (Err(e), true) => Err(e),
+            (Err(_), false) => Ok(M3u8Extraction {
+                formats: vec![],
+                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
+            }),
+        }
+    }
+
+    async fn extract_json_ld(
+        &mut self,
+        html: String,
+    ) -> Option<crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo> {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo;
+        let parsed = scraper::Html::parse_document(&html);
+        let v = rdlp_extractor::base::common::json_ld::extract_json_ld(&parsed)?;
+        // Duration: parse ISO 8601 string via BaseExtractor, convert f64 → u32 with range check
+        let duration = v
+            .duration
+            .as_deref()
+            .and_then(rdlp_extractor::base::common::BaseExtractor::parse_iso8601_duration)
+            .and_then(|d| {
+                if d >= 0.0 && d <= u32::MAX as f64 {
+                    Some(d as u32)
+                } else {
+                    None
+                }
+            });
+        // Thumbnails: extract_thumbnails returns Option<Vec<rdlp_types::Thumbnail>>;
+        // Thumbnail.url is String (not Option<String>), so map, not filter_map.
+        let thumbnails = rdlp_extractor::base::common::json_ld::extract_thumbnails(&v)
+            .map(|ts| ts.into_iter().map(|t| t.url).collect())
+            .unwrap_or_default();
+        Some(JsonLdVideo {
+            title: v.name.clone(),
+            description: v.description.clone(),
+            thumbnail: rdlp_extractor::base::common::json_ld::get_thumbnail_url(&v),
+            thumbnails,
+            upload_date: v.upload_date.clone(),
+            duration,
+            view_count: rdlp_extractor::base::common::json_ld::extract_view_count(&v),
+            like_count: rdlp_extractor::base::common::json_ld::extract_like_count(&v),
+            tags: rdlp_extractor::base::common::json_ld::extract_tags(&v)
+                .unwrap_or_default(),
+            categories: rdlp_extractor::base::common::json_ld::extract_categories(&v)
+                .unwrap_or_default(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,256 +576,5 @@ hi.m3u8\n";
             .unwrap();
         assert_eq!(r.formats.len(), 0);
         assert_eq!(r.subtitles.len(), 0);
-    }
-}
-
-impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
-    async fn search_regex(
-        &mut self,
-        pattern: String,
-        haystack: String,
-        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
-    ) -> Option<String> {
-        let pat = build_regex(&pattern, re_flags).ok()?;
-        let m = pat.captures(&haystack)?;
-        // Return the first non-None capture group, falling back to group 0.
-        for i in 1..m.len() {
-            if let Some(g) = m.get(i) {
-                return Some(g.as_str().to_string());
-            }
-        }
-        Some(m.get(0)?.as_str().to_string())
-    }
-
-    async fn html_search_regex(
-        &mut self,
-        pattern: String,
-        haystack: String,
-        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
-    ) -> Option<String> {
-        let raw = self.search_regex(pattern, haystack, re_flags).await?;
-        Some(clean_html(&raw))
-    }
-
-    async fn html_search_meta(&mut self, name: String, html: String) -> Option<String> {
-        // Mirrors yt-dlp's `_html_search_meta` (extractor/common.py:1492+).
-        // Tries 5 attribute names: itemprop / name / property / id / http-equiv.
-        // Tries content-after AND content-before patterns.
-        let escaped = regex::escape(&name);
-        let attrs = "(?:itemprop|name|property|id|http-equiv)";
-        let pat1 = format!(
-            r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#
-        );
-        let pat2 = format!(
-            r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#
-        );
-        for pat in [&pat1, &pat2] {
-            let re = regex::RegexBuilder::new(pat).case_insensitive(true).build().ok()?;
-            if let Some(m) = re.captures(&html)
-                && let Some(g) = m.get(1)
-            {
-                return Some(g.as_str().to_string());
-            }
-        }
-        None
-    }
-
-    async fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
-        // Mirrors yt-dlp's `_og_regexes` + `_og_search_property` (common.py:1463-1490).
-        let prop_escaped = regex::escape(&prop);
-        // content= with double-quote (group 1), single-quote (group 2),
-        // or unquoted HTML5 attribute value (group 3).
-        // The unquoted branch uses `[^\s"'=<>`]+` — excludes whitespace and the
-        // HTML5-forbidden characters (`"`, `'`, `=`, `<`, `>`, backtick) but allows
-        // `/` so URLs like `https://x.com/y.jpg` round-trip correctly.  In practice
-        // the value is terminated by the space that precedes `/>` (or the next
-        // attribute), so `/` inside the value is unambiguous.  The `regex` crate
-        // does not support lookaheads, so this is the correct no-lookahead form.
-        let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)'|([^\s"'=<>`]+))"#;
-        let sep = r"(?:&#x3A;|[:-])";
-        let property_re = format!(
-            r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#
-        );
-        let templates = [
-            format!(r#"<meta[^>]+?{property_re}[^>]+?{content_re}"#),
-            format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
-        ];
-        for pat in &templates {
-            let Ok(re) = regex::RegexBuilder::new(pat)
-                .dot_matches_new_line(true)
-                .case_insensitive(true)
-                .build()
-            else {
-                continue;
-            };
-            if let Some(m) = re.captures(&html) {
-                for i in 1..m.len() {
-                    if let Some(g) = m.get(i) {
-                        return Some(html_escape::decode_html_entities(g.as_str()).into_owned());
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    async fn rta_search(&mut self, html: String) -> Option<u8> {
-        // Mirrors yt-dlp's `_rta_search` (common.py:1525-1543).
-        let official = regex::RegexBuilder::new(
-            r#"<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA""#,
-        )
-        .case_insensitive(true)
-        .ignore_whitespace(true)
-        .build()
-        .ok()?;
-        if official.is_match(&html) {
-            return Some(18);
-        }
-        let markers = [
-            r#"Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>"#,
-            r">[^<]*you acknowledge you are at least (\d+) years old",
-            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
-        ];
-        let mut age_limit: Option<u8> = None;
-        for m in markers {
-            let Some(re) = regex::Regex::new(m).ok() else { continue };
-            if let Some(cap) = re.captures(&html) {
-                let val: u8 = cap
-                    .get(1)
-                    .and_then(|g| g.as_str().parse().ok())
-                    .unwrap_or(18);
-                age_limit = Some(age_limit.map_or(val, |x| x.max(val)));
-            }
-        }
-        age_limit
-    }
-
-    async fn search_json(
-        &mut self,
-        start_pattern: String,
-        end_pattern: String,
-        haystack: String,
-    ) -> Option<String> {
-        // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
-        // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
-        let full = format!(
-            r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})"
-        );
-        let re = regex::Regex::new(&full).ok()?;
-        let cap = re.captures(&haystack)?;
-        let json = cap.name("json")?.as_str();
-        Some(json.to_string())
-    }
-
-    async fn extract_m3u8(
-        &mut self,
-        url: String,
-        _video_id: String,
-        opts: crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options,
-    ) -> Result<
-        crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction,
-        crate::bindings::rdlp::plugin::host_fetch::FetchError,
-    > {
-        use crate::bindings::rdlp::plugin::host_extract_helpers::{
-            ExtractHelpersSubtitle, M3u8Extraction, M3u8Format,
-        };
-        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
-
-        let result: Result<M3u8Extraction, FetchError> = async {
-            let req = Request {
-                url: url.clone(),
-                method: "GET".to_string(),
-                headers: vec![],
-                body: None,
-                timeout_ms: Some(30_000),
-            };
-            let resp = self.fetch(req).await?;
-            let body = String::from_utf8(resp.body)
-                .map_err(|e| FetchError::Network(e.to_string()))?;
-            let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
-                .map_err(FetchError::Network)?;
-            let formats: Vec<M3u8Format> = variants
-                .into_iter()
-                .map(|v| M3u8Format {
-                    format_id: opts
-                        .m3u8_id
-                        .as_deref()
-                        .map(|p| format!("{p}-{}", v.format_id))
-                        .unwrap_or(v.format_id),
-                    url: v.url,
-                    ext: opts.ext.clone().unwrap_or(v.ext),
-                    protocol: opts.protocol.clone().unwrap_or(v.protocol),
-                    tbr: v.tbr,
-                    width: v.width,
-                    height: v.height,
-                    fps: v.fps,
-                    vcodec: v.vcodec,
-                    acodec: v.acodec,
-                    vbr: v.vbr,
-                    abr: v.abr,
-                    language: v.language,
-                    format_note: v.format_note,
-                    format_index: v.format_index,
-                    manifest_url: v.manifest_url,
-                    has_drm: v.has_drm,
-                    preference: v.preference,
-                    quality: v.quality,
-                })
-                .collect();
-            Ok(M3u8Extraction {
-                formats,
-                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
-            })
-        }
-        .await;
-
-        match (result, opts.fatal) {
-            (Ok(x), _) => Ok(x),
-            (Err(e), true) => Err(e),
-            (Err(_), false) => Ok(M3u8Extraction {
-                formats: vec![],
-                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
-            }),
-        }
-    }
-
-    async fn extract_json_ld(
-        &mut self,
-        html: String,
-    ) -> Option<crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo> {
-        use crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo;
-        let parsed = scraper::Html::parse_document(&html);
-        let v = rdlp_extractor::base::common::json_ld::extract_json_ld(&parsed)?;
-        // Duration: parse ISO 8601 string via BaseExtractor, convert f64 → u32 with range check
-        let duration = v
-            .duration
-            .as_deref()
-            .and_then(rdlp_extractor::base::common::BaseExtractor::parse_iso8601_duration)
-            .and_then(|d| {
-                if d >= 0.0 && d <= u32::MAX as f64 {
-                    Some(d as u32)
-                } else {
-                    None
-                }
-            });
-        // Thumbnails: extract_thumbnails returns Option<Vec<rdlp_types::Thumbnail>>;
-        // Thumbnail.url is String (not Option<String>), so map, not filter_map.
-        let thumbnails = rdlp_extractor::base::common::json_ld::extract_thumbnails(&v)
-            .map(|ts| ts.into_iter().map(|t| t.url).collect())
-            .unwrap_or_default();
-        Some(JsonLdVideo {
-            title: v.name.clone(),
-            description: v.description.clone(),
-            thumbnail: rdlp_extractor::base::common::json_ld::get_thumbnail_url(&v),
-            thumbnails,
-            upload_date: v.upload_date.clone(),
-            duration,
-            view_count: rdlp_extractor::base::common::json_ld::extract_view_count(&v),
-            like_count: rdlp_extractor::base::common::json_ld::extract_like_count(&v),
-            tags: rdlp_extractor::base::common::json_ld::extract_tags(&v)
-                .unwrap_or_default(),
-            categories: rdlp_extractor::base::common::json_ld::extract_categories(&v)
-                .unwrap_or_default(),
-        })
     }
 }
