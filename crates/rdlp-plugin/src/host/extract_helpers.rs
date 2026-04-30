@@ -545,12 +545,18 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         use crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo;
         let parsed = scraper::Html::parse_document(&html);
         let v = rdlp_extractor::base::common::json_ld::extract_json_ld(&parsed)?;
-        // Duration: parse ISO 8601 string via BaseExtractor, convert f64 → u32
+        // Duration: parse ISO 8601 string via BaseExtractor, convert f64 → u32 with range check
         let duration = v
             .duration
             .as_deref()
             .and_then(rdlp_extractor::base::common::BaseExtractor::parse_iso8601_duration)
-            .map(|d| d as u32);
+            .and_then(|d| {
+                if d >= 0.0 && d <= u32::MAX as f64 {
+                    Some(d as u32)
+                } else {
+                    None
+                }
+            });
         // Thumbnails: extract_thumbnails returns Option<Vec<rdlp_types::Thumbnail>>;
         // Thumbnail.url is String (not Option<String>), so map, not filter_map.
         let thumbnails = rdlp_extractor::base::common::json_ld::extract_thumbnails(&v)
