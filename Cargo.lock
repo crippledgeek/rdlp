@@ -6104,6 +6104,7 @@ dependencies = [
  "rand 0.8.5",
  "rdlp-cookies",
  "rdlp-core",
+ "rdlp-extractor",
  "rdlp-http",
  "rdlp-jsinterp",
  "rdlp-plugin-manifest",
