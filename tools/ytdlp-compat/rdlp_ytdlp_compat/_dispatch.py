@@ -63,13 +63,23 @@ def discover_ie_classes(module):
 
 def dispatch_url(classes, url):
     """Walk `classes` in order; return the first whose `suitable(url)`
-    is True. Returns None when no class claims the URL."""
+    is True. Returns None when no class claims the URL.
+
+    A buggy `suitable()` override raising an exception MUST NOT poison
+    dispatch for subsequent candidates — the exception is logged via
+    `_host.log` and dispatch continues. Without the log, a typo'd
+    override would silently never match and the plugin author would
+    have no signal."""
+    from rdlp_ytdlp_compat import _host
     for cls in classes:
         try:
             if cls.suitable(url):
                 return cls
-        except Exception:  # noqa: BLE001
-            # `suitable()` is user code — a buggy override shouldn't
-            # poison dispatch for subsequent candidates. Continue.
+        except Exception as e:  # noqa: BLE001
+            _host.log(
+                "warn",
+                f"{cls.__name__}.suitable({url!r}) raised "
+                f"{type(e).__name__}: {e}; skipping this class",
+            )
             continue
     return None

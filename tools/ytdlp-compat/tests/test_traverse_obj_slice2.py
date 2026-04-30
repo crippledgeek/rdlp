@@ -198,6 +198,31 @@ class TestGetAllFalse:
         assert result == "a"
 
 
+class TestCasesenseFalse:
+    """`casesense=False` makes dict-key lookup case-insensitive. The
+    Slice-2 rewrite reassigns `key` via `casefold()` mid-iteration —
+    pin behaviour against accidental regressions during future edits."""
+
+    def test_case_insensitive_lookup(self):
+        d = {"Title": "Hello"}
+        assert traverse_obj(d, "title", casesense=False) == "Hello"
+
+    def test_case_insensitive_lookup_nested(self):
+        d = {"Outer": {"Inner": "value"}}
+        assert traverse_obj(
+            d, ("outer", "inner"), casesense=False,
+        ) == "value"
+
+    def test_casesense_true_default_misses_wrong_case(self):
+        d = {"Title": "Hello"}
+        # Default casesense=True → strict match.
+        assert traverse_obj(d, "title") is None
+
+    def test_case_insensitive_does_not_affect_int_index(self):
+        # Integer indices are unaffected by casefold().
+        assert traverse_obj([10, 20, 30], 1, casesense=False) == 20
+
+
 class TestSliceOnePathBackcompat:
     """Slice-1 behaviour MUST remain green for the existing test surface."""
 

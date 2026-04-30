@@ -457,6 +457,15 @@ class InfoExtractor:
         impersonate/require_impersonation are accepted for compatibility but
         ignored — TLS impersonation is host-side via wreq."""
         url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        if query:
+            # yt-dlp's `_download_webpage` serialises the `query=` dict
+            # into the URL as `?k=v&...` (URL-encoded). Without this the
+            # GraphQL endpoints used by SVTSeriesIE etc. would receive
+            # no payload. `urlencode` percent-encodes braces, spaces,
+            # quotes — required for raw GraphQL strings.
+            from urllib.parse import urlencode
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}{urlencode(query, doseq=True)}"
         if note is not None:
             _host.log("info", f"{note}: {url}")
         last_err = None
@@ -652,8 +661,13 @@ class InfoExtractor:
             return None
         if "_VALID_URL_RE" not in cls.__dict__:
             from rdlp_ytdlp_compat._utils import variadic as _variadic
+            # No flags — upstream (`extractor/common.py:624`) compiles
+            # without flags and relies on inline `(?x)` for verbose
+            # patterns. Force-applying `re.VERBOSE` here would silently
+            # strip whitespace and `#` literals from single-line URL
+            # regexes that don't carry the inline flag.
             cls._VALID_URL_RE = tuple(
-                _re.compile(p, _re.VERBOSE) for p in _variadic(cls._VALID_URL)
+                _re.compile(p) for p in _variadic(cls._VALID_URL)
             )
         for regex in cls._VALID_URL_RE:
             m = regex.match(url)

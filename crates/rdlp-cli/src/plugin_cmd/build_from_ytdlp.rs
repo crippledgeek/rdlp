@@ -513,13 +513,13 @@ def _extractor_error_to_variant(e):
         return ExtractError_Internal(msg)
 
     # === Catch-all — extractor bug ========================================
-    # Flatten Python's __cause__ if present (re-raised exceptions from
-    # buggy plugin code).
-    msg = str(e)
-    cause = getattr(e, "__cause__", None)
-    if cause is not None:
-        msg = f"{msg} (cause: {type(cause).__name__}: {cause})"
-    return ExtractError_Internal(msg)
+    # Reuse `_format_payload` so the legacy `cause` attribute (yt-dlp's
+    # own convention via `ExtractorError(msg, cause=e)`) is also
+    # flattened, not just `__cause__`. Earlier this branch duplicated
+    # the cause-flattening inline and dropped the legacy attr — found
+    # in code review as a debug-info regression for unknown exception
+    # types.
+    return ExtractError_Internal(_format_payload(e))
 
 
 def _validate_id(d):

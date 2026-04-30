@@ -157,3 +157,45 @@ class TestDispatchUrl:
             [_SiblingPrimaryIE, _SiblingSeriesIE], url,
         )
         assert cls is _SiblingPrimaryIE
+
+    def test_buggy_suitable_does_not_poison_dispatch(self):
+        """A `suitable()` override raising an exception MUST NOT prevent
+        sibling classes from being tried. The exception is logged via
+        `_host.log` so the plugin author can find broken overrides."""
+        class _BrokenIE(InfoExtractor):
+            _VALID_URL = r"https?://broken\.example/(?P<id>\w+)"
+
+            @classmethod
+            def suitable(cls, url):
+                raise RuntimeError("intentionally buggy override")
+
+        # Dispatch must skip BrokenIE (logging the error) and find AlphaIE.
+        cls = dispatch_url(
+            [_BrokenIE, _AlphaIE], "https://alpha.example/foo",
+        )
+        assert cls is _AlphaIE
+
+    def test_buggy_suitable_logs_via_host(self, monkeypatch):
+        """Pin the warn-log call so a future refactor that silently
+        swallows the exception triggers a regression."""
+        logged = []
+
+        from rdlp_ytdlp_compat import _host
+
+        def fake_log(level, msg):
+            logged.append((level, msg))
+
+        monkeypatch.setattr(_host, "log", fake_log)
+
+        class _BrokenIE2(InfoExtractor):
+            _VALID_URL = r"https?://broken2\.example/(?P<id>\w+)"
+
+            @classmethod
+            def suitable(cls, url):
+                raise RuntimeError("boom")
+
+        dispatch_url([_BrokenIE2], "https://broken2.example/x")
+        assert any(
+            level == "warn" and "_BrokenIE2" in msg and "boom" in msg
+            for level, msg in logged
+        ), f"expected warn-level log mentioning class + error, got {logged!r}"

@@ -48,6 +48,56 @@ class TestMatchValidUrl:
         assert m1.group("id") == "x"
         assert m2.group("id") == "y"
 
+    def test_compiled_without_verbose_flag(self):
+        """Upstream `_match_valid_url` (`extractor/common.py:617-626`)
+        compiles `_VALID_URL` with NO flags. Compiling with `re.VERBOSE`
+        unconditionally would silently strip whitespace and `#` from
+        single-line patterns that don't carry the `(?x)` inline flag.
+
+        Direct assertion against compiled pattern flags is the only
+        reliable way to pin this contract — string-match tests fail to
+        detect VERBOSE because `re.match` is prefix-anchored and most
+        patterns still produce SOME match even after VERBOSE corruption.
+        """
+        import re as _re
+
+        class _PinFlagsIE(InfoExtractor):
+            _VALID_URL = r"https?://flags\.example/(?P<id>\w+)"
+
+        # Force compilation by dispatching once.
+        _PinFlagsIE._match_valid_url("https://flags.example/x")
+        assert hasattr(_PinFlagsIE, "_VALID_URL_RE")
+        for compiled in _PinFlagsIE._VALID_URL_RE:
+            assert not (compiled.flags & _re.VERBOSE), (
+                f"_VALID_URL pattern was compiled with re.VERBOSE "
+                f"(flags={compiled.flags}); upstream uses zero flags. "
+                f"Inline `(?x)` is the correct mechanism for verbose "
+                f"patterns."
+            )
+
+    def test_hash_literal_preserved_in_pattern(self):
+        """Behavioural sibling of `test_compiled_without_verbose_flag`:
+        a single-line pattern carrying a `#` literal must match URLs
+        with that fragment, AND must NOT match URLs lacking it. Without
+        VERBOSE the `#frag` literal is required; under VERBOSE it is
+        stripped and the pattern degrades to "match anything before #".
+        """
+        class _FragIE(InfoExtractor):
+            _VALID_URL = r"https?://frag\.example/(?P<id>\w+)#frag$"
+
+        # The `#frag$` anchor MUST be enforced by the regex.
+        assert _FragIE._match_valid_url(
+            "https://frag.example/abc#frag",
+        ) is not None
+        # If VERBOSE strips `#frag$`, this URL would still match. It
+        # MUST NOT under correct (no-flag) compilation.
+        assert _FragIE._match_valid_url(
+            "https://frag.example/abc#otherfragment",
+        ) is None, (
+            "pattern with `#frag$` anchor matched a URL ending in "
+            "`#otherfragment` — VERBOSE flag stripped the literal `#frag`"
+        )
+
 
 class TestMatchId:
     def test_returns_id_group(self):
@@ -284,6 +334,76 @@ class TestGeoVerificationHeaders:
         # we don't ship YoutubeDL params, so always empty in shim.
         result = ie.geo_verification_headers()
         assert isinstance(result, dict)
+
+
+class TestDownloadWebpageQuery:
+    """SVT's `SVTSeriesIE._real_extract` (line 313) calls
+    `_download_json(url, slug, 'note', query={'query': '{...GraphQL...}'})`.
+    The `query=` kwarg MUST serialise into the URL as `?key=value` before
+    fetching, otherwise the GraphQL endpoint receives no payload."""
+
+    def test_query_dict_appended_to_url(self, monkeypatch):
+        # Capture the URL that `_host.fetch_text` is asked to fetch.
+        captured = {}
+
+        def fake_fetch_text(url, headers=None, timeout_ms=None,
+                            expected_status=None):
+            captured["url"] = url
+            return "fake body"
+
+        from rdlp_ytdlp_compat import _host
+        monkeypatch.setattr(_host, "fetch_text", fake_fetch_text)
+
+        ie = _ExampleIE()
+        ie._download_webpage(
+            "https://api.example.com/graphql",
+            "vid1",
+            query={"query": "{ user { id } }", "variables": "null"},
+        )
+
+        # URL must contain both query parameters URL-encoded.
+        assert "?" in captured["url"], f"got: {captured['url']!r}"
+        assert "query=" in captured["url"]
+        assert "variables=" in captured["url"]
+        # Special chars (braces, spaces) must be percent-encoded.
+        assert " " not in captured["url"]
+        assert "{" not in captured["url"]
+
+    def test_query_none_leaves_url_unchanged(self, monkeypatch):
+        captured = {}
+
+        def fake_fetch_text(url, headers=None, timeout_ms=None,
+                            expected_status=None):
+            captured["url"] = url
+            return ""
+
+        from rdlp_ytdlp_compat import _host
+        monkeypatch.setattr(_host, "fetch_text", fake_fetch_text)
+
+        ie = _ExampleIE()
+        ie._download_webpage("https://api.example.com/graphql", "vid1", query=None)
+        assert captured["url"] == "https://api.example.com/graphql"
+
+    def test_query_appended_to_existing_querystring(self, monkeypatch):
+        captured = {}
+
+        def fake_fetch_text(url, headers=None, timeout_ms=None,
+                            expected_status=None):
+            captured["url"] = url
+            return ""
+
+        from rdlp_ytdlp_compat import _host
+        monkeypatch.setattr(_host, "fetch_text", fake_fetch_text)
+
+        ie = _ExampleIE()
+        ie._download_webpage(
+            "https://api.example.com/path?existing=1",
+            "vid1",
+            query={"new": "value"},
+        )
+        # Both existing and new params must appear; separator is `&`.
+        assert "existing=1" in captured["url"]
+        assert "new=value" in captured["url"]
 
 
 # -----------------------------------------------------------------------------
