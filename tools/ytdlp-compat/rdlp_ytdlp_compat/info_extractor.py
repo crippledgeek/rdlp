@@ -367,6 +367,31 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     return default
 
 
+def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
+    """Multi-group / named-group / no-host calls keep going through the
+    local Python `re` module — the host helper returns a single string."""
+    patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
+    for pat in patterns:
+        m = _re.search(pat, string, flags) if isinstance(pat, str) else pat.search(string)
+        if m is not None:
+            if group is None:
+                groups = m.groups()
+                if groups:
+                    for g in groups:
+                        if g is not None:
+                            return g
+                return m.group(0)
+            if isinstance(group, (list, tuple)):
+                return tuple(m.group(g) for g in group)
+            return m.group(group)
+    from rdlp_ytdlp_compat._errors import RegexNotFoundError
+    if default is NO_DEFAULT:
+        if fatal:
+            raise RegexNotFoundError(f"Unable to extract {name}")
+        return None
+    return default
+
+
 class InfoExtractor:
     """Base class for yt-dlp-style extractors. I/O helpers added in Tasks 6-7.
 
@@ -526,38 +551,32 @@ class InfoExtractor:
 
     def _search_regex(self, pattern, string, name, default=NO_DEFAULT,
                       fatal=True, flags=0, group=None):
-        """yt-dlp's _search_regex. CRITICAL: real default is fatal=True (extractors
-        omit the kwarg expecting raise-on-miss). Accepts a single pattern OR an
-        iterable of patterns/compiled regexes; first match wins.
-
-        - group=None: return first non-None group, or group(0) if no groups.
-        - group=int/str: return that named/numbered group.
-        - group=list/tuple: return tuple of groups.
-        """
+        """Slice-2.5 passthrough to host-extract-helpers.search-regex.
+        yt-dlp's pattern-list semantics + group/fatal/default management
+        stay Python — they're cheap branching the host doesn't see.
+        Falls back to the stdlib `re` path when outside the componentize-py
+        runtime (i.e. `_host._HXH_AVAILABLE` is False and the function
+        raises RuntimeError) so that existing unit tests keep passing."""
+        from rdlp_ytdlp_compat._errors import RegexNotFoundError
+        # multi-group / named-group always use the legacy stdlib path
+        if isinstance(group, (list, tuple)) or (
+            group is not None and not isinstance(group, int)
+        ):
+            return _legacy_search_regex(pattern, string, name, default,
+                                        fatal, flags, group)
         patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
-        m = None
         for pat in patterns:
-            m = _re.search(pat, string, flags) if isinstance(pat, str) else pat.search(string)
-            if m is not None:
-                break
-        if m is not None:
-            if group is None:
-                groups = m.groups()
-                if groups:
-                    for g in groups:
-                        if g is not None:
-                            return g
-                return m.group(0)
-            if isinstance(group, (list, tuple)):
-                return tuple(m.group(g) for g in group)
-            return m.group(group)
-        # No match
+            pat_str = pat if isinstance(pat, str) else pat.pattern
+            try:
+                result = _host.search_regex(pat_str, string, flags)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                return _legacy_search_regex(pattern, string, name, default,
+                                            fatal, flags, group)
+            if result is not None:
+                return result
         if default is NO_DEFAULT:
             if fatal:
-                # Raise the typed yt-dlp class so the WIT dispatcher routes
-                # to extract-error::parse via isinstance, and ported code
-                # using `except RegexNotFoundError:` keeps working.
-                from rdlp_ytdlp_compat._errors import RegexNotFoundError
                 raise RegexNotFoundError(f"Unable to extract {name}")
             _host.log("warn", f"unable to extract {name}; returning None")
             return None
