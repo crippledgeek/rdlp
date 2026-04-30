@@ -153,6 +153,36 @@ mod tests {
         ).await;
         assert_eq!(r, None);
     }
+
+    #[tokio::test]
+    async fn og_search_property_extracts_title() {
+        let mut c = ctx();
+        let r = c.og_search_property(
+            "title".to_string(),
+            r#"<meta property="og:title" content="My Video"/>"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("My Video".to_string()));
+    }
+
+    #[tokio::test]
+    async fn og_search_property_extracts_image() {
+        let mut c = ctx();
+        let r = c.og_search_property(
+            "image".to_string(),
+            r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
+    }
+
+    #[tokio::test]
+    async fn og_search_property_unescapes_entities() {
+        let mut c = ctx();
+        let r = c.og_search_property(
+            "title".to_string(),
+            r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("A & B".to_string()));
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -206,8 +236,38 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         None
     }
 
-    async fn og_search_property(&mut self, _prop: String, _html: String) -> Option<String> {
-        unimplemented!("Task 6")
+    async fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
+        // Mirrors yt-dlp's `_og_regexes` + `_og_search_property` (common.py:1463-1490).
+        // The unquoted attribute-value branch from yt-dlp requires lookahead (unsupported by
+        // the `regex` crate); it is omitted here since real-world og: tags always quote content.
+        let prop_escaped = regex::escape(&prop);
+        // content= with double-quote (group 1) or single-quote (group 2) value.
+        let content_re = r#"content=(?:"([^"]+?)"|'([^']+?)')"#;
+        let sep = r"(?:&#x3A;|[:-])";
+        let property_re = format!(
+            r#"(?:name|property)=(?:'og{sep}{prop_escaped}'|"og{sep}{prop_escaped}")"#
+        );
+        let templates = [
+            format!(r#"<meta[^>]+?{property_re}[^>]+?{content_re}"#),
+            format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
+        ];
+        for pat in &templates {
+            let Ok(re) = regex::RegexBuilder::new(pat)
+                .dot_matches_new_line(true)
+                .case_insensitive(true)
+                .build()
+            else {
+                continue;
+            };
+            if let Some(m) = re.captures(&html) {
+                for i in 1..m.len() {
+                    if let Some(g) = m.get(i) {
+                        return Some(html_escape::decode_html_entities(g.as_str()).into_owned());
+                    }
+                }
+            }
+        }
+        None
     }
 
     async fn rta_search(&mut self, _html: String) -> Option<u8> {
