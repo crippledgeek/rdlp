@@ -157,13 +157,11 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: lts/*
-          # Cache the npm download cache (~/.npm) keyed by the desktop
-          # frontend's lockfile. Avoids re-downloading the same Tauri /
-          # Vite / shadcn dep tree every matrix run × 3 platforms.
-          # Uses the built-in setup-node cache (rather than actions/cache)
-          # because it auto-handles per-platform path differences.
-          cache: 'npm'
-          cache-dependency-path: crates/rdlp-desktop/package-lock.json
+          # NOTE: built-in `cache: 'npm'` requires a TRACKED lockfile.
+          # `crates/rdlp-desktop/package-lock.json` is in .gitignore by
+          # project policy, so setup-node's cache hash fails to resolve
+          # and the action errors out. Re-enable IF the project ever
+          # tracks its lockfile.
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -244,14 +242,14 @@ jobs:
               - 'crates/rdlp-plugin/wit/**'
               - 'crates/rdlp-plugin/src/host/**'
               - 'crates/rdlp-plugin-manifest/src/**'
-              - 'examples/plugins/ytdlp-golden/**'
-              - 'examples/plugins/ytdlp-hello-world/**'
-              - 'examples/plugins/svt/**'
-              - 'crates/rdlp-plugin/tests/svt_golden.rs'
-              - 'crates/rdlp-plugin/tests/fixtures/svt/**'
-              - 'crates/rdlp-plugin/tests/xxxymovies_golden.rs'
-              - 'crates/rdlp-plugin/tests/fixtures/xxxymovies/**'
-              - 'examples/plugins/xxxymovies/**'
+              # Glob-everything so each new ported plugin (Slice 2.5+)
+              # auto-triggers without per-plugin CI edits. Plugins live
+              # under examples/plugins/<name>/, fixtures under
+              # crates/rdlp-plugin/tests/fixtures/<name>/, and the
+              # integration golden at tests/<name>_golden.rs.
+              - 'examples/plugins/**'
+              - 'crates/rdlp-plugin/tests/*_golden.rs'
+              - 'crates/rdlp-plugin/tests/fixtures/**'
               - '.github/workflows/ci.yml'
 
   ytdlp-plugin-golden:
@@ -345,27 +343,26 @@ jobs:
         with:
           shared-key: rust-ubuntu-22.04
 
-      - name: Build golden plugins
-        run: cargo test -p rdlp-plugin --test ytdlp_golden -- --ignored --nocapture
-        timeout-minutes: 20
-
-      - name: Run SVT end-to-end golden (Slice 2)
-        # Builds the real upstream yt-dlp svt.py via componentize-py,
-        # signs + loads the resulting wasm component, injects host:fetch
-        # fixtures, dispatches `extract("svt:ePBvGRq")`, and asserts the
-        # returned InfoDict (id, title, formats) matches the upstream
-        # _TEST golden. Regression guard for the entire Slice-2 surface
-        # (multi-class dispatch, traverse_obj set-syntax, _download_json,
-        # _extract_m3u8_formats_and_subtitles, fixture-replay harness).
-        run: cargo test -p rdlp-plugin --test svt_golden -- --ignored --nocapture
-        timeout-minutes: 10
-
-      - name: Run xxxymovies end-to-end golden (Slice 2)
-        # Single-class plugin port covering a different code path from
-        # SVT: HTML scraping (no Next.js/urqlState), `_search_regex` +
-        # `_html_search_regex` + `_html_search_meta` + `_rta_search`,
-        # plus single-format `'url':` synthesis (extractor returns no
-        # formats[] but a top-level url string). Together with svt the
-        # two goldens cover both major yt-dlp extractor archetypes.
-        run: cargo test -p rdlp-plugin --test xxxymovies_golden -- --ignored --nocapture
-        timeout-minutes: 10
+      - name: Run all goldens
+        # Iterates every `crates/rdlp-plugin/tests/*_golden.rs` file —
+        # each new ported plugin (Slice 2.5+) auto-runs without CI
+        # edits. Tests inside golden files are `#[ignore]` (slow:
+        # ~30s componentize-py wasm build per plugin), so we explicitly
+        # pass --ignored. Sequential execution (one cargo test
+        # invocation per file) avoids parallel wasm builds saturating
+        # disk + CPU on the runner.
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          goldens=(crates/rdlp-plugin/tests/*_golden.rs)
+          if [ ${#goldens[@]} -eq 0 ]; then
+            echo "::error::no *_golden.rs files found"
+            exit 1
+          fi
+          for f in "${goldens[@]}"; do
+            name=$(basename "$f" .rs)
+            echo "::group::Run $name"
+            cargo test -p rdlp-plugin --test "$name" -- --ignored --nocapture
+            echo "::endgroup::"
+          done
