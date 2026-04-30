@@ -193,6 +193,31 @@ mod tests {
         ).await;
         assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
     }
+
+    #[tokio::test]
+    async fn rta_search_official_meta_returns_18() {
+        let mut c = ctx();
+        let r = c.rta_search(
+            r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string(),
+        ).await;
+        assert_eq!(r, Some(18));
+    }
+
+    #[tokio::test]
+    async fn rta_search_2257_marker_returns_18() {
+        let mut c = ctx();
+        let r = c.rta_search(
+            "footer text > 18 U.S.C. § 2257 statement".to_string(),
+        ).await;
+        assert_eq!(r, Some(18));
+    }
+
+    #[tokio::test]
+    async fn rta_search_no_marker_returns_none() {
+        let mut c = ctx();
+        let r = c.rta_search("<html><body>nothing</body></html>".to_string()).await;
+        assert_eq!(r, None);
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -285,8 +310,35 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         None
     }
 
-    async fn rta_search(&mut self, _html: String) -> Option<u8> {
-        unimplemented!("Task 7")
+    async fn rta_search(&mut self, html: String) -> Option<u8> {
+        // Mirrors yt-dlp's `_rta_search` (common.py:1525-1543).
+        let official = regex::RegexBuilder::new(
+            r#"<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA""#,
+        )
+        .case_insensitive(true)
+        .ignore_whitespace(true)
+        .build()
+        .ok()?;
+        if official.is_match(&html) {
+            return Some(18);
+        }
+        let markers = [
+            r#"Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>"#,
+            r">[^<]*you acknowledge you are at least (\d+) years old",
+            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
+        ];
+        let mut age_limit: Option<u8> = None;
+        for m in markers {
+            let re = regex::Regex::new(m).ok()?;
+            if let Some(cap) = re.captures(&html) {
+                let val: u8 = cap
+                    .get(1)
+                    .and_then(|g| g.as_str().parse().ok())
+                    .unwrap_or(18);
+                age_limit = Some(age_limit.map_or(val, |x| x.max(val)));
+            }
+        }
+        age_limit
     }
 
     async fn search_json(
