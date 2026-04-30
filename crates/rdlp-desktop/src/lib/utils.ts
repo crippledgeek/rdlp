@@ -40,3 +40,32 @@ export function parseUploadTimestamp(value: string): Date | null {
 
     return null;
 }
+
+
+/**
+ * Placeholder text rendered in the GUI when an extractor produces an
+ * empty/null/whitespace-only title. Single source of truth so JobCard,
+ * MediaHero, HistoryView etc. don't drift apart on labelling.
+ *
+ * Surfaced by the godresource port: API returned `title: null`, the
+ * shim's `_real_extract` wrote `'title': ''`, and the backend's
+ * template renderer (after the empty-string-as-missing fix) maps that
+ * to either the `|default` pipe or "NA". For the UI we use the same
+ * placeholder text everywhere so users see consistent language.
+ */
+export const TITLE_PLACEHOLDER = "Unknown";
+
+/**
+ * Normalise a title-like string for display. Returns `TITLE_PLACEHOLDER`
+ * when the input is null, undefined, empty, or whitespace-only —
+ * matching the backend's empty-string-as-missing semantics. Use at
+ * every render site that displays a video/playlist title.
+ *
+ * @param title - The raw title from an `InfoDict` / job state.
+ * @returns The trimmed title if non-blank, otherwise `TITLE_PLACEHOLDER`.
+ */
+export function displayTitle(title: string | null | undefined): string {
+    if (title == null) return TITLE_PLACEHOLDER;
+    const trimmed = title.trim();
+    return trimmed.length === 0 ? TITLE_PLACEHOLDER : trimmed;
+}

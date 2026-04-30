@@ -7,7 +7,7 @@ use crate::container::ContainerFormat;
 #[test]
 fn test_default_config() {
     let config = Config::default();
-    assert_eq!(config.output_template, "%(title)s.%(ext)s");
+    assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
     assert!(config.format.is_none());
     assert!(config.continue_downloads);
     assert_eq!(config.concurrent_fragments, 4);

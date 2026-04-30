@@ -2,7 +2,7 @@
 // Click switches to Queue view and selects the job.
 
 import { setView, setSelectedJob } from "@/stores/uiStore";
-import { cn } from "@/lib/utils";
+import { cn, displayTitle } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobMiniCardProps {
@@ -12,7 +12,7 @@ interface JobMiniCardProps {
 
 export function JobMiniCard({ job, className }: JobMiniCardProps) {
     const progress = job.progress ?? 0;
-    const title = job.title ?? job.url;
+    const title = displayTitle(job.title);
     const isRunning = job.status === "running";
     const isPending = job.status === "pending";
 

@@ -2,7 +2,7 @@
 // Unit tests for lib/utils.ts — cn() and parseUploadTimestamp().
 
 import { describe, test, expect } from "vitest";
-import { cn, parseUploadTimestamp } from "./utils";
+import { cn, displayTitle, parseUploadTimestamp, TITLE_PLACEHOLDER } from "./utils";
 
 // ---------------------------------------------------------------------------
 // cn()
@@ -91,5 +91,42 @@ describe("parseUploadTimestamp", () => {
         const d = parseUploadTimestamp("  20230101  ");
         expect(d).not.toBeNull();
         expect(d!.getFullYear()).toBe(2023);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// displayTitle()
+// ---------------------------------------------------------------------------
+
+describe("displayTitle", () => {
+    test("returns trimmed title for non-empty input", () => {
+        expect(displayTitle("My Video")).toBe("My Video");
+        expect(displayTitle("  Padded  ")).toBe("Padded");
+    });
+
+    test("returns placeholder for null", () => {
+        expect(displayTitle(null)).toBe(TITLE_PLACEHOLDER);
+    });
+
+    test("returns placeholder for undefined", () => {
+        expect(displayTitle(undefined)).toBe(TITLE_PLACEHOLDER);
+    });
+
+    test("returns placeholder for empty string", () => {
+        // godresource regression: API returns title:null, plugin's
+        // _real_extract sets `'title': ''` — must surface as "Unknown".
+        expect(displayTitle("")).toBe(TITLE_PLACEHOLDER);
+    });
+
+    test("returns placeholder for whitespace-only string", () => {
+        expect(displayTitle("   ")).toBe(TITLE_PLACEHOLDER);
+        expect(displayTitle("\t\n")).toBe(TITLE_PLACEHOLDER);
+    });
+
+    test("placeholder text is 'Unknown'", () => {
+        // Locked in so a future rename of the constant doesn't silently
+        // change what users see; rename here too if you change the
+        // shared placeholder.
+        expect(TITLE_PLACEHOLDER).toBe("Unknown");
     });
 });
