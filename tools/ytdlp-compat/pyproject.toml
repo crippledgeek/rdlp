@@ -18,38 +18,141 @@ dev = [
     "mypy>=1.10",
 ]
 
+# ---------------------------------------------------------------------------
+# Ruff (lint + format)
+#
+# Mirrors the upstream yt-dlp ruff configuration (Python 3.10+, line 120) so
+# ported extractor code stays drop-in copyable. We keep B904 enabled (we are
+# stricter than upstream on exception chaining) but otherwise track their
+# select / ignore set verbatim. Source: https://github.com/yt-dlp/yt-dlp/blob/master/pyproject.toml
+# ---------------------------------------------------------------------------
 [tool.ruff]
 target-version = "py312"
 line-length = 120
 
+[tool.ruff.lint]
+select = [
+    "E",       # pycodestyle errors
+    "W",       # pycodestyle warnings
+    "F",       # Pyflakes (undefined names, unused imports/vars)
+    "I",       # isort
+    "Q",       # flake8-quotes — enforces single-quote convention
+    "N803",    # PEP 8 argument naming
+    "N804",    # first arg of classmethod is `cls`
+    "UP",      # pyupgrade — flags Optional[X], List[T], typing.Union, etc.
+    "B",       # flake8-bugbear — likely bugs
+    "A",       # flake8-builtins — shadowing of builtins
+    # COM is intentionally absent: COM812 (missing-trailing-comma) conflicts
+    # with `ruff format`. The formatter handles trailing commas already.
+    "C4",      # flake8-comprehensions
+    "FA",      # flake8-future-annotations
+    "ISC",     # flake8-implicit-str-concat
+    "ICN003",  # banned import conventions
+    "PIE",     # flake8-pie misc
+    "T20",     # flake8-print — no stray prints
+    "RSE",     # flake8-raise — no parens on bare raises
+    "RET504",  # unnecessary assignment before return
+    "SIM",     # flake8-simplify
+    "TID251",  # banned APIs (relative imports policy)
+    "TD",      # flake8-todos
+    "PLC",     # pylint convention
+    "PLE",     # pylint error
+    "PLW",     # pylint warning
+    "RUF",     # ruff-specific
+]
+ignore = [
+    # ── Line length & formatter-owned ─────────────────────────────────────
+    "E402",    # module-level import not at top — try/except guarded imports
+    "E501",    # line length — formatter owns this
+    "E731",    # lambda assignment — fine in test fixtures
+    "E741",    # ambiguous variable name — `l`, `O` etc. are sometimes clearer
+    # ── pyupgrade noise yt-dlp opts out of ────────────────────────────────
+    "UP031",   # printf-style formatting kept where mirroring yt-dlp templates
+    "UP036",   # outdated version block — we use it for runtime guards
+    # ── flake8-bugbear opt-outs ───────────────────────────────────────────
+    "B006",    # mutable default arg — yt-dlp parity uses these
+    "B008",    # call in default arg — NO_DEFAULT singleton sentinel
+    "B011",    # assert False — used as unreachable marker in fixtures
+    "B017",    # pytest.raises(Exception) is fine in our test surface
+    "B023",    # closure over loop variable — accepted yt-dlp idiom
+    "B028",    # warnings without stacklevel
+    # ── flake8-comprehensions ─────────────────────────────────────────────
+    "C401",    # generator-to-set rewrite — readability over a shave
+    "C402",    # generator-to-dict rewrite
+    # ── flake8-pie ────────────────────────────────────────────────────────
+    "PIE790",  # pass after docstring — fine for placeholders
+    # ── flake8-simplify (mostly readability fights) ───────────────────────
+    "SIM102",  # nested if — sometimes clearer than collapsed and-chain
+    "SIM108",  # ternary — preserve if/else when branches are non-trivial
+    "SIM112",  # env-var .get with default
+    "SIM113",  # enumerate-instead-of-counter
+    "SIM114",  # combine if-branches with same body
+    "SIM115",  # use context manager — covered case-by-case
+    "SIM117",  # combine nested with-blocks
+    "SIM223",  # redundant comparisons in tests
+    "SIM300",  # yoda conditions in tests
+    # ── flake8-todos ──────────────────────────────────────────────────────
+    "TD001",   # invalid TODO tag
+    "TD002",   # missing TODO author
+    "TD003",   # missing TODO link
+    # ── pylint subsets ────────────────────────────────────────────────────
+    "PLC0415", # import outside top-level — circular-dep workarounds need this
+    "PLE0604", # invalid __all__ object — false positives on lazy exports
+    "PLE0643", # invalid index — too aggressive on Any
+    "PLW0603", # global statement — used by sentinel singletons
+    "PLW1510", # subprocess.run check
+    "PLW1641", # __eq__ without __hash__
+    "PLW2901", # for-loop variable overwrite
+    # ── ruff-specific ─────────────────────────────────────────────────────
+    "RUF001",  # ambiguous Unicode chars — accent table needs these
+    "RUF012",  # mutable ClassVar — yt-dlp pattern
+    "RUF100",  # unused noqa — sometimes necessary across rule-set drift
+]
+
+# Tests get a slightly relaxed ICN/T20/print/A002 set, mirroring yt-dlp.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["I", "ICN003", "T20", "A002", "C408"]
+
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+# Formatter-compatible: `multiline-quotes = "single"` conflicts with `ruff format`
+# (it always emits """...""" for multi-line strings). Keep "double" to match
+# the formatter and avoid lint/format whiplash.
+multiline-quotes = "double"
+inline-quotes = "single"
+avoid-escape = false
+
 [tool.ruff.lint.isort]
-# Keep `from X import (a, b, c)` style — splitting per-symbol is noise.
+# Keep `from X import (a, b, c)` style — per-symbol splitting is noise.
 combine-as-imports = true
 force-single-line = false
 
-[tool.ruff.lint]
-# Default selection plus a few quality-of-life rules that catch idiom drift.
-# Keep this conservative — every rule added is a contract with future contributors.
-select = [
-    "E",   # pycodestyle errors
-    "F",   # Pyflakes
-    "W",   # pycodestyle warnings
-    "UP",  # pyupgrade — flags `Optional[X]`, `List[T]`, etc.
-    "B",   # flake8-bugbear — likely bugs
-    "SIM", # flake8-simplify
-    "I",   # isort
-]
-ignore = [
-    "E501",  # line length is enforced by formatter, not lint
-    "B008",  # function call in default arg — yt-dlp parity uses these (e.g. NO_DEFAULT singleton sentinel)
-]
+[tool.ruff.format]
+# Match the inline-quote convention — formatter rewrites string literals.
+quote-style = "single"
+docstring-code-format = false
 
+# ---------------------------------------------------------------------------
+# Mypy
+#
+# Progressive strictness: every flag below is on except disallow_untyped_defs
+# (yt-dlp's API is duck-typed; full annotation requires touching every
+# helper). Re-evaluate that flag once the module-level surface stabilizes.
+# Source: https://mypy.readthedocs.io/en/stable/existing_code.html
+# ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.12"
 strict_optional = true
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_return_any = true
 no_implicit_optional = true
-# Most of the package is Any-typed at the boundaries (yt-dlp's API is duck-typed).
-# `disallow_untyped_defs` is intentionally OFF until the entire surface is annotated.
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+disallow_subclassing_any = true
+disallow_any_generics = true
+disallow_untyped_decorators = true
+disallow_incomplete_defs = true
+no_implicit_reexport = true
+extra_checks = true
+# disallow_untyped_defs = true  # progressive — enable once every helper carries types
+# disallow_untyped_calls = true # progressive — depends on disallow_untyped_defs
