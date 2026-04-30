@@ -61,3 +61,14 @@ def test_og_search_property_calls_host(monkeypatch, ie):
     monkeypatch.setattr(_host, "og_search_property", lambda prop, html: "Title")
     assert ie._og_search_title("<html/>") == "Title"
     assert ie._og_search_thumbnail("<html/>") == "Title"
+
+
+def test_rta_search_calls_host(monkeypatch):
+    from rdlp_ytdlp_compat import _host, InfoExtractor
+    monkeypatch.setattr(_host, "rta_search", lambda html: 18)
+    assert InfoExtractor._rta_search("anything") == 18
+
+def test_rta_search_none(monkeypatch):
+    from rdlp_ytdlp_compat import _host, InfoExtractor
+    monkeypatch.setattr(_host, "rta_search", lambda html: None)
+    assert InfoExtractor._rta_search("clean") is None

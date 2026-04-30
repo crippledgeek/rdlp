@@ -608,37 +608,32 @@ class InfoExtractor:
 
     @staticmethod
     def _rta_search(html):
-        """yt-dlp's `_rta_search` (`extractor/common.py:1525-1543`).
-        Returns 18 if the page has the official RTA-5042 meta label OR
-        any of three age-acknowledgement markers (proudly-labeled link,
-        "you acknowledge you are at least N years old", 18 U.S.C. 2257
-        statement). Otherwise returns `None`. Used by adult-content
-        extractors to populate `age_limit`."""
-        if _re.search(
-            r'(?ix)<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA"',
-            html,
-        ):
-            return 18
-        markers = [
-            r'Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>',
-            r">[^<]*you acknowledge you are at least (\d+) years old",
-            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
-        ]
-        age_limit = None
-        for marker in markers:
-            mobj = _re.search(marker, html)
-            if mobj is not None:
-                # Capture group 1 (when present) carries the age threshold;
-                # otherwise default to 18. Upstream uses `traverse_obj` for
-                # the safe extraction; `try / except IndexError` is the
-                # equivalent without the heavy-helper dependency here.
-                try:
-                    captured = mobj.group(1)
-                    val = int(captured) if captured else 18
-                except (IndexError, ValueError):
-                    val = 18
-                age_limit = max(age_limit or 0, val)
-        return age_limit
+        """Slice-2.5 passthrough to host-extract-helpers.rta-search."""
+        try:
+            return _host.rta_search(html)
+        except RuntimeError:
+            # Outside componentize-py runtime — fall back to stdlib path.
+            if _re.search(
+                r'(?ix)<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA"',
+                html,
+            ):
+                return 18
+            markers = [
+                r'Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>',
+                r">[^<]*you acknowledge you are at least (\d+) years old",
+                r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
+            ]
+            age_limit = None
+            for marker in markers:
+                mobj = _re.search(marker, html)
+                if mobj is not None:
+                    try:
+                        captured = mobj.group(1)
+                        val = int(captured) if captured else 18
+                    except (IndexError, ValueError):
+                        val = 18
+                    age_limit = max(age_limit or 0, val)
+            return age_limit
 
     def _html_search_meta(self, name, html, display_name=None, fatal=False, **kwargs):
         """Slice-2.5 passthrough to host-extract-helpers.html-search-meta."""
