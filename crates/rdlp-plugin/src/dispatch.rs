@@ -197,6 +197,45 @@ pub fn compile_url_regex(plugin: &str, source: &str) -> Result<regex::Regex, Plu
     })
 }
 
+/// Returns `true` if `url` is claimed by the plugin's manifest.
+///
+/// The manifest's `matches` array (Chrome-style match patterns) is the
+/// authoritative declaration of which URLs a plugin handles. This function
+/// parses the URL once, then checks every pattern.
+///
+/// **Empty `matches`:** returns `true` for any `http`/`https` URL that
+/// parses cleanly. This preserves backwards compatibility with the
+/// adapter's permissive `^https?://` regex fallback for plugins that
+/// were authored before manifest patterns were enforced — but any
+/// plugin shipping today MUST declare `matches` to scope its claim.
+///
+/// **Malformed URL:** returns `false` (no panic, no claim).
+///
+/// This is the fix for the godresource case: manifest declares
+/// `["https://new.godresource.com/*"]` but the plugin's `valid_url()`
+/// regex (the legacy fallback) was the permissive `^https?://`. Result:
+/// the plugin claimed the apex `https://godresource.com/...` URL even
+/// though the manifest didn't, the dispatcher picked it because of its
+/// priority over Generic, and the wasm rejected the URL internally
+/// after the user already paid the dispatch cost. Honoring `matches`
+/// at `suitable()` time means the dispatcher correctly falls through
+/// to Generic for URLs the plugin never claimed.
+#[must_use]
+pub fn claims_url(manifest: &crate::manifest::Manifest, url: &str) -> bool {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    if manifest.matches.is_empty() {
+        return matches!(parsed.scheme(), "http" | "https");
+    }
+    manifest.matches.iter().any(|raw| {
+        MatchPattern::parse(raw)
+            .map(|p| p.matches(&parsed))
+            .unwrap_or(false)
+    })
+}
+
 /// Dispatcher backed by a linear scan over registered patterns.
 ///
 /// MVP-grade — good enough for hundreds of plugins. Future optimization:
@@ -221,5 +260,96 @@ impl<T: Clone> MatchTrie<T> {
             .filter(|(p, _)| p.matches(url))
             .map(|(_, v)| v.clone())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod claims_url_tests {
+    use super::claims_url;
+    use crate::manifest::parse_manifest_str;
+
+    fn manifest_with_matches(patterns: &[&str]) -> crate::manifest::Manifest {
+        let matches_toml = patterns
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let toml = format!(
+            r#"
+name = "test"
+version = "1.0.0"
+wit_version = "0.1.0"
+matches = [{matches_toml}]
+priority = 150
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#,
+        );
+        parse_manifest_str(&toml).expect("parse")
+    }
+
+    #[test]
+    fn matches_exact_host_pattern() {
+        let m = manifest_with_matches(&["https://new.godresource.com/*"]);
+        assert!(claims_url(&m, "https://new.godresource.com/video/abc"));
+    }
+
+    #[test]
+    fn rejects_apex_when_pattern_requires_subdomain() {
+        // Regression: the godresource plugin's manifest declares
+        // `["https://new.godresource.com/*"]`, but before the
+        // claims_url fix the adapter's permissive `^https?://` fallback
+        // claimed every URL. Apex URL `godresource.com/...` must be
+        // rejected so the dispatcher falls through to Generic.
+        let m = manifest_with_matches(&["https://new.godresource.com/*"]);
+        assert!(!claims_url(&m, "https://godresource.com/video/abc"));
+    }
+
+    #[test]
+    fn rejects_other_host() {
+        let m = manifest_with_matches(&["https://new.godresource.com/*"]);
+        assert!(!claims_url(&m, "https://example.com/video/abc"));
+    }
+
+    #[test]
+    fn rejects_wrong_scheme() {
+        let m = manifest_with_matches(&["https://new.godresource.com/*"]);
+        assert!(!claims_url(&m, "http://new.godresource.com/video/abc"));
+    }
+
+    // Note: the empty-matches fallback in claims_url is defensive code
+    // — parse_manifest_str rejects manifests with empty `matches`, so
+    // the branch is unreachable through normal manifest construction.
+    // Kept in the implementation in case future refactors loosen the
+    // schema; not tested here because we cannot construct a Manifest
+    // that triggers it.
+
+    #[test]
+    fn malformed_url_returns_false() {
+        let m = manifest_with_matches(&["https://example.com/*"]);
+        assert!(!claims_url(&m, "not a url"));
+    }
+
+    #[test]
+    fn multiple_match_patterns_or_together() {
+        let m =
+            manifest_with_matches(&["https://a.example.com/*", "https://b.example.com/*"]);
+        assert!(claims_url(&m, "https://a.example.com/x"));
+        assert!(claims_url(&m, "https://b.example.com/x"));
+        assert!(!claims_url(&m, "https://c.example.com/x"));
+    }
+
+    #[test]
+    fn subdomain_wildcard_pattern() {
+        let m = manifest_with_matches(&["https://*.example.com/*"]);
+        assert!(claims_url(&m, "https://api.example.com/x"));
+        assert!(claims_url(&m, "https://www.example.com/x"));
+        // Match-pattern semantics: *.example.com also matches the apex.
+        assert!(claims_url(&m, "https://example.com/x"));
+        assert!(!claims_url(&m, "https://example.org/x"));
     }
 }

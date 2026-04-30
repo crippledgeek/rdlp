@@ -176,6 +176,21 @@ impl InfoExtractor for PluginExtractor {
         &self.valid_url_regex
     }
 
+    /// Honour the manifest's `matches` patterns at dispatch time.
+    ///
+    /// The default trait implementation calls `valid_url().is_match(url)`,
+    /// but for plugins without an explicit `url_regex` the adapter's
+    /// fallback regex is the permissive `^https?://` — which would make
+    /// every plugin claim every URL and shadow the Generic extractor.
+    /// Delegating to [`crate::dispatch::claims_url`] uses the manifest's
+    /// declared Chrome-style match patterns as the authoritative source
+    /// of truth, so plugins only claim URLs they were configured for.
+    /// See `claims_url` for the godresource regression that motivated
+    /// this override.
+    fn suitable(&self, url: &str) -> bool {
+        crate::dispatch::claims_url(&self.manifest, url)
+    }
+
     fn priority(&self) -> i32 {
         self.plugin_priority()
     }
