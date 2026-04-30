@@ -367,6 +367,18 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     return default
 
 
+def _format_to_dict(f):
+    """Convert a WIT M3u8Format record into yt-dlp's dict shape."""
+    out = {"format_id": f.format_id, "url": f.url, "ext": f.ext, "protocol": f.protocol}
+    for attr in ("tbr", "width", "height", "fps", "vcodec", "acodec",
+                 "vbr", "abr", "language", "format_note", "format_index",
+                 "manifest_url", "has_drm", "preference", "quality"):
+        v = getattr(f, attr, None)
+        if v is not None:
+            out[attr] = v
+    return out
+
+
 def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
     """Multi-group / named-group / no-host calls keep going through the
     local Python `re` module — the host helper returns a single string."""
@@ -666,71 +678,32 @@ class InfoExtractor:
         return formats
 
     def _extract_m3u8_formats_and_subtitles(
-            self, m3u8_url, video_id, ext=None, entry_protocol="m3u8_native",
+            self, m3u8_url, video_id, *, ext=None, entry_protocol="m3u8_native",
             preference=None, quality=None, m3u8_id=None, note=None, errnote=None,
             fatal=True, live=False, data=None, headers=None, query=None):
-        """yt-dlp's _extract_m3u8_formats_and_subtitles. Slice-1 scope: master
-        playlist only — does NOT recurse into media playlists. Returns
-        (formats, subs={}).
-
-        Honors yt-dlp's `note` / `errnote` / `fatal` logging contract: a
-        host-fetch failure raises only when `fatal=True` (the yt-dlp default);
-        otherwise the error is logged via `errnote` and an empty
-        (formats=[], subs={}) result is returned. Real extractors test
-        `if formats:` and fall back to a non-HLS path when the playlist is
-        unreachable — silently re-raising would break that pattern."""
+        """Slice-2.5 passthrough to host-extract-helpers.extract-m3u8."""
         if note is not None:
             _host.log("info", f"{note}: {m3u8_url}")
         try:
-            body = _host.fetch_text(m3u8_url, headers=headers)
+            result = _host.extract_m3u8(
+                m3u8_url, video_id,
+                ext=ext, protocol=entry_protocol, m3u8_id=m3u8_id, fatal=fatal,
+            )
         except RuntimeError as e:
-            # Same narrow catch as _download_webpage (I5): only RuntimeError
-            # / HostHttpError subclasses are legitimate retry signals.
-            # Always log on failure so the host sees the diagnostic.
-            label = errnote or f"failed to fetch HLS playlist {m3u8_url}"
+            # Outside componentize-py runtime or fetch failure.
+            label = errnote or f"failed to extract HLS playlist {m3u8_url}"
             _host.log("warn", f"{label}: {e}")
             if fatal:
                 raise
             return [], {}
-        formats = []
-        lines = body.splitlines()
-        for i, line in enumerate(lines):
-            if not line.startswith("#EXT-X-STREAM-INF:"):
-                continue
-            attrs = self._parse_m3u8_attrs(line[len("#EXT-X-STREAM-INF:"):])
-            if i + 1 >= len(lines):
-                continue
-            url = lines[i + 1].strip()
-            if not url or url.startswith("#"):
-                continue
-            url = urljoin(m3u8_url, url)
-            bandwidth = int_or_none(attrs.get("BANDWIDTH"), scale=1000)
-            resolution = attrs.get("RESOLUTION", "")
-            width = height = None
-            if "x" in resolution:
-                w, h = resolution.split("x", 1)
-                width = int_or_none(w)
-                height = int_or_none(h)
-            formats.append({
-                "format_id": f"{m3u8_id}-{bandwidth}" if m3u8_id else str(bandwidth or len(formats)),
-                "url": url,
-                "ext": ext or "mp4",
-                "protocol": entry_protocol,
-                "tbr": bandwidth,
-                "width": width,
-                "height": height,
-                "preference": preference,
-                "quality": quality,
-            })
-        return formats, {}
-
-    @staticmethod
-    def _parse_m3u8_attrs(s):
-        """Parse `KEY1=VALUE1,KEY2="VALUE 2"` into a dict."""
-        out = {}
-        for m in _re.finditer(r'([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))', s):
-            out[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
-        return out
+        formats = [_format_to_dict(f) for f in result.formats]
+        subtitles = {}
+        for s in result.subtitles:
+            entry = {"url": s.url}
+            if s.ext is not None:
+                entry["ext"] = s.ext
+            subtitles.setdefault(s.language, []).append(entry)
+        return formats, subtitles
 
     # ------------------------------------------------------------------
     # Slice-2 additions (SVT support)
