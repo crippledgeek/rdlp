@@ -800,13 +800,21 @@ fn write_manifest(path: &Path, name: &str, matches: &[String]) -> Result<()> {
          priority = 150\n\
          claims_override = []\n\
          supports_search = false\n\
-         capabilities = [\"fetch\", \"log\"]\n\
+         # componentize-py-pin@0.17.2 emits IMPORTS for every interface in\n\
+         # the WIT world regardless of which the plugin actually uses, so\n\
+         # the manifest MUST declare all six host capabilities or the host\n\
+         # linker rejects the wasm at instantiation time. Capability-gating\n\
+         # still happens at runtime via populate_capability_contexts: a\n\
+         # capability declared here but not granted by the host returns\n\
+         # \"denied\" when the plugin actually calls it. Hand-edit this list\n\
+         # down only if the plugin demonstrably never imports a capability.\n\
+         capabilities = [\"fetch\", \"cookie-jar\", \"js-eval\", \"html-select\", \"log\", \"store-kv\"]\n\
          \n\
          # PLACEHOLDER — run `rdlp plugin sign {name}` to populate.\n\
          [signature]\n\
          type = \"ed25519\"\n\
-         pubkey = \"REPLACE_WITH_BASE64_PUBKEY\"\n\
-         signature = \"REPLACE_WITH_BASE64_SIGNATURE\"\n"
+         pubkey = \"PLACEHOLDER_PUBKEY\"\n\
+         signature = \"PLACEHOLDER_SIGNATURE\"\n"
     );
     std::fs::write(path, body)?;
     Ok(())
@@ -1031,7 +1039,14 @@ class FooIE:
         assert_eq!(manifest.name, "test-plugin");
         assert_eq!(manifest.matches, vec!["https://example.com/*".to_string()]);
         assert_eq!(manifest.priority, 150);
-        assert_eq!(manifest.capabilities, vec!["fetch", "log"]);
+        // The default capability set MUST cover every interface
+        // componentize-py emits in the WIT world (instantiation fails
+        // otherwise — see the capabilities-line doc-comment in
+        // `write_manifest`).
+        assert_eq!(
+            manifest.capabilities,
+            vec!["fetch", "cookie-jar", "js-eval", "html-select", "log", "store-kv"],
+        );
         assert!(matches!(
             manifest.signature,
             rdlp_plugin_manifest::Signature::Ed25519 { .. }
