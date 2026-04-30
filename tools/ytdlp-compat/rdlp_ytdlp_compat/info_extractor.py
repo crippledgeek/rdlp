@@ -885,32 +885,36 @@ class InfoExtractor:
     def _search_json(self, start_pattern, string, name, video_id, *,
                      end_pattern="", contains_pattern=r"{(?s:.+)}",
                      fatal=True, default=NO_DEFAULT, **kwargs):
-        """yt-dlp's `_search_json` (`extractor/common.py:1352-1378`).
-        Locates a JSON object in `string` matching
-        `(start_pattern)\\s*(json)\\s*(end_pattern)`, then parses it.
-        Default `contains_pattern` is the lazy brace-balanced regex
-        `{(?s:.+)}` — `_parse_json` tolerates trailing junk via
-        `ignore_extra=True`. `default` overrides `fatal=True`."""
+        """Slice-2.5 passthrough to host-extract-helpers.search-json
+        plus stdlib json.loads for the parse step. The contains_pattern
+        kwarg is honoured Python-side via fallback regex match if the
+        WIT default doesn't capture."""
         if default is NO_DEFAULT:
             has_default = False
         else:
             fatal, has_default = False, True
-
-        full_pattern = (
-            rf"(?:{start_pattern})\s*(?P<json>{contains_pattern})\s*"
-            rf"(?:{end_pattern})"
-        )
-        json_string = self._search_regex(
-            full_pattern, string, name, group="json",
-            fatal=fatal,
-            default=None if has_default else NO_DEFAULT,
-        )
-        if not json_string:
-            return default if has_default else {}
         try:
-            return self._parse_json(
-                json_string, video_id, fatal=True, **kwargs,
+            json_string = _host.search_json(start_pattern, end_pattern, string)
+        except RuntimeError:
+            # Outside componentize-py runtime — fall back to stdlib path.
+            full_pattern = (
+                rf"(?:{start_pattern})\s*(?P<json>{contains_pattern})\s*"
+                rf"(?:{end_pattern})"
             )
+            json_string = self._search_regex(
+                full_pattern, string, name, group="json",
+                fatal=fatal,
+                default=None if has_default else NO_DEFAULT,
+            )
+        if not json_string:
+            if not fatal:
+                return default if has_default else {}
+            from rdlp_ytdlp_compat._errors import ExtractorError
+            raise ExtractorError(
+                f"Unable to extract {name}", video_id=video_id,
+            )
+        try:
+            return self._parse_json(json_string, video_id, fatal=True, **kwargs)
         except (_json.JSONDecodeError, ValueError) as e:
             if fatal:
                 from rdlp_ytdlp_compat._errors import ExtractorError

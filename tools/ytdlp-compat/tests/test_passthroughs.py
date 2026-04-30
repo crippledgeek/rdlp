@@ -72,3 +72,10 @@ def test_rta_search_none(monkeypatch):
     from rdlp_ytdlp_compat import _host, InfoExtractor
     monkeypatch.setattr(_host, "rta_search", lambda html: None)
     assert InfoExtractor._rta_search("clean") is None
+
+
+def test_search_json_calls_host(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+    monkeypatch.setattr(_host, "search_json", lambda start, end, s: '{"x": 1}')
+    result = ie._search_json(r"start", "page", "name", "vid")
+    assert result == {"x": 1}
