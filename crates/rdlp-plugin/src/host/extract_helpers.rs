@@ -123,6 +123,36 @@ mod tests {
             .await;
         assert_eq!(r, Some("Tom & Jerry".to_string()));
     }
+
+    #[tokio::test]
+    async fn html_search_meta_property_form() {
+        let mut c = ctx();
+        let r = c.html_search_meta(
+            "og:title".to_string(),
+            r#"<meta property="og:title" content="Hello"/>"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("Hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn html_search_meta_name_form() {
+        let mut c = ctx();
+        let r = c.html_search_meta(
+            "description".to_string(),
+            r#"<meta name="description" content="Page text"/>"#.to_string(),
+        ).await;
+        assert_eq!(r, Some("Page text".to_string()));
+    }
+
+    #[tokio::test]
+    async fn html_search_meta_missing_returns_none() {
+        let mut c = ctx();
+        let r = c.html_search_meta(
+            "nope".to_string(),
+            "<html></html>".to_string(),
+        ).await;
+        assert_eq!(r, None);
+    }
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
@@ -153,8 +183,27 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         Some(clean_html(&raw))
     }
 
-    async fn html_search_meta(&mut self, _name: String, _html: String) -> Option<String> {
-        unimplemented!("Task 5")
+    async fn html_search_meta(&mut self, name: String, html: String) -> Option<String> {
+        // Mirrors yt-dlp's `_html_search_meta` (extractor/common.py:1492+).
+        // Tries 5 attribute names: itemprop / name / property / id / http-equiv.
+        // Tries content-after AND content-before patterns.
+        let escaped = regex::escape(&name);
+        let attrs = "(?:itemprop|name|property|id|http-equiv)";
+        let pat1 = format!(
+            r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#
+        );
+        let pat2 = format!(
+            r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#
+        );
+        for pat in [&pat1, &pat2] {
+            let re = regex::RegexBuilder::new(pat).case_insensitive(true).build().ok()?;
+            if let Some(m) = re.captures(&html)
+                && let Some(g) = m.get(1)
+            {
+                return Some(g.as_str().to_string());
+            }
+        }
+        None
     }
 
     async fn og_search_property(&mut self, _prop: String, _html: String) -> Option<String> {
