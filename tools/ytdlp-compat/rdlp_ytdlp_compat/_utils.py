@@ -284,6 +284,21 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
+def merge_dicts(*dicts):
+    """yt-dlp's `merge_dicts` (utils/_utils.py). Merge dicts left-to-
+    right; later values override, but None values from later dicts do
+    NOT clobber non-None values from earlier ones. Returns a new dict."""
+    out = {}
+    for d in dicts:
+        if not d:
+            continue
+        for k, v in d.items():
+            if v is None and k in out:
+                continue
+            out[k] = v
+    return out
+
+
 def str_to_int(s):
     """yt-dlp's `str_to_int` (utils/_utils.py). Parses 'human' integer
     strings: '1,234' / '1.5K' / '2M' / '3B' / plain digits. Truncates
