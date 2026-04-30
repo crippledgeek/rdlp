@@ -641,24 +641,23 @@ class InfoExtractor:
         return age_limit
 
     def _html_search_meta(self, name, html, display_name=None, fatal=False, **kwargs):
-        """yt-dlp's _html_search_meta. `name` accepts scalar or iterable of meta-tag
-        names. Real yt-dlp matches FIVE attributes: itemprop|name|property|id|http-equiv
-        — limiting to property+name breaks any extractor that uses og: tags via
-        http-equiv or itemprop microdata. The default fatal is False (distinct
-        from _search_regex)."""
+        """Slice-2.5 passthrough to host-extract-helpers.html-search-meta."""
         names = name if isinstance(name, (list, tuple)) else [name]
         default = kwargs.get("default", NO_DEFAULT)
         for n in names:
-            attrs = "(?:itemprop|name|property|id|http-equiv)"
-            # content first
-            pat = rf'<meta[^>]+(?:{attrs})=["\']{_re.escape(n)}["\'][^>]*content=["\']([^"\']*)["\']'
-            m = _re.search(pat, html, _re.IGNORECASE)
-            if m is None:
-                # content second
-                pat = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:{attrs})=["\']{_re.escape(n)}["\']'
+            try:
+                result = _host.html_search_meta(n, html)
+            except RuntimeError:
+                # Outside componentize-py runtime — fall back to stdlib path.
+                attrs = "(?:itemprop|name|property|id|http-equiv)"
+                pat = rf'<meta[^>]+(?:{attrs})=["\']{_re.escape(n)}["\'][^>]*content=["\']([^"\']*)["\']'
                 m = _re.search(pat, html, _re.IGNORECASE)
-            if m is not None:
-                return m.group(1)
+                if m is None:
+                    pat = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:{attrs})=["\']{_re.escape(n)}["\']'
+                    m = _re.search(pat, html, _re.IGNORECASE)
+                result = m.group(1) if m is not None else None
+            if result is not None:
+                return result
         if default is not NO_DEFAULT:
             return default
         if fatal:

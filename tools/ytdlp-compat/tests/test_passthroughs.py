@@ -47,3 +47,10 @@ def test_html_search_regex_calls_host(monkeypatch, ie):
     result = ie._html_search_regex(r"<title>(.+?)</title>",
                                     "<title>Hello <b>World</b></title>", "title")
     assert result == "Hello World"
+
+
+def test_html_search_meta_calls_host(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+    monkeypatch.setattr(_host, "html_search_meta", lambda name, html: "value")
+    result = ie._html_search_meta("og:title", "<html/>")
+    assert result == "value"
