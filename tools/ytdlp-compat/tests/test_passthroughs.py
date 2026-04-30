@@ -1,5 +1,4 @@
 """Verify Python InfoExtractor methods correctly delegate to _host."""
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +15,9 @@ def ie():
 def test_search_regex_calls_host(monkeypatch, ie):
     captured = {}
     def fake(pat, s, flags):
-        captured["pat"] = pat; captured["s"] = s; captured["flags"] = flags
+        captured["pat"] = pat
+        captured["s"] = s
+        captured["flags"] = flags
         return "matched"
     from rdlp_ytdlp_compat import _host
     monkeypatch.setattr(_host, "search_regex", fake)
@@ -35,7 +36,7 @@ def test_search_regex_returns_default_on_miss(monkeypatch, ie):
 
 
 def test_search_regex_raises_on_miss_fatal(monkeypatch, ie):
-    from rdlp_ytdlp_compat import _host, RegexNotFoundError
+    from rdlp_ytdlp_compat import RegexNotFoundError, _host
     monkeypatch.setattr(_host, "search_regex", lambda *a, **k: None)
     with pytest.raises(RegexNotFoundError):
         ie._search_regex(r"x", "y", "name")
@@ -64,12 +65,12 @@ def test_og_search_property_calls_host(monkeypatch, ie):
 
 
 def test_rta_search_calls_host(monkeypatch):
-    from rdlp_ytdlp_compat import _host, InfoExtractor
+    from rdlp_ytdlp_compat import InfoExtractor, _host
     monkeypatch.setattr(_host, "rta_search", lambda html: 18)
     assert InfoExtractor._rta_search("anything") == 18
 
 def test_rta_search_none(monkeypatch):
-    from rdlp_ytdlp_compat import _host, InfoExtractor
+    from rdlp_ytdlp_compat import InfoExtractor, _host
     monkeypatch.setattr(_host, "rta_search", lambda html: None)
     assert InfoExtractor._rta_search("clean") is None
 
@@ -84,7 +85,8 @@ def test_search_json_calls_host(monkeypatch, ie):
 def test_set_cookie_calls_host_cookie_jar(monkeypatch, ie):
     captured = {}
     def fake_set_cookie(url, cookie):
-        captured["url"] = url; captured["cookie"] = cookie
+        captured["url"] = url
+        captured["cookie"] = cookie
     from rdlp_ytdlp_compat import _host
     fake_jar = type("J", (), {"set_cookie": staticmethod(fake_set_cookie)})()
     monkeypatch.setattr(_host, "cookie_jar", fake_jar, raising=False)
@@ -99,11 +101,16 @@ def test_set_cookie_calls_host_cookie_jar(monkeypatch, ie):
 def test_search_json_ld_calls_host(monkeypatch, ie):
     from rdlp_ytdlp_compat import _host
     class FakeJsonLd:
-        title = "T"; description = "d"
-        thumbnail = "https://x/t.jpg"; thumbnails = []
-        upload_date = "20240101"; duration = 300
-        view_count = 100; like_count = 5
-        tags = []; categories = []
+        title = "T"
+        description = "d"
+        thumbnail = "https://x/t.jpg"
+        thumbnails = []
+        upload_date = "20240101"
+        duration = 300
+        view_count = 100
+        like_count = 5
+        tags = []
+        categories = []
     monkeypatch.setattr(_host, "extract_json_ld", lambda html: FakeJsonLd())
     result = ie._search_json_ld("<html/>", "vid")
     assert result["title"] == "T"
@@ -118,12 +125,20 @@ def test_extract_m3u8_calls_host(monkeypatch, ie):
         ext = "mp4"
         protocol = "m3u8_native"
         tbr = 5000.0
-        width = 1920; height = 1080; fps = None
-        vcodec = "avc1"; acodec = "mp4a"
-        vbr = None; abr = None; language = None
-        format_note = None; format_index = 0
-        manifest_url = None; has_drm = None
-        preference = None; quality = None
+        width = 1920
+        height = 1080
+        fps = None
+        vcodec = "avc1"
+        acodec = "mp4a"
+        vbr = None
+        abr = None
+        language = None
+        format_note = None
+        format_index = 0
+        manifest_url = None
+        has_drm = None
+        preference = None
+        quality = None
     class FakeResult:
         formats = [FakeFormat()]
         subtitles = []

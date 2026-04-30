@@ -14,8 +14,7 @@ failed with `TypeError: unhashable type: 'dict'` because the shim's
 `apply_key` dispatch had no `dict` branch, so the dict fell through to
 `Mapping.get(key)` which requires the key to be hashable.
 """
-from rdlp_ytdlp_compat import traverse_obj, str_or_none
-
+from rdlp_ytdlp_compat import str_or_none, traverse_obj
 
 _TEST_DATA = {
     "str": "hi",

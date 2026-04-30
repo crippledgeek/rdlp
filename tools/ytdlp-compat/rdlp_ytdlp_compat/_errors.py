@@ -87,7 +87,7 @@ class UnsupportedError(ExtractorError):
     """
 
     def __init__(self, url):
-        super().__init__("Unsupported URL: %s" % url, expected=True)
+        super().__init__(f"Unsupported URL: {url}", expected=True)
         self.url = url
 
 
@@ -148,7 +148,7 @@ class ContentTooShortError(YoutubeDLError):
 
     def __init__(self, downloaded, expected):
         super().__init__(
-            "Downloaded %d bytes, expected %d bytes" % (downloaded, expected)
+            f"Downloaded {downloaded} bytes, expected {expected} bytes"
         )
         self.downloaded = downloaded
         self.expected = expected

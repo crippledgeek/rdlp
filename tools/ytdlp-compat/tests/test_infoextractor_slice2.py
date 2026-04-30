@@ -9,9 +9,7 @@ import pytest
 from rdlp_ytdlp_compat import (
     ExtractorError,
     InfoExtractor,
-    NO_DEFAULT,
 )
-
 
 # -----------------------------------------------------------------------------
 # Fixtures: subclass IE shapes for the dispatch / classmethod tests.

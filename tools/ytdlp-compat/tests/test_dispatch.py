@@ -17,7 +17,6 @@ from rdlp_ytdlp_compat._dispatch import (
     dispatch_url,
 )
 
-
 # -----------------------------------------------------------------------------
 # Module fixtures — simulate user_plugin modules with various class shapes.
 # -----------------------------------------------------------------------------

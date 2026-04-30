@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from rdlp_ytdlp_compat import ExtractorError, RequiredError
+from rdlp_ytdlp_compat import ExtractorError
 from rdlp_ytdlp_compat._utils import require
 from rdlp_ytdlp_compat.info_extractor import traverse_obj
 
@@ -65,13 +65,15 @@ class TestSetCallableTransformer:
     def test_callable_returning_none_drops(self):
         # A transformer that returns None should drop the value (so the
         # next path can be tried).
-        always_none = lambda _: None
+        def always_none(_):
+            return None
         assert traverse_obj({"a": 1}, ("a", {always_none})) is None
 
     def test_callable_raising_drops(self):
         # Transformer that raises (other than RequiredError) is caught and
         # treated as a miss — yt-dlp uses try_call for callable application.
-        bad = lambda _: 1 / 0
+        def bad(_):
+            return 1 / 0
         assert traverse_obj("x", {bad}) is None
 
 

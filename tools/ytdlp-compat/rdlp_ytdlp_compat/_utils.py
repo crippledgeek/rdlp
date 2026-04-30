@@ -28,11 +28,13 @@ matches:
 Plus `sanitize_path(s, force=False)` for full path-string sanitisation
 (splits on separators, sanitises each segment).
 """
+import datetime
+import html as _stdlib_html
 import re
 import unicodedata
+from typing import Any
 
 from rdlp_ytdlp_compat._errors import RequiredError
-
 
 # Mirrors yt-dlp's MEDIA_EXTENSIONS namespace (_utils.py:5091-5102 @ tag
 # 2026.03.17). `determine_ext` falls back to this set when the URL has a
@@ -52,7 +54,7 @@ _KNOWN_EXTENSIONS = frozenset((
 ))
 
 
-def variadic(x, allowed_types=(str, bytes, dict)):
+def variadic(x: Any, allowed_types: tuple[type, ...] = (str, bytes, dict)) -> Any:
     """yt-dlp's `variadic` (`_utils.py:2673-2677` @ tag 2026.03.17): wrap a
     scalar in a 1-tuple; pass iterables through unchanged.
 
@@ -69,7 +71,7 @@ def variadic(x, allowed_types=(str, bytes, dict)):
     return (x,)
 
 
-def determine_ext(url, default_ext="unknown_video"):
+def determine_ext(url: Any, default_ext: str = "unknown_video") -> str:
     """yt-dlp's `determine_ext` (`_utils.py:1304-1314` @ tag 2026.03.17).
 
     Returns the extension parsed from a URL's path: strips the query
@@ -82,7 +84,7 @@ def determine_ext(url, default_ext="unknown_video"):
     """
     if url is None or "." not in url:
         return default_ext
-    guess = url.partition("?")[0].rpartition(".")[2]
+    guess: str = str(url).partition("?")[0].rpartition(".")[2]
     if re.match(r"^[A-Za-z0-9]+$", guess):
         return guess
     if guess.rstrip("/") in _KNOWN_EXTENSIONS:
@@ -90,7 +92,7 @@ def determine_ext(url, default_ext="unknown_video"):
     return default_ext
 
 
-def dict_get(d, key_or_keys, default=None, skip_false_values=True):
+def dict_get(d: dict, key_or_keys: Any, default: Any = None, skip_false_values: bool = True) -> Any:
     """yt-dlp's `dict_get` (`utils/traversal.py:473-477` @ tag 2026.03.17).
 
     Iterate `key_or_keys` (single key or iterable of keys), returning
@@ -110,12 +112,11 @@ def dict_get(d, key_or_keys, default=None, skip_false_values=True):
     return default
 
 
-def clean_html(html):
+def clean_html(html: str | None) -> str | None:
     """yt-dlp's `clean_html` (`_utils.py:527-540` @ tag 2026.03.17).
     Strip HTML tags, collapse whitespace, convert `<br>` to newlines,
     convert `</p><p>` to newlines, unescape entities. `None` passes
     through (callers pass `_search_regex(..., default=None)` results)."""
-    import html as _stdlib_html
     if html is None:
         return html
     html = re.sub(r"\s+", " ", html)
@@ -126,7 +127,7 @@ def clean_html(html):
     return html.strip()
 
 
-def parse_duration(s):
+def parse_duration(s: Any) -> float | None:
     """yt-dlp's `parse_duration` (`_utils.py:2082-2136` @ tag 2026.03.17).
     Three-tier matcher: colon-separated (DD:HH:MM:SS / HH:MM:SS / MM:SS
     / SS), letter-suffixed (`1h2m3s` / ISO-8601 PT-form), and verbose
@@ -225,6 +226,7 @@ _ACCENT_CHARS = dict(
             "i", "i", "i", "i", "d", "n", "o", "o", "o", "o", "o", "o",
             "u", "u", "u", "u", "y", "th", "y",
         ),
+        strict=True,
     )
 )
 
@@ -284,37 +286,38 @@ def sanitize_filename(s: str, restricted: bool = False) -> str:
     return s
 
 
-def format_field(obj, field=None, template="%s", ignore=None, default="", func=None):
+def format_field(obj: Any, field: str | None = None, template: str = "%s", ignore: Any = None, default: str = "", func: Any = None) -> str:
     """yt-dlp's `format_field` (utils/_utils.py). Returns
     `template % obj[field]` when the field is present and not None,
     else `default`. `func` post-processes the value before
     formatting."""
+    if field is None:
+        return default
     val = obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
     if val is None or (ignore is not None and val == ignore):
         return default
     if func is not None:
         val = func(val)
-    return template % val
+    return str(template % val)
 
 
-def unified_strdate(date_str, day_first=True):
+def unified_strdate(date_str: Any, day_first: bool = True) -> str | None:
     """yt-dlp's `unified_strdate` (utils/_utils.py). Parses common date
     formats and returns 'YYYYMMDD' or None. Builds on
     `unified_timestamp` then formats to date-only."""
     if date_str is None or not isinstance(date_str, str):
         return None
-    s = date_str.strip()
+    s: str = date_str.strip()
     if len(s) == 8 and s.isdigit():
         return s
     from rdlp_ytdlp_compat.info_extractor import unified_timestamp
     ts = unified_timestamp(s, day_first=day_first)
     if ts is None:
         return None
-    import datetime
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y%m%d")
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).strftime("%Y%m%d")
 
 
-def merge_dicts(*dicts):
+def merge_dicts(*dicts: dict) -> dict:
     """yt-dlp's `merge_dicts` (utils/_utils.py). Merge dicts left-to-
     right; later values override, but None values from later dicts do
     NOT clobber non-None values from earlier ones. Returns a new dict."""
@@ -329,7 +332,7 @@ def merge_dicts(*dicts):
     return out
 
 
-def str_to_int(s):
+def str_to_int(s: Any) -> int | None:
     """yt-dlp's `str_to_int` (utils/_utils.py). Parses 'human' integer
     strings: '1,234' / '1.5K' / '2M' / '3B' / plain digits. Truncates
     decimals (yt-dlp's behaviour). Returns None on parse failure."""
@@ -353,7 +356,7 @@ def str_to_int(s):
         return None
 
 
-def url_or_none(s):
+def url_or_none(s: Any) -> str | None:
     """yt-dlp's `url_or_none` (utils/_utils.py). Returns the input if
     it's a usable URL (http/https/protocol-relative/data:), else None.
     Rejects relative paths and javascript: URIs."""
@@ -391,7 +394,7 @@ def sanitize_path(s: str, force: bool = False) -> str:
     return "/".join(sanitised)
 
 
-def str_or_none(v, default=None):
+def str_or_none(v: Any, default: str | None = None) -> str | None:
     """yt-dlp's `str_or_none` (utils/_utils.py:2027). Returns `str(v)` when
     `v` is not None, else `default`."""
     return default if v is None else str(v)

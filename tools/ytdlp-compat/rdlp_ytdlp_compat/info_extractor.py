@@ -10,9 +10,22 @@ import email.utils
 import html as _html
 import json as _json
 import re as _re
-from urllib.parse import urljoin as _stdlib_urljoin, urlparse as _stdlib_urlparse
+from typing import Any
+from urllib.parse import urlencode as _urlencode, urljoin as _stdlib_urljoin, urlparse as _stdlib_urlparse
 
 from rdlp_ytdlp_compat import _host
+from rdlp_ytdlp_compat._errors import (
+    ExtractorError as _ExtractorError,
+    GeoRestrictedError as _GeoRestrictedError,
+    LoginRequiredError as _LoginRequiredError,
+    NoFormatsError as _NoFormatsError,
+    RegexNotFoundError as _RegexNotFoundError,
+    RequiredError as _RequiredError,
+)
+from rdlp_ytdlp_compat._utils import (
+    clean_html as _clean_html,
+    variadic as _variadic,
+)
 
 
 # yt-dlp uses a NO_DEFAULT sentinel to distinguish "caller passed default=None"
@@ -40,7 +53,7 @@ class _NoDefault:
 NO_DEFAULT = _NoDefault()
 
 
-def int_or_none(v, scale=1, default=None, get_attr=None, invscale=1, base=None):
+def int_or_none(v: Any, scale: int = 1, default: int | None = None, get_attr: str | None = None, invscale: int = 1, base: int | None = None) -> int | None:
     """yt-dlp's int_or_none. Real signature includes get_attr (call getattr first),
     invscale (multiplicative inverse — `int_or_none(x, invscale=8)` for bytes→bits),
     and base (radix for `int(s, base=...)`)."""
@@ -49,16 +62,13 @@ def int_or_none(v, scale=1, default=None, get_attr=None, invscale=1, base=None):
     if v is None or v == "":
         return default
     try:
-        if base is not None:
-            v = int(v, base)
-        else:
-            v = int(v)
-        return v * invscale // scale
+        parsed: int = int(v, base) if base is not None else int(v)
+        return parsed * invscale // scale
     except (ValueError, TypeError):
         return default
 
 
-def try_get(src, getter, expected_type=None):
+def try_get(src: Any, getter: Any, expected_type: type | None = None) -> Any:
     """yt-dlp's try_get. `getter` accepts a single callable OR an iterable of
     callables; first non-exception, type-matching, non-None result wins."""
     getters = getter if isinstance(getter, (list, tuple)) else (getter,)
@@ -75,7 +85,7 @@ def try_get(src, getter, expected_type=None):
     return None
 
 
-def urljoin(base, path):
+def urljoin(base: Any, path: Any) -> str | None:
     """yt-dlp's urljoin. Decodes bytes; returns None for non-`https?://`/`//` base;
     returns path unchanged if already absolute. Differs from stdlib urljoin."""
     if isinstance(path, bytes):
@@ -178,7 +188,7 @@ _DATE_FORMATS_UNAMBIGUOUS = (
 )
 
 
-def unified_timestamp(date_str, day_first=True, tz_offset=0):
+def unified_timestamp(date_str: Any, day_first: bool = True, tz_offset: int = 0) -> int | None:
     """yt-dlp's unified_timestamp. day_first=True is yt-dlp's default — controls
     DD/MM vs MM/DD ambiguity. tz_offset shifts the parsed timestamp.
 
@@ -193,7 +203,7 @@ def unified_timestamp(date_str, day_first=True, tz_offset=0):
         normalized = s.replace("Z", "+00:00") if s.endswith("Z") else s
         dt = datetime.datetime.fromisoformat(normalized)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt = dt.replace(tzinfo=datetime.UTC)
         return int(dt.timestamp()) + tz_offset
     except (ValueError, TypeError):
         pass
@@ -212,7 +222,7 @@ def unified_timestamp(date_str, day_first=True, tz_offset=0):
     for fmt in formats:
         try:
             dt = datetime.datetime.strptime(s, fmt)
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
+            dt = dt.replace(tzinfo=datetime.UTC)
             return int(dt.timestamp()) + tz_offset
         except ValueError:
             continue
@@ -236,7 +246,6 @@ def _try_call(func, args=()):
     `RequiredError` — it MUST propagate so traverse_obj can catch it on
     the final path and re-raise as ExtractorError.
     """
-    from rdlp_ytdlp_compat._errors import RequiredError as _RequiredError
     try:
         return func(*args)
     except _RequiredError:
@@ -285,19 +294,18 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
     on non-final paths (so the next path can be tried) and re-raised as
     `ExtractorError(msg, expected=...)` once the last path is exhausted.
     """
-    from rdlp_ytdlp_compat._errors import (
-        ExtractorError as _ExtractorError,
-        RequiredError as _RequiredError,
-    )
-
-    casefold = lambda k: k.casefold() if isinstance(k, str) else k
+    def casefold(k):
+        return k.casefold() if isinstance(k, str) else k
 
     if expected_type is None:
-        type_test = lambda val: val
+        def type_test(val):
+            return val
     elif isinstance(expected_type, type):
-        type_test = lambda val: val if isinstance(val, expected_type) else None
+        def type_test(val):
+            return val if isinstance(val, expected_type) else None
     else:
-        type_test = lambda val: _try_call(expected_type, args=(val,))
+        def type_test(val):
+            return _try_call(expected_type, args=(val,))
 
     def apply_key(key, obj, is_last):
         """Apply ONE path segment to ONE object. Returns
@@ -318,10 +326,11 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
             item = next(iter(key))
             if len(key) > 1 or isinstance(item, type):
                 # Type filter — every member must be a type.
-                assert all(isinstance(member, type) for member in key), (
-                    "set in traverse_obj path with non-type members must "
-                    "have exactly one element (the transformer callable)"
-                )
+                if not all(isinstance(member, type) for member in key):
+                    raise TypeError(
+                        "set in traverse_obj path with non-type members must "
+                        "have exactly one element (the transformer callable)"
+                    )
                 if isinstance(obj, tuple(key)):
                     result = obj
             else:
@@ -396,21 +405,21 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                     None,
                 )
 
-        elif isinstance(key, int):
-            if _is_iterable_like(obj) and isinstance(
-                obj, _collections_abc.Sequence,
-            ):
-                try:
-                    result = obj[key]
-                except IndexError:
-                    result = None
+        elif (
+            isinstance(key, int)
+            and _is_iterable_like(obj)
+            and isinstance(obj, _collections_abc.Sequence)
+        ):
+            try:
+                result = obj[key]
+            except IndexError:
+                result = None
 
         return branching, (result if branching else (result,))
 
     def apply_path(start_obj, path, test_type):
         """Walk a single path through current state. Returns
         `(results_iter, has_branched, ends_in_dict)`."""
-        from rdlp_ytdlp_compat._utils import variadic as _variadic
         objs = (start_obj,)
         has_branched = False
         seq = list(_variadic(path, (str, bytes, dict, set)))
@@ -434,10 +443,7 @@ def traverse_obj(obj, *paths, default=NO_DEFAULT, expected_type=None,
                 # `yt_dlp/utils/traversal.py:260-267` does.
                 has_branched = False
                 filtered = (o for o in objs if o not in (None, {}))
-                if key is any:
-                    objs = (next(filtered, None),)
-                else:
-                    objs = (list(filtered),)
+                objs = (next(filtered, None),) if key is any else (list(filtered),)
                 continue
             if key is filter:
                 objs = tuple(o for o in objs if o)
@@ -527,10 +533,9 @@ def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
             if isinstance(group, (list, tuple)):
                 return tuple(m.group(g) for g in group)
             return m.group(group)
-    from rdlp_ytdlp_compat._errors import RegexNotFoundError
     if default is NO_DEFAULT:
         if fatal:
-            raise RegexNotFoundError(f"Unable to extract {name}")
+            raise _RegexNotFoundError(f"Unable to extract {name}")
         return None
     return default
 
@@ -543,7 +548,11 @@ class InfoExtractor:
     thumbnail, description, etc.
     """
 
-    _VALID_URL = None  # subclass overrides
+    # `_VALID_URL`: per yt-dlp convention this is None on the base class and
+    # overridden on subclasses with a str regex (or a tuple/list of str). The
+    # `False` form is also accepted upstream to mark "this base must not match
+    # anything"; we honour it in `_match_valid_url`.
+    _VALID_URL: str | tuple[str, ...] | list[str] | None | bool = None
 
     def __init__(self):
         pass
@@ -586,11 +595,10 @@ class InfoExtractor:
     ):
         """yt-dlp's raise_login_required. Raises `LoginRequiredError` →
         WIT `auth-required`. Sets `ie=self._ie_name` for upstream parity."""
-        from rdlp_ytdlp_compat._errors import LoginRequiredError
         full_msg = msg
         if method is not None:
             full_msg = f"{msg}. Use {method} to log in."
-        raise LoginRequiredError(full_msg, ie=self._ie_name)
+        raise _LoginRequiredError(full_msg, ie=self._ie_name)
 
     def raise_geo_restricted(
         self, msg="This video is not available from your location due to geo restriction",
@@ -599,18 +607,16 @@ class InfoExtractor:
         """yt-dlp's raise_geo_restricted. Raises `GeoRestrictedError` →
         WIT `auth-required` (Slice 1 has no dedicated geo-restricted variant;
         a Slice-2 WIT bump can split it out)."""
-        from rdlp_ytdlp_compat._errors import GeoRestrictedError
-        raise GeoRestrictedError(msg, countries=countries, ie=self._ie_name)
+        raise _GeoRestrictedError(msg, countries=countries, ie=self._ie_name)
 
     def raise_no_formats(self, msg, expected=False, video_id=None):
         """yt-dlp's raise_no_formats. Raises `NoFormatsError` (when
         `expected=True`) → WIT `not-found`, or `ExtractorError(expected=False)`
         → WIT `internal` otherwise (yt-dlp convention for unexpected
         no-formats: it's usually an extractor bug)."""
-        from rdlp_ytdlp_compat._errors import ExtractorError, NoFormatsError
         if expected:
-            raise NoFormatsError(msg, video_id=video_id, ie=self._ie_name)
-        raise ExtractorError(
+            raise _NoFormatsError(msg, video_id=video_id, ie=self._ie_name)
+        raise _ExtractorError(
             msg, expected=False, video_id=video_id, ie=self._ie_name,
         )
 
@@ -631,9 +637,8 @@ class InfoExtractor:
             # GraphQL endpoints used by SVTSeriesIE etc. would receive
             # no payload. `urlencode` percent-encodes braces, spaces,
             # quotes — required for raw GraphQL strings.
-            from urllib.parse import urlencode
             sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}{urlencode(query, doseq=True)}"
+            url = f"{url}{sep}{_urlencode(query, doseq=True)}"
         if note is not None:
             _host.log("info", f"{note}: {url}")
         last_err = None
@@ -700,7 +705,6 @@ class InfoExtractor:
         Falls back to the stdlib `re` path when outside the componentize-py
         runtime (i.e. `_host._HXH_AVAILABLE` is False and the function
         raises RuntimeError) so that existing unit tests keep passing."""
-        from rdlp_ytdlp_compat._errors import RegexNotFoundError
         # multi-group / named-group always use the legacy stdlib path
         if isinstance(group, (list, tuple)) or (
             group is not None and not isinstance(group, int)
@@ -720,7 +724,7 @@ class InfoExtractor:
                 return result
         if default is NO_DEFAULT:
             if fatal:
-                raise RegexNotFoundError(f"Unable to extract {name}")
+                raise _RegexNotFoundError(f"Unable to extract {name}")
             _host.log("warn", f"unable to extract {name}; returning None")
             return None
         return default
@@ -728,7 +732,6 @@ class InfoExtractor:
     def _html_search_regex(self, pattern, string, name, default=NO_DEFAULT,
                            fatal=True, flags=0, group=None):
         """Slice-2.5 passthrough to host-extract-helpers.html-search-regex."""
-        from rdlp_ytdlp_compat._errors import RegexNotFoundError
         patterns = pattern if isinstance(pattern, (list, tuple)) else [pattern]
         for pat in patterns:
             pat_str = pat if isinstance(pat, str) else pat.pattern
@@ -736,7 +739,6 @@ class InfoExtractor:
                 result = _host.html_search_regex(pat_str, string, flags)
             except RuntimeError:
                 # Outside componentize-py runtime — fall back to stdlib path.
-                from rdlp_ytdlp_compat._utils import clean_html as _clean_html
                 res = self._search_regex(pattern, string, name, default, fatal, flags, group)
                 if isinstance(res, tuple):
                     return tuple(_clean_html(r) for r in res)
@@ -745,7 +747,7 @@ class InfoExtractor:
                 return result
         if default is NO_DEFAULT:
             if fatal:
-                raise RegexNotFoundError(f"Unable to extract {name}")
+                raise _RegexNotFoundError(f"Unable to extract {name}")
             return None
         return default
 
@@ -869,7 +871,6 @@ class InfoExtractor:
         if cls._VALID_URL is None or cls._VALID_URL is False:
             return None
         if "_VALID_URL_RE" not in cls.__dict__:
-            from rdlp_ytdlp_compat._utils import variadic as _variadic
             # No flags — upstream (`extractor/common.py:624`) compiles
             # without flags and relies on inline `(?x)` for verbose
             # patterns. Force-applying `re.VERBOSE` here would silently
@@ -949,7 +950,6 @@ class InfoExtractor:
 
     def _og_search_property(self, prop, html_text, name=None, **kargs):
         """Slice-2.5 passthrough to host-extract-helpers.og-search-property."""
-        from rdlp_ytdlp_compat._utils import variadic as _variadic
         props = _variadic(prop)
         for p in props:
             try:
@@ -1032,16 +1032,14 @@ class InfoExtractor:
         if not json_string:
             if not fatal:
                 return default if has_default else {}
-            from rdlp_ytdlp_compat._errors import ExtractorError
-            raise ExtractorError(
+            raise _ExtractorError(
                 f"Unable to extract {name}", video_id=video_id,
             )
         try:
             return self._parse_json(json_string, video_id, fatal=True, **kwargs)
         except (_json.JSONDecodeError, ValueError) as e:
             if fatal:
-                from rdlp_ytdlp_compat._errors import ExtractorError
-                raise ExtractorError(
+                raise _ExtractorError(
                     f"Unable to extract {name} - Failed to parse JSON: {e}",
                     video_id=video_id,
                 ) from e
@@ -1149,21 +1147,20 @@ class InfoExtractor:
         rdlp_extractor::base::common::json_ld extractor."""
         try:
             result = _host.extract_json_ld(html)
-        except RuntimeError:
+        except RuntimeError as err:
             # Outside componentize-py runtime.
             if default is NO_DEFAULT:
                 if fatal:
-                    from rdlp_ytdlp_compat._errors import ExtractorError
-                    raise ExtractorError("Unable to extract JSON-LD",
-                                         video_id=video_id)
+                    raise _ExtractorError(
+                        "Unable to extract JSON-LD", video_id=video_id,
+                    ) from err
                 return {}
             return default
         if result is None:
             if default is NO_DEFAULT:
                 if fatal:
-                    from rdlp_ytdlp_compat._errors import ExtractorError
-                    raise ExtractorError("Unable to extract JSON-LD",
-                                         video_id=video_id)
+                    raise _ExtractorError("Unable to extract JSON-LD",
+                                          video_id=video_id)
                 return {}
             return default
         # Convert WIT JsonLdVideo record to yt-dlp dict shape

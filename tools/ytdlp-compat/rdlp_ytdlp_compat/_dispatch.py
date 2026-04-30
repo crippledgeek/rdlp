@@ -19,6 +19,7 @@ This module is import-time pure so it's unit-testable in plain Python.
 The auto-generated `_entry.py` template imports both functions and uses
 them inside the `extract()` body.
 """
+from rdlp_ytdlp_compat import _host
 from rdlp_ytdlp_compat.info_extractor import InfoExtractor
 
 
@@ -70,7 +71,6 @@ def dispatch_url(classes, url):
     `_host.log` and dispatch continues. Without the log, a typo'd
     override would silently never match and the plugin author would
     have no signal."""
-    from rdlp_ytdlp_compat import _host
     for cls in classes:
         try:
             if cls.suitable(url):

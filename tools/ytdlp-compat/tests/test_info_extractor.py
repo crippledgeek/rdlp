@@ -2,6 +2,7 @@
 import logging
 
 import pytest
+
 from rdlp_ytdlp_compat import (
     ExtractorError,
     GeoRestrictedError,
@@ -10,12 +11,15 @@ from rdlp_ytdlp_compat import (
     YoutubeDLError,
 )
 from rdlp_ytdlp_compat.info_extractor import (
-    InfoExtractor,
-    int_or_none, try_get, urljoin, unified_timestamp,
-    traverse_obj,
     NO_DEFAULT,
+    InfoExtractor,
+    _NoDefault,
+    int_or_none,
+    traverse_obj,
+    try_get,
+    unified_timestamp,
+    urljoin,
 )
-from rdlp_ytdlp_compat.info_extractor import _NoDefault
 
 
 class TestIntOrNone:
@@ -39,9 +43,9 @@ class TestIntOrNone:
         assert int_or_none("abc", default=99) == 99
 
     def test_get_attr_reads_attribute(self):
-        class O:
+        class Obj:
             x = "42"
-        assert int_or_none(O(), get_attr="x") == 42
+        assert int_or_none(Obj(), get_attr="x") == 42
 
     def test_invscale_multiplies(self):
         # bytes -> bits
@@ -464,8 +468,12 @@ class TestExtractM3U8Formats:
 
         class _Fmt:
             def __init__(self, fid, url, ext, proto, tbr, width, height):
-                self.format_id = fid; self.url = url; self.ext = ext
-                self.protocol = proto; self.tbr = tbr; self.width = width
+                self.format_id = fid
+                self.url = url
+                self.ext = ext
+                self.protocol = proto
+                self.tbr = tbr
+                self.width = width
                 self.height = height
                 self.fps = self.vcodec = self.acodec = None
                 self.vbr = self.abr = self.language = self.format_note = None
@@ -666,19 +674,19 @@ class TestTypedSubclasses:
     """yt-dlp drop-in compat preserved + isinstance-driven dispatch enabled."""
 
     def test_login_required_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import LoginRequiredError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError, LoginRequiredError
         e = LoginRequiredError("login")
         assert isinstance(e, ExtractorError)
         assert e.expected is True
 
     def test_no_formats_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NoFormatsError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError, NoFormatsError
         e = NoFormatsError("no formats")
         assert isinstance(e, ExtractorError)
         assert e.expected is True
 
     def test_not_found_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NotFoundError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError, NotFoundError
         assert isinstance(NotFoundError("missing"), ExtractorError)
 
     def test_rate_limited_carries_typed_retry_after(self):
@@ -691,14 +699,17 @@ class TestTypedSubclasses:
         assert RateLimitedError("slow down").retry_after is None
 
     def test_network_error_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NetworkError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError, NetworkError
         assert isinstance(NetworkError("dns failed"), ExtractorError)
 
     def test_typed_subclasses_default_messages(self):
         # Helpers raised without args produce a sensible default — matches
         # yt-dlp's user-facing message pattern.
         from rdlp_ytdlp_compat import (
-            LoginRequiredError, NoFormatsError, NotFoundError, RateLimitedError,
+            LoginRequiredError,
+            NoFormatsError,
+            NotFoundError,
+            RateLimitedError,
         )
         assert "registered users" in str(LoginRequiredError())
         assert "formats" in str(NoFormatsError())
@@ -747,7 +758,7 @@ class TestSearchRegexRaisesTypedException:
 
     def test_regex_not_found_extends_extractor_error(self):
         # Drop-in: ported `except ExtractorError:` clauses still catch.
-        from rdlp_ytdlp_compat import RegexNotFoundError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError
         ie = InfoExtractor()
         with pytest.raises(ExtractorError):
             ie._search_regex(r"NOT", "x", "thing", fatal=True)
@@ -771,7 +782,7 @@ class TestHostHttpError:
         assert e.url == "https://example.com/y"
 
     def test_check_status_raises_typed_host_http_error(self):
-        from rdlp_ytdlp_compat._host import _check_status, HostHttpError
+        from rdlp_ytdlp_compat._host import HostHttpError, _check_status
         with pytest.raises(HostHttpError) as excinfo:
             _check_status(503, None, "https://example.com")
         assert excinfo.value.status == 503

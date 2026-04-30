@@ -10,7 +10,6 @@ Each helper kept verbatim to upstream behaviour for the inputs the
 xxxymovies extractor actually feeds it (HTML stripping, MM:SS-format
 duration, RTA-5042 meta tag detection).
 """
-import pytest
 
 from rdlp_ytdlp_compat import InfoExtractor
 from rdlp_ytdlp_compat._utils import clean_html, parse_duration
@@ -138,7 +137,6 @@ class TestRtaSearch:
         assert _XxxIE._rta_search(html) == 18
 
     def test_proudly_labeled_marker_returns_18(self):
-        html = '<a href="http://www.rtalabel.org/" title="Restricted to Adults">RTA</a>'
         # The fallback uses the "Proudly Labeled <a href...>" pattern.
         full = (
             'Proudly Labeled <a href="http://www.rtalabel.org/" '

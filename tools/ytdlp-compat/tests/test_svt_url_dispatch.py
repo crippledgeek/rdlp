@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fake yt_dlp/ package contents — kept in sync with the Rust constants in
 # crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs (EXTRACTOR_COMMON_PY,
@@ -92,7 +91,6 @@ from rdlp_ytdlp_compat._dispatch import (  # noqa: E402
     discover_ie_classes,
     dispatch_url,
 )
-
 
 CANDIDATES = discover_ie_classes(SVT)
 

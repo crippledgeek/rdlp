@@ -15,7 +15,6 @@ from rdlp_ytdlp_compat.info_extractor import (
     urljoin,
 )
 
-
 # =============================================================================
 # H9 — urljoin protocol-relative scheme inheritance
 # =============================================================================
@@ -89,7 +88,7 @@ class TestUnifiedTimestampH8DateFormats:
         assert isinstance(result, int)
         # Sanity: January 15, 2024 in UTC
         import datetime
-        dt = datetime.datetime(2024, 1, 15, tzinfo=datetime.timezone.utc)
+        dt = datetime.datetime(2024, 1, 15, tzinfo=datetime.UTC)
         assert result == int(dt.timestamp())
 
     def test_dd_slash_mm_slash_yyyy_month_first(self):
@@ -97,7 +96,7 @@ class TestUnifiedTimestampH8DateFormats:
         result = unified_timestamp("01/15/2024", day_first=False)
         assert result is not None
         import datetime
-        dt = datetime.datetime(2024, 1, 15, tzinfo=datetime.timezone.utc)
+        dt = datetime.datetime(2024, 1, 15, tzinfo=datetime.UTC)
         assert result == int(dt.timestamp())
 
     def test_jan_15_2024_long_month(self):
@@ -175,8 +174,8 @@ class TestUnifiedTimestampH8DateFormats:
         import datetime
         ts_day_first = unified_timestamp("02/03/2024", day_first=True)
         ts_month_first = unified_timestamp("02/03/2024", day_first=False)
-        march_2 = int(datetime.datetime(2024, 3, 2, tzinfo=datetime.timezone.utc).timestamp())
-        feb_3 = int(datetime.datetime(2024, 2, 3, tzinfo=datetime.timezone.utc).timestamp())
+        march_2 = int(datetime.datetime(2024, 3, 2, tzinfo=datetime.UTC).timestamp())
+        feb_3 = int(datetime.datetime(2024, 2, 3, tzinfo=datetime.UTC).timestamp())
         assert ts_day_first == march_2, (
             f"day_first=True: expected March 2 ({march_2}), got {ts_day_first}"
         )

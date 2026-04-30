@@ -10,3 +10,46 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["rdlp_ytdlp_compat*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint.isort]
+# Keep `from X import (a, b, c)` style — splitting per-symbol is noise.
+combine-as-imports = true
+force-single-line = false
+
+[tool.ruff.lint]
+# Default selection plus a few quality-of-life rules that catch idiom drift.
+# Keep this conservative — every rule added is a contract with future contributors.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade — flags `Optional[X]`, `List[T]`, etc.
+    "B",   # flake8-bugbear — likely bugs
+    "SIM", # flake8-simplify
+    "I",   # isort
+]
+ignore = [
+    "E501",  # line length is enforced by formatter, not lint
+    "B008",  # function call in default arg — yt-dlp parity uses these (e.g. NO_DEFAULT singleton sentinel)
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+# Most of the package is Any-typed at the boundaries (yt-dlp's API is duck-typed).
+# `disallow_untyped_defs` is intentionally OFF until the entire surface is annotated.
