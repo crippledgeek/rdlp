@@ -1,3 +1,16 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+)]
+
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 use rdlp_plugin::manifest::{canonical_bytes, parse_manifest_str};
 
 #[test]
@@ -102,7 +115,7 @@ name = "x"
 version = "1.0.0"
 wit_version = "0.1.0"
 matches = ["https://x.com/*"]
-url_regex = "^https://x\\.com/(?P<id>\\d+)"
+url_regex = '^https://x\.com/(?P<id>\d+)'
 priority = 150
 capabilities = ["log"]
 

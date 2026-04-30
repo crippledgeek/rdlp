@@ -1,3 +1,14 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+)]
+
 //! Slice-1 spike: verify a componentize-py-built Python plugin loads,
 //! instantiates, and dispatches `extract` through the existing host. Measures
 //! cold-start (load+sign+discover) and per-call extract latency.
@@ -8,8 +19,6 @@
 //! Run with:
 //!   examples/plugins/ytdlp-hello-world/build.sh   # produces out/plugin.wasm
 //!   cargo test -p rdlp-plugin --test python_plugin_smoke -- --ignored --nocapture
-
-#![allow(clippy::disallowed_methods)] // test fixture I/O is allowed
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

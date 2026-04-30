@@ -19,6 +19,15 @@
 //! capabilities, match patterns, or `claims_override` will therefore fail
 //! verification even when the WASM binary is unchanged.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::manual_let_else,
+    clippy::match_wildcard_for_single_variants
+)]
+
 use crate::PluginError;
 use crate::manifest::{Manifest, Signature, canonical_bytes};
 use base64::Engine as _;

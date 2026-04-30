@@ -1,3 +1,10 @@
+// Lint-tightening for LIBRARY code only. `pedantic` / `nursery` are
+// stylistic; `indexing_slicing` is enforced here because production code must
+// not panic on out-of-bounds. Integration tests under `tests/` deliberately
+// use `vec[0]` after a length assertion as the assertion form — see
+// `Cargo.toml` `[lints.clippy]` for the rationale.
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
+
 //! # rdlp-plugin
 //!
 //! WASM-based plugin system for rdlp. Loads polyglot WebAssembly Component
@@ -120,7 +127,14 @@ pub use error::PluginError;
 ///   by the host on `PluginStoreData` (Task 11+).
 ///
 /// Async support is enabled (matching the engine's `async_support(true)`).
-#[allow(clippy::all, missing_docs)]
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    missing_docs,
+    // The bindgen! macro emits code that may trigger these without a clean fix.
+    unused
+)]
 pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",

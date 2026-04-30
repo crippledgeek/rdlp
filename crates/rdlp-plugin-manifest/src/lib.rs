@@ -1,3 +1,6 @@
+// Lint-tightening for LIBRARY code only — see `Cargo.toml` `[lints.clippy]`.
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
+
 //! Plugin manifest (`plugin.toml`) schema, parser, and canonical-bytes encoder.
 //!
 //! This crate is the **leaf** of the plugin manifest dependency graph: pure
@@ -60,7 +63,7 @@ pub enum ManifestError {
     /// A `claims_override` entry does not match any host in the `matches` patterns.
     ///
     /// Each `claims_override` entry must be the host (or an ancestor domain) of
-    /// at least one `matches` URL pattern. Declaring a claims_override host that
+    /// at least one `matches` URL pattern. Declaring a `claims_override` host that
     /// has no corresponding match pattern is a manifest authoring error — the
     /// override would be silently ignored during dispatch.
     #[error(
@@ -126,7 +129,7 @@ pub enum Signature {
     Ed25519 {
         /// Base64-encoded 32-byte Ed25519 public key.
         pubkey: String,
-        /// Base64-encoded 64-byte Ed25519 signature over (canonical_bytes(manifest) || wasm_bytes).
+        /// Base64-encoded 64-byte Ed25519 signature over (`canonical_bytes(manifest)` || `wasm_bytes`).
         signature: String,
     },
 }
@@ -136,8 +139,8 @@ impl Signature {
     #[must_use]
     pub fn identity_string(&self) -> String {
         match self {
-            Signature::Sigstore { identity, .. } => format!("sigstore:{identity}"),
-            Signature::Ed25519 { pubkey, .. } => {
+            Self::Sigstore { identity, .. } => format!("sigstore:{identity}"),
+            Self::Ed25519 { pubkey, .. } => {
                 // Full 32-byte SHA-256 of the base64-encoded pubkey, hex-rendered.
                 // An earlier MVP used only the first 8 bytes (64 bits) which
                 // gave a 2^32 birthday-collision cost — a crafted pubkey
@@ -152,6 +155,17 @@ impl Signature {
 }
 
 /// Parse a manifest from a TOML string and validate semantic constraints.
+///
+/// # Errors
+///
+/// - [`ManifestError::Toml`] — `s` is not valid TOML or cannot be deserialized
+///   into [`Manifest`].
+/// - [`ManifestError::InvalidManifest`] — the parsed manifest fails a semantic
+///   invariant (empty name, out-of-range priority, unknown capability, etc.).
+/// - [`ManifestError::InvalidPluginName`] — the `name` field violates the
+///   kebab-case naming rule.
+/// - [`ManifestError::ClaimsOverrideOutsideMatches`] — a `claims_override` entry
+///   has no corresponding host in the `matches` patterns.
 pub fn parse_manifest_str(s: &str) -> Result<Manifest, ManifestError> {
     let m: Manifest = toml::from_str(s)?;
     validate(&m)?;
@@ -165,6 +179,13 @@ pub fn parse_manifest_str(s: &str) -> Result<Manifest, ManifestError> {
 /// This function reads from disk synchronously. It is intended to be called at
 /// plugin-loader startup (before any concurrent work), or from within a
 /// `spawn_blocking` closure in async callers.
+///
+/// # Errors
+///
+/// - [`ManifestError::Io`] — the file cannot be read (missing, permission denied, etc.).
+/// - All error variants from [`parse_manifest_str`] when the file contents fail
+///   validation; in that case the error is wrapped as
+///   [`ManifestError::InvalidManifest`] with the file path attached.
 #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O — acceptable per clippy.toml policy
 pub fn parse_manifest_file(path: &Path) -> Result<Manifest, ManifestError> {
     let s = std::fs::read_to_string(path)?;
@@ -190,6 +211,12 @@ pub fn parse_manifest_file(path: &Path) -> Result<Manifest, ManifestError> {
 ///
 /// Rule: lowercase kebab-case, must start with `[a-z0-9]`, may contain
 /// `[a-z0-9-]` thereafter, length 1..=64.
+///
+/// # Errors
+///
+/// Returns [`ManifestError::InvalidPluginName`] when the name is empty, longer
+/// than 64 characters, starts with a non-alphanumeric character, or contains
+/// any character outside `[a-z0-9-]`.
 pub fn validate_plugin_name(name: &str) -> Result<(), ManifestError> {
     fn err(name: &str, reason: &str) -> Result<(), ManifestError> {
         Err(ManifestError::InvalidPluginName {
@@ -204,7 +231,10 @@ pub fn validate_plugin_name(name: &str) -> Result<(), ManifestError> {
         return err(name, "longer than 64 characters");
     }
     let bytes = name.as_bytes();
-    let first = bytes[0];
+    // Safety: name.is_empty() is checked above, so bytes is guaranteed non-empty.
+    // We use get(0) here to satisfy clippy::indexing_slicing; the unwrap_or
+    // branch is unreachable by the invariant above.
+    let first = bytes.first().copied().unwrap_or(0);
     if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
         return err(name, "must start with a lowercase letter or digit");
     }
@@ -250,11 +280,11 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
         // Detect any pattern whose host component is a bare `*` — i.e. there's
         // a `://*` followed by either '/' (path-bearing form) or end-of-string
         // (bare form). Both require the claim-all-urls capability.
-        if let Some(after_scheme) = p.split_once("://").map(|(_, rest)| rest) {
-            after_scheme == "*" || after_scheme.starts_with("*/")
-        } else {
-            false
-        }
+        p.split_once("://")
+            .map(|(_, rest)| rest)
+            .is_some_and(|after_scheme| {
+                after_scheme == "*" || after_scheme.starts_with("*/")
+            })
     });
     if has_tld_wildcard && !m.capabilities.iter().any(|c| c == "claim-all-urls") {
         return invalid("TLD-wildcard match pattern requires 'claim-all-urls' capability");
@@ -373,6 +403,7 @@ fn string_list(v: &[String]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // test code — panicking on unexpected errors is intentional
 mod validate_plugin_name_tests {
     use super::{ManifestError, validate_plugin_name};
 

@@ -4,6 +4,10 @@
 //! forwarded to the `log` crate with target `plugin::{plugin_name}`, allowing
 //! consumers to filter plugin messages via normal log filters.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc)]
+
 use crate::instance::PluginStoreData;
 use wasmtime::component::Linker;
 

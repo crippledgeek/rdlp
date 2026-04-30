@@ -10,6 +10,10 @@
 //! - **CI / non-interactive** — [`AlwaysApprove`], [`AlwaysDeny`], or
 //!   [`PreTrustedIdentities`] when the user passes `--trust-publisher <id>`
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::too_long_first_doc_paragraph)]
+
 /// Describes the scenario requiring user confirmation.
 #[derive(Debug, Clone)]
 pub enum ConfirmRequest {

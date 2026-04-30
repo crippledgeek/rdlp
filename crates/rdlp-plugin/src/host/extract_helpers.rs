@@ -6,6 +6,18 @@
 //! All functions sync (pure CPU) except `extract_m3u8` which fetches
 //! via the existing `host:fetch` wreq client.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::needless_raw_string_hashes,
+    clippy::too_long_first_doc_paragraph,
+    clippy::expect_used,
+    clippy::missing_errors_doc
+)]
+
 use std::sync::LazyLock;
 
 use crate::instance::PluginStoreData;
@@ -634,7 +646,7 @@ mod tests {
         let r = c
             .search_json(
                 r"NOPE".to_string(),
-                "".to_string(),
+                String::new(),
                 "irrelevant".to_string(),
             )
             .await;
@@ -677,7 +689,8 @@ hi.m3u8\n";
             .await
             .unwrap();
         assert_eq!(r.formats.len(), 1);
-        assert_eq!(r.formats[0].width, Some(1920));
+        let fmt = r.formats.first().expect("len asserted above");
+        assert_eq!(fmt.width, Some(1920));
     }
 
     #[tokio::test]

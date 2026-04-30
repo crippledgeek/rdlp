@@ -6,6 +6,10 @@
 //! This module re-exports the canonical surface and bridges the leaf's
 //! [`ManifestError`] into [`PluginError`] for in-host call sites.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::use_self)]
+
 use crate::error::PluginError;
 
 pub use rdlp_plugin_manifest::{

@@ -6,6 +6,16 @@
 //! cookie reads/writes for any other effective domain are refused. This is
 //! the vector A3 mitigation (cookie-jar cross-contamination).
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::cast_possible_wrap,
+    clippy::missing_errors_doc,
+    clippy::option_if_let_else
+)]
+
 use crate::instance::PluginStoreData;
 use std::sync::Arc;
 use wasmtime::component::Linker;

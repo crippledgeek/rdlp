@@ -5,6 +5,10 @@
 //! Errors are non-fatal: a plugin that fails to load is reported via the
 //! return value but does not block sibling plugins from loading.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::unnecessary_debug_formatting)]
+
 use crate::PluginError;
 use crate::engine::Engine;
 use crate::manifest::{self, Manifest};

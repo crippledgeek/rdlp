@@ -7,6 +7,16 @@
 //!   requires the `claim-all-urls` capability — gated at manifest validation)
 //! - `<path>` is a literal or glob with `*` standing for "any chars"
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::doc_markdown,
+    clippy::indexing_slicing,
+    clippy::match_same_arms,
+    clippy::manual_let_else
+)]
+
 use crate::PluginError;
 use url::Url;
 

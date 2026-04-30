@@ -35,6 +35,10 @@
 //! `eval` returns `Err("js-eval capability not granted")` when `PluginStoreData.js_eval`
 //! is `None`, i.e. the plugin did not declare the capability in its manifest.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc, clippy::doc_markdown)]
+
 use crate::instance::PluginStoreData;
 use rdlp_core::JsEngine as _;
 use rdlp_jsinterp::BoaJsEngine;

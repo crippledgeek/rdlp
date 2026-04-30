@@ -11,6 +11,10 @@
 //! - Track first-install vs subsequent-install state so the prompt fires only
 //!   when needed.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc)]
+
 use crate::PluginError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
