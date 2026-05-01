@@ -152,7 +152,19 @@ fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Erro
 }
 
 /// Decrypt a DPAPI-encrypted key.
+// Windows DPAPI FFI: the cast/borrow patterns below are dictated by the Win32
+// ABI (CRYPT_INTEGER_BLOB requires `*mut u8` even for read-only input,
+// CryptUnprotectData takes `*const`/`*mut` raw pointers, LocalFree takes HLOCAL
+// = isize). The clippy suggestions either change the ABI shape or are no-ops
+// after rewriting; allow the FFI-shape lints in this scoped block.
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::ptr_as_ptr,
+    clippy::ptr_cast_constness,
+    clippy::as_ptr_cast_mut,
+    clippy::borrow_as_ptr
+)]
 fn decrypt_dpapi_key(encrypted: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData};
 

@@ -138,10 +138,7 @@ fn copy_db_file(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
             || e.raw_os_error() == Some(32) /* ERROR_SHARING_VIOLATION */ =>
         {
-            debug!(
-                "Standard copy failed ({}), trying Win32 share-read fallback",
-                e
-            );
+            debug!("Standard copy failed ({e}), trying Win32 share-read fallback");
             copy_with_share_read(src, dst)
         }
         Err(e) => Err(e),
@@ -168,8 +165,8 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         OPEN_EXISTING,
     };
 
-    // GENERIC_READ = 0x80000000 — not re-exported by windows-sys FileSystem
-    const GENERIC_READ: u32 = 0x80000000;
+    // GENERIC_READ = 0x8000_0000 — not re-exported by windows-sys FileSystem
+    const GENERIC_READ: u32 = 0x8000_0000;
 
     // Convert path to wide string with null terminator
     let wide_path: Vec<u16> = src
@@ -206,6 +203,8 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         if n == 0 {
             break;
         }
+        // `Read::read` contract guarantees `n <= buf.len()`, so the slice cannot panic.
+        #[allow(clippy::indexing_slicing)]
         dst_file.write_all(&buf[..n])?;
     }
     dst_file.flush()?;

@@ -206,7 +206,7 @@ pub fn get_process_rss_kb() -> u64 {
         unsafe {
             let mut pmc: ProcessMemoryCounters = mem::zeroed();
             pmc.cb = mem::size_of::<ProcessMemoryCounters>() as u32;
-            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) != 0 {
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut pmc, pmc.cb) != 0 {
                 return (pmc.working_set_size / 1024) as u64;
             }
         }
