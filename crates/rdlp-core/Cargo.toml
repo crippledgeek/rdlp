@@ -34,6 +34,8 @@ must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 disallowed_methods = "deny"
+# `Duration::from_mins` / `from_hours` were stabilized in Rust 1.95; MSRV is 1.85.
+duration_suboptimal_units = "allow"
 # Security lints
 unwrap_used = "warn"
 expect_used = "warn"
