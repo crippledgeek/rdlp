@@ -172,6 +172,9 @@ pub unsafe fn diagnose_mux_io(octx_ptr: *mut ffmpeg_the_third::ffi::AVFormatCont
 }
 
 /// Get current process RSS in KB. Returns 0 if unavailable.
+// On non-Windows/Linux targets the body collapses to a `0` literal, which trips
+// `clippy::missing_const_for_fn`; the Linux/Windows bodies are not const-eligible.
+#[allow(clippy::missing_const_for_fn)]
 pub fn get_process_rss_kb() -> u64 {
     #[cfg(target_os = "windows")]
     {
