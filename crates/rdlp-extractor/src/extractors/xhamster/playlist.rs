@@ -6,12 +6,12 @@ use super::XHamsterExtractor;
 use super::patterns;
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use futures::stream::{self, StreamExt};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::{debug, info, warn};
 use rdlp_core::{
     ExponentialBuilder, ExtractionContext, RdlpError, Result, Retryable, check_http_response,
 };
 use rdlp_types::InfoDict;
-use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -199,21 +199,13 @@ impl XHamsterExtractor {
 ///
 /// Looks for `a.video-thumb__image-container` elements with href attributes.
 pub(super) fn extract_user_video_urls(webpage: &str) -> Vec<String> {
-    use std::sync::LazyLock;
+    static VIDEO_THUMB_HREF: Lazy<Regex> = lazy_regex!(
+        r#"<a[^>]+class=[\"'][^\"']*\bvideo-thumb__image-container[^>]+href=[\"']([^\"']+)[\"']"#
+    );
 
-    static VIDEO_THUMB_HREF: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r#"<a[^>]+class=[\"'][^\"']*\bvideo-thumb__image-container[^>]+href=[\"']([^\"']+)[\"']"#,
-        )
-        .expect("Valid video thumb href pattern")
-    });
-
-    static VIDEO_THUMB_HREF_ALT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r#"<a[^>]+href=[\"']([^\"']+)[\"'][^>]+class=[\"'][^\"']*\bvideo-thumb__image-container"#,
-        )
-        .expect("Valid video thumb href alt pattern")
-    });
+    static VIDEO_THUMB_HREF_ALT: Lazy<Regex> = lazy_regex!(
+        r#"<a[^>]+href=[\"']([^\"']+)[\"'][^>]+class=[\"'][^\"']*\bvideo-thumb__image-container"#
+    );
 
     let mut urls = Vec::new();
     let mut seen = HashSet::new();

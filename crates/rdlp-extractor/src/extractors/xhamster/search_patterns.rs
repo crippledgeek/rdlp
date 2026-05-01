@@ -2,21 +2,15 @@
 //!
 //! Contains the search URL pattern, URL builders, and filter descriptor definitions.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use url::form_urlencoded;
-
-use super::patterns::DOMAINS;
 
 /// URL pattern for xHamster search pages.
 ///
 /// Matches: `https://xhamster.com/search/query-terms`
-pub static XHAMSTER_SEARCH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r"https?://(?:[^/?#]+\.)?(?:{DOMAINS})/search/[^/?#]+"
-    ))
-    .expect("Valid xHamster search URL pattern")
-});
+pub static XHAMSTER_SEARCH_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:[^/?#]+\.)?(?:xhamster\.(?:com|one|desi)|xhms\.pro|xhamster\d+\.(?:com|desi)|xhday\.com|xhvid\.com)/search/[^/?#]+"
+);
 
 /// Check if a URL is an xHamster search URL.
 #[allow(dead_code)]
