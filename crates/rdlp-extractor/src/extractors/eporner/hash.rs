@@ -32,6 +32,9 @@ fn to_base36(mut n: u32) -> String {
         n /= 36;
     }
     bytes.reverse();
+    // INVARIANT: `bytes` is built exclusively from the ASCII-only `ALPHA` slice,
+    // so it is always valid UTF-8.
+    #[allow(clippy::expect_used)]
     String::from_utf8(bytes).expect("ascii")
 }
 

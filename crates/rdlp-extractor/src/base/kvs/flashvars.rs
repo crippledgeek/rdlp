@@ -131,10 +131,14 @@ pub(crate) fn parse_kvs_flashvars(flashvars_content: &str) -> KvsFlashvars {
         .captures_iter(flashvars_content)
         .map(|caps| {
             (
+                // INVARIANT: KVS_STRING_PATTERN defines groups 1 and 2; every match
+                // produced by captures_iter is guaranteed to have both present.
+                #[allow(clippy::expect_used)]
                 caps.get(1)
                     .expect("capture group 1 exists in matched pattern")
                     .as_str()
                     .to_string(),
+                #[allow(clippy::expect_used)]
                 caps.get(2)
                     .expect("capture group 2 exists in matched pattern")
                     .as_str()

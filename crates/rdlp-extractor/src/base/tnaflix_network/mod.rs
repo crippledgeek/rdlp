@@ -35,53 +35,43 @@ pub(crate) use crate::base::common::json_ld::{
 // ============================================================================
 
 /// Selector for title input field: <input name="title" value="...">
-static TITLE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"input[name="title"]"#).expect("Valid CSS selector"));
+static TITLE_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"input[name="title"]"#);
 
 /// Selector for h1 title fallback
-static H1_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("h1").expect("Valid CSS selector"));
+static H1_SELECTOR: LazyLock<Selector> = crate::static_selector!("h1");
 
 /// Selector for description input field
-static DESC_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"input[name="description"]"#).expect("Valid CSS selector"));
+static DESC_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"input[name="description"]"#);
 
 /// Selector for uploader input field
-static UPLOADER_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"input[name="username"]"#).expect("Valid CSS selector"));
+static UPLOADER_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"input[name="username"]"#);
 
 /// Selector for Open Graph title
-static OG_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector")
-});
+static OG_TITLE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:title"]"#);
 
 /// Selector for Open Graph description
-static OG_DESC_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:description"]"#).expect("Valid OG description selector")
-});
+static OG_DESC_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:description"]"#);
 
 /// Selector for meta description
-static META_DESC_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="description"]"#).expect("Valid meta description selector")
-});
+static META_DESC_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[name="description"]"#);
 
 /// Selector for HTML title tag
-static TITLE_TAG_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("title").expect("Valid title selector"));
+static TITLE_TAG_SELECTOR: LazyLock<Selector> = crate::static_selector!("title");
 
 /// Selector for Open Graph thumbnail
 static THUMBNAIL_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[property="og:image"]"#).expect("Valid CSS selector"));
+    crate::static_selector!(r#"meta[property="og:image"]"#);
 
 /// Selector for Twitter card image
-static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="twitter:image"]"#).expect("Valid Twitter image selector")
-});
+static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[name="twitter:image"]"#);
 
 /// Selector for link rel image_src
-static LINK_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"link[rel="image_src"]"#).expect("Valid link image selector")
-});
+static LINK_IMAGE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"link[rel="image_src"]"#);
 
 // ============================================================================
 // Extracted Metadata Structure

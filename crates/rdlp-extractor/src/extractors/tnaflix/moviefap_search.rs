@@ -43,27 +43,19 @@ use super::moviefap_search_patterns;
 
 /// Container for each video result: `<div class="videothumb">`.
 /// We target only `div` elements to avoid matching the `<a class="videothumb">` anchor.
-static VIDEO_ITEM_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("div.videothumb").expect("Valid MovieFap video item selector")
-});
+static VIDEO_ITEM_SELECTOR: LazyLock<Selector> = crate::static_selector!("div.videothumb");
 
 /// Title anchor inside `.thumbtitle`: `<span class="thumbtitle"> <a href="...">Title</a> </span>`.
-static THUMB_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(".thumbtitle a[href]").expect("Valid MovieFap title selector")
-});
+static THUMB_TITLE_SELECTOR: LazyLock<Selector> = crate::static_selector!(".thumbtitle a[href]");
 
 /// Thumbnail image inside the `<a class="videothumb">` anchor.
-static THUMB_IMG_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("a.videothumb img").expect("Valid MovieFap thumbnail img selector")
-});
+static THUMB_IMG_SELECTOR: LazyLock<Selector> = crate::static_selector!("a.videothumb img");
 
 /// Duration/upload-date container: `<div class="videoleft">`.
-static VIDEO_LEFT_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(".videoleft").expect("Valid MovieFap videoleft selector"));
+static VIDEO_LEFT_SELECTOR: LazyLock<Selector> = crate::static_selector!(".videoleft");
 
 /// Pagination links: `<div class="pagination"> <a href="...">N</a> </div>`.
-static PAGINATION_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(".pagination a").expect("Valid MovieFap pagination selector"));
+static PAGINATION_SELECTOR: LazyLock<Selector> = crate::static_selector!(".pagination a");
 
 /// Parse search results from a MovieFap search results HTML page.
 ///

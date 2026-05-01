@@ -139,6 +139,9 @@ fn parse_formats(html: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
     for caps in CDN_URL_PATTERN.captures_iter(html) {
+        // INVARIANT: CDN_URL_PATTERN defines capture group 1; captures_iter only
+        // yields matches where group 1 is present.
+        #[allow(clippy::unwrap_used)]
         let url = caps.get(1).unwrap().as_str();
         if !seen.insert(url.to_string()) {
             continue;

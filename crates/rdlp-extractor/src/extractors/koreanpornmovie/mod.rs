@@ -28,53 +28,45 @@ use crate::base::common::BaseExtractor;
 // Selectors
 // ============================================================================
 
-static META_NAME_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="name"]"#).expect("valid selector"));
+static META_NAME_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"meta[itemprop="name"]"#);
 
 static META_DESCRIPTION_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="description"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="description"]"#);
 
 static META_DURATION_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="duration"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="duration"]"#);
 
 static META_THUMBNAIL_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="thumbnailUrl"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="thumbnailUrl"]"#);
 
 static META_CONTENT_URL_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="contentURL"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="contentURL"]"#);
 
 static META_EMBED_URL_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="embedURL"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="embedURL"]"#);
 
 static META_UPLOAD_DATE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"meta[itemprop="uploadDate"]"#).expect("valid selector"));
+    crate::static_selector!(r#"meta[itemprop="uploadDate"]"#);
 
 static PLAYER_IFRAME_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"iframe[src*="player-x.php"]"#).expect("valid selector"));
+    crate::static_selector!(r#"iframe[src*="player-x.php"]"#);
 
-static ACTOR_LINK_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"a[href*="/actor/"]"#).expect("valid selector"));
+static ACTOR_LINK_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"a[href*="/actor/"]"#);
 
-static TAG_LINK_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(r#"a[href*="/tag/"]"#).expect("valid selector"));
+static TAG_LINK_SELECTOR: LazyLock<Selector> = crate::static_selector!(r#"a[href*="/tag/"]"#);
 
 // Search result selectors
-static SEARCH_ARTICLE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("article.loop-video").expect("valid selector"));
+static SEARCH_ARTICLE_SELECTOR: LazyLock<Selector> = crate::static_selector!("article.loop-video");
 
-static SEARCH_LINK_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a[href]").expect("valid selector"));
+static SEARCH_LINK_SELECTOR: LazyLock<Selector> = crate::static_selector!("a[href]");
 
 #[allow(dead_code)]
-static SEARCH_IMG_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("img").expect("valid selector"));
+static SEARCH_IMG_SELECTOR: LazyLock<Selector> = crate::static_selector!("img");
 
-static SEARCH_DURATION_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(".duration").expect("valid selector"));
+static SEARCH_DURATION_SELECTOR: LazyLock<Selector> = crate::static_selector!(".duration");
 
 #[allow(dead_code)]
-static SEARCH_NEXT_PAGE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a.next").expect("valid selector"));
+static SEARCH_NEXT_PAGE_SELECTOR: LazyLock<Selector> = crate::static_selector!("a.next");
 
 // ============================================================================
 // Extractor

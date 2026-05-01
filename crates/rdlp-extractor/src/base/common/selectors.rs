@@ -30,52 +30,42 @@ pub const DEFAULT_DEBUG_SAMPLE_SIZE: usize = 5000;
 // ============================================================================
 
 /// Selector for Open Graph title: `<meta property="og:title" content="...">`
-pub static OG_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:title"]"#).expect("Valid OG title selector")
-});
+pub static OG_TITLE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:title"]"#);
 
 /// Selector for Open Graph description: `<meta property="og:description" content="...">`
-pub static OG_DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:description"]"#).expect("Valid OG description selector")
-});
+pub static OG_DESCRIPTION_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:description"]"#);
 
 /// Selector for Open Graph image: `<meta property="og:image" content="...">`
-pub static OG_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:image"]"#).expect("Valid OG image selector")
-});
+pub static OG_IMAGE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:image"]"#);
 
 /// Selector for meta description: `<meta name="description" content="...">`
-pub static META_DESCRIPTION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="description"]"#).expect("Valid meta description selector")
-});
+pub static META_DESCRIPTION_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[name="description"]"#);
 
 /// Selector for Twitter title: `<meta name="twitter:title" content="...">`
-pub static TWITTER_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="twitter:title"]"#).expect("Valid Twitter title selector")
-});
+pub static TWITTER_TITLE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[name="twitter:title"]"#);
 
 /// Selector for Twitter image: `<meta name="twitter:image" content="...">`
-pub static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="twitter:image"]"#).expect("Valid Twitter image selector")
-});
+pub static TWITTER_IMAGE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[name="twitter:image"]"#);
 
 /// Selector for HTML title tag: `<title>...</title>`
-pub static TITLE_TAG_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("title").expect("Valid title selector"));
+pub static TITLE_TAG_SELECTOR: LazyLock<Selector> = crate::static_selector!("title");
 
 /// Selector for H1 heading: `<h1>...</h1>`
-pub static H1_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("h1").expect("Valid h1 selector"));
+pub static H1_SELECTOR: LazyLock<Selector> = crate::static_selector!("h1");
 
 /// Selector for JSON-LD scripts: `<script type="application/ld+json">`
-pub static JSONLD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"script[type="application/ld+json"]"#).expect("Valid JSON-LD selector")
-});
+pub static JSONLD_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"script[type="application/ld+json"]"#);
 
 /// Selector for canonical link: `<link rel="canonical" href="...">`
-pub static CANONICAL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"link[rel="canonical"]"#).expect("Valid canonical selector")
-});
+pub static CANONICAL_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"link[rel="canonical"]"#);
 
 // ============================================================================
 // Common Static Patterns

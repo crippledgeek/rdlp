@@ -97,24 +97,19 @@ pub(super) fn parse_duration(text: &str) -> Option<f64> {
 
 // --- Lazy selectors for metadata extraction ---
 
-static TITLE_SELECTOR: LazyLock<scraper::Selector> =
-    LazyLock::new(|| scraper::Selector::parse("h1.main-h1").expect("Valid title selector"));
+static TITLE_SELECTOR: LazyLock<scraper::Selector> = crate::static_selector!("h1.main-h1");
 
-static DURATION_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse("li.icon.fa-clock-o").expect("Valid duration selector")
-});
+static DURATION_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!("li.icon.fa-clock-o");
 
-static ACTRESS_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse("a[href^='/actress/']").expect("Valid actress selector")
-});
+static ACTRESS_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!("a[href^='/actress/']");
 
-static CATEGORY_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse("a.tag-link[href^='/category/']").expect("Valid category selector")
-});
+static CATEGORY_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!("a.tag-link[href^='/category/']");
 
-static DESCRIPTION_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse("meta[name='description']").expect("Valid description selector")
-});
+static DESCRIPTION_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!("meta[name='description']");
 
 /// Extract the video title from an HQPorner page.
 fn extract_title(html: &Html) -> String {

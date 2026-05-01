@@ -9,24 +9,20 @@ use super::detection::{Confidence, DetectedFormat, DetectionStrategy, PageContex
 // Selectors
 // ============================================================================
 
-static OG_VIDEO_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"]"#)
-        .expect("valid og:video selector")
-});
+static OG_VIDEO_SELECTOR: LazyLock<Selector> = crate::static_selector!(
+    r#"meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"]"#
+);
 
-static OG_AUDIO_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:audio"], meta[property="og:audio:url"], meta[property="og:audio:secure_url"]"#)
-        .expect("valid og:audio selector")
-});
+static OG_AUDIO_SELECTOR: LazyLock<Selector> = crate::static_selector!(
+    r#"meta[property="og:audio"], meta[property="og:audio:url"], meta[property="og:audio:secure_url"]"#
+);
 
-static OG_VIDEO_TYPE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[property="og:video:type"]"#).expect("valid og:video:type selector")
-});
+static OG_VIDEO_TYPE_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"meta[property="og:video:type"]"#);
 
-static TWITTER_PLAYER_STREAM_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"meta[name="twitter:player:stream"], meta[property="twitter:player:stream"]"#)
-        .expect("valid twitter:player:stream selector")
-});
+static TWITTER_PLAYER_STREAM_SELECTOR: LazyLock<Selector> = crate::static_selector!(
+    r#"meta[name="twitter:player:stream"], meta[property="twitter:player:stream"]"#
+);
 
 // ============================================================================
 // OpenGraph Strategy

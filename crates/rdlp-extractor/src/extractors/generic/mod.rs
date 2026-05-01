@@ -237,8 +237,7 @@ fn extract_base_url(html: &Html, page_url: &Url) -> Url {
     use scraper::Selector;
     use std::sync::LazyLock;
 
-    static BASE_SELECTOR: LazyLock<Selector> =
-        LazyLock::new(|| Selector::parse("base[href]").expect("valid base selector"));
+    static BASE_SELECTOR: LazyLock<Selector> = crate::static_selector!("base[href]");
 
     html.select(&BASE_SELECTOR)
         .next()

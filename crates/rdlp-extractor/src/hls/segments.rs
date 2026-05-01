@@ -106,6 +106,10 @@ impl HlsSizeDetector {
                 }
 
                 // Select the non-I-frame variant with the highest bandwidth (best quality)
+                // INVARIANT: the `.or_else` fallback re-iterates all variants, so
+                // `None` is only possible if `master.variants` is empty — but that
+                // is guarded by the early-return check above.
+                #[allow(clippy::expect_used)]
                 let variant = master
                     .variants
                     .iter()
