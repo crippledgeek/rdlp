@@ -6,7 +6,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
 
 use ed25519_dalek::{Signer, SigningKey};

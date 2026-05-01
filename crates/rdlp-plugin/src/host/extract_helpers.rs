@@ -644,11 +644,7 @@ mod tests {
     async fn search_json_no_match_returns_none() {
         let mut c = ctx();
         let r = c
-            .search_json(
-                r"NOPE".to_string(),
-                String::new(),
-                "irrelevant".to_string(),
-            )
+            .search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string())
             .await;
         assert_eq!(r, None);
     }

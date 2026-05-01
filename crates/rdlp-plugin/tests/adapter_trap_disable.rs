@@ -6,9 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
-
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
 //! Three-strike trap rule for `PluginExtractor`.
@@ -17,7 +16,6 @@
 //! times via the test-only hook, asserts the `disabled` flag flips on the
 //! third strike. Skips silently when the example wasm hasn't been built so
 //! the test isn't a hard dependency on the cargo-component toolchain.
-
 
 use std::path::PathBuf;
 use std::sync::Arc;

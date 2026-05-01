@@ -6,9 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
-
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
 //! Slice-2 SVT golden test — proves a real upstream yt-dlp `.py`
@@ -39,7 +38,6 @@
 //! See also the `Slice 2.5` memory note (`project_ytdlp-shim-slice2_5-host-helpers`)
 //! — when host-side helpers ship, parts of this test (m3u8 fixturing)
 //! become simpler because the host returns formats directly.
-
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

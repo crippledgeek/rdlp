@@ -6,7 +6,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
 
 //! Slice-1 spike: verify a componentize-py-built Python plugin loads,

@@ -6,9 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
-
 
 use base64::Engine as _;
 use rdlp_plugin::manifest::parse_manifest_str;

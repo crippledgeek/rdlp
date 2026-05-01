@@ -6,9 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
-
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
 //! Slice-2 second plugin: xxxymovies — proves end-to-end plugin
@@ -26,7 +25,6 @@
 //! Together with `svt_golden`, this gives Slice 2 two independent
 //! end-to-end-green plugin ports — proves the build/sign/dispatch/
 //! extract pipeline works for distinct extractor archetypes.
-
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

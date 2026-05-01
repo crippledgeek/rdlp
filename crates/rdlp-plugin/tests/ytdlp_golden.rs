@@ -6,9 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
-
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
 //! Slice-1 golden: build 3 synthetic yt-dlp-shape extractors via

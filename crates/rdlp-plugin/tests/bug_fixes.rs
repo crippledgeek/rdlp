@@ -6,7 +6,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
+    missing_docs
 )]
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -282,9 +282,7 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
         // (bare form). Both require the claim-all-urls capability.
         p.split_once("://")
             .map(|(_, rest)| rest)
-            .is_some_and(|after_scheme| {
-                after_scheme == "*" || after_scheme.starts_with("*/")
-            })
+            .is_some_and(|after_scheme| after_scheme == "*" || after_scheme.starts_with("*/"))
     });
     if has_tld_wildcard && !m.capabilities.iter().any(|c| c == "claim-all-urls") {
         return invalid("TLD-wildcard match pattern requires 'claim-all-urls' capability");
