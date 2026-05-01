@@ -416,15 +416,13 @@ mod tests {
 //
 // Secondary guard: `<main>` also excludes the sidebar nav on some layouts.
 // The video-page's performer chips live under `main.video-type-video`.
-static PORNSTAR_LINK_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse(r#"main a[href*="/pornstars/"]"#).expect("valid selector")
-});
+static PORNSTAR_LINK_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!(r#"main a[href*="/pornstars/"]"#);
 
 /// Fallback selector for legacy-layout pages that do not wrap content in
 /// `<main>`. Same pattern as before this scoping fix.
-static PORNSTAR_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse(r#"a[href*="/pornstars/"]"#).expect("valid selector")
-});
+static PORNSTAR_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> =
+    crate::static_selector!(r#"a[href*="/pornstars/"]"#);
 
 /// Extract pornstar/actor names from the video page HTML.
 ///
@@ -461,8 +459,7 @@ pub fn extract_actors(webpage: &str) -> Vec<String> {
     actors
 }
 
-static MAIN_SELECTOR: LazyLock<scraper::Selector> =
-    LazyLock::new(|| scraper::Selector::parse("main").expect("valid selector"));
+static MAIN_SELECTOR: LazyLock<scraper::Selector> = crate::static_selector!("main");
 
 // ============================================================================
 // Channel / studio extraction
@@ -474,11 +471,10 @@ static MAIN_SELECTOR: LazyLock<scraper::Selector> =
 // rules as actors apply — must be inside <main> to exclude the top-nav
 // "Channels" mega-dropdown. Falls back to the unscoped selector for legacy
 // layouts without <main>.
-static CHANNEL_LINK_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
-    scraper::Selector::parse(r#"main a[href*="/channels/"]"#).expect("valid selector")
-});
+static CHANNEL_LINK_SELECTOR: LazyLock<scraper::Selector> =
+    crate::static_selector!(r#"main a[href*="/channels/"]"#);
 static CHANNEL_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> =
-    LazyLock::new(|| scraper::Selector::parse(r#"a[href*="/channels/"]"#).expect("valid selector"));
+    crate::static_selector!(r#"a[href*="/channels/"]"#);
 
 /// Extract the channel (studio) name and URL from an XHamster video page.
 ///
