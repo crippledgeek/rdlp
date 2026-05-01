@@ -164,9 +164,13 @@ mod tests {
 
     #[test]
     fn test_temp_path_registers_with_registry() {
+        // Use a real temp dir so `TempRegistry::register()` can create the
+        // sidecar lock file. Hard-coded `/tmp/...` doesn't exist on Windows
+        // and causes registration to skip silently.
+        let dir = TempDir::new().unwrap();
         let reg = test_registry();
         let tracker = FileTracker::new(vec![], reg.clone());
-        let path = tracker.temp_path(&PathBuf::from("/tmp/video.mp4"), "mp4");
+        let path = tracker.temp_path(&dir.path().join("video.mp4"), "mp4");
         assert!(reg.contains(&path));
     }
 
