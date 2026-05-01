@@ -15,21 +15,18 @@
 //! - **URL Handling**: `extract_extension_from_url`, `make_absolute_url`
 //! - **Format Helpers**: `format_filesize`, `format_duration`
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::trace;
-use regex::Regex;
-use std::sync::LazyLock;
 
 // ============================================================================
 // Static Patterns for Utility Functions
 // ============================================================================
 
 /// Pattern for HTML entity references (e.g., &amp; &#39; &#x27;)
-static HTML_ENTITY_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"&(#?[a-zA-Z0-9]+);").expect("Valid HTML entity pattern"));
+static HTML_ENTITY_PATTERN: Lazy<Regex> = lazy_regex!(r"&(#?[a-zA-Z0-9]+);");
 
 /// Pattern for whitespace normalization
-static WHITESPACE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("Valid whitespace pattern"));
+static WHITESPACE_PATTERN: Lazy<Regex> = lazy_regex!(r"\s+");
 
 // ============================================================================
 // Debug Output Functions
