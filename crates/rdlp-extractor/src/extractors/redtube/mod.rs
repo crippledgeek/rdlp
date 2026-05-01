@@ -197,6 +197,9 @@ impl RedTubeExtractor {
 /// Looks for `<a href="/pornstar/name">` links within the `.performers-list` section.
 fn extract_performers(html: &Html) -> Vec<String> {
     static PERFORMER_SELECTOR: LazyLock<scraper::Selector> = LazyLock::new(|| {
+        // INVARIANT: hardcoded selector literal — failure is a programming error
+        // caught at first call, identical to a compile-time constant.
+        #[allow(clippy::expect_used)]
         scraper::Selector::parse(".performers-list a[href*=\"/pornstar/\"]")
             .expect("valid performer selector")
     });

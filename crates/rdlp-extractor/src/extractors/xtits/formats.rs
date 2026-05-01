@@ -25,6 +25,8 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Primary format: video_url
     if flashvars.has("video_url") {
+        // INVARIANT: `has()` returned true immediately above, so `get()` is Some.
+        #[allow(clippy::expect_used)]
         let url = flashvars
             .get("video_url")
             .expect("key confirmed present by has() check");
@@ -36,6 +38,8 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Alternate format: video_alt_url
     if flashvars.has("video_alt_url") {
+        // INVARIANT: `has()` returned true immediately above, so `get()` is Some.
+        #[allow(clippy::expect_used)]
         let url = flashvars
             .get("video_alt_url")
             .expect("key confirmed present by has() check");
@@ -47,6 +51,8 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
 
     // Second alternate (rare): video_alt_url2
     if flashvars.has("video_alt_url2") {
+        // INVARIANT: `has()` returned true immediately above, so `get()` is Some.
+        #[allow(clippy::expect_used)]
         let url = flashvars
             .get("video_alt_url2")
             .expect("key confirmed present by has() check");
