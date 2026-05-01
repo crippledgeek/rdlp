@@ -6,6 +6,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
+    // `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+    clippy::duration_suboptimal_units,
     missing_docs
 )]
 

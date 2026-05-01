@@ -72,8 +72,6 @@ missing_docs = "warn"
 # per-crate tables).
 must_use_candidate = "warn"
 disallowed_methods = "deny"
-# `Duration::from_mins` / `from_hours` were stabilized in Rust 1.95; MSRV is 1.85.
-duration_suboptimal_units = "allow"
 # Security-relevant lints applied to ALL targets (lib + integration tests +
 # benches): async-correctness, panic-on-failure, bounds-check skipping.
 await_holding_lock = "deny"

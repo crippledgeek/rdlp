@@ -430,8 +430,8 @@ impl FFmpegRunner {
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
             #[allow(clippy::disallowed_methods)]
             let total_input_bytes = {
-                std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
-                    + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0)
+                std::fs::metadata(video_input).map_or(0, |m| m.len())
+                    + std::fs::metadata(audio_input).map_or(0, |m| m.len())
             };
             let mut bytes_written: u64 = 0;
             let mut last_progress = Instant::now();

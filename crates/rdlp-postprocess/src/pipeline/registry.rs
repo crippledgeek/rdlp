@@ -31,7 +31,9 @@
 
 #![allow(
     clippy::case_sensitive_file_extension_comparisons,
-    clippy::unnecessary_literal_bound
+    clippy::unnecessary_literal_bound,
+    // `Duration::from_hours` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+    clippy::duration_suboptimal_units
 )]
 
 use std::collections::HashMap;

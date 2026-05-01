@@ -152,9 +152,6 @@ must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 disallowed_methods = "deny"
-# `Duration::from_mins` / `from_hours` were stabilized in Rust 1.95; our MSRV
-# is 1.85. Re-enable once MSRV is bumped to ≥1.95.
-duration_suboptimal_units = "allow"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]

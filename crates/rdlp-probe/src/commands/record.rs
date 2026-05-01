@@ -84,8 +84,7 @@ pub async fn run(args: Args) -> Result<()> {
         browser_emulation: args.browser,
         recorded_at_unix: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs()),
         note: args.note,
         status: status.as_u16(),
         response_headers,

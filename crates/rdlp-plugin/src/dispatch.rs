@@ -239,11 +239,10 @@ pub fn claims_url(manifest: &crate::manifest::Manifest, url: &str) -> bool {
     if manifest.matches.is_empty() {
         return matches!(parsed.scheme(), "http" | "https");
     }
-    manifest.matches.iter().any(|raw| {
-        MatchPattern::parse(raw)
-            .map(|p| p.matches(&parsed))
-            .unwrap_or(false)
-    })
+    manifest
+        .matches
+        .iter()
+        .any(|raw| MatchPattern::parse(raw).is_ok_and(|p| p.matches(&parsed)))
 }
 
 /// Dispatcher backed by a linear scan over registered patterns.

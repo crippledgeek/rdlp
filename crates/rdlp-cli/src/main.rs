@@ -33,9 +33,7 @@ use config::build_config;
 fn optimal_worker_threads() -> usize {
     // For I/O-bound work (downloads), use 2x CPU cores
     // This allows more concurrent I/O operations
-    let cpu_count = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4);
+    let cpu_count = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
     (cpu_count * 2).min(32) // Cap at 32 threads
 }

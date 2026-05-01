@@ -16,6 +16,10 @@
 //! - Typical: 500 MB video in 60-90 seconds
 //! - Bottleneck: Server throttling (not client)
 
+// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
+// workspace MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 mod merge;
 mod playlist;
 mod segment;

@@ -6,6 +6,9 @@
 //! `tauri-plugin-dialog`, and [`reveal_in_folder`] uses
 //! `tauri-plugin-opener` to show a file in the system file manager.
 
+// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 

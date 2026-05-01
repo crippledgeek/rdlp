@@ -81,9 +81,7 @@ pub async fn download_segments_with_resume(
         let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
         // Safe: HLS segment-merge path runs inside spawn_blocking; no async runtime active on this thread.
         #[allow(clippy::disallowed_methods)]
-        std::fs::metadata(&segment_path)
-            .map(|meta| meta.len() > 0)
-            .unwrap_or(false)
+        std::fs::metadata(&segment_path).is_ok_and(|meta| meta.len() > 0)
     };
     let completed: HashSet<usize> = original_completed
         .iter()

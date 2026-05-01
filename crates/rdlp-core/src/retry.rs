@@ -1,3 +1,7 @@
+// `Duration::from_mins` / `from_hours` (the lint's suggested replacements) were
+// stabilized in Rust 1.95; workspace MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 use crate::RdlpError;
 use std::time::Duration;
 

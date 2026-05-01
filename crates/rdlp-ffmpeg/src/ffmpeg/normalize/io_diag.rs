@@ -89,7 +89,7 @@ pub(super) unsafe fn validate_mux_header_state(
     }
     // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
     #[allow(clippy::disallowed_methods)]
-    let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+    let file_size = std::fs::metadata(output).map_or(0, |m| m.len());
     if file_size == 0 {
         return Err(PostProcessError::FFmpegLibraryError {
             message: format!(
@@ -156,9 +156,7 @@ pub unsafe fn dump_io_state(
 
         // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
         #[allow(clippy::disallowed_methods)]
-        let file_size = std::fs::metadata(rust_output_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(-1);
+        let file_size = std::fs::metadata(rust_output_path).map_or(-1, |m| m.len() as i64);
 
         info!(
             "[{label}] IO dump: muxer={muxer_name}, url={url}, flags=0x{flags:x}, \

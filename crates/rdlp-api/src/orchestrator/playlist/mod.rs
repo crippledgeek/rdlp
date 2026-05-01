@@ -3,6 +3,9 @@
 //! Provides batch download support with progress tracking, resume capability,
 //! and graceful degradation for failed videos.
 
+// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 mod episode;
 mod execution;
 mod helpers;
