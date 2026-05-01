@@ -6,7 +6,7 @@
 use rdlp_core::ExtractionContext;
 use rdlp_types::Codec;
 use rdlp_types::Format;
-use regex::Regex;
+use lazy_regex::{lazy_regex, Lazy, Regex};
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
@@ -24,26 +24,18 @@ pub(crate) static SOURCE_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector"));
 
 /// Regex to extract CDN URL from MovieFap JavaScript
-pub(crate) static CDN_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#).expect("Valid CDN URL regex")
-});
+pub(crate) static CDN_URL_REGEX: Lazy<Regex> = lazy_regex!(r#"url:\s*['"]([^'"]+/cdn\.php[^'"]+)['"]"#);
 
 /// Regex to extract video items from MovieFap XML
-pub(crate) static MOVIEFAP_XML_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>")
-        .expect("Valid MovieFap XML regex")
-});
+pub(crate) static MOVIEFAP_XML_REGEX: Lazy<Regex> = lazy_regex!(r"(?s)<item>.*?<res>([^<]+)</res>.*?<videoLink>([^<]+)</videoLink>.*?</item>");
 
 /// Regex patterns for extracting config URLs (multiple fallback strategies)
 #[allow(dead_code)] // Used by extract_config_url which is tested
-pub(crate) static CONFIG_URL_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r#"flashvars\.config\s*=\s*escape\("([^"]+)""#).expect("Valid config pattern 1"),
-        Regex::new(r#"<input[^>]+name="config\d?"[^>]+value="([^"]+)""#)
-            .expect("Valid config pattern 2"),
-        Regex::new(r#"config\s*=\s*["']([^"']+)["']"#).expect("Valid config pattern 3"),
-    ]
-});
+pub(crate) static CONFIG_URL_PATTERNS: [Lazy<Regex>; 3] = [
+    lazy_regex!(r#"flashvars\.config\s*=\s*escape\("([^"]+)""#),
+    lazy_regex!(r#"<input[^>]+name="config\d?"[^>]+value="([^"]+)""#),
+    lazy_regex!(r#"config\s*=\s*["']([^"']+)["']"#),
+];
 
 // ============================================================================
 // Video Source Parsing
