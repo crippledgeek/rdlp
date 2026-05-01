@@ -30,35 +30,30 @@ use std::sync::LazyLock;
 use super::search_patterns;
 
 /// Video item container: `<div data-vid="...">` grid columns.
-static VIDEO_ITEM_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("div[data-vid]").expect("Valid TNAFlix video item selector"));
+static VIDEO_ITEM_SELECTOR: LazyLock<Selector> = crate::static_selector!("div[data-vid]");
 
 /// Thumbnail anchor: `<a class="video-thumb">` inside each item.
-static VIDEO_THUMB_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a.video-thumb").expect("Valid TNAFlix thumb selector"));
+static VIDEO_THUMB_SELECTOR: LazyLock<Selector> = crate::static_selector!("a.video-thumb");
 
 /// Title anchor: `<a class="video-title">` with text content as title.
-static VIDEO_TITLE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a.video-title").expect("Valid TNAFlix title selector"));
+static VIDEO_TITLE_SELECTOR: LazyLock<Selector> = crate::static_selector!("a.video-title");
 
 /// Duration overlay: `<div class="video-duration">`.
-static DURATION_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse(".video-duration").expect("Valid duration selector"));
+static DURATION_SELECTOR: LazyLock<Selector> = crate::static_selector!(".video-duration");
 
 /// View count icon: `<i class="icon-eye">` — views text is in the parent div.
-static VIEWS_ICON_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("i.icon-eye").expect("Valid views icon selector"));
+static VIEWS_ICON_SELECTOR: LazyLock<Selector> = crate::static_selector!("i.icon-eye");
 
 /// Uploader: `<a class="badge ..." href="/profile/{user}">` inside each
 /// card. The first matching anchor's trimmed text is the display name.
-static UPLOADER_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(r#"a.badge[href*="/profile/"]"#).expect("Valid TNAFlix uploader selector")
-});
+static UPLOADER_SELECTOR: LazyLock<Selector> =
+    crate::static_selector!(r#"a.badge[href*="/profile/"]"#);
 
 /// Pagination links: Bootstrap `.pagination .page-link` anchors.
-static PAGE_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse(".pagination a.page-link").expect("Valid TNAFlix pagination selector")
-});
+static PAGE_LINK_SELECTOR: LazyLock<Selector> = crate::static_selector!(".pagination a.page-link");
+
+/// `<img>` elements (used to find lazy-loaded thumbnails and alt-text titles).
+static IMG_SELECTOR: LazyLock<Selector> = crate::static_selector!("img");
 
 /// Parse search results from a TNAFlix search results HTML page.
 ///
@@ -69,7 +64,6 @@ static PAGE_LINK_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 /// * `html` - Raw HTML string of the search results page.
 pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let document = Html::parse_document(html);
-    let img_selector = Selector::parse("img").expect("img");
 
     let mut results = Vec::new();
     let mut seen_urls = HashSet::new();
@@ -103,7 +97,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .filter(|t| !t.is_empty())
             .or_else(|| {
                 thumb_link
-                    .and_then(|a| a.select(&img_selector).next())
+                    .and_then(|a| a.select(&IMG_SELECTOR).next())
                     .and_then(|img| img.value().attr("alt"))
                     .filter(|a| !a.is_empty())
                     .map(str::to_string)
@@ -112,7 +106,7 @@ pub fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 
         // Thumbnail URL from <img> inside the thumb link (prefers data-src for lazy-loaded)
         let thumbnail_url = thumb_link
-            .and_then(|a| a.select(&img_selector).next())
+            .and_then(|a| a.select(&IMG_SELECTOR).next())
             .and_then(|img| {
                 img.value()
                     .attr("data-src")
