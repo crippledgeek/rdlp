@@ -18,25 +18,22 @@
 use rdlp_plugin::disabled_list::read_disabled_list;
 use rdlp_plugin::manifest::validate_plugin_name;
 use rdlp_types::Config;
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
-/// Shared lock — XDG_CONFIG_HOME is process-global, so tests that set it
-/// must serialize. The lock is also held across the test body so a
-/// concurrent test can't yank the env var out from under us.
-fn xdg_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-fn isolate_xdg(tempdir: &std::path::Path) {
-    // SAFETY: caller holds `xdg_lock` for the test body; tempdir outlives
-    // the test.
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", tempdir);
-        std::env::set_var("HOME", tempdir);
-    }
+/// Run `f` with XDG_CONFIG_HOME and HOME both pointing at a fresh tempdir,
+/// then pass the tempdir path into the closure.
+///
+/// temp-env's internal mutex serialises against any other test that reads or
+/// writes these vars — no per-test `OnceLock<Mutex<()>>` guard is needed.
+fn with_isolated_xdg<F: FnOnce(&std::path::Path)>(f: F) {
+    let tmp = tempfile::TempDir::new().expect("tempdir creation");
+    let path_str = tmp.path().to_str().expect("tempdir path is utf-8");
+    temp_env::with_vars(
+        [
+            ("XDG_CONFIG_HOME", Some(path_str)),
+            ("HOME", Some(path_str)),
+        ],
+        || f(tmp.path()),
+    );
 }
 
 #[test]
@@ -83,60 +80,59 @@ fn validate_plugin_name_rejects_empty_and_oversize() {
 
 #[test]
 fn disable_then_enable_round_trips() {
-    let _guard = xdg_lock();
-    let tempdir = tempfile::tempdir().unwrap();
-    isolate_xdg(tempdir.path());
+    with_isolated_xdg(|tmpdir| {
+        // Each test sets its own tempdir and observes only its own state — no
+        // cross-test dependency on the env var value.
+        let _ = tmpdir; // XDG vars already set by with_isolated_xdg
 
-    rdlp_cli::plugin_cmd::run_disable("plugin-a").unwrap();
-    rdlp_cli::plugin_cmd::run_disable("plugin-b").unwrap();
-    let path = rdlp_cli::plugin_cmd::disabled_list_path().unwrap();
-    let list = read_disabled_list(&path).expect("read disabled list");
-    assert!(list.contains(&"plugin-a".to_string()));
-    assert!(list.contains(&"plugin-b".to_string()));
+        rdlp_cli::plugin_cmd::run_disable("plugin-a").unwrap();
+        rdlp_cli::plugin_cmd::run_disable("plugin-b").unwrap();
+        let path = rdlp_cli::plugin_cmd::disabled_list_path().unwrap();
+        let list = read_disabled_list(&path).expect("read disabled list");
+        assert!(list.contains(&"plugin-a".to_string()));
+        assert!(list.contains(&"plugin-b".to_string()));
 
-    rdlp_cli::plugin_cmd::run_enable("plugin-a").unwrap();
-    let list = read_disabled_list(&path).expect("read disabled list");
-    assert!(!list.contains(&"plugin-a".to_string()));
-    assert!(list.contains(&"plugin-b".to_string()));
+        rdlp_cli::plugin_cmd::run_enable("plugin-a").unwrap();
+        let list = read_disabled_list(&path).expect("read disabled list");
+        assert!(!list.contains(&"plugin-a".to_string()));
+        assert!(list.contains(&"plugin-b".to_string()));
+    });
 }
 
 #[test]
 fn run_uninstall_rejects_path_traversal_name() {
-    let _guard = xdg_lock();
-    let tempdir = tempfile::tempdir().unwrap();
-    isolate_xdg(tempdir.path());
-    let plugin_dir = tempdir.path().join("plugins");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    let config = Config {
-        progress: false,
-        plugin_directories: vec![plugin_dir.clone()],
-        ..Default::default()
-    };
+    with_isolated_xdg(|tmpdir| {
+        let plugin_dir = tmpdir.join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let config = Config {
+            progress: false,
+            plugin_directories: vec![plugin_dir.clone()],
+            ..Default::default()
+        };
 
-    // Marker file we will assert is NOT touched by a malicious name.
-    let canary = tempdir.path().join("canary.txt");
-    std::fs::write(&canary, "must survive").unwrap();
+        // Marker file we will assert is NOT touched by a malicious name.
+        let canary = tmpdir.join("canary.txt");
+        std::fs::write(&canary, "must survive").unwrap();
 
-    let err = rdlp_cli::plugin_cmd::run_uninstall("../canary.txt", &config)
-        .expect_err("uninstall must reject traversal name");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("invalid plugin name"),
-        "expected name-validation error, got: {msg}"
-    );
-    assert!(canary.exists(), "canary file MUST NOT be deleted");
+        let err = rdlp_cli::plugin_cmd::run_uninstall("../canary.txt", &config)
+            .expect_err("uninstall must reject traversal name");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("invalid plugin name"),
+            "expected name-validation error, got: {msg}"
+        );
+        assert!(canary.exists(), "canary file MUST NOT be deleted");
+    });
 }
 
 #[test]
 fn run_disable_rejects_invalid_name() {
-    let _guard = xdg_lock();
-    let tempdir = tempfile::tempdir().unwrap();
-    isolate_xdg(tempdir.path());
-
-    for bad in ["..", "/abs", "Capital", "a b"] {
-        let err = rdlp_cli::plugin_cmd::run_disable(bad)
-            .expect_err(&format!("disable must reject {bad:?}"));
-        let msg = format!("{err:#}");
-        assert!(msg.contains("invalid plugin name"));
-    }
+    with_isolated_xdg(|_tmpdir| {
+        for bad in ["..", "/abs", "Capital", "a b"] {
+            let err = rdlp_cli::plugin_cmd::run_disable(bad)
+                .expect_err(&format!("disable must reject {bad:?}"));
+            let msg = format!("{err:#}");
+            assert!(msg.contains("invalid plugin name"));
+        }
+    });
 }

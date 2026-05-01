@@ -145,6 +145,7 @@ hex = "0.4"
 
 # Testing
 mockito = "1.5"
+temp-env = "0.3"
 tempfile = "3.14"
 
 [workspace.lints.clippy]

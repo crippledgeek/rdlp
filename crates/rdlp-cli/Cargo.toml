@@ -44,6 +44,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
+temp-env = { workspace = true }
 tempfile = "3.24"
 mockito = "1.7"
 wiremock = "0.6"
@@ -61,8 +62,6 @@ rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
 
 [lints.rust]
 missing_docs = "warn"
-# config_tests.rs uses std::env::set_var in a test (with SAFETY comment and
-# mutex serialisation). unsafe_code is not forbidden here.
 
 [lints.clippy]
 # Workspace baseline (replicated — cannot use workspace = true alongside

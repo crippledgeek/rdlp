@@ -487,28 +487,23 @@ fn test_merge_config_normal_output_not_stdout() {
 // === Browser emulation tests ===
 //
 // `merge_config` reads `RDLP_BROWSER_EMULATION` when `args.browser` is None.
-// `test_merge_config_browser_env_fallback` mutates that env var, so any other
-// test that reads it must take the same lock. The guard is module-scoped so
-// the racing tests can share it (a function-local static is unreachable from
-// other functions and was the source of the prior Windows-CI flake).
-static BROWSER_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// temp-env's singleton mutex serialises all tests that read or write this var;
+// no per-module guard is needed.
 
 #[test]
 fn test_merge_config_browser_default_is_chrome_latest() {
-    // Reads RDLP_BROWSER_EMULATION via merge_config; serialise against the
-    // env-fallback test that mutates the same var.
-    let _guard = BROWSER_ENV_GUARD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let args = default_args();
-    let config =
-        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
-
-    assert!(matches!(
-        config.browser_emulation,
-        rdlp_api::BrowserEmulation::ChromeLatest
-    ));
+    // temp-env's singleton mutex serialises against any other test that
+    // reads or writes RDLP_BROWSER_EMULATION; the var is unset for the
+    // duration of the closure.
+    temp_env::with_var_unset("RDLP_BROWSER_EMULATION", || {
+        let args = default_args();
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert!(matches!(
+            config.browser_emulation,
+            rdlp_api::BrowserEmulation::ChromeLatest
+        ));
+    });
 }
 
 #[test]
@@ -541,29 +536,17 @@ fn test_merge_config_browser_cli_flag_pinned() {
 
 #[test]
 fn test_merge_config_browser_env_fallback() {
-    // CLI flag absent; env var should drive the value.
-    // Serialised against the default-value test that also reads this var.
-    let _guard = BROWSER_ENV_GUARD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    // SAFETY: `cargo test` runs tests in threads; the module-scoped
-    // BROWSER_ENV_GUARD serialises every test that reads or writes
-    // RDLP_BROWSER_EMULATION.
-    unsafe {
-        std::env::set_var("RDLP_BROWSER_EMULATION", "safari-latest");
-    }
-    let args = default_args();
-    let config =
-        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
-    unsafe {
-        std::env::remove_var("RDLP_BROWSER_EMULATION");
-    }
-
-    assert!(matches!(
-        config.browser_emulation,
-        rdlp_api::BrowserEmulation::SafariLatest
-    ));
+    // CLI flag absent; env var should drive the value. temp-env's
+    // singleton mutex serialises against the default-test reader.
+    temp_env::with_var("RDLP_BROWSER_EMULATION", Some("safari-latest"), || {
+        let args = default_args();
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert!(matches!(
+            config.browser_emulation,
+            rdlp_api::BrowserEmulation::SafariLatest
+        ));
+    });
 }
 
 // === Proxy hard-fail negatives ===
