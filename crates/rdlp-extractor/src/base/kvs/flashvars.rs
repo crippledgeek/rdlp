@@ -28,26 +28,19 @@
 //! let duration = flashvars.get_f64("video_duration");
 //! ```
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Pattern to detect `kt_player.js` script tag in HTML.
-static KVS_SCRIPT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<script[^>]+src=["'][^"']*kt_player\.js"#).expect("Valid KVS script pattern")
-});
+static KVS_SCRIPT_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script[^>]+src=["'][^"']*kt_player\.js"#);
 
 /// Pattern to extract the flashvars block from HTML.
-static KVS_FLASHVARS_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:var\s+)?flashvars\s*=\s*\{([\s\S]*?)\}"#)
-        .expect("Valid KVS flashvars block pattern")
-});
+static KVS_FLASHVARS_BLOCK: Lazy<Regex> = lazy_regex!(r#"(?:var\s+)?flashvars\s*=\s*\{([\s\S]*?)\}"#);
 
 /// Pattern to extract a single KVS flashvar value (string).
 ///
 /// Matches: `key: 'value'` anywhere in the flashvars block.
 /// No line-start anchor because KVS sites often emit all entries on one line.
-static KVS_STRING_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\w+)\s*:\s*'([^']*)'").expect("Valid KVS string pattern"));
+static KVS_STRING_PATTERN: Lazy<Regex> = lazy_regex!(r"(\w+)\s*:\s*'([^']*)'");
 
 /// Parsed KVS flashvars as key-value pairs.
 ///
