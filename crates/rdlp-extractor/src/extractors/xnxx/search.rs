@@ -9,7 +9,7 @@ use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
-use scraper::{Html, Selector};
+use scraper::Html;
 use std::time::Duration;
 
 use super::XNXXExtractor;
@@ -77,26 +77,20 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// Duration is the bare text node after `span.right`; view count is the
 /// leading number inside `span.right`. Both are best-effort and the parser
 /// accepts cards with the metadata block missing or partially populated.
-// Static selectors compiled once at first reference. `expect()` here means a
-// CSS-selector typo causes a panic at first use rather than silently
-// producing zero results — the previous `Err(_) => return Vec::new()`
-// pattern hid programmer errors as "site returned no matches".
-static BLOCK_SEL: std::sync::LazyLock<Selector> =
-    std::sync::LazyLock::new(|| Selector::parse("div.thumb-block").expect("static selector"));
-static THUMB_IMG_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
-    Selector::parse(r#"div.thumb-inside a[href^="/video-"] img"#).expect("static selector")
-});
-static TITLE_LINK_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
-    Selector::parse(r#"div.thumb-under a[href^="/video-"]"#).expect("static selector")
-});
-static UPLOADER_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
-    Selector::parse("div.uploader span.name").expect("static selector")
-});
-static METADATA_SEL: std::sync::LazyLock<Selector> = std::sync::LazyLock::new(|| {
-    Selector::parse("div.thumb-under p.metadata").expect("static selector")
-});
-static METADATA_RIGHT_SEL: std::sync::LazyLock<Selector> =
-    std::sync::LazyLock::new(|| Selector::parse("span.right").expect("static selector"));
+// Static selectors compiled once at first reference via `static_selector!()`.
+// A CSS-selector typo is a build-time error rather than a runtime panic.
+static BLOCK_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!("div.thumb-block");
+static THUMB_IMG_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!(r#"div.thumb-inside a[href^="/video-"] img"#);
+static TITLE_LINK_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!(r#"div.thumb-under a[href^="/video-"]"#);
+static UPLOADER_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!("div.uploader span.name");
+static METADATA_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!("div.thumb-under p.metadata");
+static METADATA_RIGHT_SEL: std::sync::LazyLock<scraper::Selector> =
+    crate::static_selector!("span.right");
 
 pub(crate) fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     let doc = Html::parse_document(html);
@@ -304,6 +298,7 @@ const XNXX_NAME_STR: &str = "XNXX";
 mod tests {
     use super::*;
     use rdlp_types::SearchFilter;
+    use scraper::Html;
 
     fn make_query(q: &str, filters: Vec<SearchFilter>) -> SearchQuery {
         SearchQuery {
@@ -340,11 +335,11 @@ mod tests {
     fn selector_sanity_check() {
         let html = r#"<div class="thumb-inside"><div class="thumb"><a href="/video-14abc/foo"><img data-src="https://t.example/x.jpg"/></a></div></div>"#;
         let doc = Html::parse_document(html);
-        let thumb_sel = Selector::parse("div.thumb-inside").unwrap();
-        let blocks: Vec<_> = doc.select(&thumb_sel).collect();
+        let thumb_sel = crate::selector!("div.thumb-inside");
+        let blocks: Vec<_> = doc.select(thumb_sel).collect();
         assert_eq!(blocks.len(), 1, "sanity: 1 thumb-inside block");
-        let a_sel = Selector::parse(r#"a[href^="/video-"]"#).unwrap();
-        let links: Vec<_> = blocks[0].select(&a_sel).collect();
+        let a_sel = crate::selector!(r#"a[href^="/video-"]"#);
+        let links: Vec<_> = blocks[0].select(a_sel).collect();
         assert_eq!(links.len(), 1, "sanity: 1 link in block");
         let href = links[0].value().attr("href").unwrap();
         assert_eq!(href, "/video-14abc/foo");
