@@ -39,7 +39,10 @@ jobs:
           FFMPEG_TAG=n8.1
           FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_TAG}-latest-linux64-lgpl-shared-${FFMPEG_TAG#n}.tar.xz"
           curl -fsSL "$FFMPEG_URL" | sudo tar xJ -C /usr/local --strip-components=1
+          echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/usr-local.conf
           sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib" >> "$GITHUB_ENV"
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
