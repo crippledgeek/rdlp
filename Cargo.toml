@@ -130,6 +130,13 @@ dirs = "6.0"
 
 # Utilities
 regex = "1.11"
+# Compile-time-validated lazy static regexes. Replaces the
+# `LazyLock<Regex> + Regex::new(LITERAL).expect(...)` boilerplate in
+# rdlp-extractor with `lazy_regex!(...)` so an invalid regex literal
+# becomes a compile error rather than a runtime panic.
+# Per https://github.com/Canop/lazy-regex#usage; uses once_cell::sync::Lazy
+# under the hood and re-exports it as `Lazy`.
+lazy-regex = "3"
 lazy_static = "1.5"
 futures = "0.3"
 futures-util = "0.3"
