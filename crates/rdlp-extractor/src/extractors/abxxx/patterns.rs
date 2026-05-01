@@ -3,8 +3,7 @@
 //! ABXXX is a KVS (Kernel Video Sharing) tube site with the player config
 //! delivered via a JSON XHR endpoint rather than inline `flashvars`.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for ABXXX video pages.
 ///
@@ -12,10 +11,7 @@ use std::sync::LazyLock;
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd/`
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd`
 /// - `https://www.abxxx.com/video/129452/`
-pub(crate) static ABXXX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?abxxx\.com/video/(?P<id>\d+)(?:/(?P<slug>[^/?#]+))?/?")
-        .expect("Valid ABXXX URL pattern")
-});
+pub(crate) static ABXXX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?abxxx\.com/video/(?P<id>\d+)(?:/(?P<slug>[^/?#]+))?/?");
 
 /// Whether `url` is an ABXXX video page.
 #[must_use]
