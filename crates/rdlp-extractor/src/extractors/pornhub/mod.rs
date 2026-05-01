@@ -23,6 +23,7 @@ mod formats;
 mod patterns;
 mod playlist;
 mod search;
+mod search_html;
 mod search_patterns;
 mod utils;
 #[cfg(test)]
@@ -119,25 +120,37 @@ impl PornHubExtractor {
         search::parse_api_search_results(&body)
     }
 
-    /// Fetch a single HTML search page (fallback).
-    ///
-    /// HTML parsing is not yet implemented — returns an error so callers
-    /// propagate the original API failure instead of silently returning
-    /// empty results. A full HTML parser can be added later if the API
-    /// becomes unreliable.
+    /// Fetch a single HTML search page and parse it.
     ///
     /// # Arguments
-    /// * `_url` - HTML search URL (unused until HTML parsing is implemented).
-    /// * `_ctx` - Extraction context (unused until HTML parsing is implemented).
+    /// * `url` - HTML search URL (`/video/search?search=…&page=…`).
+    /// * `ctx` - Extraction context with HTTP client.
     async fn fetch_html_search_page(
         &self,
-        _url: &str,
-        _ctx: &ExtractionContext,
+        url: &str,
+        ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        Err(RdlpError::Extraction {
-            message: "PornHub HTML search fallback not yet implemented".to_string(),
-            url: None,
-        })
+        let response = (|| async { ctx.http_client.get(url).send().await })
+            .retry(
+                ExponentialBuilder::default()
+                    .with_max_times(2)
+                    .with_min_delay(Duration::from_millis(500)),
+            )
+            .when(|e| e.is_timeout() || e.is_connect())
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch PornHub HTML search page: {e}"),
+                url: Some(url.to_string()),
+            })?;
+
+        rdlp_core::check_http_response(&response)?;
+
+        let body = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read PornHub HTML search response: {e}"),
+            url: Some(url.to_string()),
+        })?;
+
+        search_html::parse_html_search_results(&body)
     }
 
     /// Paginated search across all pages, collecting up to `max_results` results.
