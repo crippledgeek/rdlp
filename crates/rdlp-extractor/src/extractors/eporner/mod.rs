@@ -14,8 +14,8 @@ pub mod patterns;
 pub mod search;
 
 use async_trait::async_trait;
-use log::debug;
 use lazy_regex::{Lazy, Regex, lazy_regex};
+use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::Codec;
 use rdlp_types::{DownloadProtocol, Format, InfoDict};

@@ -4,7 +4,7 @@
 //! and the `getVideoById` JSON API response.
 
 use anyhow::Context as _;
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::{Format, Thumbnail};

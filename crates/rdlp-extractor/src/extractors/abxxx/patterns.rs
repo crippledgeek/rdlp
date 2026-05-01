@@ -11,7 +11,8 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd/`
 /// - `https://abxxx.com/video/129452/excogi-katie-carmine-in-hd`
 /// - `https://www.abxxx.com/video/129452/`
-pub(crate) static ABXXX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?abxxx\.com/video/(?P<id>\d+)(?:/(?P<slug>[^/?#]+))?/?");
+pub(crate) static ABXXX_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?abxxx\.com/video/(?P<id>\d+)(?:/(?P<slug>[^/?#]+))?/?");
 
 /// Whether `url` is an ABXXX video page.
 #[must_use]

@@ -2,7 +2,7 @@
 //!
 //! Static regex patterns compiled once at first use via `lazy_regex!`.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for XTits video pages
 ///
@@ -10,12 +10,14 @@ use lazy_regex::{lazy_regex, Lazy, Regex};
 /// - Standard: `https://www.xtits.xxx/videos/183207/slug/`
 /// - Without trailing slash: `https://www.xtits.xxx/videos/183207/slug`
 /// - Without slug: `https://www.xtits.xxx/videos/183207/`
-pub static XTITS_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?xtits\.(?:xxx|com)/videos/(?P<id>\d+)/");
+pub static XTITS_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?xtits\.(?:xxx|com)/videos/(?P<id>\d+)/");
 
 /// URL pattern for XTits embed pages
 ///
 /// Supports: `https://www.xtits.xxx/embed/183207`
-pub static XTITS_EMBED_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?xtits\.(?:xxx|com)/embed/(?P<id>\d+)");
+pub static XTITS_EMBED_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?xtits\.(?:xxx|com)/embed/(?P<id>\d+)");
 
 /// Regex to extract the KVS flashvars JavaScript object
 ///

@@ -2,7 +2,7 @@
 //!
 //! Contains all regex patterns for matching and parsing URLs.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for PornHub videos
 ///
@@ -15,7 +15,8 @@ use lazy_regex::{lazy_regex, Lazy, Regex};
 /// - Alt TLDs: `.net`, `.org`
 /// - Country codes: `de.pornhub.com`, `fr.pornhub.com`
 /// - Onion: `pornhubvybmsymdol4iibwgwtkpwmeyd6luq2gxajgjzfjvotyt5zhyd.onion`
-pub static PORNHUB_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(?x)
+pub static PORNHUB_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
     https?://
     (?:
         (?:(?:www|[a-z]{2})\.)?
@@ -25,22 +26,27 @@ pub static PORNHUB_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(?x)
         (?:www\.)?thumbzilla\.com/video/
     )
     (?P<id>[\da-z]+)
-    ");
+    "
+);
 
 /// URL pattern for PornHub playlists
 ///
 /// Supports:
 /// - Standard: `https://www.pornhub.com/playlist/123456`
 /// - Alt TLDs and country codes
-pub static PORNHUB_PLAYLIST_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(?x)
+pub static PORNHUB_PLAYLIST_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
     https?://
     (?:(?:www|[a-z]{2})\.)?
     (?:pornhub(?:premium)?\.(?:com|net|org)|pornhubvybmsymdol4iibwgwtkpwmeyd6luq2gxajgjzfjvotyt5zhyd\.onion)
     /playlist/(?P<id>\d+)
-    ");
+    "
+);
 
 /// Pattern to extract video links from playlist HTML
-pub static VIDEO_LINK_PATTERN: Lazy<Regex> = lazy_regex!(r#"href="(/(?:view_video\.php\?.*?\bviewkey=|embed/)(ph[0-9a-f]+))[^"]*"[^>]*(?:title="([^"]*)")?"#);
+pub static VIDEO_LINK_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"href="(/(?:view_video\.php\?.*?\bviewkey=|embed/)(ph[0-9a-f]+))[^"]*"[^>]*(?:title="([^"]*)")?"#
+);
 
 /// Pattern to extract video count from JavaScript
 pub static VIDEO_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r"var\s+itemsCount\s*=\s*(\d+)");
@@ -55,13 +61,16 @@ pub static FLASHVARS_PATTERN: Lazy<Regex> = lazy_regex!(r"var\s+flashvars_\d+\s*
 pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(?i)(\d+)[pP]");
 
 /// Pattern to extract qualityItems JSON arrays
-pub static QUALITY_ITEMS_PATTERN: Lazy<Regex> = lazy_regex!(r#"var\s+qualityItems_\w+\s*=\s*(\[.+?])\s*;"#);
+pub static QUALITY_ITEMS_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"var\s+qualityItems_\w+\s*=\s*(\[.+?])\s*;"#);
 
 /// Pattern to extract media/quality variables
-pub static MEDIA_VAR_PATTERN: Lazy<Regex> = lazy_regex!(r#"var\s+(media|quality)_(\w+)\s*=\s*["']([^"']+)["']\s*;"#);
+pub static MEDIA_VAR_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"var\s+(media|quality)_(\w+)\s*=\s*["']([^"']+)["']\s*;"#);
 
 /// Pattern to extract download button URLs
-pub static DOWNLOAD_BTN_PATTERN: Lazy<Regex> = lazy_regex!(r#"<a[^>]+\bclass=["'][^"']*downloadBtn[^"']*["'][^>]+\bhref=["']([^"']+)["']"#);
+pub static DOWNLOAD_BTN_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<a[^>]+\bclass=["'][^"']*downloadBtn[^"']*["'][^>]+\bhref=["']([^"']+)["']"#);
 
 /// Check if URL matches video or playlist pattern
 pub fn is_suitable(url: &str) -> bool {

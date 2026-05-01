@@ -2,7 +2,7 @@
 //!
 //! Contains helper functions for parsing, validation, and common operations.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use scraper::Html;
 
@@ -18,9 +18,12 @@ const AGE_COOKIES: &[&str] = &[
 ];
 
 // Pre-compiled regexes for error detection (avoid repeated compilation)
-static REMOVED_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(r#"(?s)<div[^>]+class=["'](?:[^"']*\s)?(?:removeduserMessageSection|removed)(?:\s[^"']*)?["'][^>]*>(?P<error>.+?)</div>"#);
+static REMOVED_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"(?s)<div[^>]+class=["'](?:[^"']*\s)?(?:removeduserMessageSection|removed)(?:\s[^"']*)?["'][^>]*>(?P<error>.+?)</div>"#
+);
 
-static NO_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(r#"(?s)<section[^>]+class=["']noVideo["'][^>]*>(?P<error>.+?)</section>"#);
+static NO_VIDEO_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"(?s)<section[^>]+class=["']noVideo["'][^>]*>(?P<error>.+?)</section>"#);
 
 static GEO_BLOCKED_PATTERN: Lazy<Regex> = lazy_regex!(r#"class=["']geoBlocked["']"#);
 

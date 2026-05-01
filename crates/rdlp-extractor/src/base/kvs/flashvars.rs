@@ -34,7 +34,8 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 static KVS_SCRIPT_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script[^>]+src=["'][^"']*kt_player\.js"#);
 
 /// Pattern to extract the flashvars block from HTML.
-static KVS_FLASHVARS_BLOCK: Lazy<Regex> = lazy_regex!(r#"(?:var\s+)?flashvars\s*=\s*\{([\s\S]*?)\}"#);
+static KVS_FLASHVARS_BLOCK: Lazy<Regex> =
+    lazy_regex!(r#"(?:var\s+)?flashvars\s*=\s*\{([\s\S]*?)\}"#);
 
 /// Pattern to extract a single KVS flashvar value (string).
 ///

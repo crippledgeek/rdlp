@@ -15,7 +15,8 @@ use crate::base::common::BaseExtractor;
 use super::patterns::VIDEO_CLOSED_PATTERN;
 
 /// Pattern to extract RTA age verification meta tag content.
-static RTA_PATTERN: Lazy<Regex> = lazy_regex!(r#"<meta\s+name=["']rating["']\s+content=["']RTA-5042-1996-1400-1577-RTA["']"#);
+static RTA_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<meta\s+name=["']rating["']\s+content=["']RTA-5042-1996-1400-1577-RTA["']"#);
 
 // --- Legacy HTML fallback patterns ---
 
@@ -27,9 +28,11 @@ static LEGACY_TITLE_PATTERNS: [&str; 3] = [
 
 static LEGACY_DESCRIPTION_PATTERN: Lazy<Regex> = lazy_regex!(r"<span>Description: </span>([^<]+)");
 
-static LEGACY_UPLOAD_DATE_PATTERN: Lazy<Regex> = lazy_regex!(r#"hint=["'](\d{4}-\d{2}-\d{2}) \d{2}:\d{2}:\d{2} [A-Z]{3,4}"#);
+static LEGACY_UPLOAD_DATE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"hint=["'](\d{4}-\d{2}-\d{2}) \d{2}:\d{2}:\d{2} [A-Z]{3,4}"#);
 
-static LEGACY_UPLOADER_PATTERN: Lazy<Regex> = lazy_regex!(r#"<span[^>]+itemprop=["']author[^>]+><a[^>]+><span[^>]+>([^<]+)"#);
+static LEGACY_UPLOADER_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<span[^>]+itemprop=["']author[^>]+><a[^>]+><span[^>]+>([^<]+)"#);
 
 static LEGACY_THUMBNAIL_PATTERNS: [&str; 2] = [
     r#"["']thumbUrl["']\s*:\s*(?P<q>["'])(?P<url>.+?)(?P=q)"#,
@@ -41,13 +44,17 @@ static LEGACY_DURATION_PATTERNS: [&str; 2] = [
     r"Runtime:\s*</span>\s*([\d:]+)",
 ];
 
-static LEGACY_VIEW_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r#"content=["']User(?:View|Play)s:(\d+)"#);
+static LEGACY_VIEW_COUNT_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"content=["']User(?:View|Play)s:(\d+)"#);
 
-static LEGACY_LIKES_PATTERN: Lazy<Regex> = lazy_regex!(r#"hint=['"](?P<likes>\d+) Likes / (?P<dislikes>\d+) Dislikes"#);
+static LEGACY_LIKES_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"hint=['"](?P<likes>\d+) Likes / (?P<dislikes>\d+) Dislikes"#);
 
-static LEGACY_COMMENT_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r"</label>Comments \((?P<count>\d+)\)</div>");
+static LEGACY_COMMENT_COUNT_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"</label>Comments \((?P<count>\d+)\)</div>");
 
-static LEGACY_CATEGORIES_PATTERN: Lazy<Regex> = lazy_regex!(r"(?s)<table.+?(<span>Categories:.+?)</table>");
+static LEGACY_CATEGORIES_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)<table.+?(<span>Categories:.+?)</table>");
 
 static CATEGORY_LINK_PATTERN: Lazy<Regex> = lazy_regex!(r"<a[^>]+>(.+?)</a>");
 

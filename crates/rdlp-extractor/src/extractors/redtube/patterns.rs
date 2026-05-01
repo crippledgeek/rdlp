@@ -3,7 +3,7 @@
 //! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 //! Includes search URL builders and filter descriptors for the JSON API.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::SearchFilter;
 use url::form_urlencoded;
 
@@ -37,7 +37,8 @@ pub static HTML_VIDEO_CARD_PATTERN: Lazy<Regex> = lazy_regex!(
 /// Per-card uploader marker. RedTube emits `data-uploader-name="…"` on
 /// the outer `<li>` of every search result; the Nth match pairs with the
 /// Nth `HTML_VIDEO_CARD_PATTERN` hit by document order.
-pub static HTML_UPLOADER_NAME_PATTERN: Lazy<Regex> = lazy_regex!(r#"data-uploader-name="(?P<name>[^"]+)""#);
+pub static HTML_UPLOADER_NAME_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"data-uploader-name="(?P<name>[^"]+)""#);
 
 /// Number of results per API page.
 pub(crate) const API_RESULTS_PER_PAGE: u32 = 20;

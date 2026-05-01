@@ -42,10 +42,12 @@ pub static XHAMSTER_USER_PATTERN: Lazy<Regex> = lazy_regex!(
 /// Regex to extract `window.initials` JSON from page source.
 ///
 /// Uses `(?s)` (DOTALL) so `.` matches newlines — the JSON often spans multiple lines.
-pub static INITIALS_PATTERN: Lazy<Regex> = lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;\s*(?:</script>|$)");
+pub static INITIALS_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;\s*(?:</script>|$)");
 
 /// Fallback pattern for `window.initials` (less strict).
-pub static INITIALS_FALLBACK_PATTERN: Lazy<Regex> = lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;");
+pub static INITIALS_FALLBACK_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;");
 
 /// Pattern for legacy `sources: {...}` JS object.
 pub static LEGACY_SOURCES_PATTERN: Lazy<Regex> = lazy_regex!(r"sources\s*:\s*(\{.+?\})\s*,?\s*\n");
@@ -54,16 +56,21 @@ pub static LEGACY_SOURCES_PATTERN: Lazy<Regex> = lazy_regex!(r"sources\s*:\s*(\{
 pub static LEGACY_FILE_PATTERN: Lazy<Regex> = lazy_regex!(r#"file\s*:\s*["'](?P<url>.+?)["']"#);
 
 /// Pattern for `<a class="mp4Thumb" href="url">`.
-pub static LEGACY_MP4_THUMB_PATTERN: Lazy<Regex> = lazy_regex!(r#"<a\s+href=["'](?P<url>.+?)["']\s+class=["']mp4Thumb"#);
+pub static LEGACY_MP4_THUMB_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<a\s+href=["'](?P<url>.+?)["']\s+class=["']mp4Thumb"#);
 
 /// Pattern for `<video file="url">`.
-pub static LEGACY_VIDEO_FILE_PATTERN: Lazy<Regex> = lazy_regex!(r#"<video[^>]+file=["'](?P<url>.+?)["'][^>]*>"#);
+pub static LEGACY_VIDEO_FILE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<video[^>]+file=["'](?P<url>.+?)["'][^>]*>"#);
 
 /// Pattern for error/closed video detection.
-pub static VIDEO_CLOSED_PATTERN: Lazy<Regex> = lazy_regex!(r#"<div[^>]+id=["']videoClosed["'][^>]*>(.+?)</div>"#);
+pub static VIDEO_CLOSED_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<div[^>]+id=["']videoClosed["'][^>]*>(.+?)</div>"#);
 
 /// Pattern for embed page video URL extraction.
-pub static EMBED_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(r#"href="(https?://xhamster\.com/(?:movies/\d+/[^"]*\.html|videos/[^/]*-[0-9A-Za-z]+))[^"]*""#);
+pub static EMBED_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"href="(https?://xhamster\.com/(?:movies/\d+/[^"]*\.html|videos/[^/]*-[0-9A-Za-z]+))[^"]*""#
+);
 
 /// Pattern for embed page `vars` JSON.
 pub static EMBED_VARS_PATTERN: Lazy<Regex> = lazy_regex!(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n");

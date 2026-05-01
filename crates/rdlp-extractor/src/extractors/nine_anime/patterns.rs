@@ -22,9 +22,8 @@ pub static WATCH_URL_PATTERN: Lazy<Regex> = lazy_regex!(
 /// Looser pattern that matches watch URLs without the `?ep=` query parameter.
 ///
 /// Used by `suitable()` to match anime pages that might not have an episode selected.
-pub static WATCH_URL_LOOSE_PATTERN: Lazy<Regex> = lazy_regex!(
-    r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)"
-);
+pub static WATCH_URL_LOOSE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)");
 
 /// Check if a URL is suitable for this extractor.
 pub fn is_suitable(url: &str) -> bool {

@@ -17,14 +17,16 @@ use super::MEGACLOUD_API;
 /// Regex patterns for extracting the client key from the embed page.
 static META_PATTERN: Lazy<Regex> = lazy_regex!(r#"<meta name="_gg_fb" content="[a-zA-Z0-9]+">"#);
 static COMMENT_PATTERN: Lazy<Regex> = lazy_regex!(r#"<!--\s+_is_th:[0-9a-zA-Z]+\s+-->"#);
-static LK_DB_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script>window\._lk_db\s+=\s+\{[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["']\};</script>"#);
+static LK_DB_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<script>window\._lk_db\s+=\s+\{[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["']\};</script>"#
+);
 static DIV_PATTERN: Lazy<Regex> = lazy_regex!(r#"<div\s+data-dpi="[0-9a-zA-Z]+"\s+[^>]*></div>"#);
 static NONCE_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script nonce="[0-9a-zA-Z]+">"#);
-static WINDOW_VAR_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script>window\._xy_ws = ['"`][0-9a-zA-Z]+['"`];</script>"#);
+static WINDOW_VAR_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<script>window\._xy_ws = ['"`][0-9a-zA-Z]+['"`];</script>"#);
 
 /// General quoted-key pattern for most obfuscation methods.
-static QUOTED_KEY: Lazy<Regex> =
-    lazy_regex!(r#""[a-zA-Z0-9]+""#);
+static QUOTED_KEY: Lazy<Regex> = lazy_regex!(r#""[a-zA-Z0-9]+""#);
 
 /// Pattern for the 3-part `_lk_db` key components.
 static LK_DB_X: Lazy<Regex> = lazy_regex!(r#"x:\s+"[a-zA-Z0-9]+""#);
@@ -32,8 +34,7 @@ static LK_DB_Y: Lazy<Regex> = lazy_regex!(r#"y:\s+"[a-zA-Z0-9]+""#);
 static LK_DB_Z: Lazy<Regex> = lazy_regex!(r#"z:\s+"[a-zA-Z0-9]+""#);
 
 /// Comment key pattern (no quotes, colon-delimited).
-static COMMENT_KEY: Lazy<Regex> =
-    lazy_regex!(r":[a-zA-Z0-9]+ ");
+static COMMENT_KEY: Lazy<Regex> = lazy_regex!(r":[a-zA-Z0-9]+ ");
 
 /// Fetch the v3 embed page and extract the client key.
 pub(super) async fn extract_client_key(source_id: &str, ctx: &ExtractionContext) -> Result<String> {

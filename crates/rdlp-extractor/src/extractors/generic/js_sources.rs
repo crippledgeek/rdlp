@@ -22,18 +22,16 @@ static JW_PLAYER_OPTIONS: Lazy<Regex> = lazy_regex!(
     r#"(?:JWPlayerOptions|jwConfig|playerInstance)\s*=\s*\{[\s\S]*?["']?file["']?\s*:\s*["']([^"']+)["']"#
 );
 
-static JW_FLASHVARS_FILE: Lazy<Regex> = lazy_regex!(
-    r#"flashvars\s*[=:]\s*[{"][\s\S]*?["']?file["']?\s*[=:]\s*["']([^"']+)["']"#
-);
+static JW_FLASHVARS_FILE: Lazy<Regex> =
+    lazy_regex!(r#"flashvars\s*[=:]\s*[{"][\s\S]*?["']?file["']?\s*[=:]\s*["']([^"']+)["']"#);
 
 // Video.js patterns
 static VIDEOJS_SOURCE: Lazy<Regex> = lazy_regex!(
     r#"videojs\s*\(\s*["']?\w+["']?[\s\S]*?sources\s*:\s*\[\s*\{[\s\S]*?src\s*:\s*["']([^"']+)["']"#
 );
 
-static VIDEOJS_DATA_SETUP: Lazy<Regex> = lazy_regex!(
-    r#"data-setup\s*=\s*'[\s\S]*?"src"\s*:\s*"([^"]+)""#
-);
+static VIDEOJS_DATA_SETUP: Lazy<Regex> =
+    lazy_regex!(r#"data-setup\s*=\s*'[\s\S]*?"src"\s*:\s*"([^"]+)""#);
 
 // Generic JS parameters
 static GENERIC_FILE_PARAM: Lazy<Regex> = lazy_regex!(
@@ -216,9 +214,8 @@ impl DetectionStrategy for GenericJsParamsStrategy {
 // ============================================================================
 
 /// Last-resort scan: regex for media URLs anywhere in page source.
-static DIRECT_LINK_SCAN: Lazy<Regex> = lazy_regex!(
-    r#"["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm)(?:\?[^"'\s]*)?)["']"#
-);
+static DIRECT_LINK_SCAN: Lazy<Regex> =
+    lazy_regex!(r#"["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm)(?:\?[^"'\s]*)?)["']"#);
 
 pub(crate) struct DirectLinkScanStrategy;
 

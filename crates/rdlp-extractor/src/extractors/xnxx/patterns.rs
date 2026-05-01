@@ -2,7 +2,7 @@
 //!
 //! Matches `xnxx.com` and `xnxx3.com` video and embed pages.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Matches canonical video pages and extracts the video ID.
 ///
@@ -10,13 +10,15 @@ use lazy_regex::{lazy_regex, Lazy, Regex};
 /// - `https://www.xnxx.com/video-14cco143/slug`
 /// - `https://www.xnxx3.com/video-14cco143/`
 /// - `https://xnxx.com/video14cco143/slug` (no hyphen between `video` and id)
-pub static VIDEO_URL: Lazy<Regex> = lazy_regex!(r"(?i)^https?://(?:www\.)?xnxx3?\.com/video-?([a-z0-9]+)(?:/|$)");
+pub static VIDEO_URL: Lazy<Regex> =
+    lazy_regex!(r"(?i)^https?://(?:www\.)?xnxx3?\.com/video-?([a-z0-9]+)(?:/|$)");
 
 /// Matches embed pages and extracts the video ID.
 ///
 /// Accepted form:
 /// - `https://www.xnxx.com/embedframe/14cco143`
-pub static EMBED_URL: Lazy<Regex> = lazy_regex!(r"(?i)^https?://(?:www\.)?xnxx3?\.com/embedframe/([a-z0-9]+)");
+pub static EMBED_URL: Lazy<Regex> =
+    lazy_regex!(r"(?i)^https?://(?:www\.)?xnxx3?\.com/embedframe/([a-z0-9]+)");
 
 /// Return `true` if `url` looks like an XNXX video or embed URL.
 #[must_use]

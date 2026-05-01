@@ -15,7 +15,8 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 /// Performance: Using static lazy patterns prevents regex compilation overhead:
 /// - Without lazy: ~50-80μs compilation per constructor call
 /// - With lazy: ~0.01μs access after first initialization
-pub static TNAFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?tnaflix\.com/[^/]+/[^/]+/video(\d+)");
+pub static TNAFLIX_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?tnaflix\.com/[^/]+/[^/]+/video(\d+)");
 
 /// Static URL pattern regex for EMPFlix
 ///
@@ -23,10 +24,13 @@ pub static TNAFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?t
 /// - `/videos/title-ID` format
 /// - `/category/title/videoID` format
 /// - `/category/ID` format
-pub static EMPFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?(\d+)|[^/]+/[^/]+/video(\d+)|[^/]+/(\d+))");
+pub static EMPFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?(\d+)|[^/]+/[^/]+/video(\d+)|[^/]+/(\d+))"
+);
 
 /// Static URL pattern regex for MovieFap
-pub static MOVIEFAP_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?moviefap\.com/videos/([0-9a-f]+)/[^/]+\.html");
+pub static MOVIEFAP_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?moviefap\.com/videos/([0-9a-f]+)/[^/]+\.html");
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,6 @@
 //! URL builders, regex patterns, and filter descriptors for XTits search.
 
-use lazy_regex::{lazy_regex, Lazy, Regex};
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::{SearchFilterDescriptor, SearchFilterValue, SearchQuery};
 use url::form_urlencoded;
 
@@ -13,10 +13,13 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 /// Regex to extract video items from KVS AJAX response HTML.
 ///
 /// Captures: (1) video URL, (2) title, (3) thumbnail URL.
-pub(crate) static ITEM_PATTERN: Lazy<Regex> = lazy_regex!(r#"<a\s+[^>]*class="[^"]*js-open-popup[^"]*"\s+href="([^"]+)"\s+title="([^"]+)"[^>]*\sthumb="([^"]*)""#);
+pub(crate) static ITEM_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<a\s+[^>]*class="[^"]*js-open-popup[^"]*"\s+href="([^"]+)"\s+title="([^"]+)"[^>]*\sthumb="([^"]*)""#
+);
 
 /// Regex to extract duration from `<span class="label time">`.
-pub(crate) static DURATION_PATTERN: Lazy<Regex> = lazy_regex!(r#"<span\s+class="label\s+time"[^>]*>\s*(?:<[^>]+>\s*)*(\d+:\d+)\s*</span>"#);
+pub(crate) static DURATION_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<span\s+class="label\s+time"[^>]*>\s*(?:<[^>]+>\s*)*(\d+:\d+)\s*</span>"#);
 
 /// Regex to detect the highest page number in pagination links.
 pub(crate) static PAGE_NUMBER_PATTERN: Lazy<Regex> = lazy_regex!(r"from_videos\+from_albums:(\d+)");

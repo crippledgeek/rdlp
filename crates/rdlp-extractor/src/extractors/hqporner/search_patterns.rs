@@ -7,7 +7,8 @@ use url::form_urlencoded;
 const SEARCH_BASE: &str = "https://hqporner.com/";
 
 /// Pattern to extract the "Next" page URL from pagination.
-static NEXT_PAGE_PATTERN: Lazy<Regex> = lazy_regex!(r#"href="([^"]+)"[^>]*class="[^"]*pagi-btn[^"]*">Next"#);
+static NEXT_PAGE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"href="([^"]+)"[^>]*class="[^"]*pagi-btn[^"]*">Next"#);
 
 /// Build a search URL.
 ///

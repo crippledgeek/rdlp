@@ -20,24 +20,20 @@ pub(crate) static FILM_NAME_PATTERN: Lazy<Regex> = lazy_regex!(
 
 /// Extract thumbnail from img with data-src.
 /// Captures: (1) thumbnail URL, (2) alt text.
-pub(crate) static THUMBNAIL_PATTERN: Lazy<Regex> = lazy_regex!(
-    r#"<img\s+data-src="([^"]+)"[^>]*class="film-poster-img[^"]*"[^>]*alt="([^"]+)""#
-);
+pub(crate) static THUMBNAIL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<img\s+data-src="([^"]+)"[^>]*class="film-poster-img[^"]*"[^>]*alt="([^"]+)""#);
 
 /// Extract episode count text from tick-eps div.
 /// Captures: (1) episode text like "Ep 34/34" or "Ep Full".
-pub(crate) static EPISODE_PATTERN: Lazy<Regex> = lazy_regex!(
-    r#"<div\s+class="tick-item\s+tick-eps">\s*([^<]+?)\s*</div>"#
-);
+pub(crate) static EPISODE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<div\s+class="tick-item\s+tick-eps">\s*([^<]+?)\s*</div>"#);
 
 /// Detect "Next" pagination link.
-pub(crate) static NEXT_PAGE_PATTERN: Lazy<Regex> =
-    lazy_regex!(r#">Next\s*<"#);
+pub(crate) static NEXT_PAGE_PATTERN: Lazy<Regex> = lazy_regex!(r#">Next\s*<"#);
 
 /// Extract total page count from "of {N}" text.
 /// Captures: (1) total pages number.
-pub(crate) static TOTAL_PAGES_PATTERN: Lazy<Regex> =
-    lazy_regex!(r#"of\s+(\d+)"#);
+pub(crate) static TOTAL_PAGES_PATTERN: Lazy<Regex> = lazy_regex!(r#"of\s+(\d+)"#);
 
 /// Build the search URL for a given query and page.
 ///

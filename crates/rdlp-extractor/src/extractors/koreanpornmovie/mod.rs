@@ -11,8 +11,8 @@
 mod patterns;
 
 use async_trait::async_trait;
-use log::debug;
 use lazy_regex::{Lazy, Regex, lazy_regex};
+use log::debug;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
