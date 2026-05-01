@@ -18,11 +18,11 @@ pub mod patterns;
 pub mod search;
 
 use async_trait::async_trait;
+use lazy_regex::{lazy_regex, Lazy, Regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::Codec;
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
-use regex::Regex;
 
 use crate::base::common::BaseExtractor;
 use crate::base::wgcz_network::WgczNetworkBase;
@@ -48,8 +48,7 @@ impl XNXXExtractor {
 /// filename (e.g. `video_360p.mp4`). Falls back to `None` when the URL
 /// uses a symbolic label like `mp4_sd.mp4`.
 fn parse_mp4_height(url: &str) -> Option<u32> {
-    static RE: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"[_-](\d{3,4})p").unwrap());
+    static RE: Lazy<Regex> = lazy_regex!(r"[_-](\d{3,4})p");
     RE.captures(url)
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse().ok())
