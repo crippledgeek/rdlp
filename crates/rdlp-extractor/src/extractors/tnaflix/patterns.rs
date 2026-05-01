@@ -8,18 +8,14 @@
 //! - EMPFlix: `https://www.empflix.com/videos/title-123` and variants
 //! - MovieFap: `https://www.moviefap.com/videos/abc123/title.html`
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Static URL pattern regex for TNAFlix
 ///
 /// Performance: Using static lazy patterns prevents regex compilation overhead:
 /// - Without lazy: ~50-80μs compilation per constructor call
 /// - With lazy: ~0.01μs access after first initialization
-pub static TNAFLIX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?tnaflix\.com/[^/]+/[^/]+/video(\d+)")
-        .expect("Valid TNAFlix URL pattern")
-});
+pub static TNAFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?tnaflix\.com/[^/]+/[^/]+/video(\d+)");
 
 /// Static URL pattern regex for EMPFlix
 ///
@@ -27,16 +23,10 @@ pub static TNAFLIX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// - `/videos/title-ID` format
 /// - `/category/title/videoID` format
 /// - `/category/ID` format
-pub static EMPFLIX_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?(\d+)|[^/]+/[^/]+/video(\d+)|[^/]+/(\d+))")
-        .expect("Valid EMPFlix URL pattern")
-});
+pub static EMPFLIX_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?empflix\.com/(?:videos/(?:[^/]+-)?(\d+)|[^/]+/[^/]+/video(\d+)|[^/]+/(\d+))");
 
 /// Static URL pattern regex for MovieFap
-pub static MOVIEFAP_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?moviefap\.com/videos/([0-9a-f]+)/[^/]+\.html")
-        .expect("Valid MovieFap URL pattern")
-});
+pub static MOVIEFAP_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"https?://(?:www\.)?moviefap\.com/videos/([0-9a-f]+)/[^/]+\.html");
 
 #[cfg(test)]
 mod tests {
