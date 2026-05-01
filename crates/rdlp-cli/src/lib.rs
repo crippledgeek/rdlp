@@ -1,3 +1,9 @@
+// Lint-tightening for LIBRARY code only. `pedantic` / `nursery` are
+// stylistic; `indexing_slicing` is enforced here because production code must
+// not panic on out-of-bounds. Integration tests under `tests/` deliberately
+// use `vec[0]` after a length assertion as the assertion form — see
+// `Cargo.toml` `[lints.clippy]` for the rationale.
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 //! rdlp-cli library
 //!
 //! CLI-specific modules for the rdlp download tool.

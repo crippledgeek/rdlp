@@ -2,6 +2,25 @@
 //!
 //! Contains the unified decode → filter → encode → mux pipeline shared by
 //! peak normalization and loudnorm pass 2.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (sample rate as
+//!   `u32`/`i32`, timestamps as `i64`/`usize`). All casts are audited and within
+//!   valid ranges for `FFmpeg`-returned values.
+//! - `clippy::unwrap_used`: channel-count and sample-rate accessors on a validated
+//!   open decoder context are guaranteed non-zero; panicking signals a programming
+//!   error (the decoder should have been validated before this point).
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::unwrap_used,
+    clippy::similar_names,  // dec_ctx / enc_ctx / ofmt_ctx are standard FFmpeg naming
+)]
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -238,7 +257,7 @@ impl FFmpegRunner {
 
         Self::set_buffersink_frame_size(&mut filter_graph, "out", audio_encoder.frame_size());
 
-        FFmpegRunner::discard_non_audio_streams(&mut ictx, audio_ist_index);
+        Self::discard_non_audio_streams(&mut ictx, audio_ist_index);
 
         let ost_time_base = octx
             .stream(audio_ost_index)
@@ -272,7 +291,7 @@ impl FFmpegRunner {
             ost_time_base.denominator(),
         );
 
-        let _log_suppress = LogSuppressGuard::error_level();
+        let log_suppress = LogSuppressGuard::error_level();
 
         // Compute the starting sample offset from the input's format-level
         // start_time.  When the source has a non-zero start (e.g. HLS downloads
@@ -434,7 +453,7 @@ impl FFmpegRunner {
             Some(output),
         )?;
 
-        drop(_log_suppress);
+        drop(log_suppress);
 
         // Explicit teardown with debug-level lifecycle markers.
         // Resources are RAII-managed, but logging confirms cleanup order.

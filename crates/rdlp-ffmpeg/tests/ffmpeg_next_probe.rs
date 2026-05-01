@@ -3,6 +3,14 @@
 //! Generates a synthetic test video using FFmpeg library bindings (lavfi
 //! sources), then probes it to extract stream info.  No CLI spawning.
 
+// This integration test directly accesses raw FFmpeg FFI structs (AVCodecContext
+// fields) to verify encoder context properties. There is no safe abstraction
+// for these fields in ffmpeg-the-third v4.1.
+#![allow(unsafe_code)]
+// expect() / unwrap() are intentional in tests — panics surface failures.
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 use std::path::Path;
 
 /// Generate a 1-second test video using FFmpeg library bindings.

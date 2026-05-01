@@ -3,7 +3,10 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use super::{DownloadPlan, Orchestrator, errors::*};
+use super::{
+    DownloadPlan, Orchestrator,
+    errors::{OrchestratorError, Result},
+};
 use log::{debug, info, warn};
 use rdlp_types::{Format, FormatSelector, InfoDict};
 
@@ -111,7 +114,9 @@ impl Orchestrator {
 
             // Selector returned a merge pair: first = video, second = audio
             if selected_formats.len() > 1 {
+                #[allow(clippy::indexing_slicing)] // len > 1 checked above
                 let video = selected_formats[0].clone();
+                #[allow(clippy::indexing_slicing)] // len > 1 checked above
                 let audio = selected_formats[1].clone();
                 info!(
                     video = video.format_id.as_str(),
@@ -119,9 +124,9 @@ impl Orchestrator {
                     "Selected merge pair"
                 );
                 return Ok(Some(DownloadPlan::Merge { video, audio }));
-            } else {
-                selected_formats[0].clone()
             }
+            #[allow(clippy::indexing_slicing)] // empty case returned early above
+            selected_formats[0].clone()
         };
 
         info!(format:?; "Selected format");
@@ -169,7 +174,11 @@ impl Orchestrator {
 
         let selection = callback.select_format(&grouped_owned, info).await;
 
-        Ok(selection.map(|index| grouped_owned[index].clone()))
+        Ok(selection.map(|index| {
+            #[allow(clippy::indexing_slicing)]
+            // index provided by callback from grouped_owned.len()
+            grouped_owned[index].clone()
+        }))
     }
 }
 

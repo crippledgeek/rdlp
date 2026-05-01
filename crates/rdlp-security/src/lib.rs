@@ -47,6 +47,7 @@
 //! 4. **Pattern-based sanitization** - Redacts common sensitive patterns
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 use regex::Regex;
 use std::borrow::Cow;
@@ -105,6 +106,11 @@ pub type Result<T> = std::result::Result<T, SecurityError>;
 ///
 /// # Arguments
 /// * `url` - The URL to validate
+///
+/// # Errors
+///
+/// Returns [`SecurityError`] if the URL is too long, uses a non-HTTP scheme, or
+/// targets a private/internal host.
 ///
 /// # Returns
 /// `Ok(())` if the URL is safe, otherwise a `SecurityError`
@@ -200,7 +206,8 @@ pub fn is_private_host(host: &str) -> bool {
         return true;
     }
 
-    // Check for common internal hostnames
+    // Check for common internal hostnames (`lower` is already ASCII-lowercased above).
+    #[allow(clippy::case_sensitive_file_extension_comparisons)] // `lower` is already lowercased
     if lower.ends_with(".local") || lower.ends_with(".internal") {
         return true;
     }
@@ -232,19 +239,19 @@ pub fn is_private_host(host: &str) -> bool {
 
 /// IPv6 link-local: `fe80::/10`. First 10 bits == `1111111010`.
 #[inline]
-fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
 /// IPv6 Unique Local Address: `fc00::/7`. First 7 bits == `1111110`.
 #[inline]
-fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// IPv6 multicast: `ff00::/8`.
 #[inline]
-fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
+const fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xff00) == 0xff00
 }
 
@@ -253,16 +260,14 @@ fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
 /// `[::ffff:127.0.0.1]` and bypasses the IPv4 gate.
 #[inline]
 fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
-    if let Some(v4) = ip.to_ipv4_mapped() {
+    ip.to_ipv4_mapped().is_some_and(|v4| {
         v4.is_loopback()
             || v4.is_private()
             || v4.is_link_local()
             || v4.is_unspecified()
             || v4.is_broadcast()
             || v4.is_multicast()
-    } else {
-        false
-    }
+    })
 }
 
 /// Validate a proxy URL for security concerns.
@@ -273,6 +278,11 @@ fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
 /// # Arguments
 ///
 /// * `proxy` - The proxy URL string to validate.
+///
+/// # Errors
+///
+/// Returns [`SecurityError`] if the URL is too long, uses a disallowed scheme, or
+/// targets a private/internal host.
 ///
 /// # Returns
 ///
@@ -356,18 +366,18 @@ pub fn validate_proxy_url(proxy: &str) -> Result<()> {
 /// ```
 #[must_use]
 pub fn normalize_url(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut parsed) => {
+    url::Url::parse(url).map_or_else(
+        |_| {
+            // If URL parsing fails, fall back to simple query string stripping
+            url.split('?').next().unwrap_or(url).to_string()
+        },
+        |mut parsed| {
             // Strip query and fragment, keep everything else
             parsed.set_query(None);
             parsed.set_fragment(None);
             parsed.into()
-        }
-        Err(_) => {
-            // If URL parsing fails, fall back to simple query string stripping
-            url.split('?').next().unwrap_or(url).to_string()
-        }
-    }
+        },
+    )
 }
 
 /// Extract the path portion of a URL for CDN-agnostic comparison
@@ -400,9 +410,8 @@ pub fn normalize_url(url: &str) -> String {
 /// ```
 #[must_use]
 pub fn extract_url_path(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(parsed) => parsed.path().to_string(),
-        Err(_) => {
+    url::Url::parse(url).map_or_else(
+        |_| {
             // Fallback: find path after scheme://host
             url.split('?')
                 .next()
@@ -410,8 +419,9 @@ pub fn extract_url_path(url: &str) -> String {
                 .and_then(|s| s.find('/').map(|i| &s[i..]))
                 .unwrap_or(url)
                 .to_string()
-        }
-    }
+        },
+        |parsed| parsed.path().to_string(),
+    )
 }
 
 // ============================================================================
@@ -424,7 +434,8 @@ pub fn extract_url_path(url: &str) -> String {
 /// CDN signing parameters (`sig`, `hmac`, `X-Amz-Signature`), and the
 /// `user:pass@` URL authority form. Matching is case-insensitive on the
 /// parameter name so `?Token=` / `?ACCESS_TOKEN=` are also redacted.
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 13]> = LazyLock::new(|| {
+#[allow(clippy::expect_used)] // LazyLock<Regex>: 16 hardcoded literals; panic = programming error caught at first use
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 16]> = LazyLock::new(|| {
     [
         (
             Regex::new(r"(?i)token=[^&\s]+").expect("valid regex"),
@@ -476,6 +487,19 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 13]> = LazyLock::new(|| {
         ),
         // Strip user:pass@ from proxy/URL authority (e.g. http://user:pass@host:port)
         (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
+        // Additional auth-related query parameters (L1).
+        (
+            Regex::new(r"(?i)auth=[^&\s]+").expect("valid regex"),
+            "auth=***",
+        ),
+        (
+            Regex::new(r"(?i)authorization=[^&\s]+").expect("valid regex"),
+            "authorization=***",
+        ),
+        (
+            Regex::new(r"(?i)session=[^&\s]+").expect("valid regex"),
+            "session=***",
+        ),
     ]
 });
 
@@ -734,5 +758,82 @@ mod tests {
         // Parameter name case-insensitive (CDN URLs sometimes use TitleCase).
         let out = sanitize_for_logging("url?TOKEN=hideme");
         assert!(!out.contains("hideme"), "expected redaction, got: {out}");
+    }
+
+    // ── L1 regression guard: auth=, authorization=, session= must be redacted ─
+
+    /// Before L1 was fixed, `auth=`, `authorization=`, and `session=` query
+    /// parameters were not covered by `sanitize_for_logging`, so their values
+    /// leaked verbatim into log output.
+    #[test]
+    fn sanitize_redacts_auth_param() {
+        let input = "https://api.example.com/resource?auth=secret_auth_token&other=value";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("auth=***"),
+            "auth= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("secret_auth_token"),
+            "auth value leaked into output: {output}"
+        );
+        assert!(
+            output.contains("other=value"),
+            "unrelated param was incorrectly altered: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_authorization_param() {
+        let input = "https://api.example.com/resource?authorization=Bearer%20xyz789&q=1";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("authorization=***"),
+            "authorization= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("xyz789"),
+            "authorization value leaked into output: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_session_param() {
+        let input = "https://cdn.example.com/video.m3u8?session=sess_abc123&quality=720p";
+        let output = sanitize_for_logging(input);
+        assert!(
+            output.contains("session=***"),
+            "session= was not redacted; got: {output}"
+        );
+        assert!(
+            !output.contains("sess_abc123"),
+            "session value leaked into output: {output}"
+        );
+        assert!(
+            output.contains("quality=720p"),
+            "unrelated param was incorrectly altered: {output}"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_new_patterns_case_insensitive() {
+        // Verify case-insensitive matching for all three new patterns.
+        let auth_upper = sanitize_for_logging("url?AUTH=val1");
+        assert!(
+            !auth_upper.contains("val1"),
+            "AUTH= (uppercase) not redacted"
+        );
+
+        let authz_mixed = sanitize_for_logging("url?Authorization=val2");
+        assert!(
+            !authz_mixed.contains("val2"),
+            "Authorization= (mixed case) not redacted"
+        );
+
+        let sess_upper = sanitize_for_logging("url?SESSION=val3");
+        assert!(
+            !sess_upper.contains("val3"),
+            "SESSION= (uppercase) not redacted"
+        );
     }
 }

@@ -167,7 +167,7 @@ fn select_one<'a>(sel: &Selector, formats: &'a [Format]) -> Option<&'a Format> {
 
 /// Returns `true` when the token is `best` / `b` — the combined "any" best selector —
 /// and not the star-modified variant.  Used for the incomplete-formats fallback.
-fn is_best_combined(token: &FormatToken) -> bool {
+const fn is_best_combined(token: &FormatToken) -> bool {
     matches!(
         token,
         FormatToken::Keyword {
@@ -180,7 +180,7 @@ fn is_best_combined(token: &FormatToken) -> bool {
 }
 
 /// Extract the `.N` nth suffix from a `FormatToken::Keyword`, if present.
-fn nth_of_token(token: &FormatToken) -> Option<u32> {
+const fn nth_of_token(token: &FormatToken) -> Option<u32> {
     match token {
         FormatToken::Keyword { nth, .. } => *nth,
         _ => None,
@@ -257,7 +257,7 @@ enum FilterResult {
     Pass,
     /// The filter condition is not satisfied.
     Fail,
-    /// The required field is absent on the format (Option::None / unknown).
+    /// The required field is absent on the format (`Option::None` / unknown).
     FieldMissing,
 }
 
@@ -267,34 +267,31 @@ enum FilterResult {
 /// caller can honour the `non_fatal` flag independently of the filter outcome.
 fn evaluate_filter(filter: &Filter, f: &Format) -> FilterResult {
     match &filter.field {
-        FilterField::Height => {
-            compare_opt_num_r(f.height.map(|v| v as f64), &filter.op, &filter.value)
-        }
-        FilterField::Width => {
-            compare_opt_num_r(f.width.map(|v| v as f64), &filter.op, &filter.value)
-        }
-        FilterField::Fps => compare_opt_num_r(f.fps, &filter.op, &filter.value),
-        FilterField::Tbr => compare_opt_num_r(f.tbr, &filter.op, &filter.value),
-        FilterField::Vbr => compare_opt_num_r(f.vbr, &filter.op, &filter.value),
-        FilterField::Abr => compare_opt_num_r(f.abr, &filter.op, &filter.value),
-        FilterField::Asr => compare_opt_num_r(f.asr.map(|v| v as f64), &filter.op, &filter.value),
+        FilterField::Height => compare_opt_num_r(f.height.map(f64::from), filter.op, &filter.value),
+        FilterField::Width => compare_opt_num_r(f.width.map(f64::from), filter.op, &filter.value),
+        FilterField::Fps => compare_opt_num_r(f.fps, filter.op, &filter.value),
+        FilterField::Tbr => compare_opt_num_r(f.tbr, filter.op, &filter.value),
+        FilterField::Vbr => compare_opt_num_r(f.vbr, filter.op, &filter.value),
+        FilterField::Abr => compare_opt_num_r(f.abr, filter.op, &filter.value),
+        FilterField::Asr => compare_opt_num_r(f.asr.map(f64::from), filter.op, &filter.value),
         FilterField::Filesize => {
-            compare_opt_num_r(f.filesize.map(|v| v as f64), &filter.op, &filter.value)
+            // u64 as f64: filesize comparison tolerates precision loss at large values
+            #[allow(clippy::cast_precision_loss)]
+            let filesize_f64 = f.filesize.map(|v| v as f64);
+            compare_opt_num_r(filesize_f64, filter.op, &filter.value)
         }
-        FilterField::Ext => bool_to_result(compare_str(&f.ext, &filter.op, &filter.value)),
-        FilterField::Vcodec => match f.vcodec.as_str() {
-            Some(v) => bool_to_result(compare_str(v, &filter.op, &filter.value)),
-            None => FilterResult::FieldMissing,
-        },
-        FilterField::Acodec => match f.acodec.as_str() {
-            Some(v) => bool_to_result(compare_str(v, &filter.op, &filter.value)),
-            None => FilterResult::FieldMissing,
-        },
+        FilterField::Ext => bool_to_result(compare_str(&f.ext, filter.op, &filter.value)),
+        FilterField::Vcodec => f.vcodec.as_str().map_or(FilterResult::FieldMissing, |v| {
+            bool_to_result(compare_str(v, filter.op, &filter.value))
+        }),
+        FilterField::Acodec => f.acodec.as_str().map_or(FilterResult::FieldMissing, |v| {
+            bool_to_result(compare_str(v, filter.op, &filter.value))
+        }),
         FilterField::Protocol => {
-            bool_to_result(compare_str(f.protocol.as_str(), &filter.op, &filter.value))
+            bool_to_result(compare_str(f.protocol.as_str(), filter.op, &filter.value))
         }
         FilterField::FormatId => {
-            bool_to_result(compare_str(&f.format_id, &filter.op, &filter.value))
+            bool_to_result(compare_str(&f.format_id, filter.op, &filter.value))
         }
         // Arbitrary field names not wired to Format fields — conservatively
         // report as missing (we cannot confirm the field exists or matches).
@@ -302,7 +299,7 @@ fn evaluate_filter(filter: &Filter, f: &Format) -> FilterResult {
     }
 }
 
-fn bool_to_result(b: bool) -> FilterResult {
+const fn bool_to_result(b: bool) -> FilterResult {
     if b {
         FilterResult::Pass
     } else {
@@ -315,12 +312,14 @@ fn bool_to_result(b: bool) -> FilterResult {
 /// Returns `FilterResult::FieldMissing` when `val` is `None` so the caller can
 /// honour the non-fatal flag.  Returns `FilterResult::Fail` for unsupported
 /// operator/value combinations (e.g. string ops on numeric fields).
-fn compare_opt_num_r(val: Option<f64>, op: &FilterOp, filter_val: &FilterValue) -> FilterResult {
+fn compare_opt_num_r(val: Option<f64>, op: FilterOp, filter_val: &FilterValue) -> FilterResult {
     let Some(val) = val else {
         return FilterResult::FieldMissing;
     };
     let target = match filter_val {
         FilterValue::Number(n) => *n,
+        // u64 as f64: size comparison tolerates precision loss at large values
+        #[allow(clippy::cast_precision_loss)]
         FilterValue::Size(bytes) => *bytes as f64,
         FilterValue::Text(s) => {
             let Ok(n) = s.parse::<f64>() else {
@@ -345,7 +344,9 @@ fn compare_opt_num_r(val: Option<f64>, op: &FilterOp, filter_val: &FilterValue) 
 }
 
 /// Compare a string value against a filter.
-fn compare_str(val: &str, op: &FilterOp, filter_val: &FilterValue) -> bool {
+// f64 as i64 when formatting whole-number floats; truncation is intentional.
+#[allow(clippy::cast_possible_truncation)]
+fn compare_str(val: &str, op: FilterOp, filter_val: &FilterValue) -> bool {
     match op {
         FilterOp::StartsWith | FilterOp::EndsWith | FilterOp::Contains | FilterOp::Regex => {
             // For string ops, coerce the filter value to a string representation.
@@ -355,6 +356,7 @@ fn compare_str(val: &str, op: &FilterOp, filter_val: &FilterValue) -> bool {
                 FilterValue::Text(s) => s.as_str(),
                 FilterValue::Number(n) => {
                     // Format as integer when the value is a whole number (e.g. 26.0 → "26").
+                    // cast_possible_truncation allowed at function level above.
                     target_owned = if n.fract() == 0.0 {
                         format!("{}", *n as i64)
                     } else {
@@ -418,7 +420,7 @@ enum SortDirection {
     Worst,
 }
 
-fn sort_direction(token: &FormatToken) -> SortDirection {
+const fn sort_direction(token: &FormatToken) -> SortDirection {
     match token {
         FormatToken::Keyword {
             quality: Quality::Worst,

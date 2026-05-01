@@ -43,12 +43,10 @@ impl BrowserEmulation {
             // Update these bindings when wreq-util publishes newer profiles.
             // Currently bound to the newest stable desktop variants in
             // wreq-util 3.0.0-rc.10 (Chrome 139, Firefox 139, Safari 26.2).
-            BrowserEmulation::ChromeLatest => Emulation::Chrome139,
-            BrowserEmulation::FirefoxLatest => Emulation::Firefox139,
-            BrowserEmulation::SafariLatest => Emulation::Safari26_2,
-            BrowserEmulation::Pinned(name) => {
-                Self::resolve_pinned(name).unwrap_or(Emulation::Chrome139)
-            }
+            Self::ChromeLatest => Emulation::Chrome139,
+            Self::FirefoxLatest => Emulation::Firefox139,
+            Self::SafariLatest => Emulation::Safari26_2,
+            Self::Pinned(name) => Self::resolve_pinned(name).unwrap_or(Emulation::Chrome139),
         }
     }
 
@@ -79,10 +77,10 @@ impl FromStr for BrowserEmulation {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_ascii_lowercase().as_str() {
-            "chrome" | "chrome-latest" => BrowserEmulation::ChromeLatest,
-            "firefox" | "firefox-latest" => BrowserEmulation::FirefoxLatest,
-            "safari" | "safari-latest" => BrowserEmulation::SafariLatest,
-            other => BrowserEmulation::Pinned(other.to_string()),
+            "chrome" | "chrome-latest" => Self::ChromeLatest,
+            "firefox" | "firefox-latest" => Self::FirefoxLatest,
+            "safari" | "safari-latest" => Self::SafariLatest,
+            other => Self::Pinned(other.to_string()),
         })
     }
 }

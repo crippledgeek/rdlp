@@ -15,6 +15,10 @@
 //! production code path takes — the field exists purely for the
 //! per-plugin golden test harness.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::doc_markdown)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

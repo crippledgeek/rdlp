@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { codecsQueryOptions } from "@/api/codecs";
 
 export function SystemSection() {
-    const { data: codecs = [] } = useQuery(codecsQueryOptions());
+    const { data: codecs = [] } = useQuery(codecsQueryOptions(true));
 
     if (codecs.length === 0) return null;
 

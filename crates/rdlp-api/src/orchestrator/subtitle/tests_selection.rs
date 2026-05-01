@@ -1,4 +1,5 @@
-//! Tests for select_subtitles_for_download logic
+//! Tests for `select_subtitles_for_download` logic
+#![allow(clippy::indexing_slicing)]
 
 use rdlp_types::{Subtitle, SubtitleFormat};
 use std::collections::HashMap;

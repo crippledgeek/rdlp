@@ -1,4 +1,4 @@
-//! Tests for OutputOptions, FormatOptions, and SubtitleOptions merge overrides
+//! Tests for `OutputOptions`, `FormatOptions`, and `SubtitleOptions` merge overrides
 
 use super::*;
 use std::path::PathBuf;

@@ -28,6 +28,12 @@ pub enum RateLimitParseError {
 /// numbers are treated as bytes per second. Uses binary units:
 /// 1K = 1024, 1M = 1048576, 1G = 1073741824.
 ///
+/// # Errors
+///
+/// Returns [`RateLimitParseError::Empty`] if the input is empty,
+/// [`RateLimitParseError::InvalidNumber`] if the numeric part cannot be parsed,
+/// or [`RateLimitParseError::NotPositive`] if the value is zero or negative.
+///
 /// # Examples
 ///
 /// ```
@@ -44,12 +50,14 @@ pub fn parse_rate_limit(rate_str: &str) -> Result<u64, RateLimitParseError> {
         return Err(RateLimitParseError::Empty);
     }
 
+    // Multi-branch strip_suffix: cannot be expressed as a single map_or_else cleanly.
+    #[allow(clippy::option_if_let_else)]
     let (number_part, multiplier) = if let Some(rest) = rate_str.strip_suffix(['G', 'g']) {
-        (rest, 1024u64 * 1024 * 1024)
+        (rest, 1_024u64 * 1_024 * 1_024)
     } else if let Some(rest) = rate_str.strip_suffix(['M', 'm']) {
-        (rest, 1024u64 * 1024)
+        (rest, 1_024u64 * 1_024)
     } else if let Some(rest) = rate_str.strip_suffix(['K', 'k']) {
-        (rest, 1024u64)
+        (rest, 1_024u64)
     } else {
         (rate_str, 1u64)
     };
@@ -67,6 +75,14 @@ pub fn parse_rate_limit(rate_str: &str) -> Result<u64, RateLimitParseError> {
         return Err(RateLimitParseError::NotPositive(rate_str.to_string()));
     }
 
+    // Intentional casts: multiplier fits in f64 exactly (max 2^30 = 1 GiB).
+    // The f64->u64 cast is safe because value > 0 (checked above) and the
+    // result is a realistic bandwidth (positive, finite).
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     Ok((value * multiplier as f64) as u64)
 }
 

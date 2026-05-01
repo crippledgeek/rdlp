@@ -2,6 +2,23 @@
 //!
 //! Filter builders, JSON parsing, codec/extension maps, and the
 //! three-tier mux retry wrapper (library encode → salvage → resilient).
+//!
+//! # Lint allowances
+//!
+//! - `clippy::redundant_pub_crate`: `pub(crate)` functions in this private submodule
+//!   are accessed from `normalize/mod.rs` and `normalize/encode.rs`.
+//! - `clippy::option_if_let_else`: the two branches of the `if let Ok(container)` guard
+//!   call into different subsystems; collapsing into `map_or_else` reduces readability.
+//! - `clippy::match_same_arms`: the `aac | libfdk_aac` and `libopus` arms are kept
+//!   distinct for future per-codec bitrate tuning.
+//! - `clippy::expect_used`: `unwrap_err` replaced with `expect` plus invariant comment.
+
+#![allow(
+    clippy::redundant_pub_crate,
+    clippy::option_if_let_else,
+    clippy::match_same_arms,
+    clippy::expect_used
+)]
 
 use std::path::Path;
 
@@ -55,7 +72,7 @@ pub(super) fn build_alimiter_spec(target_tp: f64) -> String {
 /// the alimiter via [`build_alimiter_spec`] at the correct position in
 /// the filter chain (after `aresample` so resampling overshoot is caught).
 ///
-/// Default strategy: always `linear=true`.  FFmpeg's loudnorm with
+/// Default strategy: always `linear=true`.  `FFmpeg`'s loudnorm with
 /// `linear=true` falls back to dynamic internally when conditions aren't
 /// met, so forcing `linear=false` is unnecessary and often produces worse
 /// perceived loudness due to over-compression.
@@ -116,7 +133,7 @@ pub(super) fn build_loudnorm_pass2_filter(
 /// Build an audio filter graph with a custom filter spec string.
 ///
 /// Creates: `abuffer → {filter_spec} → abuffersink`
-pub(crate) fn build_audio_filter_with_spec(
+pub fn build_audio_filter_with_spec(
     decoder: &ffmpeg_the_third::decoder::Audio,
     ist_time_base: ffmpeg_the_third::Rational,
     filter_spec: &str,
@@ -145,7 +162,7 @@ pub(crate) fn build_audio_filter_with_spec(
     Ok(graph)
 }
 
-/// Parse loudnorm JSON output from captured FFmpeg log lines.
+/// Parse loudnorm JSON output from captured `FFmpeg` log lines.
 ///
 /// Looks for lines containing `"input_i"`, `"input_tp"`, etc. and extracts
 /// the values from the JSON block emitted by `loudnorm print_format=json`.
@@ -250,7 +267,7 @@ pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
 /// The MOV muxer accumulates per-packet metadata in memory until trailer write,
 /// causing allocation failures on long audio tracks. Matroska writes metadata
 /// incrementally without unbounded buffering.
-pub(super) fn audio_only_extension_for(ext: &str) -> &'static str {
+pub(super) const fn audio_only_extension_for(ext: &str) -> &'static str {
     if ext.eq_ignore_ascii_case("mp4")
         || ext.eq_ignore_ascii_case("m4a")
         || ext.eq_ignore_ascii_case("mov")
@@ -340,9 +357,12 @@ where
                 }
                 return result;
             }
+            // is_ok() returned false above — expect_err is safe here.
             warn!(
                 "Salvage retry also failed, trying resilient open: {}",
-                result.as_ref().unwrap_err()
+                result
+                    .as_ref()
+                    .expect_err("result is Err (is_ok checked above)")
             );
             if !keep_salvage {
                 debug!(
@@ -370,7 +390,7 @@ where
     encode_fn(input, true)
 }
 
-/// Capture loudnorm pass 1 JSON from FFmpeg log output.
+/// Capture loudnorm pass 1 JSON from `FFmpeg` log output.
 ///
 /// Sets up a [`LogCaptureGuard`], returns it for the caller to hold during
 /// the analysis decode loop. After the loop finishes and the filter graph

@@ -1,4 +1,4 @@
-//! Basic renderer tests for OutputTemplate — field resolution, fallbacks, defaults
+//! Basic renderer tests for `OutputTemplate` — field resolution, fallbacks, defaults
 
 use super::test_helpers::{test_ctx, test_format, test_info};
 use super::*;

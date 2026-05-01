@@ -19,6 +19,8 @@ This module is import-time pure so it's unit-testable in plain Python.
 The auto-generated `_entry.py` template imports both functions and uses
 them inside the `extract()` body.
 """
+
+from rdlp_ytdlp_compat import _host
 from rdlp_ytdlp_compat.info_extractor import InfoExtractor
 
 
@@ -40,7 +42,7 @@ def discover_ie_classes(module):
     """
     candidates = []
     for name in dir(module):
-        if name.startswith("_"):
+        if name.startswith('_'):
             continue
         value = getattr(module, name)
         if not isinstance(value, type):
@@ -49,14 +51,14 @@ def discover_ie_classes(module):
             continue
         if not issubclass(value, InfoExtractor):
             continue
-        if getattr(value, "_VALID_URL", None) is None:
+        if getattr(value, '_VALID_URL', None) is None:
             continue
         candidates.append(value)
     if not candidates:
         raise DispatchError(
-            "no InfoExtractor subclass found in plugin — declare "
-            "`class FooIE(InfoExtractor):` with a `_VALID_URL` regex "
-            "at module top level"
+            'no InfoExtractor subclass found in plugin — declare '
+            '`class FooIE(InfoExtractor):` with a `_VALID_URL` regex '
+            'at module top level'
         )
     return candidates
 
@@ -70,16 +72,14 @@ def dispatch_url(classes, url):
     `_host.log` and dispatch continues. Without the log, a typo'd
     override would silently never match and the plugin author would
     have no signal."""
-    from rdlp_ytdlp_compat import _host
     for cls in classes:
         try:
             if cls.suitable(url):
                 return cls
         except Exception as e:  # noqa: BLE001
             _host.log(
-                "warn",
-                f"{cls.__name__}.suitable({url!r}) raised "
-                f"{type(e).__name__}: {e}; skipping this class",
+                'warn',
+                f'{cls.__name__}.suitable({url!r}) raised {type(e).__name__}: {e}; skipping this class',
             )
             continue
     return None

@@ -10,6 +10,10 @@
 //! - **CI / non-interactive** — [`AlwaysApprove`], [`AlwaysDeny`], or
 //!   [`PreTrustedIdentities`] when the user passes `--trust-publisher <id>`
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::too_long_first_doc_paragraph)]
+
 /// Describes the scenario requiring user confirmation.
 #[derive(Debug, Clone)]
 pub enum ConfirmRequest {
@@ -43,8 +47,17 @@ pub enum ConfirmRequest {
 /// The prompter's decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmResponse {
-    /// Permit the install / update to proceed.
-    Approve,
+    /// Permit the install / update for this session only.
+    ///
+    /// The capability set (or first-install) is allowed to proceed but is
+    /// **not** persisted to the trust store. On the next startup the user
+    /// will be prompted again.
+    ApproveOnce,
+    /// Permit the install / update and persist the approval to the trust store.
+    ///
+    /// Subsequent loads of the same plugin version + capability set will not
+    /// prompt again.
+    ApprovePersist,
     /// Reject the install / update.
     Deny,
 }
@@ -56,13 +69,14 @@ pub trait Prompter: Send + Sync {
     fn confirm(&self, request: ConfirmRequest) -> ConfirmResponse;
 }
 
-/// Always approves. CI use only — should require a `--trust-everything`-style
-/// flag in the CLI to opt in (NOT exposed by default per design spec §9).
+/// Always approves and persists. CI use only — should require a
+/// `--trust-everything`-style flag in the CLI to opt in (NOT exposed by
+/// default per design spec §9).
 pub struct AlwaysApprove;
 
 impl Prompter for AlwaysApprove {
     fn confirm(&self, _: ConfirmRequest) -> ConfirmResponse {
-        ConfirmResponse::Approve
+        ConfirmResponse::ApprovePersist
     }
 }
 
@@ -90,7 +104,7 @@ impl Prompter for PreTrustedIdentities {
         match request {
             ConfirmRequest::FirstInstall { identity, .. } => {
                 if self.trusted.iter().any(|t| t == &identity) {
-                    ConfirmResponse::Approve
+                    ConfirmResponse::ApprovePersist
                 } else {
                     ConfirmResponse::Deny
                 }

@@ -5,7 +5,7 @@ use std::fmt;
 /// Error returned when parsing a string into a typed enum fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseEnumError {
-    /// The type name being parsed (e.g., "ContainerFormat").
+    /// The type name being parsed (e.g., "`ContainerFormat`").
     pub type_name: &'static str,
     /// The invalid input value.
     pub input: String,

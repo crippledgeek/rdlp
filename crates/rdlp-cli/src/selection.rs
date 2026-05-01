@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use rdlp_api::{AudioFormat, ContainerFormat};
 
 /// Interactive remux container selection
-pub(crate) fn select_remux_container() -> Result<Option<ContainerFormat>> {
+pub fn select_remux_container() -> Result<Option<ContainerFormat>> {
     let containers = [
         // Video containers
         (
@@ -62,11 +62,12 @@ pub(crate) fn select_remux_container() -> Result<Option<ContainerFormat>> {
         .raw_prompt_skippable()
         .context("remux container selection prompt failed")?;
 
+    #[allow(clippy::indexing_slicing)] // opt.index is guaranteed in-bounds by inquire
     Ok(selection.map(|opt| containers[opt.index].0))
 }
 
 /// Interactive audio format selection
-pub(crate) fn select_audio_format() -> Result<Option<AudioFormat>> {
+pub fn select_audio_format() -> Result<Option<AudioFormat>> {
     let formats = [
         (AudioFormat::Mp3, "MPEG Layer 3, most compatible"),
         (AudioFormat::Aac, "Advanced Audio Coding"),
@@ -93,11 +94,12 @@ pub(crate) fn select_audio_format() -> Result<Option<AudioFormat>> {
         .raw_prompt_skippable()
         .context("audio format selection prompt failed")?;
 
+    #[allow(clippy::indexing_slicing)] // opt.index is guaranteed in-bounds by inquire
     Ok(selection.map(|opt| formats[opt.index].0))
 }
 
 /// Interactive video recode format selection
-pub(crate) fn select_recode_video() -> Result<Option<ContainerFormat>> {
+pub fn select_recode_video() -> Result<Option<ContainerFormat>> {
     let formats = [
         (ContainerFormat::Mp4, "h264", "Best compatibility, H.264"),
         (ContainerFormat::Mkv, "h264", "Matroska, H.264"),
@@ -120,5 +122,6 @@ pub(crate) fn select_recode_video() -> Result<Option<ContainerFormat>> {
         .raw_prompt_skippable()
         .context("video recode format selection prompt failed")?;
 
+    #[allow(clippy::indexing_slicing)] // opt.index is guaranteed in-bounds by inquire
     Ok(selection.map(|opt| formats[opt.index].0))
 }

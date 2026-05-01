@@ -33,7 +33,7 @@ const MAX_CHUNK_RETRIES: u32 = 3;
 /// This is a different retry domain from the inner `with_retry` on
 /// `send()` — this handles failures that occur *during* body transfer,
 /// not connection-level failures.
-pub(crate) async fn download_chunk_with_retry(
+pub async fn download_chunk_with_retry(
     downloader: &HttpDownloader,
     url: &str,
     start: u64,
@@ -60,7 +60,7 @@ pub(crate) async fn download_chunk_with_retry(
                     );
                     // Clean up partial file before retry
                     let _ = tokio::fs::remove_file(chunk_path).await;
-                    tokio::time::sleep(Duration::from_secs(retries as u64)).await;
+                    tokio::time::sleep(Duration::from_secs(u64::from(retries))).await;
                 } else {
                     return Err(e);
                 }
@@ -79,10 +79,10 @@ enum MergeMode {
 }
 
 impl MergeMode {
-    fn log_action(self) -> &'static str {
+    const fn log_action(self) -> &'static str {
         match self {
-            MergeMode::Create => "Merging",
-            MergeMode::Append => "Appending",
+            Self::Create => "Merging",
+            Self::Append => "Appending",
         }
     }
 }
@@ -355,15 +355,13 @@ impl HttpDownloader {
                 let progress = progress.clone();
                 let ctrl_report = ctrl.clone();
                 let chunk_path = temp_dir_owned.join(format!(
-                    "{}.{}.{}{}",
-                    filename_owned, download_id, suffix_owned, chunk_id
+                    "{filename_owned}.{download_id}.{suffix_owned}{chunk_id}"
                 ));
                 let ctrl_next = ctrl.clone();
 
                 async move {
-                    let chunk = match ctrl.next_chunk() {
-                        Some(c) => c,
-                        None => return Ok(None),
+                    let Some(chunk) = ctrl.next_chunk() else {
+                        return Ok(None);
                     };
 
                     let download_fut = async move {
@@ -460,8 +458,7 @@ impl HttpDownloader {
                 };
 
                 let chunk_path = temp_dir_owned.join(format!(
-                    "{}.{}.{}{}",
-                    filename_owned, download_id, suffix_owned, chunk_id
+                    "{filename_owned}.{download_id}.{suffix_owned}{chunk_id}"
                 ));
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);

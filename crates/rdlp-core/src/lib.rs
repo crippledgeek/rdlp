@@ -25,6 +25,7 @@
 //! ```
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 /// HLS codec parsing utilities
 pub mod codecs;

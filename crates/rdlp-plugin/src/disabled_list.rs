@@ -6,6 +6,10 @@
 //! `rdlp-plugin`) lets both crates read it without `rdlp-api` depending on
 //! `rdlp-cli`.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc)]
+
 use crate::PluginError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;

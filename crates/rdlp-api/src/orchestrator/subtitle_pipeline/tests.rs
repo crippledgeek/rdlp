@@ -1,4 +1,5 @@
 //! Tests for subtitle pipeline: validation, normalization, and policy
+#![allow(clippy::indexing_slicing)]
 
 use super::*;
 use rdlp_types::SubtitleKind;

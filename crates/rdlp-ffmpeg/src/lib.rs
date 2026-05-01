@@ -1,12 +1,12 @@
 //! # rdlp-ffmpeg
 //!
-//! FFmpeg library bindings wrapper for rdlp, providing media operations
+//! `FFmpeg` library bindings wrapper for rdlp, providing media operations
 //! via `ffmpeg-the-third` (no CLI process spawning).
 //!
 //! # CLI Usage Policy
 //!
 //! This crate MUST NOT use `std::process::Command` or spawn external
-//! processes. All FFmpeg operations use library bindings via
+//! processes. All `FFmpeg` operations use library bindings via
 //! `ffmpeg-the-third`. Corrupt input recovery uses `discardcorrupt+genpts`
 //! format flags on the input context (library API), not CLI fallback.
 //! Violations are caught by CI check: `scripts/check-no-cli.sh`.
@@ -20,7 +20,7 @@
 //! - **Metadata embedding**: Write title, artist, chapters into containers
 //! - **Thumbnail embedding**: Cover art via `attached_pic` disposition
 //!
-//! All operations use `tokio::task::spawn_blocking()` internally since FFmpeg
+//! All operations use `tokio::task::spawn_blocking()` internally since `FFmpeg`
 //! library calls are synchronous.
 //!
 //! ## Quick Start
@@ -41,6 +41,9 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![warn(clippy::indexing_slicing)]
 
 pub mod error;
 pub mod ffmpeg;

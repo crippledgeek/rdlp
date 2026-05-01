@@ -3,7 +3,7 @@
 //! Provides `AudioCodecConfig` and `AUDIO_CODECS` for mapping codec names
 //! to encoder names, file extensions, quality scale ranges, and bitrate ranges.
 //!
-//! When `libfdk_aac` is available (custom FFmpeg build with `--enable-nonfree`),
+//! When `libfdk_aac` is available (custom `FFmpeg` build with `--enable-nonfree`),
 //! it is automatically preferred over the built-in `aac` encoder for better
 //! quality at equivalent bitrates. Use [`preferred_aac_encoder()`] to resolve
 //! the best available AAC encoder at runtime.
@@ -13,7 +13,7 @@ use super::audio_encoder_registry;
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioCodecConfig {
-    /// FFmpeg encoder name (e.g., "libmp3lame", "aac")
+    /// `FFmpeg` encoder name (e.g., "libmp3lame", "aac")
     pub encoder: Option<&'static str>,
     /// Output file extension
     pub extension: &'static str,

@@ -8,16 +8,16 @@ use strum_macros::{Display, EnumString};
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum SubtitleFormat {
-    /// SubRip Text
+    /// `SubRip` Text
     #[strum(serialize = "srt")]
     Srt,
     /// Web Video Text Tracks
     #[strum(serialize = "vtt", serialize = "webvtt")]
     Vtt,
-    /// Advanced SubStation Alpha
+    /// Advanced `SubStation` Alpha
     #[strum(serialize = "ass")]
     Ass,
-    /// SubStation Alpha
+    /// `SubStation` Alpha
     #[strum(serialize = "ssa")]
     Ssa,
     /// LRC lyrics format
@@ -29,7 +29,7 @@ impl SubtitleFormat {
     /// File extension for this subtitle format.
     #[inline]
     #[must_use]
-    pub fn as_ext(&self) -> &'static str {
+    pub const fn as_ext(&self) -> &'static str {
         match self {
             Self::Srt => "srt",
             Self::Vtt => "vtt",

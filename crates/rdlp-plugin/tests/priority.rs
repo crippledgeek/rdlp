@@ -1,3 +1,16 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+)]
+
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 use rdlp_plugin::manifest::{Manifest, parse_manifest_str};
 use rdlp_plugin::priority::{BUILT_IN_MAX, PLUGIN_MAX, PLUGIN_MIN, USER_MAX, effective_priority};
 use url::Url;
@@ -8,12 +21,24 @@ fn manifest_for_test(priority: u32, claims_override: &[&str]) -> Manifest {
         .map(|h| format!("\"{h}\""))
         .collect::<Vec<_>>()
         .join(", ");
+
+    // Include each claims_override host in the matches list so the new M4
+    // validation (claims_override must correspond to a matches host) passes.
+    // The tests verify priority logic, not manifest validation, so this is the
+    // correct fix — a real plugin declaring claims_override["youtube.com"] would
+    // also match on youtube.com URLs.
+    let mut match_patterns: Vec<String> = vec!["\"https://example.com/*\"".to_string()];
+    for h in claims_override {
+        match_patterns.push(format!("\"https://{h}/*\""));
+    }
+    let matches_str = match_patterns.join(", ");
+
     let toml = format!(
         r#"
 name = "test"
 version = "1.0.0"
 wit_version = "0.1.0"
-matches = ["https://example.com/*"]
+matches = [{matches_str}]
 priority = {priority}
 claims_override = [{claims_str}]
 capabilities = ["log"]

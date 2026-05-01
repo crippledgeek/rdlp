@@ -2,6 +2,10 @@
 //!
 //! See design spec §8.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::doc_markdown)]
+
 use crate::manifest::Manifest;
 use url::Url;
 

@@ -13,12 +13,23 @@ use regex::Regex;
 
 /// Run the `rdlp plugin build-from-ytdlp` command — invokes componentize-py
 /// to produce `<output_dir>/<name>/plugin.wasm` + `plugin.toml.template`.
+///
+/// # Errors
+///
+/// Returns an error if the input file cannot be canonicalized, the plugin
+/// filename is invalid, `componentize-py` is not found or fails, or the
+/// manifest template cannot be written.
+#[allow(clippy::too_many_lines)] // sequential build steps; extracting sub-functions would obscure the pipeline
 pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> {
     let py_path = plugin_py
         .canonicalize()
         .with_context(|| format!("input not found: {}", plugin_py.display()))?;
-    let output_dir =
-        output_dir.unwrap_or_else(|| py_path.parent().unwrap_or(Path::new(".")).to_path_buf());
+    let output_dir = output_dir.unwrap_or_else(|| {
+        py_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    });
     let raw_stem = py_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -169,14 +180,17 @@ pub async fn run(plugin_py: PathBuf, output_dir: Option<PathBuf>) -> Result<()> 
 /// docstring) and skip. This handles yt-dlp's pattern of putting
 /// `_VALID_URL = r'...'` examples inside class/module docstrings.
 fn extract_valid_urls(source: &str) -> Vec<String> {
+    #[allow(clippy::unwrap_used)] // static literal patterns — compile-time valid
     let triple =
         Regex::new(r#"(?ms)^\s*_VALID_URL\s*=\s*r?(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")"#).unwrap();
+    #[allow(clippy::unwrap_used)] // static literal pattern — compile-time valid
     let single = Regex::new(r#"(?m)^\s*_VALID_URL\s*=\s*r?['"]([^'"\n]+)['"]"#).unwrap();
 
     let mut out: Vec<String> = Vec::new();
     let mut consumed_ranges: Vec<(usize, usize)> = Vec::new();
 
     for cap in triple.captures_iter(source) {
+        #[allow(clippy::unwrap_used)] // group 0 is always Some inside captures_iter
         let m = cap.get(0).unwrap();
         if is_inside_triple_quote(source, m.start()) {
             // Triple-quoted `_VALID_URL` example inside a docstring.
@@ -194,6 +208,7 @@ fn extract_valid_urls(source: &str) -> Vec<String> {
         out.push(body);
     }
     for cap in single.captures_iter(source) {
+        #[allow(clippy::unwrap_used)] // group 0 is always Some inside captures_iter
         let m = cap.get(0).unwrap();
         // Skip captures inside a triple-quoted range we already saw.
         if consumed_ranges
@@ -243,10 +258,12 @@ fn valid_urls_to_match_patterns(regexes: &[String]) -> Vec<String> {
     }
     // Capture host between the scheme and the first `/`. Handle the
     // optional `(?:www\.)?` prefix yt-dlp uses pervasively.
+    #[allow(clippy::unwrap_used)] // static literal patterns — compile-time valid
     let with_www = Regex::new(
         r"https\??(?:s\?)?://(?:\(\?:www\\\.\)\?)([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)",
     )
     .unwrap();
+    #[allow(clippy::unwrap_used)] // static literal pattern — compile-time valid
     let bare = Regex::new(r"https\??(?:s\?)?://([a-zA-Z0-9-]+(?:\\?\.[a-zA-Z0-9-]+)+)").unwrap();
 
     let mut out: Vec<String> = Vec::new();
@@ -409,21 +426,21 @@ from rdlp_ytdlp_compat._utils import (  # noqa: F401
 ///
 /// 1. The class implementing `metadata`/`extract`/`search` MUST be named
 ///    `ExtractorPlugin` because componentize-py-pin@0.17.2 looks up a concrete
-///    class whose name matches `--world-module` in PascalCase. Renaming it
+///    class whose name matches `--world-module` in `PascalCase`. Renaming it
 ///    produces `Can't instantiate abstract class ExtractorPlugin` at load.
 /// 2. All imports stay at module top level (componentize-py issue #23 —
-///    lazy `__import__()` silently fails inside the bundled CPython).
+///    lazy `__import__()` silently fails inside the bundled `CPython`).
 /// 3. Errors raise via `Err(<variant>)`, NOT return, because the WIT
 ///    Protocol method signature is the `Ok` payload only — see
 ///    `extractor_plugin/types.py::Err` (a frozen-dataclass Exception).
 /// 4. Multi-class plugin support (Slice 2): `_entry.py` walks every
 ///    concrete `InfoExtractor` subclass in `user_plugin` at extract time
 ///    and dispatches by `cls.suitable(url)`. SVT-style siblings
-///    (SVTPlayIE / SVTSeriesIE / SVTPageIE) ship in one .py and the
+///    (`SVTPlayIE` / `SVTSeriesIE` / `SVTPageIE`) ship in one .py and the
 ///    `suitable()` overrides decide which class claims a given URL.
 ///    Discovery + dispatch live in `rdlp_ytdlp_compat._dispatch` so they
-///    are unit-testable in plain CPython.
-/// 5. info_dict shape is validated per yt-dlp's documented contract
+///    are unit-testable in plain `CPython`.
+/// 5. `info_dict` shape is validated per yt-dlp's documented contract
 ///    (`yt_dlp/extractor/common.py:107-498` at upstream tag 2026.03.17):
 ///    `id` and `title` are required strs; either `formats` or `url` must
 ///    be present.
@@ -921,7 +938,8 @@ mod tests {
         let patterns =
             valid_urls_to_match_patterns(&[r"https?://example\.com/(?P<id>\d+)".to_string()]);
         assert_eq!(patterns, vec!["https://example.com/*".to_string()]);
-        rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
+        let first = patterns.first().expect("asserted non-empty");
+        rdlp_plugin::dispatch::MatchPattern::parse(first).unwrap();
     }
 
     #[test]
@@ -929,7 +947,8 @@ mod tests {
         let patterns =
             valid_urls_to_match_patterns(&[r"some-weird-regex-without-host".to_string()]);
         assert_eq!(patterns, vec!["*://*/*".to_string()]);
-        rdlp_plugin::dispatch::MatchPattern::parse(&patterns[0]).unwrap();
+        let first = patterns.first().expect("asserted non-empty");
+        rdlp_plugin::dispatch::MatchPattern::parse(first).unwrap();
     }
 
     #[test]
@@ -992,7 +1011,7 @@ class APageIE(Base):
     fn extract_valid_urls_handles_triple_quoted() {
         // SVT uses r'''...''' for verbose regex. Single-line capture
         // would miss this — test triple-quote support explicitly.
-        let src = r#"
+        let src = r"
 class SVTPlayIE(SVTBaseIE):
     _VALID_URL = r'''(?x)
                     (?:
@@ -1001,10 +1020,12 @@ class SVTPlayIE(SVTBaseIE):
                     )
                     (?P<id>[^/?#&]+)
                     '''
-"#;
+";
         let urls = extract_valid_urls(src);
         assert_eq!(urls.len(), 1);
-        assert!(urls[0].contains("svt\\.se"), "got: {:?}", urls[0]);
+        // Safety: asserted len == 1 above
+        let first = urls.first().expect("asserted non-empty");
+        assert!(first.contains("svt\\.se"), "got: {first:?}");
     }
 
     #[test]
@@ -1028,22 +1049,24 @@ class FooIE:
         // Exactly one match — the real assignment. The docstring
         // example must be skipped.
         assert_eq!(urls.len(), 1, "got {urls:?}");
-        assert!(urls[0].contains("real-foo"), "got {urls:?}");
+        let first = urls.first().expect("asserted non-empty");
+        assert!(first.contains("real-foo"), "got {urls:?}");
     }
 
     #[test]
     fn extract_valid_urls_skips_single_quote_docstring_example() {
         // Same scenario, single-quoted docstring.
-        let src = r#"
+        let src = r"
 class FooIE:
     '''Single-quoted docstring with example:
         _VALID_URL = r'https?://docstring\.example/(?P<id>\w+)'
     '''
     _VALID_URL = r'https?://real\.example/(?P<id>\w+)'
-"#;
+";
         let urls = extract_valid_urls(src);
         assert_eq!(urls.len(), 1, "got {urls:?}");
-        assert!(urls[0].contains(r"real\.example"), "got {urls:?}");
+        let first = urls.first().expect("asserted non-empty");
+        assert!(first.contains(r"real\.example"), "got {urls:?}");
     }
 
     #[test]

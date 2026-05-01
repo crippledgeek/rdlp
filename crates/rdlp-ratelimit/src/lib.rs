@@ -16,6 +16,7 @@
 //! ```
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 mod limiter;
 mod parse;

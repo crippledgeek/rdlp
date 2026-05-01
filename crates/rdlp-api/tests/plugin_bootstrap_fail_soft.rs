@@ -6,7 +6,17 @@
 //! verifies `RdlpClient::new` still returns a working client whose
 //! `list_extractors()` includes the full built-in set.
 
-#![allow(clippy::disallowed_methods)] // test fixture I/O
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+    unsafe_code, // integration test uses set_var to isolate XDG dirs from user config
+)]
 
 use rdlp_api::RdlpClient;
 use rdlp_types::Config;

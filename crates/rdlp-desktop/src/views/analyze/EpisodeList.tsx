@@ -146,7 +146,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
                         aria-label={isAllSelected ? "Deselect all episodes" : "Select all episodes"}
                         className="text-[12px]"
                     >
-                        <span className="text-[11px] text-[#888888]">
+                        <span className="text-[11px] text-[var(--text-muted)]">
                             {isAllSelected ? "Deselect All" : "Select All"}
                         </span>
                     </Checkbox>
@@ -215,7 +215,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
                                 {/* Checkbox auto-rendered by GridListItem for selectionMode="multiple" + selectionBehavior="toggle" */}
 
                                 {/* Index */}
-                                <span className="w-8 text-right text-[12px] text-[#888888] tabular-nums shrink-0">
+                                <span className="w-8 text-right text-[12px] text-[var(--text-muted)] tabular-nums shrink-0">
                                     {ep.index}
                                 </span>
 
@@ -238,7 +238,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
 
                                 {/* Duration */}
                                 {ep.duration !== null && (
-                                    <span className="text-[11px] text-[#888888] tabular-nums shrink-0">
+                                    <span className="text-[11px] text-[var(--text-muted)] tabular-nums shrink-0">
                                         {formatDuration(ep.duration)}
                                     </span>
                                 )}

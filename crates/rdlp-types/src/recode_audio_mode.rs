@@ -33,9 +33,9 @@ pub enum RecodeAudioMode {
     Copy,
     /// Auto-select best encoder for the output container.
     Auto,
-    /// Use a specific encoder (e.g., "libfdk_aac", "libopus").
+    /// Use a specific encoder (e.g., "`libfdk_aac`", "libopus").
     Encoder {
-        /// FFmpeg encoder name (e.g., "libfdk_aac", "libopus").
+        /// `FFmpeg` encoder name (e.g., "`libfdk_aac`", "libopus").
         name: String,
     },
 }

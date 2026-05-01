@@ -1,4 +1,4 @@
-//! SubtitleStage — embeds subtitle files into video containers.
+//! `SubtitleStage` — embeds subtitle files into video containers.
 //!
 //! This stage runs at index 5 when `config.embed_subtitles` is true.
 //! Non-fatal: subtitle failure logs a warning and passes through.
@@ -30,7 +30,7 @@ pub struct SubtitleStage {
 impl SubtitleStage {
     /// Create a new `SubtitleStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -41,7 +41,7 @@ impl SubtitleStage {
             .any(|c| c.eq_ignore_ascii_case(extension))
     }
 
-    /// Get the FFmpeg subtitle codec for a container format.
+    /// Get the `FFmpeg` subtitle codec for a container format.
     fn subtitle_codec_for_container(container_ext: &str) -> &'static str {
         if ["mp4", "m4a", "m4v", "mov"]
             .iter()
@@ -141,7 +141,7 @@ impl SubtitleStage {
 
 #[async_trait]
 impl PipelineStage for SubtitleStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "SubtitleStage"
     }
 
@@ -165,10 +165,7 @@ impl PipelineStage for SubtitleStage {
             .unwrap_or("");
 
         if !Self::supports_subtitles(extension) {
-            debug!(
-                "SubtitleStage: container '{}' does not support subtitle embedding",
-                extension
-            );
+            debug!("SubtitleStage: container '{extension}' does not support subtitle embedding");
             return Ok(msg);
         }
 
@@ -350,7 +347,7 @@ mod tests {
     }
 
     /// Negative test for the C1 fix: when subtitle files are discovered but
-    /// the FFmpeg muxer is not yet implemented, the stage MUST push a
+    /// the `FFmpeg` muxer is not yet implemented, the stage MUST push a
     /// structured warning onto `msg.warnings` so the API event stream
     /// surfaces it as `Event::Warning`. Previously the stage emitted
     /// `info!("would embed subtitle …")` which the user never saw.

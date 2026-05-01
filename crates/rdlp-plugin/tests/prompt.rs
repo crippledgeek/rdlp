@@ -1,3 +1,16 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+)]
+
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 use rdlp_plugin::prompt::{
     AlwaysApprove, AlwaysDeny, ConfirmRequest, ConfirmResponse, PreTrustedIdentities, Prompter,
 };
@@ -28,9 +41,10 @@ fn first_install(name: &str) -> ConfirmRequest {
 #[test]
 fn always_approve_says_yes() {
     let p = AlwaysApprove;
+    // AlwaysApprove now returns ApprovePersist (durable approval).
     assert!(matches!(
         p.confirm(first_install("foo")),
-        ConfirmResponse::Approve
+        ConfirmResponse::ApprovePersist
     ));
 }
 
@@ -47,7 +61,7 @@ fn always_deny_says_no() {
 fn recording_prompter_captures_request() {
     let p = Recording {
         last: Default::default(),
-        answer: ConfirmResponse::Approve,
+        answer: ConfirmResponse::ApprovePersist,
     };
     let req = first_install("foo");
     let _ = p.confirm(req);
@@ -65,9 +79,10 @@ fn pre_trusted_identities_approves_known() {
     let p = PreTrustedIdentities {
         trusted: vec!["sigstore:github:user/foo".into()],
     };
+    // PreTrustedIdentities returns ApprovePersist for known identities.
     assert!(matches!(
         p.confirm(first_install("foo")),
-        ConfirmResponse::Approve
+        ConfirmResponse::ApprovePersist
     ));
 }
 

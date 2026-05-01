@@ -1,4 +1,25 @@
 //! Container remuxing (stream copy, no re-encoding).
+//!
+//! # Lint allowances
+//!
+//! - `clippy::borrow_as_ptr`: `&mut (*ctx).field` required for `FFmpeg` `**AVDictionary` APIs.
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (`i64`/`f64`/`i32`/`usize`).
+//!   All casts are audited: timestamps and stream counts are within valid ranges.
+//! - `clippy::expect_used`: post-construction stream access is safe by construction;
+//!   `CString::new("literal")` cannot fail on NUL-free compile-time strings.
+//! - `clippy::indexing_slicing`: `stream_mapping[ist_index]` and `ist_time_bases[ist_index]`
+//!   are pre-allocated to `ictx.streams().count()` and indexed only during iteration
+//!   over those same streams, so bounds are guaranteed.
+
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +40,11 @@ impl FFmpegRunner {
     /// - Moving the moov atom to the start of MP4 files (faststart)
     /// - Fixing timestamps and container structure
     /// - Converting between container formats
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` fails to open the input file, create the
+    /// output container, or write packets (including I/O errors and mux failures).
     pub async fn remux(
         &self,
         input: impl AsRef<Path>,
@@ -44,6 +70,7 @@ impl FFmpegRunner {
     ///
     /// Normalizes PTS/DTS timestamps to start at 0 (fixes HLS streams with non-zero start times).
     /// For MKV output, uses raw FFI with proper stream property copying for VLC compatibility.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn remux_sync(
         input: &Path,
         output: &Path,

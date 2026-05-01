@@ -1,4 +1,4 @@
-//! FFmpeg integration via `ffmpeg-the-third` library bindings.
+//! `FFmpeg` integration via `ffmpeg-the-third` library bindings.
 //!
 //! This module provides utilities for:
 //! - Probing media files for codec and format information
@@ -8,7 +8,15 @@
 //! - Metadata and chapter embedding
 //! - Thumbnail embedding (container-specific strategies)
 //!
-//! All FFmpeg operations use direct library calls (no CLI process spawning).
+//! All `FFmpeg` operations use direct library calls (no CLI process spawning).
+//!
+//! # Unsafe policy
+//!
+//! All `unsafe` blocks in this module tree wrap raw `FFmpeg` C APIs
+//! (`AVFormatContext`, `AVCodecContext`, `AVPacket`, `av_log_set_callback`,
+//! etc.). Each `unsafe` block carries a `// SAFETY:` comment justifying the
+//! invariants that make the call sound. New `unsafe` blocks require both the
+//! comment and human review of the safety argument.
 //!
 //! # Example
 //!
@@ -26,6 +34,10 @@
 //! # Ok(())
 //! # }
 //! ```
+
+// All unsafe blocks in this module tree wrap raw FFmpeg C APIs. See "Unsafe
+// policy" section in the module docstring above.
+#![allow(unsafe_code)]
 
 mod audio_codecs;
 pub mod audio_encoder_registry;
@@ -67,14 +79,19 @@ pub use video_codecs::{
     list_available_codecs, preferred_video_encoder, resolve_encoder,
 };
 
-/// Global initialization state for the FFmpeg library.
+/// Global initialization state for the `FFmpeg` library.
 /// Ensures `ffmpeg_the_third::init()` is called exactly once.
 static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
-/// Initialize the FFmpeg library (idempotent).
+/// Initialize the `FFmpeg` library (idempotent).
 ///
 /// This must be called before any `ffmpeg-the-third` library operations.
 /// Safe to call multiple times -- only the first call performs initialization.
+///
+/// # Errors
+///
+/// Returns [`PostProcessError::FFmpegInitFailed`] if `ffmpeg_the_third::init()`
+/// fails (e.g. required shared libraries are missing or incompatible).
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
         ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
@@ -92,11 +109,11 @@ pub fn ensure_init() -> Result<()> {
     }
 }
 
-/// Set FFmpeg library log level based on verbose mode.
+/// Set `FFmpeg` library log level based on verbose mode.
 ///
-/// Call after `ensure_init()` to enable FFmpeg trace logging when `-v` is passed.
-/// - `verbose=true`: Show FFmpeg trace/debug messages
-/// - `verbose=false`: Only show FFmpeg errors (default)
+/// Call after `ensure_init()` to enable `FFmpeg` trace logging when `-v` is passed.
+/// - `verbose=true`: Show `FFmpeg` trace/debug messages
+/// - `verbose=false`: Only show `FFmpeg` errors (default)
 pub fn set_verbose(verbose: bool) {
     let level = if verbose {
         ffmpeg_the_third::log::Level::Trace
@@ -106,7 +123,7 @@ pub fn set_verbose(verbose: bool) {
     ffmpeg_the_third::log::set_level(level);
 }
 
-/// FFmpeg runner.
+/// `FFmpeg` runner.
 ///
 /// Provides media operations via `ffmpeg-the-third` library bindings:
 /// probing, remuxing, merging, audio extraction, video conversion,
@@ -115,27 +132,37 @@ pub fn set_verbose(verbose: bool) {
 pub struct FFmpegRunner;
 
 impl FFmpegRunner {
-    /// Create a new FFmpeg runner.
+    /// Create a new `FFmpeg` runner.
     ///
-    /// Initializes the FFmpeg library (idempotent -- safe to call multiple times).
+    /// Initializes the `FFmpeg` library (idempotent -- safe to call multiple times).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` library initialization fails.
+    /// See [`ensure_init`] for details.
     pub fn new() -> Result<Self> {
         ensure_init()?;
         debug!("FFmpeg library initialized");
         Ok(Self)
     }
 
-    /// Create a new FFmpeg runner with a custom location.
+    /// Create a new `FFmpeg` runner with a custom location.
     ///
     /// The `location` parameter is accepted for API compatibility but is
     /// ignored -- all operations use `ffmpeg-the-third` library bindings
-    /// which link against system FFmpeg shared libraries.
+    /// which link against system `FFmpeg` shared libraries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` library initialization fails.
+    /// See [`ensure_init`] for details.
     pub fn with_location(_location: Option<&Path>) -> Result<Self> {
         Self::new()
     }
 
-    /// Run a blocking FFmpeg operation on a background thread.
+    /// Run a blocking `FFmpeg` operation on a background thread.
     ///
-    /// All FFmpeg library calls are synchronous and must not run on the
+    /// All `FFmpeg` library calls are synchronous and must not run on the
     /// Tokio runtime. This helper wraps `tokio::task::spawn_blocking`
     /// with uniform error mapping.
     async fn spawn_blocking<F, T>(task_name: &str, f: F) -> Result<T>

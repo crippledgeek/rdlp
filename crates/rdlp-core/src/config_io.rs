@@ -21,6 +21,11 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// Load configuration from a TOML file.
 ///
 /// Missing fields use `Config::default()` values thanks to `#[serde(default)]`.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read (`io::Error`) or the TOML
+/// is malformed (`RdlpError::Config`).
 pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Config> {
     // Safe: sync public API invoked from CLI startup / tests before any async runtime.
     // Callers in async contexts must wrap in spawn_blocking.
@@ -38,26 +43,33 @@ pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Config> {
 ///
 /// Returns `Ok(Some(config))` on success, `Ok(None)` if no config file exists at the
 /// default location, or `Err` on parse/IO errors.
+///
+/// # Errors
+///
+/// Returns an error if the given path cannot be read or parsed, or if an existing default
+/// config file is malformed.
 pub fn load_config(path: Option<&Path>) -> Result<Option<(Config, PathBuf)>> {
-    match path {
-        Some(p) => {
-            let config = from_toml_file(p)?;
-            Ok(Some((config, p.to_path_buf())))
+    if let Some(p) = path {
+        let config = from_toml_file(p)?;
+        Ok(Some((config, p.to_path_buf())))
+    } else {
+        let Some(default_path) = default_config_path() else {
+            return Ok(None);
+        };
+        if !default_path.exists() {
+            return Ok(None);
         }
-        None => {
-            let Some(default_path) = default_config_path() else {
-                return Ok(None);
-            };
-            if !default_path.exists() {
-                return Ok(None);
-            }
-            let config = from_toml_file(&default_path)?;
-            Ok(Some((config, default_path)))
-        }
+        let config = from_toml_file(&default_path)?;
+        Ok(Some((config, default_path)))
     }
 }
 
 /// Save configuration to a TOML file
+///
+/// # Errors
+///
+/// Returns an error if the configuration cannot be serialized (`RdlpError::Config`)
+/// or the file cannot be written (`io::Error`).
 pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
     let content = toml::to_string_pretty(config)
         .map_err(|e| RdlpError::Config(format!("Failed to serialize TOML: {e}")))?;
@@ -68,7 +80,11 @@ pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-/// Validate configuration, returning RdlpError on failure
+/// Validate configuration, returning `RdlpError` on failure
+///
+/// # Errors
+///
+/// Returns [`RdlpError::Config`] if `config.validate()` fails.
 pub fn validate(config: &Config) -> Result<()> {
     config
         .validate()

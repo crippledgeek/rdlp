@@ -1,6 +1,6 @@
-//! URL decryption for XHamster format URLs.
+//! URL decryption for `XHamster` format URLs.
 //!
-//! XHamster encrypts video format URLs by embedding a hex-encoded ciphertext
+//! `XHamster` encrypts video format URLs by embedding a hex-encoded ciphertext
 //! in the URL path. The first byte selects one of 7 PRNG algorithms, bytes 1-4
 //! are the seed (little-endian i32), and the remaining bytes are XOR'd with
 //! the PRNG output stream to recover the real URL path.
@@ -9,7 +9,7 @@
 //!
 //! 1. Linear Congruential Generator (a=1664525, c=1013904223)
 //! 2. Xorshift32
-//! 3. Weyl Sequence + MurmurHash3 fmix32
+//! 3. Weyl Sequence + `MurmurHash3` fmix32
 //! 4. Custom scramble with ROL-7
 //! 5. Xorshift variant with addition
 //! 6. LCG with variable right-shift scrambler
@@ -43,11 +43,12 @@ use crate::prng::ByteGenerator;
 ///
 /// The path starts with `/{hex}{remainder}` where hex is 12+ hex chars
 /// and remainder starts with `/` or `,`.
+#[allow(clippy::expect_used)] // LazyLock<Regex>: hardcoded literal, panic = programming error caught at first use
 static HEX_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/(?P<hex>[0-9a-fA-F]{12,})(?P<rem>[/,].+)$").expect("Valid hex path pattern")
 });
 
-/// Decipher an encrypted XHamster format URL.
+/// Decipher an encrypted `XHamster` format URL.
 ///
 /// Returns the deciphered URL, or `None` if the URL format is not recognized
 /// or the algorithm ID is unsupported.
@@ -124,6 +125,9 @@ fn decipher_bare_hex(hex_str: &str) -> Option<String> {
 }
 
 /// Core decryption: decode hex to bytes, extract algorithm + seed, XOR with PRNG stream.
+// The `byte_data.len() < 6` guard above each index/slice makes these infallible;
+// `indexing_slicing` cannot see through the early-return guard.
+#[allow(clippy::indexing_slicing)]
 fn decipher_hex_bytes(hex_str: &str) -> Option<String> {
     let byte_data = hex::decode(hex_str).ok()?;
     if byte_data.len() < 6 {

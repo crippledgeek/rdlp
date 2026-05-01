@@ -154,15 +154,13 @@ pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
 /// * `app` - The Tauri application handle for emitting events.
 /// * `job_id` - The UUID string identifying the download job.
 /// * `event` - The rdlp-api event to forward.
+#[allow(clippy::too_many_lines)]
 pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
     match event {
         Event::Progress { progress, .. } => {
             // DownloadProgress.progress is already clamped to [0.0, 1.0] by the
             // Progress newtype — emit the fraction directly without rescaling.
-            let pct = progress
-                .progress
-                .map(|p| f64::from(p.fraction()))
-                .unwrap_or(0.0);
+            let pct = progress.progress.map_or(0.0, |p| f64::from(p.fraction()));
 
             let payload = DownloadProgressPayload {
                 job_id: job_id.to_owned(),
@@ -351,6 +349,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

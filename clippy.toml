@@ -1,11 +1,32 @@
-# Phase 1.5 async-correctness gate: these std::fs APIs are blocking and
-# must not appear in async fn bodies. Per-site `#[allow(clippy::disallowed_methods)]`
-# is accepted ONLY at (a) FFmpeg / rusqlite wrappers inside spawn_blocking,
-# (b) Tauri / CLI startup code that runs before any concurrent work,
-# (c) test fixtures and build.rs.
+# ──────────────────────────────────────────────────────────────────────
+# Test-code lint policy
 #
-# Research basis: docs/implementation/tls-impersonation/phase-1-report.md Appendix C.
-# Pattern: Embark's rust-ecosystem + Oxide's oxide-tokio-rt.
+# `unwrap()` / `expect()` are idiomatic in tests (see BurntSushi,
+# https://burntsushi.net/unwrap/). These two flags opt inline
+# `#[cfg(test)]` and `#[test]` items out of `unwrap_used` and
+# `expect_used` so production code stays gated while tests can panic
+# on failure.
+#
+# Known clippy limitation: integration tests under `crates/*/tests/*.rs`
+# are NOT covered because they aren't seen as `#[cfg(test)]` by these
+# checks (rust-clippy#13981, #9062, #9612). Those files keep a single
+# file-scope `#![allow(clippy::unwrap_used, clippy::expect_used)]` with
+# the upstream-bug citation; do NOT extend the allow list beyond those
+# two lints there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# ──────────────────────────────────────────────────────────────────────
+# Async-correctness gate (Phase 1.5)
+#
+# These std::fs APIs are blocking and must not appear in async fn bodies.
+# Per-site `#[allow(clippy::disallowed_methods)]` is accepted ONLY at:
+#   (a) FFmpeg / rusqlite wrappers inside spawn_blocking,
+#   (b) Tauri / CLI startup code that runs before any concurrent work,
+#   (c) test fixtures and build.rs.
+#
+# Research basis: docs/implementation/tls-impersonation/phase-1-report.md
+# Appendix C. Pattern: Embark's rust-ecosystem + Oxide's oxide-tokio-rt.
 
 disallowed-methods = [
     { path = "std::fs::create_dir_all", reason = "blocking in async context — use tokio::fs::create_dir_all or spawn_blocking" },

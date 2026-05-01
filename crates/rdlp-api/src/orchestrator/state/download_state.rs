@@ -15,7 +15,7 @@ pub enum DownloadState {
 impl DownloadState {
     /// Get the resume offset (0 for fresh downloads)
     #[must_use]
-    pub fn offset(&self) -> u64 {
+    pub const fn offset(&self) -> u64 {
         match self {
             Self::Fresh => 0,
             Self::Resume(offset) => *offset,
@@ -28,6 +28,7 @@ impl fmt::Display for DownloadState {
         match self {
             Self::Fresh => write!(f, "fresh download"),
             Self::Resume(offset) => {
+                #[allow(clippy::cast_precision_loss)] // display-only MB value
                 let mb = *offset as f64 / (1024.0 * 1024.0);
                 write!(f, "resuming from {mb:.1} MB")
             }

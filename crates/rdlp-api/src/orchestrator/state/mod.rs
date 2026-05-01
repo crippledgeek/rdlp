@@ -6,7 +6,10 @@ pub use download_state::DownloadState;
 
 use super::DownloadPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
-use super::{Orchestrator, errors::*};
+use super::{
+    Orchestrator,
+    errors::{OrchestratorError, Result},
+};
 use crate::events::Event;
 use log::{debug, warn};
 use rdlp_types::Format;
@@ -138,6 +141,7 @@ impl DownloadPhase {
     ///
     /// Returns an error if any phase transition fails (extraction error, download error, etc.)
     #[instrument(skip_all, fields(phase = %self))]
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn advance(
         self,
         orchestrator: &Orchestrator,
@@ -160,7 +164,7 @@ impl DownloadPhase {
                 // Try loading saved session state to skip interactive selection.
                 // Skip in stdout mode — session state is irrelevant for pipe output
                 // and a stale merge state could produce a confusing error.
-                let sanitized = orchestrator.sanitize_filename(&info.title);
+                let sanitized = Orchestrator::sanitize_filename(&info.title);
                 let state_path = session_state::single_video_state_path(
                     &orchestrator.config.output_directory,
                     &sanitized,
@@ -184,6 +188,8 @@ impl DownloadPhase {
                         let subtitle_selection = orchestrator
                             .resolve_subtitles_for_episode(&info, &saved.subtitle_langs);
                         // Reconstruct plan: merge if audio format was saved
+                        #[allow(clippy::option_if_let_else)]
+                        // side-effecting branches preclude map_or_else
                         let plan = if let Some(ref audio_id) = saved.audio_format_id {
                             if let Some(audio) = info
                                 .formats
@@ -273,7 +279,7 @@ impl DownloadPhase {
                 // Skip for stdout mode — no file to resume, and the state
                 // would just be deleted on completion anyway.
                 if !orchestrator.config.output_to_stdout {
-                    let sanitized = orchestrator.sanitize_filename(&info.title);
+                    let sanitized = Orchestrator::sanitize_filename(&info.title);
                     let state_path = session_state::single_video_state_path(
                         &orchestrator.config.output_directory,
                         &sanitized,
@@ -470,7 +476,7 @@ impl DownloadPhase {
                 }
 
                 // Delete session state on successful completion
-                let sanitized = orchestrator.sanitize_filename(&info.title);
+                let sanitized = Orchestrator::sanitize_filename(&info.title);
                 let state_path = session_state::single_video_state_path(
                     &orchestrator.config.output_directory,
                     &sanitized,

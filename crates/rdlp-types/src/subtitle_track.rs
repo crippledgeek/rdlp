@@ -51,7 +51,7 @@ pub enum SubtitleStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubtitleReason {
-    /// The subtitle fields in InfoDict were None
+    /// The subtitle fields in `InfoDict` were None
     FieldMissing,
     /// The subtitle map was present but empty
     EmptyList,
@@ -72,7 +72,7 @@ pub enum SubtitleReason {
 /// Diagnostic key-value pair for debugging subtitle issues.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubtitleDiagnostic {
-    /// Diagnostic key (e.g., "extractor", "field_checked")
+    /// Diagnostic key (e.g., "extractor", "`field_checked`")
     pub key: String,
     /// Diagnostic value
     pub value: String,
@@ -113,7 +113,7 @@ impl SubtitleResult {
     /// assert_eq!(result.status, rdlp_types::SubtitleStatus::Available);
     /// ```
     #[must_use]
-    pub fn available(tracks: Vec<SubtitleTrack>) -> Self {
+    pub const fn available(tracks: Vec<SubtitleTrack>) -> Self {
         Self {
             tracks,
             status: SubtitleStatus::Available,
@@ -141,7 +141,7 @@ impl SubtitleResult {
     /// assert!(!result.has_tracks());
     /// ```
     #[must_use]
-    pub fn not_available(reasons: Vec<SubtitleReason>) -> Self {
+    pub const fn not_available(reasons: Vec<SubtitleReason>) -> Self {
         Self {
             tracks: Vec::new(),
             status: SubtitleStatus::NotAvailable,
@@ -173,7 +173,10 @@ impl SubtitleResult {
     /// assert!(!result.has_tracks());
     /// ```
     #[must_use]
-    pub fn error_soft(reasons: Vec<SubtitleReason>, diagnostics: Vec<SubtitleDiagnostic>) -> Self {
+    pub const fn error_soft(
+        reasons: Vec<SubtitleReason>,
+        diagnostics: Vec<SubtitleDiagnostic>,
+    ) -> Self {
         Self {
             tracks: Vec::new(),
             status: SubtitleStatus::ErrorSoft,
@@ -195,7 +198,7 @@ impl SubtitleResult {
     /// assert!(!SubtitleResult::available(vec![]).has_tracks());
     /// ```
     #[must_use]
-    pub fn has_tracks(&self) -> bool {
+    pub const fn has_tracks(&self) -> bool {
         !self.tracks.is_empty()
     }
 }
@@ -224,6 +227,7 @@ impl SubtitleResult {
 /// assert!(!result.has_tracks());
 /// ```
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn normalize_from_info_dict(
     subtitles: Option<&HashMap<String, Vec<Subtitle>>>,
     automatic_captions: Option<&HashMap<String, Vec<Subtitle>>>,
@@ -276,6 +280,13 @@ pub fn normalize_from_info_dict(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
 

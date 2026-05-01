@@ -1,3 +1,16 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs,
+)]
+
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 //! Slice-2 second plugin: xxxymovies — proves end-to-end plugin
 //! extraction with a SECOND real upstream yt-dlp source independent of
 //! SVT. Distinct from `svt_golden.rs` in that:
@@ -14,7 +27,6 @@
 //! end-to-end-green plugin ports — proves the build/sign/dispatch/
 //! extract pipeline works for distinct extractor archetypes.
 
-#![allow(clippy::disallowed_methods)] // test fixture I/O is allowed
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

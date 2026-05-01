@@ -3,6 +3,20 @@
 //! Provides `extract_audio` (async entry point) plus synchronous helpers for
 //! copy-mode extraction and transcode-mode extraction with filter graph
 //! sample format/rate conversion.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (sample rate,
+//!   timestamps). All casts are audited and within valid ranges for
+//!   `FFmpeg`-returned values.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,6 +40,12 @@ impl FFmpegRunner {
     ///
     /// Automatically detects and salvages corrupt Matroska/WebM containers
     /// before extraction to prevent EBML-induced muxer failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probing, decoding, encoding, or muxing fails —
+    /// including I/O errors, unsupported codec errors, and ENOMEM during
+    /// mux write.
     pub async fn extract_audio(
         &self,
         input: impl AsRef<Path>,
@@ -515,7 +535,7 @@ impl FFmpegRunner {
 
     /// Build an audio filter graph for sample format/rate/channel conversion.
     ///
-    /// Uses `abuffer` -> `aformat` -> `abuffersink` to let FFmpeg handle any
+    /// Uses `abuffer` -> `aformat` -> `abuffersink` to let `FFmpeg` handle any
     /// necessary sample format, sample rate, or channel layout conversions.
     /// Delegates to the shared filter graph helper in normalize/helpers.
     fn build_audio_filter(

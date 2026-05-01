@@ -1,4 +1,4 @@
-//! NormalizeStage — normalizes audio levels in media files.
+//! `NormalizeStage` — normalizes audio levels in media files.
 //!
 //! This stage runs at index 2 when `config.normalize_audio` is true.
 //! Supports peak mode and EBU R128 loudnorm two-pass mode.
@@ -25,7 +25,7 @@ pub struct NormalizeStage {
 impl NormalizeStage {
     /// Create a new `NormalizeStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -61,7 +61,7 @@ impl NormalizeStage {
 
 #[async_trait]
 impl PipelineStage for NormalizeStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "NormalizeStage"
     }
 
@@ -121,7 +121,7 @@ impl PipelineStage for NormalizeStage {
             .context("normalize stage failed")?;
 
         // Capture the encoding_tool for downstream pass-through stages.
-        msg.encoding_tool = Some(format!("normalize ({})", mode_name));
+        msg.encoding_tool = Some(format!("normalize ({mode_name})"));
 
         info!(
             "NormalizeStage: normalization complete: {}",

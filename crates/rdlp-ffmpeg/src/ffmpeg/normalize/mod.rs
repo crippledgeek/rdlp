@@ -1,16 +1,23 @@
-//! Audio normalization via FFmpeg library bindings.
+//! Audio normalization via `FFmpeg` library bindings.
 //!
 //! Two modes:
 //! - **Peak**: Analyze peak/RMS levels via `astats` filter frame metadata,
 //!   then apply `volume` + `alimiter` filters to normalize to a target peak.
 //! - **Loudnorm**: EBU R128 two-pass normalization via `loudnorm` filter.
-//!   Pass 1 captures measurements from FFmpeg log output, pass 2 applies
+//!   Pass 1 captures measurements from `FFmpeg` log output, pass 2 applies
 //!   them with `linear=true` for high-quality correction.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::redundant_pub_crate`: `pub(crate)` items in this private submodule
+//!   are accessed from `ffmpeg/mod.rs` via `crate::ffmpeg::normalize::*`.
+
+#![allow(clippy::redundant_pub_crate)]
 
 mod analysis;
 mod dispatch;
 mod encode;
-pub(crate) mod helpers;
+pub mod helpers;
 mod io_diag;
 
 #[cfg(test)]
@@ -26,7 +33,7 @@ use crate::error::{PostProcessError, Result};
 use super::salvage::prepare_input_with_salvage;
 use super::{AudioNormMode, FFmpegRunner, NormalizeOptions, PeakAnalysis};
 
-pub(crate) use io_diag::dump_io_state;
+pub use io_diag::dump_io_state;
 
 use helpers::{ALIMITER_TP_HEADROOM_DB, LIMITER_BOOST_SHORTFALL_THRESHOLD};
 
@@ -41,6 +48,12 @@ impl FFmpegRunner {
     /// are automatically detected and remuxed to a clean temporary file before
     /// normalization. This prevents EBML structural errors from cascading into
     /// muxer ENOMEM failures during the encode pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if probing, decoding, filtering, encoding, or muxing
+    /// fails — including I/O errors, codec configuration errors, and ENOMEM
+    /// during mux write.
     pub async fn normalize_audio(
         &self,
         input: impl AsRef<Path>,
@@ -106,7 +119,7 @@ impl FFmpegRunner {
         // Peak: analysis (0.0–0.3) already done above; encode phase (0.3–1.0)
         let encode_progress: Option<Arc<dyn Fn(f64) + Send + Sync>> =
             progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac: f64| p(0.3 + frac * 0.7))
+                Arc::new(move |frac: f64| p(frac.mul_add(0.7, 0.3)))
             });
         Self::apply_peak_gain_sync(input, output, &analysis, opts, encode_progress.as_deref())
     }
@@ -158,7 +171,7 @@ impl FFmpegRunner {
         // Pass 2: progress maps to 0.5–1.0 (pass 1 covers 0.0–0.5 but is fast/no callback)
         let pass2_progress: Option<Arc<dyn Fn(f64) + Send + Sync>> =
             progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
-                Arc::new(move |frac: f64| p(0.5 + frac * 0.5))
+                Arc::new(move |frac: f64| p(frac.mul_add(0.5, 0.5)))
             });
         Self::loudnorm_pass2_sync(
             input,
@@ -174,7 +187,7 @@ impl FFmpegRunner {
         Ok(())
     }
 
-    /// LimiterBoost fallback: fixed gain + hard limiter via `apply_peak_gain_sync`.
+    /// `LimiterBoost` fallback: fixed gain + hard limiter via `apply_peak_gain_sync`.
     ///
     /// Constructs a synthetic [`PeakAnalysis`] so that `apply_peak_gain_sync`
     /// computes `gain_db = boost_gain_db` and `linear_limit = ceiling`.

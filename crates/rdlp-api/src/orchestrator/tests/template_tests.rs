@@ -1,4 +1,5 @@
 //! Tests for output template rendering and path generation
+#![allow(clippy::unreadable_literal)]
 
 use super::*;
 

@@ -3,7 +3,9 @@
 //! Contains filesystem scanning for existing downloads, subtitle file
 //! detection with fuzzy matching, and subtitle-only retry downloads.
 
-use super::*;
+use super::{
+    HashMap, Orchestrator, PathBuf, RESUME_SUB_FORMATS, ResumeDetection, debug, info, warn,
+};
 
 /// Check if any subtitle file exists for the given language (exact or fuzzy).
 ///
@@ -92,15 +94,12 @@ impl Orchestrator {
         }
 
         // Get all files in the playlist directory
-        let mut dir_entries = match tokio::fs::read_dir(playlist_dir).await {
-            Ok(entries) => entries,
-            Err(_) => {
-                return ResumeDetection {
-                    completed,
-                    partial_count,
-                    missing_subs,
-                };
-            }
+        let Ok(mut dir_entries) = tokio::fs::read_dir(playlist_dir).await else {
+            return ResumeDetection {
+                completed,
+                partial_count,
+                missing_subs,
+            };
         };
 
         let mut files: Vec<PathBuf> = Vec::new();
@@ -113,7 +112,7 @@ impl Orchestrator {
 
         // Check each video in the playlist
         for info in infos {
-            let sanitized_title = self.sanitize_filename(&info.title);
+            let sanitized_title = Self::sanitize_filename(&info.title);
 
             // Look for completed file matching this title
             let mut found_complete = false;
@@ -157,12 +156,12 @@ impl Orchestrator {
                             // collected `files` list from the outer async scan
                             // to avoid re-entering std::fs::read_dir once per
                             // (episode × lang) pair.
-                            let subs_missing = if !subtitle_langs.is_empty() {
+                            let subs_missing = if subtitle_langs.is_empty() {
+                                false
+                            } else {
                                 !subtitle_langs
                                     .iter()
                                     .any(|lang| has_subtitle_file(&files, &sanitized_title, lang))
-                            } else {
-                                false
                             };
 
                             // Strict mode: missing subs invalidate the video
@@ -183,10 +182,9 @@ impl Orchestrator {
                             completed.insert(sanitized_title.clone(), file_path.clone());
                             found_complete = true;
                             break;
-                        } else {
-                            // File exists but is too small - treat as partial
-                            found_partial = true;
                         }
+                        // File exists but is too small — treat as partial
+                        found_partial = true;
                     }
                 }
             }
@@ -222,7 +220,7 @@ impl Orchestrator {
             // Find the matching InfoDict by sanitized title
             let Some(ep_info) = infos
                 .iter()
-                .find(|i| self.sanitize_filename(&i.title) == *sanitized_title)
+                .find(|i| Self::sanitize_filename(&i.title) == *sanitized_title)
             else {
                 warn!(
                     title:% = sanitized_title;
@@ -235,10 +233,10 @@ impl Orchestrator {
             let fresh_info = match self.extract_lazy_formats(&ep_info.webpage_url).await {
                 Ok(mut resolved) => {
                     // Preserve episode metadata from original stub
-                    resolved.id = ep_info.id.clone();
-                    resolved.title = ep_info.title.clone();
-                    resolved.playlist = ep_info.playlist.clone();
-                    resolved.playlist_title = ep_info.playlist_title.clone();
+                    resolved.id.clone_from(&ep_info.id);
+                    resolved.title.clone_from(&ep_info.title);
+                    resolved.playlist.clone_from(&ep_info.playlist);
+                    resolved.playlist_title.clone_from(&ep_info.playlist_title);
                     resolved.playlist_index = ep_info.playlist_index;
                     resolved.playlist_count = ep_info.playlist_count;
                     resolved
@@ -269,18 +267,18 @@ impl Orchestrator {
                 }
             };
 
-            if !downloaded_subs.is_empty() {
+            if downloaded_subs.is_empty() {
+                warn!(
+                    title:? = ep_info.title;
+                    "Subtitle retry: no subtitles downloaded"
+                );
+            } else {
                 info!(
                     title:? = ep_info.title,
                     count = downloaded_subs.len();
                     "Subtitle retry succeeded"
                 );
                 recovered += 1;
-            } else {
-                warn!(
-                    title:? = ep_info.title;
-                    "Subtitle retry: no subtitles downloaded"
-                );
             }
         }
 
@@ -291,14 +289,13 @@ impl Orchestrator {
     ///
     /// Uses `sanitize_filename` to match infos against `missing_subs` keys.
     pub(super) fn log_missing_subs(
-        &self,
         missing_subs: &HashMap<String, PathBuf>,
         infos: &[rdlp_types::InfoDict],
         total: usize,
     ) {
         infos
             .iter()
-            .filter(|info| missing_subs.contains_key(&self.sanitize_filename(&info.title)))
+            .filter(|info| missing_subs.contains_key(&Self::sanitize_filename(&info.title)))
             .for_each(|info| {
                 let pos = info.playlist_index.unwrap_or(0);
                 warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);

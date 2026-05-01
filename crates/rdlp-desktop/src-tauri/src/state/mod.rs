@@ -81,6 +81,10 @@ impl AppState {
             }
         };
 
+        // SAFETY (expect): startup-time fatal — builder only fails if the plugin
+        // system cannot initialise (WASM runtime unavailable), which is an
+        // unrecoverable environment failure.
+        #[allow(clippy::expect_used)]
         let client = RdlpClient::builder()
             .config(config)
             .temp_registry(Arc::clone(&temp_registry))

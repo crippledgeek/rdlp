@@ -3,13 +3,16 @@
 //! These methods implement the execution phase of playlist downloads after
 //! format resolution and selection are complete.
 
-use super::*;
+use super::{
+    Duration, HashMap, HashSet, Instant, Orchestrator, PathBuf, StreamExt, archive, debug, error,
+    info, warn,
+};
 
 impl Orchestrator {
     /// Download episodes concurrently with cancellation support.
     ///
     /// Returns (downloaded paths, failed episodes, whether interrupted).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::ref_option, clippy::too_many_lines)]
     pub(super) async fn download_episodes(
         &self,
         infos: &[rdlp_types::InfoDict],
@@ -31,7 +34,7 @@ impl Orchestrator {
             .iter()
             .enumerate()
             .filter_map(|(i, ep)| {
-                let sanitized = self.sanitize_filename(&ep.title);
+                let sanitized = Self::sanitize_filename(&ep.title);
                 let exists = downloaded.iter().any(|p| {
                     p.file_stem()
                         .and_then(|s| s.to_str())
@@ -152,7 +155,7 @@ impl Orchestrator {
     /// After the initial pass, retry failed episodes up to 3 more
     /// times with increasing delays. Each wave re-extracts fresh CDN
     /// URLs since old tokens are likely expired.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines, clippy::ref_option)]
     pub(super) async fn run_retry_waves(
         &self,
         failed: &mut Vec<(usize, String, String)>,
@@ -213,6 +216,8 @@ impl Orchestrator {
                 let sub_langs = selected_sub_langs.to_vec();
                 let audio = selected_audio.clone();
                 let index = position - 1;
+                #[allow(clippy::indexing_slicing)]
+                // index = position-1; position came from infos enumeration
                 let mut info_stub = infos[index].clone();
                 info_stub.formats.clear();
                 async move {
@@ -255,6 +260,7 @@ impl Orchestrator {
                                         );
                                         downloaded.push(path);
                                         let idx = pos - 1;
+                                        #[allow(clippy::indexing_slicing)] // idx = pos-1; pos from infos enumeration
                                         self.record_in_archive(
                                             &infos[idx].extractor,
                                             &infos[idx].id,
@@ -357,7 +363,7 @@ impl Orchestrator {
             }
             if still_missing > 0 {
                 warn!("Missing subtitles: {still_missing}");
-                self.log_missing_subs(missing_subs, &[], total);
+                Self::log_missing_subs(missing_subs, &[], total);
                 if !self.config.retry_subs {
                     info!("Hint: re-run with --retry-subs to attempt subtitle download");
                 }

@@ -37,7 +37,7 @@ impl HttpClientFactory {
         Self::default()
     }
 
-    /// Create a factory from an HttpClientConfig
+    /// Create a factory from an [`HttpClientConfig`]
     #[must_use]
     pub fn from_config(config: &HttpClientConfig) -> Self {
         Self {
@@ -53,13 +53,13 @@ impl HttpClientFactory {
         }
     }
 
-    /// Build a wreq::Client with the configured settings
+    /// Build a `wreq::Client` with the configured settings
     #[must_use]
     pub fn build(&self) -> wreq::Client {
         self.build_inner(None)
     }
 
-    /// Build a wreq::Client with a cookie provider.
+    /// Build a `wreq::Client` with a cookie provider.
     ///
     /// Cookies in the jar are automatically sent with every request and
     /// `Set-Cookie` response headers are stored back into the jar.
@@ -120,6 +120,8 @@ impl HttpClientFactory {
         // Silent fallback to `wreq::Client::new()` would strip emulation, cookies,
         // proxy and timeouts — a JA4 leak and an authentication failure waiting to
         // happen. A misconfigured client at startup is fatal.
+        #[allow(clippy::expect_used)]
+        // startup-fatal: TLS/runtime misconfiguration must panic immediately
         builder
             .build()
             .expect("HttpClientFactory: wreq client build failed (TLS/runtime config invalid)")
@@ -168,7 +170,7 @@ mod tests {
     /// Regression guard for I-1: a proxy URL pointing at a private/internal
     /// host (SSRF risk) MUST NOT be installed on the resulting client. Prior
     /// behavior swallowed the URL via `wreq::Proxy::all` even though
-    /// rdlp_security::validate_proxy_url would have rejected it.
+    /// `rdlp_security::validate_proxy_url` would have rejected it.
     #[test]
     fn private_host_proxy_is_rejected_silently_without_panicking() {
         let config = HttpClientConfig::new().with_proxy("http://127.0.0.1:8080");

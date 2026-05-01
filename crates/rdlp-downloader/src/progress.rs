@@ -3,6 +3,26 @@
 //! This module provides a unified progress reporter that works for both
 //! HTTP (byte-based) and HLS (duration-based) downloads, eliminating
 //! duplicate progress tracking code.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::branches_sharing_code`: the two branches of the `if elapsed > …`
+//!   block return the same `smooth_speed` value, but each branch has different
+//!   side effects (`prev_bytes`/`prev_time` mutations). Extracting the
+//!   shared return would obscure the intent.
+//! - `clippy::redundant_clone`: `Arc` clones inside closures are required
+//!   for multi-producer progress callbacks.
+//! - `clippy::needless_pass_by_value`: `new()` and related constructors use
+//!   by-value parameters matching the builder pattern.
+//! - `clippy::option_if_let_else`: the `if let (Some(…))` pattern is clearer
+//!   than `map_or` for the HLS/HTTP progress branch.
+
+#![allow(
+    clippy::branches_sharing_code,
+    clippy::redundant_clone,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else
+)]
 
 use rdlp_core::{DownloadProgress, ProgressCallback};
 use std::sync::Arc;
@@ -18,7 +38,7 @@ pub struct ProgressGuard(Option<tokio::task::JoinHandle<()>>);
 impl ProgressGuard {
     /// Create a new progress guard wrapping an optional task handle.
     #[must_use]
-    pub fn new(task: Option<tokio::task::JoinHandle<()>>) -> Self {
+    pub const fn new(task: Option<tokio::task::JoinHandle<()>>) -> Self {
         Self(task)
     }
 
@@ -49,7 +69,7 @@ pub struct ProgressMetrics {
 
 impl ProgressMetrics {
     /// Create metrics for byte-based progress (HTTP downloads).
-    pub fn bytes_only(downloaded: Arc<AtomicU64>) -> Self {
+    pub const fn bytes_only(downloaded: Arc<AtomicU64>) -> Self {
         Self {
             downloaded,
             segments_completed: None,
@@ -58,7 +78,7 @@ impl ProgressMetrics {
     }
 
     /// Create metrics for duration-based progress (HLS downloads).
-    pub fn with_duration(
+    pub const fn with_duration(
         downloaded: Arc<AtomicU64>,
         segments_completed: Arc<AtomicU64>,
         duration_completed: Arc<AtomicU64>,
@@ -90,7 +110,7 @@ pub struct ProgressReporterConfig {
 impl ProgressReporterConfig {
     /// Create config for HTTP byte-based progress.
     #[must_use]
-    pub fn http(start_time: Instant, total_size: u64, resume_from: u64) -> Self {
+    pub const fn http(start_time: Instant, total_size: u64, resume_from: u64) -> Self {
         Self {
             start_time,
             resume_from,
@@ -103,7 +123,7 @@ impl ProgressReporterConfig {
 
     /// Create config for HLS duration-based progress.
     #[must_use]
-    pub fn hls(start_time: Instant, total_segments: u64, total_duration: f64) -> Self {
+    pub const fn hls(start_time: Instant, total_segments: u64, total_duration: f64) -> Self {
         Self {
             start_time,
             resume_from: 0,
@@ -154,7 +174,7 @@ pub fn spawn_progress_reporter(
                     smooth_speed = if smooth_speed == 0.0 {
                         instant_speed
                     } else {
-                        EWMA_ALPHA * instant_speed + (1.0 - EWMA_ALPHA) * smooth_speed
+                        EWMA_ALPHA.mul_add(instant_speed, (1.0 - EWMA_ALPHA) * smooth_speed)
                     };
                     prev_bytes = bytes;
                     prev_time = now;

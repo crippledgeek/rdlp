@@ -76,6 +76,7 @@ impl std::error::Error for ConfigValidationError {}
 ///
 /// For file I/O operations (loading from TOML/YAML), use the extension
 /// functions in `rdlp_core::config_io`.
+#[allow(clippy::struct_excessive_bools)] // Config structs legitimately carry many boolean feature flags
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -168,7 +169,7 @@ pub struct Config {
     /// Write automatic captions
     pub write_auto_subtitles: bool,
 
-    /// Subtitle languages to download (e.g., ["en", "es"])
+    /// Subtitle languages to download (e.g., \["en", "es"\])
     pub subtitle_langs: Vec<String>,
 
     /// Subtitle format
@@ -242,7 +243,7 @@ pub struct Config {
 
     // === Filtering ===
     /// Match filter expressions (OR logic between multiple filters, AND within each).
-    /// Evaluated against InfoDict before download — non-matching videos are skipped.
+    /// Evaluated against `InfoDict` before download — non-matching videos are skipped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub match_filters: Vec<String>,
 
@@ -289,7 +290,7 @@ pub struct Config {
     pub adaptive_downloads: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -398,6 +399,12 @@ impl Default for Config {
 
 impl Config {
     /// Validate configuration and return errors if invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigValidationError`] if any field is out of range or
+    /// inconsistent (e.g. `concurrent_fragments == 0`, `buffer_size == 0`,
+    /// invalid `playlist_start`).
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.concurrent_fragments == 0 {
             return Err(ConfigValidationError::InvalidConcurrentFragments);

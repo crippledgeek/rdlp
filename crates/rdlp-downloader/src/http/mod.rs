@@ -32,7 +32,7 @@ use crate::chunking::ChunkSizeStrategy;
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
-/// Convert optional HashMap headers to wreq HeaderMap
+/// Convert optional `HashMap` headers to wreq `HeaderMap`
 fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
     let Some(headers) = headers else {
         return HeaderMap::new();
@@ -107,7 +107,7 @@ impl HttpDownloader {
 
     /// Get reference to the HTTP client
     #[must_use]
-    pub fn client(&self) -> &wreq::Client {
+    pub const fn client(&self) -> &wreq::Client {
         &self.client
     }
 

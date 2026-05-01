@@ -30,7 +30,7 @@ impl Progress {
     ///
     /// NaN is mapped to `0.0` so callers always get a usable value.
     #[must_use]
-    pub fn new(fraction: f32) -> Self {
+    pub const fn new(fraction: f32) -> Self {
         if fraction.is_nan() {
             Self(0.0)
         } else {
@@ -53,7 +53,8 @@ impl Progress {
 
     /// Construct from a `f64` fraction with the same clamping semantics as [`Progress::new`].
     #[must_use]
-    pub fn from_f64(fraction: f64) -> Self {
+    #[allow(clippy::cast_possible_truncation)]
+    pub const fn from_f64(fraction: f64) -> Self {
         Self::new(fraction as f32)
     }
 
@@ -61,6 +62,7 @@ impl Progress {
     ///
     /// Returns [`Progress::ZERO`] if `total == 0`.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn from_ratio(done: u64, total: u64) -> Self {
         if total == 0 {
             Self::ZERO
@@ -71,7 +73,7 @@ impl Progress {
 
     /// The underlying fraction in `[0.0, 1.0]`.
     #[must_use]
-    pub fn fraction(self) -> f32 {
+    pub const fn fraction(self) -> f32 {
         self.0
     }
 
@@ -108,6 +110,13 @@ impl<'de> Deserialize<'de> for Progress {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
 

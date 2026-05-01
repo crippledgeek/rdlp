@@ -1,6 +1,6 @@
 //! Resume detection and chunk merging functionality
 
-use super::{Orchestrator, errors::*};
+use super::{Orchestrator, errors::Result};
 use anyhow::Context;
 use log::{debug, warn};
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use tracing::instrument;
 
 /// Information about detected chunk files
 #[derive(Debug, Clone)]
-pub(crate) struct ChunkInfo {
+pub struct ChunkInfo {
     /// Download ID (None for old-style chunks without ID)
     pub(crate) download_id: Option<u64>,
     /// Chunk file paths in order
@@ -100,18 +100,15 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
 /// Merge chunk files into the output file
 ///
 /// Supports both old-style and new-style chunk patterns
-pub(crate) async fn merge_chunk_files(
-    output_path: &Path,
-    chunk_info: &ChunkInfo,
-) -> anyhow::Result<u64> {
+pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> anyhow::Result<u64> {
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, BufWriter};
 
     let chunk_count = chunk_info.chunk_paths.len();
-    let chunk_type = match chunk_info.download_id {
-        Some(id) => format!("new-style (ID: {id})"),
-        None => "old-style".to_owned(),
-    };
+    let chunk_type = chunk_info.download_id.map_or_else(
+        || "old-style".to_owned(),
+        |id| format!("new-style (ID: {id})"),
+    );
 
     debug!(chunk_count, chunk_type:?; "Merging chunks");
 
@@ -209,28 +206,29 @@ impl Orchestrator {
                 // Check if file is already complete
                 if let Some(expected) = expected_size {
                     if size == expected {
-                        debug!(
-                            "File already downloaded ({:.1} MB), skipping...",
-                            size as f64 / (1024.0 * 1024.0)
-                        );
+                        #[allow(clippy::cast_precision_loss)] // display-only MB value
+                        let mb = size as f64 / (1024.0 * 1024.0);
+                        debug!("File already downloaded ({mb:.1} MB), skipping...");
                         // Clean up any orphaned chunks
                         cleanup_old_chunks(output_path).await;
                         return Ok(size);
                     } else if size > expected {
-                        warn!(
-                            "Partial file is larger than expected ({:.1} MB > {:.1} MB), starting fresh...",
+                        #[allow(clippy::cast_precision_loss)] // display-only MB values
+                        let (size_mb, exp_mb) = (
                             size as f64 / (1024.0 * 1024.0),
-                            expected as f64 / (1024.0 * 1024.0)
+                            expected as f64 / (1024.0 * 1024.0),
+                        );
+                        warn!(
+                            "Partial file is larger than expected ({size_mb:.1} MB > {exp_mb:.1} MB), starting fresh..."
                         );
                         tokio::fs::remove_file(output_path).await.ok();
                         cleanup_old_chunks(output_path).await;
                         return Ok(0);
                     }
                 }
-                debug!(
-                    "Found partial download ({:.1} MB), resuming...",
-                    size as f64 / (1024.0 * 1024.0)
-                );
+                #[allow(clippy::cast_precision_loss)] // display-only MB value
+                let size_mb = size as f64 / (1024.0 * 1024.0);
+                debug!("Found partial download ({size_mb:.1} MB), resuming...");
                 // Clean up any orphaned chunks from failed parallel attempts
                 cleanup_old_chunks(output_path).await;
                 return Ok(size);
@@ -239,17 +237,17 @@ impl Orchestrator {
 
         // 2. Check for interrupted parallel download chunks
         if let Some(chunk_info) = detect_chunk_files(output_path).await {
-            let chunk_type = if let Some(id) = chunk_info.download_id {
-                format!("new-style (download ID: {id})")
-            } else {
-                "old-style".to_owned()
-            };
+            let chunk_type = chunk_info.download_id.map_or_else(
+                || "old-style".to_owned(),
+                |id| format!("new-style (download ID: {id})"),
+            );
 
+            #[allow(clippy::cast_precision_loss)] // display-only MB value
+            let total_mb = chunk_info.total_size as f64 / (1024.0 * 1024.0);
             debug!(
-                "Found {} interrupted {} chunk files ({:.1} MB), merging and resuming...",
+                "Found {} interrupted {} chunk files ({total_mb:.1} MB), merging and resuming...",
                 chunk_info.chunk_paths.len(),
                 chunk_type,
-                chunk_info.total_size as f64 / (1024.0 * 1024.0)
             );
 
             // If using new-style chunks, clean up any old-style chunks first
@@ -260,6 +258,7 @@ impl Orchestrator {
             // Merge chunks into the main file
             match merge_chunk_files(output_path, &chunk_info).await {
                 Ok(size) => {
+                    #[allow(clippy::cast_precision_loss)] // display-only MB value
                     let mb = size as f64 / (1024.0 * 1024.0);
                     debug!(
                         chunks = chunk_info.chunk_paths.len(),

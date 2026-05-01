@@ -2,6 +2,17 @@
 //!
 //! Provides pixel format selection, video filter graph construction,
 //! and frame/packet processing functions used by `convert_video_transcode_sync`.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` stream index types require `usize`/`i32` conversions.
+//!   All casts are audited and within valid ranges.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 
 use log::warn;
 
@@ -92,8 +103,7 @@ impl FFmpegRunner {
         let enc_pix_fmt_name = encoder
             .format()
             .descriptor()
-            .map(|d| d.name().to_string())
-            .unwrap_or_else(|| "yuv420p".to_string());
+            .map_or_else(|| "yuv420p".to_string(), |d| d.name().to_string());
 
         let format_spec = format!("format=pix_fmts={enc_pix_fmt_name}");
 
@@ -154,7 +164,7 @@ impl FFmpegRunner {
     /// Receive encoded video packets from encoder and write to output.
     ///
     /// Packets are rescaled from `enc_time_base` to the output stream's
-    /// time_base (read from octx, which reflects the muxer's final value
+    /// `time_base` (read from octx, which reflects the muxer's final value
     /// set during `write_header`).
     pub(super) fn drain_video_encoder_packets(
         encoder: &mut ffmpeg_the_third::encoder::video::Video,
@@ -184,7 +194,7 @@ impl FFmpegRunner {
             let ret = unsafe {
                 ffmpeg_the_third::ffi::av_interleaved_write_frame(
                     octx.as_mut_ptr(),
-                    packet.as_ptr() as *mut _,
+                    packet.as_ptr().cast_mut(),
                 )
             };
             // Unref immediately: frees encoded data before next receive_packet.

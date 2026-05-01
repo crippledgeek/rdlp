@@ -44,36 +44,36 @@ impl Codec {
     pub fn new(s: impl AsRef<str>) -> Self {
         let s = s.as_ref();
         if s.is_empty() || s.eq_ignore_ascii_case("none") {
-            Codec::Absent
+            Self::Absent
         } else {
-            Codec::Present(s.to_owned())
+            Self::Present(s.to_owned())
         }
     }
 
     /// Convenience — same as [`Codec::new`] but accepts an `Option`.
     #[must_use]
     pub fn from_optional_str<S: AsRef<str>>(s: Option<S>) -> Self {
-        s.map_or(Codec::Absent, Codec::new)
+        s.map_or(Self::Absent, Self::new)
     }
 
     /// `true` when no codec is present.
     #[must_use]
     pub const fn is_absent(&self) -> bool {
-        matches!(self, Codec::Absent)
+        matches!(self, Self::Absent)
     }
 
     /// `true` when a codec name is present.
     #[must_use]
     pub const fn is_present(&self) -> bool {
-        matches!(self, Codec::Present(_))
+        matches!(self, Self::Present(_))
     }
 
     /// Borrow the codec name when present.
     #[must_use]
-    pub fn as_str(&self) -> Option<&str> {
+    pub const fn as_str(&self) -> Option<&str> {
         match self {
-            Codec::Absent => None,
-            Codec::Present(s) => Some(s.as_str()),
+            Self::Absent => None,
+            Self::Present(s) => Some(s.as_str()),
         }
     }
 
@@ -82,8 +82,8 @@ impl Codec {
     #[must_use]
     pub fn into_option_string(self) -> Option<String> {
         match self {
-            Codec::Absent => None,
-            Codec::Present(s) => Some(s),
+            Self::Absent => None,
+            Self::Present(s) => Some(s),
         }
     }
 }
@@ -91,8 +91,8 @@ impl Codec {
 impl fmt::Display for Codec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Codec::Absent => f.write_str("none"),
-            Codec::Present(s) => f.write_str(s),
+            Self::Absent => f.write_str("none"),
+            Self::Present(s) => f.write_str(s),
         }
     }
 }
@@ -101,25 +101,25 @@ impl fmt::Display for Codec {
 
 impl From<&str> for Codec {
     fn from(s: &str) -> Self {
-        Codec::new(s)
+        Self::new(s)
     }
 }
 
 impl From<String> for Codec {
     fn from(s: String) -> Self {
-        Codec::new(s)
+        Self::new(s)
     }
 }
 
 impl From<Option<String>> for Codec {
     fn from(s: Option<String>) -> Self {
-        Codec::from_optional_str(s)
+        Self::from_optional_str(s)
     }
 }
 
 impl From<Option<&str>> for Codec {
     fn from(s: Option<&str>) -> Self {
-        Codec::from_optional_str(s)
+        Self::from_optional_str(s)
     }
 }
 
@@ -134,8 +134,8 @@ impl From<Codec> for Option<String> {
 impl Serialize for Codec {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
-            Codec::Absent => s.serialize_none(),
-            Codec::Present(name) => s.serialize_str(name),
+            Self::Absent => s.serialize_none(),
+            Self::Present(name) => s.serialize_str(name),
         }
     }
 }
@@ -143,7 +143,7 @@ impl Serialize for Codec {
 impl<'de> Deserialize<'de> for Codec {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let opt: Option<String> = Option::deserialize(d)?;
-        Ok(Codec::from_optional_str(opt))
+        Ok(Self::from_optional_str(opt))
     }
 }
 

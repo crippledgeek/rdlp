@@ -188,7 +188,7 @@ pub fn all_columns() -> Vec<ColumnDef> {
 /// For `Style::blank()`: no borders/separators, just 2 spaces between columns.
 /// Overhead = (n-1) * 2.
 #[must_use]
-pub fn border_overhead(n_cols: usize, compact: bool) -> usize {
+pub const fn border_overhead(n_cols: usize, compact: bool) -> usize {
     if n_cols == 0 {
         return 0;
     }
@@ -290,6 +290,14 @@ pub fn compute_budget(
         .collect();
     let total_want: usize = wants.iter().sum();
 
+    // Proportional distribution: usize→f64 precision loss is acceptable
+    // for column widths (values ≤ terminal width, typically ≤ 300).
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::indexing_slicing
+    )]
     let widths: Vec<usize> = if total_want == 0 || extra == 0 {
         candidates.iter().map(|(_, c)| c.min_width).collect()
     } else {
@@ -319,6 +327,14 @@ pub fn compute_budget(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing,
+    clippy::needless_collect
+)]
 mod tests {
     use super::*;
     use rdlp_types::Codec;

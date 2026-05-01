@@ -37,7 +37,7 @@ pub struct FormatInfo {
     pub abr: Option<f64>,
     /// Audio sampling rate in Hz.
     pub asr: Option<u32>,
-    /// Download protocol (e.g. "https", "m3u8_native").
+    /// Download protocol (e.g. "https", "`m3u8_native`").
     pub protocol: String,
     /// Whether this format contains a video stream.
     pub has_video: bool,
@@ -145,6 +145,6 @@ pub struct FormatData {
     pub(crate) abr: Option<f64>,
     /// Audio sampling rate in Hz.
     pub(crate) asr: Option<u32>,
-    /// Download protocol string (e.g. "https", "m3u8_native").
+    /// Download protocol string (e.g. "https", "`m3u8_native`").
     pub(crate) protocol: String,
 }

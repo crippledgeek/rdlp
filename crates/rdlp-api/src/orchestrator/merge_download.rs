@@ -5,7 +5,7 @@
 //! passed to the postprocessor pipeline where `MergeStage` handles muxing.
 
 use super::Orchestrator;
-use super::errors::*;
+use super::errors::Result;
 use crate::events::Event;
 use log::{debug, info, warn};
 use rdlp_types::Format;
@@ -44,8 +44,8 @@ impl Orchestrator {
         audio: &Format,
         base_output_path: &Path,
     ) -> Result<Option<MergeDownloadOutcome>> {
-        let video_path = self.merge_stream_path(base_output_path, video, "video");
-        let audio_path = self.merge_stream_path(base_output_path, audio, "audio");
+        let video_path = Self::merge_stream_path(base_output_path, video, "video");
+        let audio_path = Self::merge_stream_path(base_output_path, audio, "audio");
 
         info!(
             video_format = video.format_id.as_str(),
@@ -124,13 +124,13 @@ impl Orchestrator {
     ///
     /// Produces paths like `/output/dir/Title.video.f137.mp4` for the video
     /// stream and `/output/dir/Title.audio.f140.m4a` for the audio stream.
-    fn merge_stream_path(&self, base_output_path: &Path, format: &Format, label: &str) -> PathBuf {
+    fn merge_stream_path(base_output_path: &Path, format: &Format, label: &str) -> PathBuf {
         let stem = base_output_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
         let ext = &format.ext;
-        let dir = base_output_path.parent().unwrap_or(Path::new("."));
+        let dir = base_output_path.parent().unwrap_or_else(|| Path::new("."));
         dir.join(format!("{stem}.{label}.{}.{ext}", format.format_id))
     }
 

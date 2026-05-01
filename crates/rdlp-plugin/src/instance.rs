@@ -1,16 +1,18 @@
 //! Per-call wasmtime instance creation with timeout + cancellation enforcement.
 //!
-//! Each plugin invocation gets a fresh `Store<PluginStoreData>` so plugin
+//! Each plugin invocation gets a fresh [`Store<PluginStoreData>`] so plugin
 //! state cannot leak across calls. The store is configured with:
 //!
-//! - `StoreLimits` — memory + table caps from [`crate::engine::EngineConfig`]
+//! - [`StoreLimits`] — memory + table caps (see [`PluginStoreData::new`] for
+//!   the calibrated values and their rationale).
 //! - `set_epoch_deadline` — N ticks where N is the desired wall-clock deadline
-//!   divided by the engine's tick period (default 100ms)
-//! - `epoch_deadline_trap` — on deadline expiry, the plugin traps so the host
-//!   regains control deterministically
+//!   divided by the engine's tick period (default 100ms).
+//! - `epoch_deadline_trap` — on deadline expiry the plugin traps so the host
+//!   regains control deterministically (preferred over `yield_and_update` because
+//!   the trap is unconditional).
 //!
-//! Cancellation is enforced at the call site via `tokio::select!` against a
-//! `CancellationToken`.
+//! Cancellation is enforced at the call site via [`run_with_cancel`], which
+//! races the plugin future against a [`CancellationToken`].
 
 use crate::PluginError;
 use crate::engine::Engine;
@@ -108,11 +110,14 @@ impl PluginStoreData {
 
 /// Build a fresh store with the given deadline (expressed as engine epoch ticks).
 ///
-/// Wires the limiter, sets the epoch deadline, and configures
-/// `epoch_deadline_trap` so the plugin traps deterministically when the
-/// deadline elapses. This is preferable to `epoch_deadline_async_yield_and_update`
+/// Wires the [`StoreLimits`] resource limiter, sets the epoch deadline, and
+/// configures `epoch_deadline_trap` so the plugin traps deterministically when
+/// the deadline elapses. This is preferable to `epoch_deadline_async_yield_and_update`
 /// for timeout enforcement because the trap is unconditional — the yield variant
 /// requires the host to actively stop resuming the future.
+///
+/// The returned store has all capability fields set to `None`; callers (the
+/// plugin loader) populate them after wiring the linker.
 pub fn build_store(
     engine: &Engine,
     plugin_name: impl Into<String>,
@@ -128,15 +133,40 @@ pub fn build_store(
 }
 
 /// Convert a wall-clock duration into engine epoch ticks (rounded up, min 1).
+///
+/// The minimum return value is 1 regardless of input so callers always get at
+/// least one tick of headroom even when `deadline` is zero.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use rdlp_plugin::instance::deadline_ticks;
+///
+/// assert_eq!(deadline_ticks(Duration::from_secs(30), Duration::from_millis(100)), 300);
+/// assert_eq!(deadline_ticks(Duration::ZERO, Duration::from_millis(100)), 1);
+/// ```
 #[must_use]
 pub fn deadline_ticks(deadline: Duration, tick_period: Duration) -> u64 {
+    // as u64: as_millis() returns u128; plugin deadlines are at most hours so
+    // the cast is safe in practice. Saturating cast is unnecessary overhead.
+    #[allow(clippy::cast_possible_truncation)]
     let denom = tick_period.as_millis().max(1) as u64;
+    #[allow(clippy::cast_possible_truncation)]
     let total = deadline.as_millis() as u64;
     (total / denom).max(1)
 }
 
-/// Race `fut` against `cancel.cancelled()`. Returns `Err(PluginError::Cancelled)`
-/// when cancellation wins.
+/// Race `fut` against `cancel.cancelled()`.
+///
+/// Returns `Err(PluginError::Cancelled)` when the token fires first. Otherwise
+/// returns the inner future's result unchanged.
+///
+/// # Errors
+///
+/// - Returns [`PluginError::Cancelled`] when `cancel` is triggered before `fut`
+///   resolves.
+/// - Propagates any error returned by `fut`.
 pub async fn run_with_cancel<F, T>(
     plugin_name: &str,
     cancel: &CancellationToken,
@@ -149,5 +179,86 @@ where
         biased;
         () = cancel.cancelled() => Err(PluginError::Cancelled { plugin: plugin_name.to_string() }),
         result = fut => result,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // test code — panicking on unexpected errors is intentional
+mod store_limits_tests {
+    use super::*;
+    use wasmtime::ResourceLimiter;
+
+    // 64 MiB memory cap — the threat-model boundary for plugin linear memory.
+    const LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Regression guard for the `StoreLimits` calibration in [`PluginStoreData::new`].
+    ///
+    /// These values were deliberately chosen to match Spin's production
+    /// wasmtime+componentize-py embedder (`max_core_instances_per_component = 200`,
+    /// `max_memories_per_component = 32`, `max_tables_per_component = 64`) so
+    /// that CPython-based plugins (componentize-py 0.17.2) have the same headroom
+    /// Spin provides in production. Changing any of these values MUST go through
+    /// a deliberate review, not an accidental bump.
+    ///
+    /// The `memory_size` (64 MiB) and `table_elements` (`100_000`) values are the
+    /// threat-model boundary and `DoS` mitigation respectively.
+    #[test]
+    fn store_limits_match_spin_calibration() {
+        let cancel = CancellationToken::new();
+        let data = PluginStoreData::new("test-plugin", cancel);
+
+        // Verify the three ResourceLimiter trait methods that expose the
+        // configured limits. StoreLimits fields are private, so we go through
+        // the trait.
+        assert_eq!(
+            ResourceLimiter::instances(&data.limits),
+            200,
+            "instances limit must match Spin's max_core_instances_per_component"
+        );
+        assert_eq!(
+            ResourceLimiter::memories(&data.limits),
+            32,
+            "memories limit must match Spin's max_memories_per_component"
+        );
+        assert_eq!(
+            ResourceLimiter::tables(&data.limits),
+            64,
+            "tables limit must match Spin's max_tables_per_component"
+        );
+    }
+
+    /// Verify that `memory_growing` returns false (deny) when the requested
+    /// final size exceeds the 64 MiB cap, confirming the `memory_size` limit
+    /// is wired.
+    #[test]
+    fn store_limits_deny_memory_beyond_64mib() {
+        let cancel = CancellationToken::new();
+        let mut data = PluginStoreData::new("test-plugin", cancel);
+
+        // A grow that stays within the cap must be allowed.
+        let allowed = data.limits.memory_growing(
+            0,           // current bytes
+            LIMIT_BYTES, // desired bytes (exactly at cap)
+            None,        // maximum from WASM declaration
+        );
+        assert!(
+            allowed.unwrap_or(false),
+            "memory_growing at exactly the cap should be allowed"
+        );
+
+        // A grow that exceeds the cap must be denied. Because the limiter is
+        // built with `trap_on_grow_failure(true)`, wasmtime's `StoreLimits`
+        // returns `Err(...)` (rather than `Ok(false)`) so the host promotes
+        // the denial into a wasm trap. See wasmtime 30 `runtime/limits.rs`.
+        let denied = data.limits.memory_growing(
+            0,               // current bytes
+            LIMIT_BYTES + 1, // desired bytes (one byte over cap)
+            None,
+        );
+        assert!(
+            denied.is_err(),
+            "with trap_on_grow_failure=true, growing past the 64 MiB cap must \
+             return Err so the cap surfaces as a trap; got: {denied:?}"
+        );
     }
 }

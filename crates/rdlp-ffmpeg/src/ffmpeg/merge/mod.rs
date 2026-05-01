@@ -3,6 +3,24 @@
 //! Uses two-way timestamp-interleaved merging to avoid ENOMEM when
 //! `av_interleaved_write_frame` buffers one complete stream waiting
 //! for the other.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (timestamps as
+//!   `i64`/`u64`, stream counts as `usize`/`i32`). Each cast is audited and
+//!   within valid ranges for `FFmpeg`-returned values.
+//! - `clippy::borrow_as_ptr`: `&mut (*ctx).field` required for `**AVDictionary` APIs.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::borrow_as_ptr,
+    clippy::similar_names,  // ist_index/ost_index, video_stream/audio_stream are FFmpeg convention
+    clippy::match_same_arms,  // future per-arm tuning
+)]
 
 mod mkv_raw_ffi;
 mod raw_ffi_helpers;
@@ -27,6 +45,11 @@ impl FFmpegRunner {
     /// Takes two input files (one containing video, one containing audio) and
     /// combines them into a single output file without re-encoding.
     /// The MP4 muxer automatically handles AAC ADTS->ASC conversion when needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` fails to open the input files, create the
+    /// output container, or write packets (including I/O errors and mux failures).
     pub async fn merge(
         &self,
         video_input: impl AsRef<Path>,
@@ -52,6 +75,7 @@ impl FFmpegRunner {
     }
 
     /// Merge separate video and audio files synchronously (stream copy).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn merge_sync(
         video_input: &Path,
         audio_input: &Path,
@@ -210,7 +234,7 @@ impl FFmpegRunner {
             }
             let apkt = ffi::av_packet_alloc();
             if apkt.is_null() {
-                ffi::av_packet_free(&mut (vpkt as *mut _));
+                ffi::av_packet_free(&mut vpkt.cast());
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: "av_packet_alloc failed for audio packet".into(),
                 }
@@ -298,8 +322,8 @@ impl FFmpegRunner {
             // Clean up any unreleased packets
             ffi::av_packet_unref(vpkt);
             ffi::av_packet_unref(apkt);
-            ffi::av_packet_free(&mut (vpkt as *mut _));
-            ffi::av_packet_free(&mut (apkt as *mut _));
+            ffi::av_packet_free(&mut vpkt.cast());
+            ffi::av_packet_free(&mut apkt.cast());
         }
 
         // Emit final 1.0 on completion

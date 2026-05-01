@@ -1,7 +1,9 @@
 """Pure-Python unit tests for utility helpers (no host I/O)."""
+
 import logging
 
 import pytest
+
 from rdlp_ytdlp_compat import (
     ExtractorError,
     GeoRestrictedError,
@@ -10,12 +12,15 @@ from rdlp_ytdlp_compat import (
     YoutubeDLError,
 )
 from rdlp_ytdlp_compat.info_extractor import (
-    InfoExtractor,
-    int_or_none, try_get, urljoin, unified_timestamp,
-    traverse_obj,
     NO_DEFAULT,
+    InfoExtractor,
+    _NoDefault,
+    int_or_none,
+    traverse_obj,
+    try_get,
+    unified_timestamp,
+    urljoin,
 )
-from rdlp_ytdlp_compat.info_extractor import _NoDefault
 
 
 class TestIntOrNone:
@@ -23,32 +28,33 @@ class TestIntOrNone:
         assert int_or_none(None) is None
 
     def test_string_digit_parses(self):
-        assert int_or_none("42") == 42
+        assert int_or_none('42') == 42
 
     def test_invalid_returns_none(self):
-        assert int_or_none("not a number") is None
+        assert int_or_none('not a number') is None
 
     def test_scale_divides(self):
-        assert int_or_none("1000", scale=1000) == 1
-        assert int_or_none("999", scale=1000) == 0  # int division
+        assert int_or_none('1000', scale=1000) == 1
+        assert int_or_none('999', scale=1000) == 0  # int division
 
     def test_default_when_invalid(self):
-        assert int_or_none("oops", default=-1) == -1
+        assert int_or_none('oops', default=-1) == -1
 
     def test_invalid_string_with_default(self):
-        assert int_or_none("abc", default=99) == 99
+        assert int_or_none('abc', default=99) == 99
 
     def test_get_attr_reads_attribute(self):
-        class O:
-            x = "42"
-        assert int_or_none(O(), get_attr="x") == 42
+        class Obj:
+            x = '42'
+
+        assert int_or_none(Obj(), get_attr='x') == 42
 
     def test_invscale_multiplies(self):
         # bytes -> bits
-        assert int_or_none("10", invscale=8) == 80
+        assert int_or_none('10', invscale=8) == 80
 
     def test_base_radix(self):
-        assert int_or_none("ff", base=16) == 255
+        assert int_or_none('ff', base=16) == 255
 
     def test_bool_true_returns_one(self):
         # Python's bool IS-A int (`int(True) == 1`). Real extractors
@@ -59,7 +65,7 @@ class TestIntOrNone:
 
     def test_zero_string_returns_zero(self):
         # Empty string should fall through to default; "0" is a valid value.
-        assert int_or_none("0") == 0
+        assert int_or_none('0') == 0
 
 
 class TestNoDefaultSingleton:
@@ -87,91 +93,89 @@ class TestHostLogOutsideRuntime:
 
     def test_warn_emitted_through_stdlib_logging(self, caplog):
         from rdlp_ytdlp_compat import _host
-        with caplog.at_level(logging.WARNING, logger="rdlp_ytdlp_compat"):
-            _host.log("warn", "test warning surfaces in pytest")
+
+        with caplog.at_level(logging.WARNING, logger='rdlp_ytdlp_compat'):
+            _host.log('warn', 'test warning surfaces in pytest')
         assert any(
-            "test warning surfaces in pytest" in r.message and r.levelno == logging.WARNING
-            for r in caplog.records
+            'test warning surfaces in pytest' in r.message and r.levelno == logging.WARNING for r in caplog.records
         )
 
     def test_error_emitted_through_stdlib_logging(self, caplog):
         from rdlp_ytdlp_compat import _host
-        with caplog.at_level(logging.ERROR, logger="rdlp_ytdlp_compat"):
-            _host.log("error", "test error surfaces in pytest")
-        assert any(
-            r.levelno == logging.ERROR for r in caplog.records
-        )
+
+        with caplog.at_level(logging.ERROR, logger='rdlp_ytdlp_compat'):
+            _host.log('error', 'test error surfaces in pytest')
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
 
     def test_unknown_level_falls_back_to_info(self, caplog):
         from rdlp_ytdlp_compat import _host
-        with caplog.at_level(logging.INFO, logger="rdlp_ytdlp_compat"):
-            _host.log("nonsense_level", "fallback path")
-        assert any(
-            "fallback path" in r.message for r in caplog.records
-        )
+
+        with caplog.at_level(logging.INFO, logger='rdlp_ytdlp_compat'):
+            _host.log('nonsense_level', 'fallback path')
+        assert any('fallback path' in r.message for r in caplog.records)
 
 
 class TestTryGet:
     def test_simple_path(self):
-        d = {"a": {"b": 1}}
-        assert try_get(d, lambda x: x["a"]["b"]) == 1
+        d = {'a': {'b': 1}}
+        assert try_get(d, lambda x: x['a']['b']) == 1
 
     def test_keyerror_returns_none(self):
-        d = {"a": {}}
-        assert try_get(d, lambda x: x["a"]["b"]) is None
+        d = {'a': {}}
+        assert try_get(d, lambda x: x['a']['b']) is None
 
     def test_typeerror_returns_none(self):
-        assert try_get(None, lambda x: x["a"]) is None
+        assert try_get(None, lambda x: x['a']) is None
 
     def test_expected_type_filter(self):
-        d = {"a": "not an int"}
-        assert try_get(d, lambda x: x["a"], expected_type=int) is None
+        d = {'a': 'not an int'}
+        assert try_get(d, lambda x: x['a'], expected_type=int) is None
 
     def test_expected_type_pass(self):
-        d = {"a": 42}
-        assert try_get(d, lambda x: x["a"], expected_type=int) == 42
+        d = {'a': 42}
+        assert try_get(d, lambda x: x['a'], expected_type=int) == 42
 
     def test_iterable_of_getters_first_match_wins(self):
-        d = {"b": 99}
-        result = try_get(d, (lambda x: x["a"], lambda x: x["b"]))
+        d = {'b': 99}
+        result = try_get(d, (lambda x: x['a'], lambda x: x['b']))
         assert result == 99
 
 
 class TestUrljoin:
     def test_absolute_url_unchanged(self):
-        assert urljoin("https://example.com/a", "https://other.com/b") == "https://other.com/b"
+        assert urljoin('https://example.com/a', 'https://other.com/b') == 'https://other.com/b'
 
     def test_relative_path(self):
-        assert urljoin("https://example.com/a/b", "/c") == "https://example.com/c"
+        assert urljoin('https://example.com/a/b', '/c') == 'https://example.com/c'
 
     def test_protocol_relative(self):
-        assert urljoin("https://example.com/a", "//cdn.example.com/x") == "https://cdn.example.com/x"
+        assert urljoin('https://example.com/a', '//cdn.example.com/x') == 'https://cdn.example.com/x'
 
     def test_none_base_returns_path_when_absolute(self):
         # yt-dlp behavior: returns path unchanged when base is None and path is absolute
-        assert urljoin(None, "https://x.com/a") == "https://x.com/a"
+        assert urljoin(None, 'https://x.com/a') == 'https://x.com/a'
 
     def test_none_path_returns_none(self):
-        assert urljoin("https://example.com", None) is None
+        assert urljoin('https://example.com', None) is None
 
     def test_non_url_base_returns_none(self):
         # yt-dlp's behaviour: non-URL base produces None, not stdlib ValueError
-        assert urljoin("not-a-url", "/path") is None
+        assert urljoin('not-a-url', '/path') is None
 
     def test_bytes_path_decoded(self):
-        assert urljoin("https://example.com/a", b"/c") == "https://example.com/c"
+        assert urljoin('https://example.com/a', b'/c') == 'https://example.com/c'
 
 
 class TestUnifiedTimestamp:
     def test_iso_8601_z(self):
         # 2026-04-29T12:00:00Z
-        assert unified_timestamp("2026-04-29T12:00:00Z") == 1777464000
+        assert unified_timestamp('2026-04-29T12:00:00Z') == 1777464000
 
     def test_rfc_2822(self):
-        assert unified_timestamp("Wed, 29 Apr 2026 12:00:00 GMT") == 1777464000
+        assert unified_timestamp('Wed, 29 Apr 2026 12:00:00 GMT') == 1777464000
 
     def test_invalid_returns_none(self):
-        assert unified_timestamp("not a date") is None
+        assert unified_timestamp('not a date') is None
 
     def test_none_returns_none(self):
         assert unified_timestamp(None) is None
@@ -180,22 +184,23 @@ class TestUnifiedTimestamp:
 class TestParseJson:
     def test_valid_json(self):
         ie = InfoExtractor()
-        assert ie._parse_json('{"a": 1}', "x") == {"a": 1}
+        assert ie._parse_json('{"a": 1}', 'x') == {'a': 1}
 
     def test_transform_source(self):
         ie = InfoExtractor()
         # yt-dlp pattern: strip a JSONP wrapper
-        assert ie._parse_json("callback({\"a\": 1})", "x",
-                              transform_source=lambda s: s[s.index("(")+1:s.rindex(")")]) == {"a": 1}
+        assert ie._parse_json(
+            'callback({"a": 1})', 'x', transform_source=lambda s: s[s.index('(') + 1 : s.rindex(')')]
+        ) == {'a': 1}
 
     def test_invalid_non_fatal_returns_none(self):
         ie = InfoExtractor()
-        assert ie._parse_json("not json", "x", fatal=False) is None
+        assert ie._parse_json('not json', 'x', fatal=False) is None
 
     def test_invalid_fatal_raises(self):
         ie = InfoExtractor()
         with pytest.raises((ValueError, TypeError)):
-            ie._parse_json("not json", "x", fatal=True)
+            ie._parse_json('not json', 'x', fatal=True)
 
     def test_lenient_kwarg_silently_dropped(self):
         # Slice-2 update: `lenient`, `ignore_extra`, and `strict` are
@@ -206,22 +211,22 @@ class TestParseJson:
         # break at the boundary. See `_parse_json` doc + Slice-2
         # spec/code-review fix commit 955bd86.
         ie = InfoExtractor()
-        result = ie._parse_json('{"a": 1}', "x", lenient=True)
-        assert result == {"a": 1}
+        result = ie._parse_json('{"a": 1}', 'x', lenient=True)
+        assert result == {'a': 1}
 
 
 class TestSearchRegex:
     def test_simple_match(self):
         ie = InfoExtractor()
-        assert ie._search_regex(r"id=(\d+)", "<div id=42>", "video id") == "42"
+        assert ie._search_regex(r'id=(\d+)', '<div id=42>', 'video id') == '42'
 
     def test_named_group(self):
         ie = InfoExtractor()
-        assert ie._search_regex(r"id=(?P<id>\d+)", "<div id=42>", "video id", group="id") == "42"
+        assert ie._search_regex(r'id=(?P<id>\d+)', '<div id=42>', 'video id', group='id') == '42'
 
     def test_default_when_no_match(self):
         ie = InfoExtractor()
-        assert ie._search_regex(r"NOT", "x", "thing", default="fallback") == "fallback"
+        assert ie._search_regex(r'NOT', 'x', 'thing', default='fallback') == 'fallback'
 
     def test_fatal_explicit_raises_when_no_match(self):
         # Raises RegexNotFoundError (typed yt-dlp subclass), which extends
@@ -229,7 +234,7 @@ class TestSearchRegex:
         # is what the WIT dispatcher recognises (route to parse variant).
         ie = InfoExtractor()
         with pytest.raises(RegexNotFoundError):
-            ie._search_regex(r"NOT", "x", "thing", fatal=True)
+            ie._search_regex(r'NOT', 'x', 'thing', fatal=True)
 
     def test_default_fatal_is_true_silent_break_guard(self):
         # CRITICAL: yt-dlp default is fatal=True. Real extractors omit the kwarg
@@ -237,56 +242,56 @@ class TestSearchRegex:
         # produce empty info-dicts.
         ie = InfoExtractor()
         with pytest.raises(RegexNotFoundError):
-            ie._search_regex(r"NOT", "x", "thing")  # no fatal kwarg
+            ie._search_regex(r'NOT', 'x', 'thing')  # no fatal kwarg
 
     def test_list_of_patterns_first_match_wins(self):
         ie = InfoExtractor()
-        assert ie._search_regex([r"NOT", r"id=(\d+)"], "id=7", "id") == "7"
+        assert ie._search_regex([r'NOT', r'id=(\d+)'], 'id=7', 'id') == '7'
 
     def test_no_groups_returns_full_match(self):
         ie = InfoExtractor()
-        assert ie._search_regex(r"hello", "say hello world", "greeting") == "hello"
+        assert ie._search_regex(r'hello', 'say hello world', 'greeting') == 'hello'
 
 
 class TestHtmlSearchMeta:
     def test_meta_property(self):
         ie = InfoExtractor()
         html = '<meta property="og:title" content="Hello">'
-        assert ie._html_search_meta("og:title", html, "title") == "Hello"
+        assert ie._html_search_meta('og:title', html, 'title') == 'Hello'
 
     def test_meta_name(self):
         ie = InfoExtractor()
         html = '<meta name="description" content="A page">'
-        assert ie._html_search_meta("description", html, "desc") == "A page"
+        assert ie._html_search_meta('description', html, 'desc') == 'A page'
 
     def test_meta_itemprop(self):
         # CRITICAL: yt-dlp matches 5 attrs (itemprop|name|property|id|http-equiv)
         # not just name+property. Microdata extractors rely on itemprop.
         ie = InfoExtractor()
         html = '<meta itemprop="duration" content="PT2M30S">'
-        assert ie._html_search_meta("duration", html, "duration") == "PT2M30S"
+        assert ie._html_search_meta('duration', html, 'duration') == 'PT2M30S'
 
     def test_meta_http_equiv(self):
         ie = InfoExtractor()
         html = '<meta http-equiv="refresh" content="0; url=/x">'
-        assert ie._html_search_meta("refresh", html, "redirect") == "0; url=/x"
+        assert ie._html_search_meta('refresh', html, 'redirect') == '0; url=/x'
 
     def test_default_when_missing(self):
         ie = InfoExtractor()
-        assert ie._html_search_meta("nope", "<html></html>", "x", default="d") == "d"
+        assert ie._html_search_meta('nope', '<html></html>', 'x', default='d') == 'd'
 
     def test_default_fatal_is_false(self):
         # _html_search_meta defaults to fatal=False (distinct from _search_regex)
         ie = InfoExtractor()
         # Should not raise; default is None
-        assert ie._html_search_meta("nope", "<html></html>", "x") is None
+        assert ie._html_search_meta('nope', '<html></html>', 'x') is None
 
     def test_meta_id_attribute(self):
         # 5th supported attr — id="..." is the rarest of the 5 in real
         # extractors but the regex must still match it.
         ie = InfoExtractor()
         html = '<meta id="page-title" content="Hello via id">'
-        assert ie._html_search_meta("page-title", html, "title") == "Hello via id"
+        assert ie._html_search_meta('page-title', html, 'title') == 'Hello via id'
 
     def test_meta_iterable_name_first_match_wins(self):
         # `name` accepts a scalar OR an iterable of meta-tag names; the first
@@ -294,46 +299,44 @@ class TestHtmlSearchMeta:
         # (`og:title`, `twitter:title`) for redundant meta-tag fallbacks.
         ie = InfoExtractor()
         html = '<meta name="twitter:title" content="from twitter">'
-        result = ie._html_search_meta(
-            ["og:title", "twitter:title"], html, "title"
-        )
-        assert result == "from twitter"
+        result = ie._html_search_meta(['og:title', 'twitter:title'], html, 'title')
+        assert result == 'from twitter'
 
     def test_meta_attr_match_is_case_insensitive(self):
         # Real-world HTML often has `Content` (mixed case) or `PROPERTY=...`.
         ie = InfoExtractor()
         html = '<META PROPERTY="og:title" CONTENT="Mixed Case">'
-        assert ie._html_search_meta("og:title", html, "title") == "Mixed Case"
+        assert ie._html_search_meta('og:title', html, 'title') == 'Mixed Case'
 
 
 class TestTraverseObj:
     def test_dict_path(self):
-        assert traverse_obj({"a": {"b": 1}}, ("a", "b")) == 1
+        assert traverse_obj({'a': {'b': 1}}, ('a', 'b')) == 1
 
     def test_list_index(self):
-        assert traverse_obj([{"x": 1}, {"x": 2}], (0, "x")) == 1
+        assert traverse_obj([{'x': 1}, {'x': 2}], (0, 'x')) == 1
 
     def test_missing_returns_none_for_scalar_path(self):
         # Scalar (non-branching) path miss: returns None
-        assert traverse_obj({"a": {}}, ("a", "b")) is None
+        assert traverse_obj({'a': {}}, ('a', 'b')) is None
 
     def test_default(self):
-        assert traverse_obj({"a": {}}, ("a", "b"), default=99) == 99
+        assert traverse_obj({'a': {}}, ('a', 'b'), default=99) == 99
 
     def test_branched_miss_returns_empty_list_not_none(self):
         # CRITICAL: yt-dlp returns [] (not None) when a branched/get_all path
         # misses. Extractors do `if traverse_obj(...): ...` AND `len(...)` —
         # None would silently skip iteration paths.
-        result = traverse_obj({"a": []}, ("a", Ellipsis))
+        result = traverse_obj({'a': []}, ('a', Ellipsis))
         assert result == []
 
     def test_get_all_false_returns_first_only(self):
-        result = traverse_obj([{"x": 1}, {"x": 2}], (Ellipsis, "x"), get_all=False)
+        result = traverse_obj([{'x': 1}, {'x': 2}], (Ellipsis, 'x'), get_all=False)
         assert result == 1
 
     def test_casesense_false(self):
-        d = {"Title": "Hello"}
-        assert traverse_obj(d, "title", casesense=False) == "Hello"
+        d = {'Title': 'Hello'}
+        assert traverse_obj(d, 'title', casesense=False) == 'Hello'
 
     def test_callable_filter(self):
         # Keep only ints. Slice-2 conforms to yt-dlp's two-arg callable
@@ -343,23 +346,24 @@ class TestTraverseObj:
         # == 'Default'`); the Slice-1 single-arg form was an over-simplified
         # shim API that this test now corrects.
         result = traverse_obj(
-            [1, "x", 2, "y"], (lambda _, v: isinstance(v, int),),
+            [1, 'x', 2, 'y'],
+            (lambda _, v: isinstance(v, int),),
         )
         assert result == [1, 2]
 
     def test_multiple_paths_first_hit(self):
-        d = {"a": None, "b": "found"}
-        assert traverse_obj(d, ("a",), ("b",)) == "found"
+        d = {'a': None, 'b': 'found'}
+        assert traverse_obj(d, ('a',), ('b',)) == 'found'
 
     def test_expected_type_filter_passes(self):
-        d = {"x": 42}
-        assert traverse_obj(d, "x", expected_type=int) == 42
+        d = {'x': 42}
+        assert traverse_obj(d, 'x', expected_type=int) == 42
 
     def test_expected_type_filter_rejects(self):
-        d = {"x": "not int"}
+        d = {'x': 'not int'}
         # Type filter on a scalar miss — defaults to [] when get_all and NO_DEFAULT
         # actually returns default when no path produces a hit
-        result = traverse_obj(d, "x", expected_type=int)
+        result = traverse_obj(d, 'x', expected_type=int)
         assert result == [] or result is None  # either acceptable for Slice 1
 
 
@@ -369,45 +373,53 @@ class TestHostCheckStatus:
 
     def test_2xx_passes(self):
         from rdlp_ytdlp_compat._host import _check_status
-        _check_status(200, None, "https://x")
-        _check_status(204, None, "https://x")
-        _check_status(299, None, "https://x")
+
+        _check_status(200, None, 'https://x')
+        _check_status(204, None, 'https://x')
+        _check_status(299, None, 'https://x')
 
     def test_4xx_raises(self):
         from rdlp_ytdlp_compat._host import _check_status
-        with pytest.raises(RuntimeError, match="HTTP 404"):
-            _check_status(404, None, "https://example.com/missing")
+
+        with pytest.raises(RuntimeError, match='HTTP 404'):
+            _check_status(404, None, 'https://example.com/missing')
 
     def test_5xx_raises(self):
         from rdlp_ytdlp_compat._host import _check_status
-        with pytest.raises(RuntimeError, match="HTTP 503"):
-            _check_status(503, None, "https://example.com")
+
+        with pytest.raises(RuntimeError, match='HTTP 503'):
+            _check_status(503, None, 'https://example.com')
 
     def test_3xx_raises(self):
         # Redirect status without a Location is also a non-success.
         from rdlp_ytdlp_compat._host import _check_status
-        with pytest.raises(RuntimeError, match="HTTP 301"):
-            _check_status(301, None, "https://example.com")
+
+        with pytest.raises(RuntimeError, match='HTTP 301'):
+            _check_status(301, None, 'https://example.com')
 
     def test_expected_status_allows_match(self):
         # yt-dlp's soft-404 pattern: expected_status=404 means "I'll handle it".
         from rdlp_ytdlp_compat._host import _check_status
-        _check_status(404, 404, "https://example.com")
+
+        _check_status(404, 404, 'https://example.com')
 
     def test_expected_status_does_not_allow_other_errors(self):
         # expected_status=404 must NOT silently allow 500.
         from rdlp_ytdlp_compat._host import _check_status
-        with pytest.raises(RuntimeError, match="HTTP 500"):
-            _check_status(500, 404, "https://example.com")
+
+        with pytest.raises(RuntimeError, match='HTTP 500'):
+            _check_status(500, 404, 'https://example.com')
 
     def test_expected_status_2xx_still_passes(self):
         from rdlp_ytdlp_compat._host import _check_status
-        _check_status(200, 404, "https://example.com")
+
+        _check_status(200, 404, 'https://example.com')
 
     def test_url_appears_in_error(self):
         from rdlp_ytdlp_compat._host import _check_status
-        with pytest.raises(RuntimeError, match="example.com/auth"):
-            _check_status(401, None, "https://example.com/auth")
+
+        with pytest.raises(RuntimeError, match=r'example\.com/auth'):
+            _check_status(401, None, 'https://example.com/auth')
 
 
 class TestExtractM3U8Formats:
@@ -418,8 +430,8 @@ class TestExtractM3U8Formats:
         # can verify the method exists and is callable, and that the
         # _and_subtitles companion exists.
         ie = InfoExtractor()
-        assert hasattr(ie, "_extract_m3u8_formats")
-        assert hasattr(ie, "_extract_m3u8_formats_and_subtitles")
+        assert hasattr(ie, '_extract_m3u8_formats')
+        assert hasattr(ie, '_extract_m3u8_formats_and_subtitles')
 
     def test_fetch_failure_with_fatal_false_returns_empty(self):
         # yt-dlp contract: when fatal=False and the playlist fetch fails, the
@@ -430,8 +442,9 @@ class TestExtractM3U8Formats:
         # error inside the runtime.
         ie = InfoExtractor()
         formats, subs = ie._extract_m3u8_formats_and_subtitles(
-            "https://example.com/master.m3u8", "vid",
-            errnote="Unable to download HLS playlist",
+            'https://example.com/master.m3u8',
+            'vid',
+            errnote='Unable to download HLS playlist',
             fatal=False,
         )
         assert formats == []
@@ -443,7 +456,8 @@ class TestExtractM3U8Formats:
         ie = InfoExtractor()
         with pytest.raises(RuntimeError):
             ie._extract_m3u8_formats_and_subtitles(
-                "https://example.com/master.m3u8", "vid",
+                'https://example.com/master.m3u8',
+                'vid',
                 fatal=True,
             )
 
@@ -451,9 +465,7 @@ class TestExtractM3U8Formats:
         # The non-suffixed wrapper must propagate fatal=False through to the
         # _and_subtitles companion and only return formats (drop subs).
         ie = InfoExtractor()
-        formats = ie._extract_m3u8_formats(
-            "https://example.com/master.m3u8", "vid", fatal=False
-        )
+        formats = ie._extract_m3u8_formats('https://example.com/master.m3u8', 'vid', fatal=False)
         assert formats == []
 
     def test_master_playlist_parse_happy_path(self, monkeypatch):
@@ -464,8 +476,12 @@ class TestExtractM3U8Formats:
 
         class _Fmt:
             def __init__(self, fid, url, ext, proto, tbr, width, height):
-                self.format_id = fid; self.url = url; self.ext = ext
-                self.protocol = proto; self.tbr = tbr; self.width = width
+                self.format_id = fid
+                self.url = url
+                self.ext = ext
+                self.protocol = proto
+                self.tbr = tbr
+                self.width = width
                 self.height = height
                 self.fps = self.vcodec = self.acodec = None
                 self.vbr = self.abr = self.language = self.format_note = None
@@ -474,37 +490,35 @@ class TestExtractM3U8Formats:
 
         class _Result:
             formats = [
-                _Fmt("hls-1280", "https://cdn.example.com/low/index.m3u8",
-                     "mp4", "m3u8_native", 1280, 640, 360),
-                _Fmt("hls-2560", "https://cdn.example.com/high/index.m3u8",
-                     "mp4", "m3u8_native", 2560, 1280, 720),
+                _Fmt('hls-1280', 'https://cdn.example.com/low/index.m3u8', 'mp4', 'm3u8_native', 1280, 640, 360),
+                _Fmt('hls-2560', 'https://cdn.example.com/high/index.m3u8', 'mp4', 'm3u8_native', 2560, 1280, 720),
             ]
             subtitles = []
 
-        monkeypatch.setattr(_host, "extract_m3u8", lambda *a, **kw: _Result())
+        monkeypatch.setattr(_host, 'extract_m3u8', lambda *a, **kw: _Result())
         ie = InfoExtractor()
         formats, subs = ie._extract_m3u8_formats_and_subtitles(
-            "https://cdn.example.com/master.m3u8",
-            "vid",
-            ext="mp4",
-            m3u8_id="hls",
+            'https://cdn.example.com/master.m3u8',
+            'vid',
+            ext='mp4',
+            m3u8_id='hls',
         )
         assert subs == {}
         assert len(formats) == 2
 
         low = formats[0]
-        assert low["url"] == "https://cdn.example.com/low/index.m3u8"
-        assert low["ext"] == "mp4"
-        assert low["protocol"] == "m3u8_native"
-        assert low["tbr"] == 1280
-        assert low["width"] == 640
-        assert low["height"] == 360
-        assert low["format_id"] == "hls-1280"
+        assert low['url'] == 'https://cdn.example.com/low/index.m3u8'
+        assert low['ext'] == 'mp4'
+        assert low['protocol'] == 'm3u8_native'
+        assert low['tbr'] == 1280
+        assert low['width'] == 640
+        assert low['height'] == 360
+        assert low['format_id'] == 'hls-1280'
 
         high = formats[1]
-        assert high["tbr"] == 2560
-        assert high["width"] == 1280
-        assert high["height"] == 720
+        assert high['tbr'] == 2560
+        assert high['width'] == 1280
+        assert high['height'] == 720
 
     def test_master_playlist_skips_malformed_entries(self, monkeypatch):
         # When extract_m3u8 returns an empty formats list, the method
@@ -515,10 +529,11 @@ class TestExtractM3U8Formats:
             formats = []
             subtitles = []
 
-        monkeypatch.setattr(_host, "extract_m3u8", lambda *a, **kw: _Result())
+        monkeypatch.setattr(_host, 'extract_m3u8', lambda *a, **kw: _Result())
         ie = InfoExtractor()
         formats, _ = ie._extract_m3u8_formats_and_subtitles(
-            "https://cdn.example.com/m.m3u8", "vid",
+            'https://cdn.example.com/m.m3u8',
+            'vid',
         )
         assert formats == []
 
@@ -537,37 +552,37 @@ class TestExtractorErrorHierarchy:
         # yt-dlp upstream signature: (msg, tb, expected, cause, video_id, ie).
         # Extractor source uses every one of these — missing kwargs would
         # fail at first import-and-run.
-        cause = RuntimeError("inner")
+        cause = RuntimeError('inner')
         e = ExtractorError(
-            "boom",
-            tb="<traceback>",
+            'boom',
+            tb='<traceback>',
             expected=True,
             cause=cause,
-            video_id="abc123",
-            ie="FooIE",
+            video_id='abc123',
+            ie='FooIE',
         )
-        assert e.orig_msg == "boom"
-        assert e.traceback == "<traceback>"
+        assert e.orig_msg == 'boom'
+        assert e.traceback == '<traceback>'
         assert e.expected is True
         assert e.cause is cause
-        assert e.video_id == "abc123"
-        assert e.ie == "FooIE"
+        assert e.video_id == 'abc123'
+        assert e.ie == 'FooIE'
 
     def test_extractor_error_default_expected_false(self):
-        e = ExtractorError("boom")
+        e = ExtractorError('boom')
         assert e.expected is False
 
     def test_unsupported_error_single_arg_url(self):
         # Upstream's UnsupportedError is `__init__(self, url)` with
         # expected=True forced.
-        e = UnsupportedError("https://example.com/foo")
-        assert e.url == "https://example.com/foo"
+        e = UnsupportedError('https://example.com/foo')
+        assert e.url == 'https://example.com/foo'
         assert e.expected is True
-        assert "https://example.com/foo" in str(e)
+        assert 'https://example.com/foo' in str(e)
 
     def test_geo_restricted_carries_countries(self):
-        e = GeoRestrictedError("blocked", countries=["US", "GB"])
-        assert e.countries == ["US", "GB"]
+        e = GeoRestrictedError('blocked', countries=['US', 'GB'])
+        assert e.countries == ['US', 'GB']
         assert e.expected is True
 
     def test_regex_not_found_subclass_of_extractor_error(self):
@@ -591,19 +606,19 @@ class TestRaiseHelpers:
         assert excinfo.value.expected is True
         # Marker prefix is GONE (wave-3 fix C1) — typed class is the
         # dispatch key. Token must NOT leak into user-facing message.
-        assert "[login required]" not in excinfo.value.orig_msg
+        assert '[login required]' not in excinfo.value.orig_msg
 
     def test_raise_login_required_with_method(self):
         ie = InfoExtractor()
         with pytest.raises(ExtractorError) as excinfo:
-            ie.raise_login_required("Please log in", method="cookies")
-        assert "cookies" in excinfo.value.orig_msg
+            ie.raise_login_required('Please log in', method='cookies')
+        assert 'cookies' in excinfo.value.orig_msg
 
     def test_raise_geo_restricted_raises_geo_restricted_error(self):
         ie = InfoExtractor()
         with pytest.raises(GeoRestrictedError) as excinfo:
-            ie.raise_geo_restricted(countries=["US"])
-        assert excinfo.value.countries == ["US"]
+            ie.raise_geo_restricted(countries=['US'])
+        assert excinfo.value.countries == ['US']
         assert excinfo.value.expected is True
 
     def test_raise_no_formats_raises_extractor_error(self):
@@ -611,9 +626,9 @@ class TestRaiseHelpers:
         # ExtractorError (extractor bug case); the marker prefix is gone.
         ie = InfoExtractor()
         with pytest.raises(ExtractorError) as excinfo:
-            ie.raise_no_formats("no media available", video_id="vid")
-        assert "[no formats]" not in excinfo.value.orig_msg
-        assert excinfo.value.video_id == "vid"
+            ie.raise_no_formats('no media available', video_id='vid')
+        assert '[no formats]' not in excinfo.value.orig_msg
+        assert excinfo.value.video_id == 'vid'
 
     def test_raise_login_required_sets_ie_to_extractor_name(self):
         # Upstream yt-dlp's raise_* helpers populate ExtractorError.ie so
@@ -621,40 +636,45 @@ class TestRaiseHelpers:
         # sees the extractor identity, not None.
         class FooIE(InfoExtractor):
             pass
+
         with pytest.raises(ExtractorError) as excinfo:
             FooIE().raise_login_required()
-        assert excinfo.value.ie == "Foo"  # class name minus trailing "IE"
+        assert excinfo.value.ie == 'Foo'  # class name minus trailing "IE"
 
     def test_raise_geo_restricted_sets_ie(self):
         class BarIE(InfoExtractor):
             pass
+
         with pytest.raises(GeoRestrictedError) as excinfo:
-            BarIE().raise_geo_restricted(countries=["JP"])
-        assert excinfo.value.ie == "Bar"
+            BarIE().raise_geo_restricted(countries=['JP'])
+        assert excinfo.value.ie == 'Bar'
 
     def test_raise_no_formats_sets_ie(self):
         class BazIE(InfoExtractor):
             pass
+
         with pytest.raises(ExtractorError) as excinfo:
-            BazIE().raise_no_formats("no media", video_id="vid")
-        assert excinfo.value.ie == "Baz"
+            BazIE().raise_no_formats('no media', video_id='vid')
+        assert excinfo.value.ie == 'Baz'
 
     def test_ie_name_uses_explicit_IE_NAME_attribute(self):
         # When the extractor declares `IE_NAME = "youtube:music"` upstream-
         # style, that takes precedence over the class-name derivation.
         class WeirdNamedExtractor(InfoExtractor):
-            IE_NAME = "youtube:music"
+            IE_NAME = 'youtube:music'
+
         with pytest.raises(ExtractorError) as excinfo:
             WeirdNamedExtractor().raise_login_required()
-        assert excinfo.value.ie == "youtube:music"
+        assert excinfo.value.ie == 'youtube:music'
 
     def test_ie_name_falls_back_to_class_name_when_no_IE_suffix(self):
         # If the class doesn't end in "IE", use the full class name.
         class FooBarExtractor(InfoExtractor):
             pass
+
         with pytest.raises(ExtractorError) as excinfo:
             FooBarExtractor().raise_login_required()
-        assert excinfo.value.ie == "FooBarExtractor"
+        assert excinfo.value.ie == 'FooBarExtractor'
 
 
 # =============================================================================
@@ -666,44 +686,54 @@ class TestTypedSubclasses:
     """yt-dlp drop-in compat preserved + isinstance-driven dispatch enabled."""
 
     def test_login_required_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import LoginRequiredError, ExtractorError
-        e = LoginRequiredError("login")
+        from rdlp_ytdlp_compat import ExtractorError, LoginRequiredError
+
+        e = LoginRequiredError('login')
         assert isinstance(e, ExtractorError)
         assert e.expected is True
 
     def test_no_formats_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NoFormatsError, ExtractorError
-        e = NoFormatsError("no formats")
+        from rdlp_ytdlp_compat import ExtractorError, NoFormatsError
+
+        e = NoFormatsError('no formats')
         assert isinstance(e, ExtractorError)
         assert e.expected is True
 
     def test_not_found_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NotFoundError, ExtractorError
-        assert isinstance(NotFoundError("missing"), ExtractorError)
+        from rdlp_ytdlp_compat import ExtractorError, NotFoundError
+
+        assert isinstance(NotFoundError('missing'), ExtractorError)
 
     def test_rate_limited_carries_typed_retry_after(self):
         from rdlp_ytdlp_compat import RateLimitedError
-        e = RateLimitedError("slow down", retry_after=42)
+
+        e = RateLimitedError('slow down', retry_after=42)
         assert e.retry_after == 42
 
     def test_rate_limited_retry_after_optional(self):
         from rdlp_ytdlp_compat import RateLimitedError
-        assert RateLimitedError("slow down").retry_after is None
+
+        assert RateLimitedError('slow down').retry_after is None
 
     def test_network_error_extends_extractor_error(self):
-        from rdlp_ytdlp_compat import NetworkError, ExtractorError
-        assert isinstance(NetworkError("dns failed"), ExtractorError)
+        from rdlp_ytdlp_compat import ExtractorError, NetworkError
+
+        assert isinstance(NetworkError('dns failed'), ExtractorError)
 
     def test_typed_subclasses_default_messages(self):
         # Helpers raised without args produce a sensible default — matches
         # yt-dlp's user-facing message pattern.
         from rdlp_ytdlp_compat import (
-            LoginRequiredError, NoFormatsError, NotFoundError, RateLimitedError,
+            LoginRequiredError,
+            NoFormatsError,
+            NotFoundError,
+            RateLimitedError,
         )
-        assert "registered users" in str(LoginRequiredError())
-        assert "formats" in str(NoFormatsError())
-        assert "not found" in str(NotFoundError()).lower()
-        assert "rate" in str(RateLimitedError()).lower()
+
+        assert 'registered users' in str(LoginRequiredError())
+        assert 'formats' in str(NoFormatsError())
+        assert 'not found' in str(NotFoundError()).lower()
+        assert 'rate' in str(RateLimitedError()).lower()
 
 
 class TestRaiseHelpersUseTypedSubclasses:
@@ -714,22 +744,25 @@ class TestRaiseHelpersUseTypedSubclasses:
 
     def test_raise_login_required_raises_typed_class(self):
         from rdlp_ytdlp_compat import LoginRequiredError
+
         with pytest.raises(LoginRequiredError) as excinfo:
             InfoExtractor().raise_login_required()
         # No marker prefix in message — typed class is the dispatch key.
-        assert "[login required]" not in excinfo.value.orig_msg
+        assert '[login required]' not in excinfo.value.orig_msg
 
     def test_raise_no_formats_expected_true_raises_typed_class(self):
         from rdlp_ytdlp_compat import NoFormatsError
+
         with pytest.raises(NoFormatsError) as excinfo:
-            InfoExtractor().raise_no_formats("nothing", expected=True)
-        assert "[no formats]" not in excinfo.value.orig_msg
+            InfoExtractor().raise_no_formats('nothing', expected=True)
+        assert '[no formats]' not in excinfo.value.orig_msg
 
     def test_raise_no_formats_expected_false_raises_bare_extractor_error(self):
         # expected=False = "extractor bug, not site failure" — bare class.
         from rdlp_ytdlp_compat import ExtractorError, NoFormatsError
+
         with pytest.raises(ExtractorError) as excinfo:
-            InfoExtractor().raise_no_formats("buggy", expected=False)
+            InfoExtractor().raise_no_formats('buggy', expected=False)
         # Must NOT be NoFormatsError — that's reserved for the expected case.
         assert not isinstance(excinfo.value, NoFormatsError)
         assert excinfo.value.expected is False
@@ -741,16 +774,18 @@ class TestSearchRegexRaisesTypedException:
 
     def test_fatal_raises_regex_not_found_error(self):
         from rdlp_ytdlp_compat import RegexNotFoundError
+
         ie = InfoExtractor()
         with pytest.raises(RegexNotFoundError):
-            ie._search_regex(r"NOT", "x", "thing", fatal=True)
+            ie._search_regex(r'NOT', 'x', 'thing', fatal=True)
 
     def test_regex_not_found_extends_extractor_error(self):
         # Drop-in: ported `except ExtractorError:` clauses still catch.
-        from rdlp_ytdlp_compat import RegexNotFoundError, ExtractorError
+        from rdlp_ytdlp_compat import ExtractorError
+
         ie = InfoExtractor()
         with pytest.raises(ExtractorError):
-            ie._search_regex(r"NOT", "x", "thing", fatal=True)
+            ie._search_regex(r'NOT', 'x', 'thing', fatal=True)
 
 
 class TestHostHttpError:
@@ -761,24 +796,28 @@ class TestHostHttpError:
 
     def test_host_http_error_subclass_of_runtime_error(self):
         from rdlp_ytdlp_compat._host import HostHttpError
-        e = HostHttpError(404, "https://example.com/x")
+
+        e = HostHttpError(404, 'https://example.com/x')
         assert isinstance(e, RuntimeError)
 
     def test_host_http_error_carries_typed_attributes(self):
         from rdlp_ytdlp_compat._host import HostHttpError
-        e = HostHttpError(429, "https://example.com/y")
+
+        e = HostHttpError(429, 'https://example.com/y')
         assert e.status == 429
-        assert e.url == "https://example.com/y"
+        assert e.url == 'https://example.com/y'
 
     def test_check_status_raises_typed_host_http_error(self):
-        from rdlp_ytdlp_compat._host import _check_status, HostHttpError
+        from rdlp_ytdlp_compat._host import HostHttpError, _check_status
+
         with pytest.raises(HostHttpError) as excinfo:
-            _check_status(503, None, "https://example.com")
+            _check_status(503, None, 'https://example.com')
         assert excinfo.value.status == 503
 
     def test_check_status_ok_is_silent(self):
         from rdlp_ytdlp_compat._host import _check_status
-        _check_status(200, None, "https://example.com")  # no raise
+
+        _check_status(200, None, 'https://example.com')  # no raise
 
 
 class TestSanitizeFilename:
@@ -786,43 +825,50 @@ class TestSanitizeFilename:
 
     def test_empty_returns_underscore(self):
         from rdlp_ytdlp_compat import sanitize_filename
-        assert sanitize_filename("") == "_"
+
+        assert sanitize_filename('') == '_'
 
     def test_none_returns_underscore(self):
         from rdlp_ytdlp_compat import sanitize_filename
-        assert sanitize_filename(None) == "_"
+
+        assert sanitize_filename(None) == '_'
 
     def test_default_mode_replaces_forbidden_with_unicode_lookalikes(self):
         from rdlp_ytdlp_compat import sanitize_filename
+
         # /, \, :, |, *, <, > all forbidden on Windows; replaced not stripped.
-        result = sanitize_filename("a/b\\c:d|e*f<g>h")
-        for ch in "/\\:|*<>":
+        result = sanitize_filename('a/b\\c:d|e*f<g>h')
+        for ch in '/\\:|*<>':
             assert ch not in result
         # Result still contains all letters
-        for ch in "abcdefgh":
+        for ch in 'abcdefgh':
             assert ch in result
 
     def test_restricted_mode_collapses_to_ascii_underscore(self):
         from rdlp_ytdlp_compat import sanitize_filename
-        result = sanitize_filename("a/b c", restricted=True)
-        assert "/" not in result
+
+        result = sanitize_filename('a/b c', restricted=True)
+        assert '/' not in result
         # whitespace and / both become _
-        assert "_" in result
+        assert '_' in result
 
     def test_control_chars_stripped(self):
         from rdlp_ytdlp_compat import sanitize_filename
-        result = sanitize_filename("foo\x00\x01\x1f\x7fbar")
-        assert "\x00" not in result and "\x01" not in result
-        assert "foo" in result and "bar" in result
+
+        result = sanitize_filename('foo\x00\x01\x1f\x7fbar')
+        assert '\x00' not in result and '\x01' not in result
+        assert 'foo' in result and 'bar' in result
 
     def test_leading_trailing_dots_stripped(self):
         from rdlp_ytdlp_compat import sanitize_filename
+
         # Windows hostile to trailing dot; yt-dlp strips both.
-        assert sanitize_filename(".foo.").strip(".") == "foo"
+        assert sanitize_filename('.foo.').strip('.') == 'foo'
 
     def test_path_traversal_neutralised_in_default_mode(self):
         # The motivating attack: format_id = "../../etc/passwd"
         from rdlp_ytdlp_compat import sanitize_filename
-        result = sanitize_filename("../../etc/passwd")
+
+        result = sanitize_filename('../../etc/passwd')
         # / replaced with full-width look-alike or stripped
-        assert "/" not in result
+        assert '/' not in result

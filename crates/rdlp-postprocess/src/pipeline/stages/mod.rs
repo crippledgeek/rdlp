@@ -1,9 +1,9 @@
 //! Stage implementations for the post-processing pipeline.
 //!
 //! Stages are executed in fixed index order (not priority):
-//! 0: MergeStage → 1: AudioExtractStage → 2: NormalizeStage → 3: RemuxStage →
-//! 4: RecodeStage → 5: SubtitleStage → 6: MetadataStage → 7: ThumbnailStage →
-//! 8: FixupStage → 9: FinalizeMetadataStage
+//! 0: `MergeStage` → 1: `AudioExtractStage` → 2: `NormalizeStage` → 3: `RemuxStage` →
+//! 4: `RecodeStage` → 5: `SubtitleStage` → 6: `MetadataStage` → 7: `ThumbnailStage` →
+//! 8: `FixupStage` → 9: `FinalizeMetadataStage`
 
 pub mod audio_extract;
 pub mod finalize_metadata;

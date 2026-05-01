@@ -3,6 +3,21 @@
 //! These encapsulate all `unsafe` FFI operations that lack safe wrappers
 //! in `ffmpeg-the-third`, providing safe call-site signatures. The `unsafe`
 //! blocks are limited to these well-documented helpers.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` codec parameter types use `u32`/`i32`. Conversions
+//!   are audited and within valid ranges.
+//! - `clippy::redundant_pub_crate`: `pub(crate)` functions are accessed from sibling
+//!   modules via `crate::ffmpeg::ffi_helpers::*`.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::redundant_pub_crate,
+    clippy::similar_names,  // FFI convention: ctx_ptr / dec_ctx / enc_ctx are standard names
+)]
 
 mod filter_graph;
 
@@ -42,12 +57,12 @@ impl FFmpegRunner {
     /// Reset the codec tag to 0 for container compatibility.
     ///
     /// When remuxing between containers, the source codec tag may not be valid
-    /// in the target container. Setting it to 0 lets FFmpeg auto-select.
+    /// in the target container. Setting it to 0 lets `FFmpeg` auto-select.
     pub(crate) fn clear_codec_tag(params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters) {
         // SAFETY: `params_ptr` points to a valid AVCodecParameters allocated by FFmpeg.
         // Setting codec_tag to 0 is always valid — it tells FFmpeg to auto-select.
         unsafe {
-            (*(params_ptr as *mut ffmpeg_the_third::ffi::AVCodecParameters)).codec_tag = 0;
+            (*params_ptr.cast_mut()).codec_tag = 0;
         }
     }
 
@@ -82,7 +97,7 @@ impl FFmpegRunner {
         // `av_channel_layout_default` populates the ch_layout field in-place.
         unsafe {
             ffmpeg_the_third::ffi::av_channel_layout_default(
-                &mut (*encoder_ptr).ch_layout,
+                &raw mut (*encoder_ptr).ch_layout,
                 channels,
             );
         }
@@ -271,9 +286,9 @@ impl FFmpegRunner {
 
 /// Release packet buffer references. Idempotent — safe on empty packets.
 ///
-/// SAFETY: `Packet::as_ptr()` returns a valid, non-null AVPacket pointer
+/// SAFETY: `Packet::as_ptr()` returns a valid, non-null `AVPacket` pointer
 /// owned by the Rust wrapper. `av_packet_unref` only zeroes internal fields.
-pub(crate) fn packet_unref(pkt: &mut ffmpeg_the_third::Packet) {
+pub fn packet_unref(pkt: &mut ffmpeg_the_third::Packet) {
     use ffmpeg_the_third::packet::Mut;
     unsafe { ffmpeg_the_third::ffi::av_packet_unref(pkt.as_mut_ptr()) }
 }
@@ -283,22 +298,22 @@ pub(crate) fn packet_unref(pkt: &mut ffmpeg_the_third::Packet) {
 /// Calling this after `filter.source().add(&frame)` and after
 /// `encoder.send_frame(&frame)` releases our reference immediately,
 /// reducing peak memory when the filter/encoder also holds a ref.
-pub(crate) fn frame_unref_audio(frame: &mut ffmpeg_the_third::frame::Audio) {
+pub fn frame_unref_audio(frame: &mut ffmpeg_the_third::frame::Audio) {
     unsafe { ffmpeg_the_third::ffi::av_frame_unref((*frame).as_mut_ptr()) }
 }
 
 /// Release video frame buffer references. Idempotent — safe on empty frames.
-pub(crate) fn frame_unref_video(frame: &mut ffmpeg_the_third::frame::Video) {
+pub fn frame_unref_video(frame: &mut ffmpeg_the_third::frame::Video) {
     unsafe { ffmpeg_the_third::ffi::av_frame_unref((*frame).as_mut_ptr()) }
 }
 
 /// Force single-threaded operation on a codec context.
 ///
 /// Must be called **before** `avcodec_open2` (i.e. before `.audio()?` or
-/// `.open_as()`). Setting `thread_count = 1` causes FFmpeg's
+/// `.open_as()`). Setting `thread_count = 1` causes `FFmpeg`'s
 /// `validate_thread_parameters()` to set `active_thread_type = 0`, which
 /// disables both frame threading and slice threading. This eliminates:
-/// - Frame threading's per-thread decode buffer pre-allocation (N × frame_size)
+/// - Frame threading's per-thread decode buffer pre-allocation (N × `frame_size`)
 /// - Slice threading's per-slice scratch buffers
 ///
 /// For audio normalization paths this is the primary RSS reduction knob:
@@ -308,7 +323,7 @@ pub(crate) fn frame_unref_video(frame: &mut ffmpeg_the_third::frame::Video) {
 /// # Safety
 ///
 /// `ctx_ptr` must point to a valid, **unopened** `AVCodecContext`.
-pub(crate) fn set_single_thread_codec(ctx_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext) {
+pub fn set_single_thread_codec(ctx_ptr: *mut ffmpeg_the_third::ffi::AVCodecContext) {
     // SAFETY: caller guarantees ctx_ptr is valid and unopened.
     // Setting thread_count before open is the documented way to control threading.
     unsafe {
@@ -323,7 +338,7 @@ pub(crate) fn set_single_thread_codec(ctx_ptr: *mut ffmpeg_the_third::ffi::AVCod
 /// # Safety
 ///
 /// `ctx_ptr` must point to a valid, opened `AVCodecContext`.
-pub(crate) fn codec_threading_info(
+pub const fn codec_threading_info(
     ctx_ptr: *const ffmpeg_the_third::ffi::AVCodecContext,
 ) -> (i32, i32) {
     unsafe { ((*ctx_ptr).thread_count, (*ctx_ptr).active_thread_type) }

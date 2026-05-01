@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// - `embed_thumbnail`: `true` (matches rdlp CLI default).
 /// - All other fields default to `false`, `None`, or empty.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AppSettings {
     /// Directory where downloaded files are saved.
     pub output_dir: PathBuf,
@@ -41,7 +42,7 @@ pub struct AppSettings {
     /// Enable audio normalization (peak mode unless loudnorm is set).
     #[serde(default)]
     pub normalize_audio: bool,
-    /// Use EBU R128 loudnorm normalization (implies normalize_audio).
+    /// Use EBU R128 loudnorm normalization (implies `normalize_audio`).
     #[serde(default)]
     pub loudnorm: bool,
     /// Loudnorm preset name ("streaming", "broadcast", "loud").
@@ -111,9 +112,10 @@ impl AppSettings {
     /// The [`PathBuf`] to the settings file.
     #[must_use]
     pub fn settings_path() -> PathBuf {
-        dirs::config_dir()
-            .map(|p| p.join("rdlp").join("settings.json"))
-            .unwrap_or_else(|| PathBuf::from("settings.json"))
+        dirs::config_dir().map_or_else(
+            || PathBuf::from("settings.json"),
+            |p| p.join("rdlp").join("settings.json"),
+        )
     }
 
     /// Load settings from disk, falling back to defaults.
@@ -130,8 +132,13 @@ impl AppSettings {
         let path = Self::settings_path();
         // Safe: invoked from Tauri sync startup (AppState::new) before any async runtime is active.
         #[allow(clippy::disallowed_methods)]
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match serde_json::from_str(&contents) {
+        let contents = std::fs::read_to_string(&path);
+        contents.map_or_else(
+            |_| {
+                info!("No settings file at {}, using defaults", path.display());
+                Self::default()
+            },
+            |contents| match serde_json::from_str(&contents) {
                 Ok(settings) => {
                     info!("Loaded settings from {}", path.display());
                     settings
@@ -144,11 +151,7 @@ impl AppSettings {
                     Self::default()
                 }
             },
-            Err(_) => {
-                info!("No settings file at {}, using defaults", path.display());
-                Self::default()
-            }
-        }
+        )
     }
 
     /// Persist the current settings to disk as JSON.

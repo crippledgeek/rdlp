@@ -11,6 +11,8 @@ mod models;
 
 pub(crate) use models::*;
 
+use rdlp_types::protocol::DownloadProtocol;
+use rdlp_types::{Format, FormatSelector};
 use tauri::State;
 
 use crate::error::AppError;
@@ -168,6 +170,11 @@ pub async fn get_formats(
 /// * `expression` - A yt-dlp format selector expression (e.g. `bv[height<=1080]+ba`).
 /// * `formats` - Format metadata from the frontend for matching.
 ///
+/// # Errors
+///
+/// Returns [`AppError::InvalidInput`] if the expression cannot be parsed
+/// by [`rdlp_types::FormatSelector`].
+///
 /// # Returns
 ///
 /// A list of matching format IDs on success, or an [`AppError`] on
@@ -181,8 +188,6 @@ pub async fn validate_format_expression(
     // `spawn_blocking` threshold per the TLS Phase 1 async audit
     // (Finding 5.R1); panic isolation for this site is now provided by
     // the global `std::panic::set_hook` installed in `run()`.
-    use rdlp_types::FormatSelector;
-
     let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
         field: "expression".to_owned(),
         message: e.to_string(),
@@ -191,9 +196,6 @@ pub async fn validate_format_expression(
     if formats.is_empty() {
         return Ok(Vec::new());
     }
-
-    use rdlp_types::Format;
-    use rdlp_types::protocol::DownloadProtocol;
 
     let format_list: Vec<Format> = formats
         .iter()
@@ -228,6 +230,7 @@ pub async fn validate_format_expression(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -395,8 +398,8 @@ mod tests {
             height,
             fps: None,
             tbr: None,
-            vcodec: vcodec.map(|s| s.to_owned()),
-            acodec: acodec.map(|s| s.to_owned()),
+            vcodec: vcodec.map(std::borrow::ToOwned::to_owned),
+            acodec: acodec.map(std::borrow::ToOwned::to_owned),
             filesize: None,
             vbr: None,
             abr: None,
@@ -417,7 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_format_expression_invalid() {
-        let result = super::validate_format_expression("".to_owned(), vec![]).await;
+        let result = super::validate_format_expression(String::new(), vec![]).await;
         assert!(result.is_err());
     }
 

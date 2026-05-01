@@ -4,6 +4,14 @@
 //! - [`set_encoding_tool`] — high-level API (safe `octx`)
 //! - [`set_encoding_tool_ffi`] — raw FFI (`*mut AVFormatContext`)
 //! - [`set_stream_encoder`] — per-stream encoder tag
+//!
+//! # Lint allowances
+//!
+//! - `clippy::expect_used`: `CString::new("static literal")` cannot fail (NUL-free
+//!   compile-time constants). `octx.stream_mut(index)` is valid by construction:
+//!   the stream was just added by `add_stream_copy` immediately before this call.
+
+#![allow(clippy::expect_used)]
 
 use std::ffi::CString;
 
@@ -13,7 +21,7 @@ use std::ffi::CString;
 /// encoding_tool_tag("libx264 + libfdk_aac")  // → "rdlp/0.1.0 (libx264 + libfdk_aac)"
 /// encoding_tool_tag("remux")                  // → "rdlp/0.1.0 (remux)"
 /// ```
-pub(crate) fn encoding_tool_tag(components: &str) -> String {
+pub fn encoding_tool_tag(components: &str) -> String {
     format!("rdlp/{} ({components})", env!("CARGO_PKG_VERSION"))
 }
 
@@ -21,10 +29,7 @@ pub(crate) fn encoding_tool_tag(components: &str) -> String {
 ///
 /// Unconditionally sets the tag. Use for stages that create content
 /// (recode, audio extract, normalize).
-pub(crate) fn set_encoding_tool(
-    octx: &mut ffmpeg_the_third::format::context::Output,
-    components: &str,
-) {
+pub fn set_encoding_tool(octx: &mut ffmpeg_the_third::format::context::Output, components: &str) {
     let mut meta = octx.metadata().to_owned();
     meta.set("encoding_tool", &encoding_tool_tag(components));
     octx.set_metadata(meta);
@@ -35,7 +40,7 @@ pub(crate) fn set_encoding_tool(
 ///
 /// Use for pass-through stages (remux, merge, metadata embed, thumbnail
 /// embed, salvage) that should preserve the primary stage's tag.
-pub(crate) fn set_encoding_tool_if_missing(
+pub fn set_encoding_tool_if_missing(
     octx: &mut ffmpeg_the_third::format::context::Output,
     components: &str,
 ) {
@@ -52,7 +57,7 @@ pub(crate) fn set_encoding_tool_if_missing(
 /// # Safety
 ///
 /// `ofmt_ctx` must be a valid, non-null `AVFormatContext` pointer.
-pub(crate) unsafe fn set_encoding_tool_ffi(
+pub unsafe fn set_encoding_tool_ffi(
     ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
     components: &str,
 ) {
@@ -60,7 +65,7 @@ pub(crate) unsafe fn set_encoding_tool_ffi(
     let val = CString::new(encoding_tool_tag(components)).expect("no null bytes in version string");
     unsafe {
         ffmpeg_the_third::ffi::av_dict_set(
-            &mut (*ofmt_ctx).metadata,
+            &raw mut (*ofmt_ctx).metadata,
             key.as_ptr(),
             val.as_ptr(),
             0,
@@ -74,7 +79,7 @@ pub(crate) unsafe fn set_encoding_tool_ffi(
 /// # Safety
 ///
 /// `ofmt_ctx` must be a valid, non-null `AVFormatContext` pointer.
-pub(crate) unsafe fn set_encoding_tool_ffi_if_missing(
+pub unsafe fn set_encoding_tool_ffi_if_missing(
     ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
     components: &str,
 ) {
@@ -93,7 +98,7 @@ pub(crate) unsafe fn set_encoding_tool_ffi_if_missing(
 }
 
 /// Set the `encoder` per-stream tag on a high-level output stream.
-pub(crate) fn set_stream_encoder(
+pub fn set_stream_encoder(
     octx: &mut ffmpeg_the_third::format::context::Output,
     stream_index: usize,
     encoder_name: &str,

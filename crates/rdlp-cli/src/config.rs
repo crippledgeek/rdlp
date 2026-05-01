@@ -17,7 +17,8 @@ use crate::selection::{select_audio_format, select_recode_video, select_remux_co
 ///
 /// These are resolved BEFORE the pure config merge so that `merge_config()`
 /// remains free of side effects and is testable.
-pub(crate) struct ResolvedInteractiveValues {
+#[derive(Copy, Clone)]
+pub struct ResolvedInteractiveValues {
     pub audio_format: Option<AudioFormat>,
     pub recode_video: Option<ContainerFormat>,
     pub remux_container: Option<ContainerFormat>,
@@ -87,7 +88,14 @@ macro_rules! merge_bool {
 ///
 /// This function has no side effects (no interactive prompts, no I/O).
 /// Interactive values must be pre-resolved via `resolve_interactive_values()`.
-pub(crate) fn merge_config(
+///
+/// # Errors
+///
+/// Returns an error if any CLI argument fails to parse (invalid format string,
+/// container name, subtitle format, etc.) or if the resulting config fails
+/// validation.
+#[allow(clippy::too_many_lines)] // flat merge of 50+ CLI flags; extracting sub-functions would add indirection without clarity
+pub fn merge_config(
     args: &Args,
     file_config: Config,
     interactive_values: ResolvedInteractiveValues,
@@ -112,10 +120,10 @@ pub(crate) fn merge_config(
             config.postprocess.embed_thumbnail = false;
         }
     } else if let Some(ref output) = args.output {
-        config.output_template = output.clone();
+        config.output_template.clone_from(output);
     }
     if let Some(ref dir) = args.output_dir {
-        config.output_directory = dir.clone();
+        config.output_directory.clone_from(dir);
     }
     if let Some(ref format) = args.format {
         config.format = Some(format.clone());
@@ -343,7 +351,7 @@ pub(crate) fn merge_config(
 }
 
 /// Build Config by: resolve interactive prompts -> load file -> merge.
-pub(crate) fn build_config(args: &Args) -> Result<Config> {
+pub fn build_config(args: &Args) -> Result<Config> {
     // Step 1: Resolve interactive values (side effects isolated here)
     let interactive_values = resolve_interactive_values(args)
         .context("failed to resolve interactive configuration values")?;
