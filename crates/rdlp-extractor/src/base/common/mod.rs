@@ -37,6 +37,7 @@ pub mod json_ld;
 mod metadata;
 mod parsing;
 mod selectors;
+pub mod selector_macro;
 mod string_utils;
 #[cfg(test)]
 mod tests;
