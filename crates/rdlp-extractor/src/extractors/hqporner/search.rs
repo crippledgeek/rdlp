@@ -3,16 +3,15 @@
 //! Parses search result HTML into `SearchResultPreview` items.
 //! Each result card contains a title, video URL, thumbnail, and duration.
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::SearchResultPreview;
-use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::parse_duration;
 
 /// Pattern to extract total result count from "1850 HD movies" text.
-static TOTAL_COUNT_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d+)\s+HD movies").expect("Valid total count pattern"));
+static TOTAL_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)\s+HD movies");
 
 /// Selector for search result title links.
 static LINK_SELECTOR: LazyLock<Selector> =
