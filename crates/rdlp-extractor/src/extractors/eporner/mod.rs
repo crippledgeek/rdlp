@@ -14,14 +14,13 @@ pub mod patterns;
 pub mod search;
 
 use async_trait::async_trait;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
 use rdlp_types::Codec;
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
-use regex::Regex;
 use scraper::Html;
 use serde_json::Value;
-use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 use hash::calc_hash;
@@ -36,15 +35,13 @@ const EPORNER_ROOT: &str = "https://www.eporner.com";
 /// Regex that extracts the 32-char hex page hash from a script block.
 ///
 /// Matches both `hash = "…"` and `hash: "…"` variants and supports single quotes.
-static PAGE_HASH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"hash\s*[:=]\s*["']([0-9a-f]{32})"#).unwrap());
+static PAGE_HASH: Lazy<Regex> = lazy_regex!(r#"hash\s*[:=]\s*["']([0-9a-f]{32})"#);
 
 /// Regex for `/dload/` download links.
 ///
 /// Captures: (1) relative path, (2) height digits.
 /// The `-av1` suffix is optional.
-static DLOAD_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"href="(/dload/[^"]+?-(\d+)p(?:-av1)?\.mp4)""#).unwrap());
+static DLOAD_LINK: Lazy<Regex> = lazy_regex!(r#"href="(/dload/[^"]+?-(\d+)p(?:-av1)?\.mp4)""#);
 
 // ============================================================================
 // EPornerExtractor struct

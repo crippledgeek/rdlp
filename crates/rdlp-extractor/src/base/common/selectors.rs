@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use regex::Regex;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use scraper::Selector;
 use std::sync::LazyLock;
 
@@ -82,27 +82,21 @@ pub static CANONICAL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 // ============================================================================
 
 /// Pattern to extract quality from URL (e.g., "720p", "1080P")
-pub static QUALITY_FROM_URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d+)[pP]").expect("Valid quality pattern"));
+pub static QUALITY_FROM_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)[pP]");
 
 /// Pattern to extract bitrate from URL (e.g., "720P_4000K")
-pub static BITRATE_FROM_URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d+)[pP]_(\d+)[kK]").expect("Valid bitrate pattern"));
+pub static BITRATE_FROM_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)[pP]_(\d+)[kK]");
 
 /// Pattern for ISO 8601 duration. Accepts both `PT…` and the day-prefixed
 /// `P{N}DT…` form some sites emit (e.g. KoreanPornMovie's `P0DT1H1M14S`).
 /// The day count is consumed but discarded — observed values are always 0
 /// in practice and a per-day conversion would surface a misleading total
 /// when the day slot was actually used as a placeholder.
-pub static ISO8601_DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$")
-        .expect("Valid ISO8601 duration pattern")
-});
+pub static ISO8601_DURATION_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"^P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$");
 
 /// Pattern for ISO 8601 date (e.g., "2024-01-15" or "2024-01-15T10:30:00Z")
-pub static ISO8601_DATE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d{4})-(\d{2})-(\d{2})").expect("Valid ISO8601 date pattern"));
+pub static ISO8601_DATE_PATTERN: Lazy<Regex> = lazy_regex!(r"^(\d{4})-(\d{2})-(\d{2})");
 
 /// Pattern to strip HTML tags from text
-pub static HTML_TAG_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("Valid HTML tag pattern"));
+pub static HTML_TAG_PATTERN: Lazy<Regex> = lazy_regex!(r"<[^>]+>");

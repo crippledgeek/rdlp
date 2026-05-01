@@ -106,42 +106,42 @@ impl HttpClientConfig {
 
     /// Set the connection timeout in seconds
     #[must_use]
-    pub fn with_connect_timeout_secs(mut self, secs: u64) -> Self {
+    pub const fn with_connect_timeout_secs(mut self, secs: u64) -> Self {
         self.connect_timeout_secs = secs;
         self
     }
 
     /// Set the read timeout in seconds
     #[must_use]
-    pub fn with_read_timeout_secs(mut self, secs: u64) -> Self {
+    pub const fn with_read_timeout_secs(mut self, secs: u64) -> Self {
         self.read_timeout_secs = secs;
         self
     }
 
     /// Set the maximum idle connections per host
     #[must_use]
-    pub fn with_pool_max_idle_per_host(mut self, count: usize) -> Self {
+    pub const fn with_pool_max_idle_per_host(mut self, count: usize) -> Self {
         self.pool_max_idle_per_host = count;
         self
     }
 
     /// Set the idle connection timeout in seconds
     #[must_use]
-    pub fn with_pool_idle_timeout_secs(mut self, secs: u64) -> Self {
+    pub const fn with_pool_idle_timeout_secs(mut self, secs: u64) -> Self {
         self.pool_idle_timeout_secs = secs;
         self
     }
 
     /// Set the TCP keepalive interval in seconds
     #[must_use]
-    pub fn with_tcp_keepalive_secs(mut self, secs: u64) -> Self {
+    pub const fn with_tcp_keepalive_secs(mut self, secs: u64) -> Self {
         self.tcp_keepalive_secs = secs;
         self
     }
 
-    /// Enable or disable TCP_NODELAY
+    /// Enable or disable `TCP_NODELAY`
     #[must_use]
-    pub fn with_tcp_nodelay(mut self, enabled: bool) -> Self {
+    pub const fn with_tcp_nodelay(mut self, enabled: bool) -> Self {
         self.tcp_nodelay = enabled;
         self
     }

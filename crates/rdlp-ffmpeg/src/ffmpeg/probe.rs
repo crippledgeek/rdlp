@@ -1,4 +1,17 @@
-//! Media file probing via FFmpeg library bindings.
+//! Media file probing via `FFmpeg` library bindings.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `FFmpeg` probe values use C integer types (duration as `i64`,
+//!   codec properties as `u32`/`u8`). Conversions to `f64`/`u32` are audited:
+//!   durations and codec widths/heights are within safe ranges.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +23,7 @@ use crate::error::{PostProcessError, Result};
 
 use super::{FFmpegRunner, ensure_init};
 
-/// Media file information from FFprobe.
+/// Media file information from `FFprobe`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MediaInfo {
     /// File path
@@ -75,7 +88,12 @@ pub struct StreamInfo {
 }
 
 impl FFmpegRunner {
-    /// Probe a media file using the FFmpeg library and return its information.
+    /// Probe a media file using the `FFmpeg` library and return its information.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PostProcessError::InputNotFound`] if the file does not exist,
+    /// or a library error if `FFmpeg` fails to open or decode the container.
     pub async fn probe(&self, path: impl AsRef<Path>) -> Result<MediaInfo> {
         let path = path.as_ref().to_path_buf();
 
@@ -90,6 +108,7 @@ impl FFmpegRunner {
     }
 
     /// Probe a media file synchronously using ffmpeg-the-third library.
+    #[allow(clippy::too_many_lines)]
     fn probe_sync(path: &Path) -> anyhow::Result<MediaInfo> {
         ensure_init()?;
 
@@ -171,8 +190,8 @@ impl FFmpegRunner {
             let stream_duration_ts = stream.duration();
             if stream_duration_ts > 0 {
                 let tb = stream.time_base();
-                let dur =
-                    stream_duration_ts as f64 * tb.numerator() as f64 / tb.denominator() as f64;
+                let dur = stream_duration_ts as f64 * f64::from(tb.numerator())
+                    / f64::from(tb.denominator());
                 stream_info.duration = Some(dur);
             }
 
@@ -180,7 +199,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::media::Type::Video => {
                     info.has_video = true;
                     if info.video_codec.is_none() {
-                        info.video_codec = stream_info.codec_name.clone();
+                        info.video_codec.clone_from(&stream_info.codec_name);
                     }
 
                     if let Ok(codec_ctx) =
@@ -194,7 +213,7 @@ impl FFmpegRunner {
                     // Frame rate from avg_frame_rate
                     let rate = stream.avg_frame_rate();
                     if rate.denominator() > 0 {
-                        let fps = rate.numerator() as f64 / rate.denominator() as f64;
+                        let fps = f64::from(rate.numerator()) / f64::from(rate.denominator());
                         if fps > 0.0 && fps < 1000.0 {
                             info.fps = Some(fps);
                         }
@@ -230,7 +249,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::media::Type::Audio => {
                     info.has_audio = true;
                     if info.audio_codec.is_none() {
-                        info.audio_codec = stream_info.codec_name.clone();
+                        info.audio_codec.clone_from(&stream_info.codec_name);
                     }
 
                     if let Ok(codec_ctx) =

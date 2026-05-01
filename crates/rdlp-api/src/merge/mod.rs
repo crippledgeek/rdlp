@@ -18,7 +18,7 @@ mod tests_postprocess_network;
 ///
 /// Implementors MUST follow the "only override when Some" rule:
 /// `None` fields are skipped, preserving whatever the config already has.
-pub(crate) trait MergeOverrides {
+pub trait MergeOverrides {
     /// Apply overrides from `self` to `config`.
     fn merge_into(&self, config: &mut Config);
 }
@@ -26,10 +26,10 @@ pub(crate) trait MergeOverrides {
 impl MergeOverrides for OutputOptions {
     fn merge_into(&self, config: &mut Config) {
         if let Some(ref v) = self.output_dir {
-            config.output_directory = v.clone();
+            config.output_directory.clone_from(v);
         }
         if let Some(ref v) = self.template {
-            config.output_template = v.clone();
+            config.output_template.clone_from(v);
         }
         if let Some(v) = self.stdout {
             config.output_to_stdout = v;
@@ -64,7 +64,7 @@ impl MergeOverrides for SubtitleOptions {
             config.write_auto_subtitles = v;
         }
         if !self.sub_langs.is_empty() {
-            config.subtitle_langs = self.sub_langs.clone();
+            config.subtitle_langs.clone_from(&self.sub_langs);
         }
         if let Some(v) = self.sub_format {
             config.subtitle_format = Some(v);
@@ -93,7 +93,7 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(v) = self.embed_thumbnail {
             config.postprocess.embed_thumbnail = v;
         }
-        if let Some(true) = self.no_thumbnail {
+        if self.no_thumbnail == Some(true) {
             config.postprocess.embed_thumbnail = false;
             config.postprocess.write_thumbnail = false;
         }

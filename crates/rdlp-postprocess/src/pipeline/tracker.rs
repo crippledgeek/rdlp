@@ -29,7 +29,7 @@ pub struct FileTracker {
 
 impl FileTracker {
     /// Create a new tracker with the given initial files.
-    pub fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
+    pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
         Self {
             current_files: files,
             temp_files: Vec::new(),
@@ -56,7 +56,7 @@ impl FileTracker {
     /// crash before the stage completes will still clean it up.
     #[must_use]
     pub fn temp_path(&self, base: &Path, ext: &str) -> PathBuf {
-        let dir = base.parent().unwrap_or(Path::new("."));
+        let dir = base.parent().unwrap_or_else(|| Path::new("."));
         let raw_stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
         // Strip any existing .rdlp-tmp-{uuid} suffixes to prevent stacking
         let stem = raw_stem.split(".rdlp-tmp-").next().unwrap_or(raw_stem);
@@ -164,9 +164,13 @@ mod tests {
 
     #[test]
     fn test_temp_path_registers_with_registry() {
+        // Use a real temp dir so `TempRegistry::register()` can create the
+        // sidecar lock file. Hard-coded `/tmp/...` doesn't exist on Windows
+        // and causes registration to skip silently.
+        let dir = TempDir::new().unwrap();
         let reg = test_registry();
         let tracker = FileTracker::new(vec![], reg.clone());
-        let path = tracker.temp_path(&PathBuf::from("/tmp/video.mp4"), "mp4");
+        let path = tracker.temp_path(&dir.path().join("video.mp4"), "mp4");
         assert!(reg.contains(&path));
     }
 

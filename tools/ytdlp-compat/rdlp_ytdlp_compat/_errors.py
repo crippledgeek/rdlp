@@ -64,9 +64,7 @@ class ExtractorError(YoutubeDLError):
     `rate-limited`, `parse`, and `internal` variants.
     """
 
-    def __init__(
-        self, msg, tb=None, expected=False, cause=None, video_id=None, ie=None
-    ):
+    def __init__(self, msg, tb=None, expected=False, cause=None, video_id=None, ie=None):
         super().__init__(msg)
         self.orig_msg = str(msg)
         self.traceback = tb
@@ -87,7 +85,7 @@ class UnsupportedError(ExtractorError):
     """
 
     def __init__(self, url):
-        super().__init__("Unsupported URL: %s" % url, expected=True)
+        super().__init__(f'Unsupported URL: {url}', expected=True)
         self.url = url
 
 
@@ -108,7 +106,7 @@ class GeoRestrictedError(ExtractorError):
     """
 
     def __init__(self, msg, countries=None, **kwargs):
-        kwargs.setdefault("expected", True)
+        kwargs.setdefault('expected', True)
         super().__init__(msg, **kwargs)
         self.countries = countries
 
@@ -118,8 +116,8 @@ class UserNotLive(ExtractorError):
     `_utils.py:1047-1052`)."""
 
     def __init__(self, msg=None, **kwargs):
-        kwargs.setdefault("expected", True)
-        super().__init__(msg or "The channel is not currently live", **kwargs)
+        kwargs.setdefault('expected', True)
+        super().__init__(msg or 'The channel is not currently live', **kwargs)
 
 
 class DownloadError(YoutubeDLError):
@@ -138,7 +136,7 @@ class UnavailableVideoError(YoutubeDLError):
     unavailable (`_utils.py:1136-1147`). Not raised from `_real_extract`."""
 
     def __init__(self, err=None):
-        super().__init__("Unable to download video" if err is None else str(err))
+        super().__init__('Unable to download video' if err is None else str(err))
 
 
 class ContentTooShortError(YoutubeDLError):
@@ -147,9 +145,7 @@ class ContentTooShortError(YoutubeDLError):
     """
 
     def __init__(self, downloaded, expected):
-        super().__init__(
-            "Downloaded %d bytes, expected %d bytes" % (downloaded, expected)
-        )
+        super().__init__(f'Downloaded {downloaded} bytes, expected {expected} bytes')
         self.downloaded = downloaded
         self.expected = expected
 
@@ -192,9 +188,9 @@ class LoginRequiredError(ExtractorError):
     """
 
     def __init__(self, msg=None, **kwargs):
-        kwargs.setdefault("expected", True)
+        kwargs.setdefault('expected', True)
         super().__init__(
-            msg or "This video is only available for registered users",
+            msg or 'This video is only available for registered users',
             **kwargs,
         )
 
@@ -208,8 +204,8 @@ class NoFormatsError(ExtractorError):
     """
 
     def __init__(self, msg=None, **kwargs):
-        kwargs.setdefault("expected", True)
-        super().__init__(msg or "No video formats available", **kwargs)
+        kwargs.setdefault('expected', True)
+        super().__init__(msg or 'No video formats available', **kwargs)
 
 
 class NotFoundError(ExtractorError):
@@ -223,8 +219,8 @@ class NotFoundError(ExtractorError):
     """
 
     def __init__(self, msg=None, **kwargs):
-        kwargs.setdefault("expected", True)
-        super().__init__(msg or "Resource not found", **kwargs)
+        kwargs.setdefault('expected', True)
+        super().__init__(msg or 'Resource not found', **kwargs)
 
 
 class RateLimitedError(ExtractorError):
@@ -238,8 +234,8 @@ class RateLimitedError(ExtractorError):
     """
 
     def __init__(self, msg=None, retry_after=None, **kwargs):
-        kwargs.setdefault("expected", True)
-        super().__init__(msg or "Rate limited by site", **kwargs)
+        kwargs.setdefault('expected', True)
+        super().__init__(msg or 'Rate limited by site', **kwargs)
         self.retry_after = retry_after
 
 
@@ -256,7 +252,7 @@ class NetworkError(ExtractorError):
     """
 
     def __init__(self, msg, **kwargs):
-        kwargs.setdefault("expected", True)
+        kwargs.setdefault('expected', True)
         super().__init__(msg, **kwargs)
 
 

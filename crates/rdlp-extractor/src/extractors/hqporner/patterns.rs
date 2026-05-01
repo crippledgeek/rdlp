@@ -2,8 +2,7 @@
 //!
 //! Contains regex patterns for matching video, category, actress, and search URLs.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for HQPorner video pages.
 ///
@@ -13,80 +12,65 @@ use std::sync::LazyLock;
 /// - `https://m.hqporner.com/hdporn/81203-slug.html`
 ///
 /// The slug is ignored by the server — only the numeric ID matters.
-pub static HQPORNER_VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)
+pub static HQPORNER_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
         https?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /hdporn/(?P<id>\d+)-[\w-]+\.html
-        ",
-    )
-    .expect("Valid HQPorner video URL pattern")
-});
+        "
+);
 
 /// URL pattern for HQPorner category pages.
 ///
 /// Matches:
 /// - `https://hqporner.com/category/amateur`
 /// - `https://hqporner.com/category/1080p-porn/3`
-pub static HQPORNER_CATEGORY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)
+pub static HQPORNER_CATEGORY_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
         https?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /category/(?P<name>[\w-]+)
         (?:/(?P<page>\d+))?
-        ",
-    )
-    .expect("Valid HQPorner category URL pattern")
-});
+        "
+);
 
 /// URL pattern for HQPorner actress pages.
 ///
 /// Matches:
 /// - `https://hqporner.com/actress/emily-bloom`
 /// - `https://hqporner.com/actress/emily-bloom/2`
-pub static HQPORNER_ACTRESS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)
+pub static HQPORNER_ACTRESS_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
         https?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /actress/(?P<name>[\w-]+)
         (?:/(?P<page>\d+))?
-        ",
-    )
-    .expect("Valid HQPorner actress URL pattern")
-});
+        "
+);
 
 /// URL pattern for HQPorner search pages.
 ///
 /// Matches:
 /// - `https://hqporner.com/?q=massage`
 /// - `https://hqporner.com/?q=massage&p=2`
-pub static HQPORNER_SEARCH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)
+pub static HQPORNER_SEARCH_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?x)
         https?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /\?q=
-        ",
-    )
-    .expect("Valid HQPorner search URL pattern")
-});
+        "
+);
 
 /// Pattern to extract the mydaddy.cc iframe embed URL from a video page.
-pub static IFRAME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"iframe[^>]+src="(//mydaddy\.cc/video/[^"]+)""#).expect("Valid iframe pattern")
-});
+pub static IFRAME_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"iframe[^>]+src="(//mydaddy\.cc/video/[^"]+)""#);
 
 /// Pattern to extract video links from listing pages.
-pub static VIDEO_LINK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"href="(/hdporn/\d+-[\w-]+\.html)""#).expect("Valid video link pattern")
-});
+pub static VIDEO_LINK_PATTERN: Lazy<Regex> = lazy_regex!(r#"href="(/hdporn/\d+-[\w-]+\.html)""#);
 
 /// Extract the numeric video ID from a video URL.
 pub fn extract_video_id(url: &str) -> Option<String> {

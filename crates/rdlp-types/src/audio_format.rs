@@ -44,7 +44,7 @@ pub enum AudioFormat {
     /// MPEG Audio Layer 2
     #[strum(serialize = "mp2")]
     Mp2,
-    /// WavPack lossless
+    /// `WavPack` lossless
     #[strum(serialize = "wavpack", serialize = "wv")]
     WavPack,
     /// True Audio lossless
@@ -56,15 +56,14 @@ impl AudioFormat {
     /// File extension for this audio format.
     #[inline]
     #[must_use]
-    pub fn as_ext(&self) -> &'static str {
+    pub const fn as_ext(&self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
             Self::Aac => "aac",
-            Self::M4a => "m4a",
+            Self::M4a | Self::Alac => "m4a",
             Self::Opus => "opus",
             Self::Vorbis => "ogg",
             Self::Flac => "flac",
-            Self::Alac => "m4a",
             Self::Wav => "wav",
             Self::Ac3 => "ac3",
             Self::Eac3 => "eac3",
@@ -75,10 +74,10 @@ impl AudioFormat {
         }
     }
 
-    /// Codec lookup name (matches AUDIO_CODECS keys in ffmpeg.rs).
+    /// Codec lookup name (matches `AUDIO_CODECS` keys in ffmpeg.rs).
     #[inline]
     #[must_use]
-    pub fn codec_name(&self) -> &'static str {
+    pub const fn codec_name(&self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
             Self::Aac => "aac",

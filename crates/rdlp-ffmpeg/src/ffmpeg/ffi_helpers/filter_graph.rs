@@ -3,6 +3,16 @@
 //! Provides `add_abuffer_to_graph` and `parse_and_validate_filter_graph`
 //! which bypass `ffmpeg-the-third` wrapper limitations for audio filter
 //! graph setup.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::expect_used`: `CString::new(format_args)` calls in this module use
+//!   `format!`-produced strings that are guaranteed NUL-free (they contain only
+//!   decimal digits, commas, and codec names). Any bug would surface at first test run.
+//! - `clippy::redundant_pub_crate`: `pub(crate)` methods in this `impl FFmpegRunner`
+//!   block are accessed from normalize and transcode submodules via `crate::` paths.
+
+#![allow(clippy::expect_used, clippy::redundant_pub_crate)]
 
 use std::ffi::CString;
 
@@ -15,7 +25,7 @@ impl FFmpegRunner {
     ///
     /// Uses `avfilter_graph_alloc_filter` + `av_opt_set*` + `avfilter_init_str`
     /// instead of the args-string approach via `Graph::add()`. Required because
-    /// FFmpeg 8.0's abuffer option is `"channel_layout"` (not `"chlayout"`),
+    /// `FFmpeg` 8.0's abuffer option is `"channel_layout"` (not `"chlayout"`),
     /// and the args-string parser rejects unknown option names.
     pub(crate) fn add_abuffer_to_graph(
         graph: &mut ffmpeg_the_third::filter::Graph,
@@ -61,7 +71,7 @@ impl FFmpegRunner {
             let search = ffmpeg_the_third::ffi::AV_OPT_SEARCH_CHILDREN;
 
             let ret = ffmpeg_the_third::ffi::av_opt_set(
-                ctx as *mut std::ffi::c_void,
+                ctx.cast::<std::ffi::c_void>(),
                 key_channel_layout.as_ptr(),
                 ch_layout_c.as_ptr(),
                 search,
@@ -75,7 +85,7 @@ impl FFmpegRunner {
             }
 
             let ret = ffmpeg_the_third::ffi::av_opt_set(
-                ctx as *mut std::ffi::c_void,
+                ctx.cast::<std::ffi::c_void>(),
                 key_sample_fmt.as_ptr(),
                 sample_fmt_c.as_ptr(),
                 search,
@@ -87,7 +97,7 @@ impl FFmpegRunner {
             }
 
             let ret = ffmpeg_the_third::ffi::av_opt_set_q(
-                ctx as *mut std::ffi::c_void,
+                ctx.cast::<std::ffi::c_void>(),
                 key_time_base.as_ptr(),
                 ffmpeg_the_third::ffi::AVRational {
                     num: time_base.numerator(),
@@ -106,7 +116,7 @@ impl FFmpegRunner {
             }
 
             let ret = ffmpeg_the_third::ffi::av_opt_set_int(
-                ctx as *mut std::ffi::c_void,
+                ctx.cast::<std::ffi::c_void>(),
                 key_sample_rate.as_ptr(),
                 i64::from(sample_rate),
                 search,
@@ -132,7 +142,7 @@ impl FFmpegRunner {
     ///
     /// Bypasses the `ffmpeg-the-third` wrapper's `Parser::parse()` which may
     /// swap the `inputs`/`outputs` parameters to `avfilter_graph_parse_ptr`.
-    /// Instead calls FFI directly matching FFmpeg's official `filter_audio.c`
+    /// Instead calls FFI directly matching `FFmpeg`'s official `filter_audio.c`
     /// example: `outputs` = source (abuffer), `inputs` = sink (abuffersink).
     pub(crate) fn parse_and_validate_filter_graph(
         graph: &mut ffmpeg_the_third::filter::Graph,
@@ -191,7 +201,7 @@ impl FFmpegRunner {
             let inputs = ffmpeg_the_third::ffi::avfilter_inout_alloc();
             if inputs.is_null() {
                 let mut out_ptr = outputs;
-                ffmpeg_the_third::ffi::avfilter_inout_free(&mut out_ptr);
+                ffmpeg_the_third::ffi::avfilter_inout_free(&raw mut out_ptr);
                 return Err(PostProcessError::FFmpegLibraryError {
                     message: "failed to allocate AVFilterInOut for inputs".into(),
                 });
@@ -209,14 +219,14 @@ impl FFmpegRunner {
             let ret = ffmpeg_the_third::ffi::avfilter_graph_parse_ptr(
                 graph.as_mut_ptr(),
                 spec_c.as_ptr(),
-                &mut inputs_ptr,
-                &mut outputs_ptr,
+                &raw mut inputs_ptr,
+                &raw mut outputs_ptr,
                 std::ptr::null_mut(),
             );
 
             // Free InOut structures (parse_ptr may set consumed pointers to NULL)
-            ffmpeg_the_third::ffi::avfilter_inout_free(&mut inputs_ptr);
-            ffmpeg_the_third::ffi::avfilter_inout_free(&mut outputs_ptr);
+            ffmpeg_the_third::ffi::avfilter_inout_free(&raw mut inputs_ptr);
+            ffmpeg_the_third::ffi::avfilter_inout_free(&raw mut outputs_ptr);
 
             if ret < 0 {
                 return Err(PostProcessError::FFmpegLibraryError {

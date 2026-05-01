@@ -3,10 +3,13 @@
 //! Owns `download_from_info_to_dir`, which downloads an individual
 //! episode with lazy format resolution and CDN retry.
 
-use super::*;
+use super::{
+    DownloadPlan, DownloadResult, Duration, Instant, Orchestrator, OrchestratorError, PathBuf,
+    Result, TOKEN_MAX_AGE, debug, extract_cdn_host, is_reextractable_error, warn,
+};
 
 impl Orchestrator {
-    /// Download from pre-extracted InfoDict to a specific directory
+    /// Download from pre-extracted `InfoDict` to a specific directory
     ///
     /// This method is used by playlist downloads to save files to the playlist folder.
     /// Uses the shared CDN fallback loop via `download_with_cdn_fallback()`.
@@ -25,6 +28,7 @@ impl Orchestrator {
     /// * `output_dir` - Directory to save the file in
     /// * `subtitle_langs` - Pre-selected subtitle language names (empty = config-based)
     /// * `audio_type_filter` - If set, filter lazily-resolved formats to this language
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn download_from_info_to_dir(
         &self,
         info: &rdlp_types::InfoDict,
@@ -45,6 +49,8 @@ impl Orchestrator {
 
         for attempt in 0..=MAX_EXTRACT_RETRIES {
             if attempt > 0 {
+                #[allow(clippy::indexing_slicing)]
+                // attempt ∈ 1..=MAX_EXTRACT_RETRIES; array len == MAX_EXTRACT_RETRIES
                 let delay = Duration::from_secs(RETRY_DELAYS[attempt - 1]);
                 warn!(
                     attempt = attempt + 1,
@@ -83,12 +89,12 @@ impl Orchestrator {
                 };
 
                 // Preserve all episode metadata from the original stub
-                resolved.id = info.id.clone();
-                resolved.title = info.title.clone();
-                resolved.thumbnail = info.thumbnail.clone();
-                resolved.description = info.description.clone();
-                resolved.playlist = info.playlist.clone();
-                resolved.playlist_title = info.playlist_title.clone();
+                resolved.id.clone_from(&info.id);
+                resolved.title.clone_from(&info.title);
+                resolved.thumbnail.clone_from(&info.thumbnail);
+                resolved.description.clone_from(&info.description);
+                resolved.playlist.clone_from(&info.playlist);
+                resolved.playlist_title.clone_from(&info.playlist_title);
                 resolved.playlist_index = info.playlist_index;
                 resolved.playlist_count = info.playlist_count;
 
@@ -137,7 +143,7 @@ impl Orchestrator {
                     // Compute output path on first attempt only
                     if output_path.is_none() {
                         let file_ext = self.determine_file_extension(&format);
-                        let sanitized_title = self.sanitize_filename(&info_ref.title);
+                        let sanitized_title = Self::sanitize_filename(&info_ref.title);
                         let filename = format!("{sanitized_title}.{file_ext}");
                         let path = output_dir.join(&filename);
 
@@ -149,6 +155,8 @@ impl Orchestrator {
                     }
 
                     // output_path is always set: the is_none() guard above runs on first iteration.
+                    #[allow(clippy::expect_used)]
+                    // loop invariant: set by is_none guard on first pass
                     let path = output_path
                         .as_ref()
                         .expect("output_path set in is_none guard above");
@@ -177,7 +185,6 @@ impl Orchestrator {
                         Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
                             warn!("All CDN URLs failed: {e}");
                             warn!("Will re-extract fresh URLs after delay");
-                            continue;
                         }
                         Err(e) => return Err(e),
                     }
@@ -221,7 +228,7 @@ impl Orchestrator {
                     // Compute output path on first attempt only
                     if output_path.is_none() {
                         let file_ext = self.determine_file_extension(&video);
-                        let sanitized_title = self.sanitize_filename(&info_ref.title);
+                        let sanitized_title = Self::sanitize_filename(&info_ref.title);
                         let filename = format!("{sanitized_title}.{file_ext}");
                         let path = output_dir.join(&filename);
 
@@ -233,6 +240,8 @@ impl Orchestrator {
                     }
 
                     // output_path is always set: the is_none() guard above runs on first iteration.
+                    #[allow(clippy::expect_used)]
+                    // loop invariant: set by is_none guard on first pass
                     let path = output_path
                         .as_ref()
                         .expect("output_path set in is_none guard above");
@@ -251,7 +260,6 @@ impl Orchestrator {
                         Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
                             warn!("Merge download failed: {e}");
                             warn!("Will re-extract fresh URLs after delay");
-                            continue;
                         }
                         Err(e) => return Err(e),
                     }
@@ -284,10 +292,10 @@ impl Orchestrator {
         }
 
         // Download subtitles: resolve per-episode URLs from language names.
-        let episode_subs = if !subtitle_langs.is_empty() {
-            self.resolve_subtitles_for_episode(final_info, subtitle_langs)
-        } else {
+        let episode_subs = if subtitle_langs.is_empty() {
             Vec::new()
+        } else {
+            self.resolve_subtitles_for_episode(final_info, subtitle_langs)
         };
         let downloaded_subs = self
             .download_subtitles(final_info, &output_path, &episode_subs)

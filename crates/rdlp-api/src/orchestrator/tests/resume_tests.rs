@@ -1,4 +1,9 @@
 //! Tests for chunk merge and resume compatibility
+#![allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use super::*;
 

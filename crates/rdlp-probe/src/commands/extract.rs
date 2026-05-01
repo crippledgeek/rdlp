@@ -40,18 +40,17 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> Result<()> {
-    let input = match args.file {
-        Some(p) => tokio::fs::read_to_string(&p)
+    let input = if let Some(p) = args.file {
+        tokio::fs::read_to_string(&p)
             .await
-            .with_context(|| format!("read {}", p.display()))?,
-        None => {
-            let mut s = String::new();
-            tokio::io::stdin()
-                .read_to_string(&mut s)
-                .await
-                .context("read stdin")?;
-            s
-        }
+            .with_context(|| format!("read {}", p.display()))?
+    } else {
+        let mut s = String::new();
+        tokio::io::stdin()
+            .read_to_string(&mut s)
+            .await
+            .context("read stdin")?;
+        s
     };
 
     match args.mode {

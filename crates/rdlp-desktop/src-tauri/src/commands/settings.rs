@@ -6,6 +6,9 @@
 //! `tauri-plugin-dialog`, and [`reveal_in_folder`] uses
 //! `tauri-plugin-opener` to show a file in the system file manager.
 
+// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -39,7 +42,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, App
     let settings = state
         .settings
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
 
     Ok(settings)
@@ -76,10 +79,14 @@ pub async fn update_settings(
             message: e.to_string(),
         })?;
 
-    let mut current = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-
+    let mut current = state
+        .settings
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *current = settings;
-    current.save().map_err(|e| AppError::Internal {
+    let result = current.save();
+    drop(current);
+    result.map_err(|e| AppError::Internal {
         message: format!("Failed to save settings: {e}"),
     })?;
 
@@ -169,13 +176,13 @@ pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppErr
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        warn!("reveal_in_folder: file does not exist: {}", path);
+        warn!("reveal_in_folder: file does not exist: {path}");
         return Err(AppError::Internal {
             message: format!("File not found: {path}"),
         });
     }
 
-    info!("reveal_in_folder: revealing {}", path);
+    info!("reveal_in_folder: revealing {path}");
 
     app.opener()
         .reveal_item_in_dir(&path_buf)

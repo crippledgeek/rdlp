@@ -27,7 +27,7 @@ impl fmt::Display for CorruptionKind {
 #[derive(Debug, Error)]
 #[allow(missing_docs)] // Field names are self-explanatory, variant docs describe them
 pub enum PostProcessError {
-    /// FFmpeg operation failed
+    /// `FFmpeg` operation failed
     #[error("FFmpeg failed: {message}")]
     FFmpegFailed {
         message: String,
@@ -83,11 +83,11 @@ pub enum PostProcessError {
         source: std::io::Error,
     },
 
-    /// FFmpeg library initialization failed
+    /// `FFmpeg` library initialization failed
     #[error("FFmpeg library initialization failed: {message}")]
     FFmpegInitFailed { message: String },
 
-    /// FFmpeg library operation failed
+    /// `FFmpeg` library operation failed
     #[error("FFmpeg library error: {message}")]
     FFmpegLibraryError { message: String },
 
@@ -124,7 +124,7 @@ pub enum PostProcessError {
     #[error("Audio normalization failed: {message}")]
     NormalizationFailed { message: String },
 
-    /// FFmpeg log capture failed
+    /// `FFmpeg` log capture failed
     #[error("FFmpeg log capture failed: {message}")]
     LogCaptureFailed { message: String },
 
@@ -150,7 +150,7 @@ pub enum PostProcessError {
 }
 
 impl PostProcessError {
-    /// Create an FFmpeg failed error
+    /// Create an `FFmpeg` failed error
     pub fn ffmpeg_failed(message: impl Into<String>) -> Self {
         Self::FFmpegFailed {
             message: message.into(),
@@ -168,7 +168,7 @@ impl PostProcessError {
 
     /// True if this is a mux write error (ENOMEM / ENOSPC from the muxer).
     #[must_use]
-    pub fn is_mux_write_error(&self) -> bool {
+    pub const fn is_mux_write_error(&self) -> bool {
         matches!(self, Self::MuxWriteError { .. })
     }
 
@@ -177,19 +177,19 @@ impl PostProcessError {
     /// D1: Triggers on mux write errors (ENOMEM/ENOSPC/EIO/EINVAL),
     /// stall watchdog aborts, and input container corruption.
     #[must_use]
-    pub fn is_salvage_retryable(&self) -> bool {
+    pub const fn is_salvage_retryable(&self) -> bool {
         matches!(self, Self::MuxWriteError { .. } | Self::InputCorrupt { .. })
     }
 
     /// True if this error indicates memory exhaustion (ENOMEM/-12).
     #[must_use]
-    pub fn is_enomem(&self) -> bool {
+    pub const fn is_enomem(&self) -> bool {
         matches!(self, Self::MuxWriteError { code, .. } if *code == -12)
     }
 
     /// True if this error indicates an I/O error (EIO/-5).
     #[must_use]
-    pub fn is_eio(&self) -> bool {
+    pub const fn is_eio(&self) -> bool {
         matches!(self, Self::MuxWriteError { code, .. } if *code == -5)
     }
 
@@ -220,34 +220,26 @@ impl<T> FfmpegResultExt<T> for std::result::Result<T, ffmpeg_the_third::Error> {
     }
 }
 
-/// Convert ffmpeg-the-third errors into PostProcessError.
+/// Convert ffmpeg-the-third errors into `PostProcessError`.
 impl From<ffmpeg_the_third::Error> for PostProcessError {
     fn from(e: ffmpeg_the_third::Error) -> Self {
-        PostProcessError::FFmpegLibraryError {
+        Self::FFmpegLibraryError {
             message: e.to_string(),
         }
     }
 }
 
-/// Convert PostProcessError to RdlpError for use at trait boundaries.
+/// Convert `PostProcessError` to `RdlpError` for use at trait boundaries.
 impl From<PostProcessError> for RdlpError {
     fn from(error: PostProcessError) -> Self {
         match error {
             PostProcessError::FFmpegFailed { .. }
             | PostProcessError::FFmpegInitFailed { .. }
             | PostProcessError::FFmpegLibraryError { .. }
-            | PostProcessError::MuxWriteError { .. } => RdlpError::FFmpeg(error.to_string()),
-
-            PostProcessError::InputNotFound { .. }
-            | PostProcessError::OutputExists { .. }
-            | PostProcessError::IoError { .. }
-            | PostProcessError::TempFileError { .. } => RdlpError::PostProcess(error.to_string()),
-
-            PostProcessError::InputCorrupt { .. } | PostProcessError::SalvageFailed { .. } => {
-                RdlpError::FFmpeg(error.to_string())
-            }
-
-            _ => RdlpError::PostProcess(error.to_string()),
+            | PostProcessError::MuxWriteError { .. }
+            | PostProcessError::InputCorrupt { .. }
+            | PostProcessError::SalvageFailed { .. } => Self::FFmpeg(error.to_string()),
+            _ => Self::PostProcess(error.to_string()),
         }
     }
 }

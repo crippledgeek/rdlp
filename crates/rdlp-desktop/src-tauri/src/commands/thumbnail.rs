@@ -35,10 +35,10 @@ fn derive_referer(url: &str) -> Option<String> {
 
     // For IP addresses, keep as-is (including port)
     if host.parse::<std::net::IpAddr>().is_ok() {
-        return match parsed.port() {
-            Some(port) => Some(format!("{scheme}://{host}:{port}")),
-            None => Some(format!("{scheme}://{host}")),
-        };
+        return Some(parsed.port().map_or_else(
+            || format!("{scheme}://{host}"),
+            |port| format!("{scheme}://{host}:{port}"),
+        ));
     }
 
     // Strip CDN subdomains: keep last 2 segments, prepend www.
@@ -48,7 +48,10 @@ fn derive_referer(url: &str) -> Option<String> {
     // reject the bare registrable domain as Referer.
     let parts: Vec<&str> = host.split('.').collect();
     let registrable = if parts.len() > 2 {
-        parts[parts.len() - 2..].join(".")
+        let start = parts.len().saturating_sub(2);
+        parts
+            .get(start..)
+            .map_or_else(|| host.to_string(), |s| s.join("."))
     } else {
         host.to_string()
     };
@@ -57,10 +60,12 @@ fn derive_referer(url: &str) -> Option<String> {
     // the content site, not the CDN domain.
     let reg_parts: Vec<&str> = registrable.split('.').collect();
     let content_domain = if reg_parts.len() == 2
-        && let Some(stripped) = reg_parts[0].strip_suffix("-cdn")
+        && let Some(first) = reg_parts.first()
+        && let Some(second) = reg_parts.get(1)
+        && let Some(stripped) = first.strip_suffix("-cdn")
         && !stripped.is_empty()
     {
-        format!("{stripped}.{}", reg_parts[1])
+        format!("{stripped}.{second}")
     } else {
         registrable
     };
@@ -94,6 +99,12 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
         });
     }
 
+    // SSRF gate: block requests to private/internal hosts.
+    rdlp_security::validate_url_security(&url).map_err(|e| AppError::InvalidInput {
+        field: "url".to_owned(),
+        message: format!("Thumbnail URL failed security validation: {e}"),
+    })?;
+
     let referer = derive_referer(&url).unwrap_or_default();
 
     // Route through HttpClientFactory so the default browser emulation
@@ -121,7 +132,7 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
 
     // Check Content-Length if available
     if let Some(len) = resp.content_length()
-        && len as usize > MAX_BODY_SIZE
+        && usize::try_from(len).is_ok_and(|l| l > MAX_BODY_SIZE)
     {
         return Err(AppError::Internal {
             message: format!("Thumbnail too large: {len} bytes (max {MAX_BODY_SIZE})"),
@@ -206,6 +217,74 @@ mod tests {
         assert!(derive_referer("not-a-url").is_none());
     }
 
+    // ── SSRF regression guard (H1) ──────────────────────────────────────────
+
+    /// Before the SSRF gate was added, `proxy_thumbnail` would issue a real HTTP
+    /// request to any URL that started with `https://`, including private hosts.
+    /// These tests assert the gate blocks both link-local and RFC-1918 addresses.
+    #[tokio::test]
+    async fn test_rejects_link_local_ssrf() {
+        let result = proxy_thumbnail("https://169.254.169.254/latest/meta-data/".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for link-local address, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rejects_private_ip_ssrf() {
+        let result = proxy_thumbnail("https://10.0.0.1/image.jpg".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for private IP, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rejects_localhost_ssrf() {
+        let result = proxy_thumbnail("https://localhost/image.jpg".to_owned()).await;
+        match result {
+            Err(AppError::InvalidInput { field, message }) => {
+                assert_eq!(field, "url");
+                assert!(
+                    message.contains("security"),
+                    "expected security message, got: {message}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
+            Ok(_) => panic!("Expected Err(InvalidInput) for localhost, got Ok"),
+        }
+    }
+
+    /// A public hostname passes the SSRF gate (network failure is acceptable
+    /// in unit-test context — the important signal is that no `InvalidInput`
+    /// error was returned at the validation stage).
+    #[tokio::test]
+    async fn test_public_host_passes_ssrf_gate() {
+        let result = proxy_thumbnail("https://www.example.com/image.jpg".to_owned()).await;
+        // Any error other than InvalidInput(security) means the SSRF gate passed.
+        match result {
+            Err(AppError::InvalidInput { message, .. }) if message.contains("security") => {
+                panic!("Public host was rejected by security gate: {message}");
+            }
+            _ => {} // Ok, NetworkError, Internal — all acceptable
+        }
+    }
+
     #[tokio::test]
     async fn test_rejects_http_url() {
         let result = proxy_thumbnail("http://example.com/image.jpg".to_owned()).await;
@@ -221,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rejects_empty_url() {
-        let result = proxy_thumbnail("".to_owned()).await;
+        let result = proxy_thumbnail(String::new()).await;
         match result {
             Err(AppError::InvalidInput { .. }) => {}
             Err(other) => panic!("Expected InvalidInput, got: {other:?}"),
@@ -255,6 +334,7 @@ mod tests {
         let bytes = resp.bytes().await.unwrap();
         assert_eq!(&bytes[..], &[0x89, 0x50, 0x4e, 0x47]);
         mock.assert_async().await;
+        drop(server);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -274,5 +354,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status().as_u16(), 403);
+        drop(server);
     }
 }

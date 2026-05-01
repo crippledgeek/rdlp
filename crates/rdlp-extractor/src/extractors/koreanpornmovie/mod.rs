@@ -11,8 +11,8 @@
 mod patterns;
 
 use async_trait::async_trait;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
-use regex::Regex;
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
@@ -650,10 +650,8 @@ fn make_video_format(format_id: &str, url: &str) -> Format {
 
 /// Extract width/height from a decoded `<video width="640" height="264">` tag.
 fn extract_dimensions_from_tag(tag: &str) -> (Option<u32>, Option<u32>) {
-    static WIDTH_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"width=["'](\d+)["']"#).expect("valid"));
-    static HEIGHT_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"height=["'](\d+)["']"#).expect("valid"));
+    static WIDTH_RE: Lazy<Regex> = lazy_regex!(r#"width=["'](\d+)["']"#);
+    static HEIGHT_RE: Lazy<Regex> = lazy_regex!(r#"height=["'](\d+)["']"#);
 
     let width = WIDTH_RE
         .captures(tag)
@@ -694,10 +692,7 @@ fn decode_player_iframe(iframe_src: &str) -> Option<String> {
 ///
 /// Handles both `<video><source src="...">` and `<iframe src="...">` patterns.
 fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
-    use regex::Regex;
-
-    static SRC_PATTERN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"src=["']([^"']+)["']"#).expect("valid src pattern"));
+    static SRC_PATTERN: Lazy<Regex> = lazy_regex!(r#"src=["']([^"']+)["']"#);
 
     SRC_PATTERN
         .captures_iter(tag_html)

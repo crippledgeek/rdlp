@@ -3,15 +3,15 @@
 //! Channel-based post-processing pipeline for rdlp.
 //!
 //! This crate provides a 9-stage pipeline for FFmpeg-based media transformations:
-//! - **MergeStage**: Combine separate video and audio streams
-//! - **AudioExtractStage**: Extract and convert audio to various formats
-//! - **NormalizeStage**: Peak / EBU R128 loudnorm audio normalization
-//! - **RemuxStage**: Remux to a target container (HLS TS → MP4, etc.)
-//! - **RecodeStage**: Transcode video to a different container/codec
-//! - **SubtitleStage**: Embed subtitle files into video containers
-//! - **MetadataStage**: Embed title, artist, chapters, etc.
-//! - **ThumbnailStage**: Embed cover art (FFmpeg + MP4 covr atom)
-//! - **FixupStage**: Detect and repair container/codec issues
+//! - **`MergeStage`**: Combine separate video and audio streams
+//! - **`AudioExtractStage`**: Extract and convert audio to various formats
+//! - **`NormalizeStage`**: Peak / EBU R128 loudnorm audio normalization
+//! - **`RemuxStage`**: Remux to a target container (HLS TS → MP4, etc.)
+//! - **`RecodeStage`**: Transcode video to a different container/codec
+//! - **`SubtitleStage`**: Embed subtitle files into video containers
+//! - **`MetadataStage`**: Embed title, artist, chapters, etc.
+//! - **`ThumbnailStage`**: Embed cover art (`FFmpeg` + MP4 covr atom)
+//! - **`FixupStage`**: Detect and repair container/codec issues
 //!
 //! ## Quick Start
 //!
@@ -54,9 +54,9 @@
 //! # }
 //! ```
 //!
-//! ## FFmpeg Integration
+//! ## `FFmpeg` Integration
 //!
-//! FFmpeg operations are provided by the [`rdlp_ffmpeg`] crate. Use `rdlp_postprocess::FFmpegRunner`
+//! `FFmpeg` operations are provided by the [`rdlp_ffmpeg`] crate. Use `rdlp_postprocess::FFmpegRunner`
 //! (re-exported) or `rdlp_ffmpeg::FFmpegRunner` directly:
 //!
 //! ```no_run
@@ -76,6 +76,9 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![warn(clippy::indexing_slicing)]
 
 pub mod pipeline;
 

@@ -3,16 +3,76 @@
 //! Copies stream properties essential for proper Matroska playback:
 //! `avg_frame_rate`, `r_frame_rate`, `time_base`, `sample_aspect_ratio`,
 //! plus `cluster_time_limit=500` for VLC-compatible seeking.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::borrow_as_ptr`: `&mut (*ctx).field` is required for `FFmpeg` C APIs
+//!   that take `**AVDictionary`. There is no safe wrapper.
+//! - `clippy::cast_*`: `FFmpeg` APIs use mixed C integer types (`i32`/`u64`/etc.).
+//!   Each cast is manually audited: none can panic; all are within valid ranges
+//!   for the values `FFmpeg` returns (stream counts, timestamps, codec params).
+//! - `clippy::expect_used`: `CString::new("static literal")` cannot fail (NUL-free
+//!   compile-time constant); `av_packet_alloc` OOM is unrecoverable anyway.
+//! - `clippy::redundant_pub_crate`: functions are `pub(crate)` so the parent merge
+//!   module can call them via `crate::` path; the `pub(crate)` is intentional.
+
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::redundant_pub_crate
+)]
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use ffmpeg_the_third::ffi;
 use log::{debug, info};
 
 use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
 use super::raw_ffi_helpers::{dts_in_us, read_next_raw, rescale_and_write_raw};
+
+/// RAII owner for a heap-allocated `AVPacket`.
+///
+/// Dropping frees the packet via `av_packet_free`, so any `?` early-return
+/// from the merge loop releases the allocation deterministically. This is
+/// the structural guarantee against the leak that existed when packets were
+/// freed only on the success path.
+struct AvPacketOwned(*mut ffi::AVPacket);
+
+impl AvPacketOwned {
+    fn alloc() -> Result<Self> {
+        // SAFETY: av_packet_alloc returns either a valid heap AVPacket or null.
+        // The null check below guarantees Drop always sees a valid pointer.
+        let p = unsafe { ffi::av_packet_alloc() };
+        if p.is_null() {
+            return Err(PostProcessError::FFmpegLibraryError {
+                message: "av_packet_alloc failed".into(),
+            });
+        }
+        Ok(Self(p))
+    }
+
+    const fn as_ptr(&self) -> *mut ffi::AVPacket {
+        self.0
+    }
+}
+
+impl Drop for AvPacketOwned {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: self.0 is a valid pointer from av_packet_alloc; av_packet_free
+            // both unrefs and frees it, then nulls our local copy via the &mut.
+            unsafe { ffi::av_packet_free(&mut self.0) };
+        }
+    }
+}
 
 impl FFmpegRunner {
     /// Merge video + audio into MKV using raw FFI with full stream property copying.
@@ -35,7 +95,6 @@ impl FFmpegRunner {
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
         encoding_tool_override: Option<&str>,
     ) -> Result<()> {
-        use ffmpeg_the_third::ffi;
         use std::ffi::CString;
         use std::ptr;
 
@@ -153,13 +212,20 @@ impl FFmpegRunner {
                 });
             }
 
-            // 6. Add video output stream with full property copying
-            // Safety: avformat_find_stream_info guarantees streams is non-null and
-            // has at least nb_streams valid entries.
-            assert!(
-                !(*ifmt_video).streams.is_null(),
-                "streams must be non-null after avformat_find_stream_info"
-            );
+            // 6. Add video output stream with full property copying.
+            // SAFETY: avformat_find_stream_info populates `streams[0..nb_streams]`.
+            // Bounds-check `video_stream_idx` against `nb_streams` before pointer
+            // arithmetic so a malformed input cannot read past the array.
+            if (*ifmt_video).streams.is_null()
+                || (*ifmt_video).nb_streams as usize <= video_stream_idx
+            {
+                ffi::avformat_close_input(&mut ifmt_video);
+                ffi::avformat_close_input(&mut ifmt_audio);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "video input has no stream at the selected index".into(),
+                });
+            }
             let in_video_stream = *(*ifmt_video).streams.add(video_stream_idx);
 
             let out_video_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
@@ -211,13 +277,18 @@ impl FFmpegRunner {
                 (*out_video_stream).r_frame_rate.den,
             );
 
-            // 7. Add audio output stream with full property copying
-            // Safety: avformat_find_stream_info guarantees streams is non-null and
-            // has at least nb_streams valid entries.
-            assert!(
-                !(*ifmt_audio).streams.is_null(),
-                "streams must be non-null after avformat_find_stream_info"
-            );
+            // 7. Add audio output stream with full property copying.
+            // SAFETY: same invariant as the video bounds check above.
+            if (*ifmt_audio).streams.is_null()
+                || (*ifmt_audio).nb_streams as usize <= audio_stream_idx
+            {
+                ffi::avformat_close_input(&mut ifmt_video);
+                ffi::avformat_close_input(&mut ifmt_audio);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "audio input has no stream at the selected index".into(),
+                });
+            }
             let in_audio_stream = *(*ifmt_audio).streams.add(audio_stream_idx);
 
             let out_audio_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
@@ -359,8 +430,8 @@ impl FFmpegRunner {
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
             #[allow(clippy::disallowed_methods)]
             let total_input_bytes = {
-                std::fs::metadata(video_input).map(|m| m.len()).unwrap_or(0)
-                    + std::fs::metadata(audio_input).map(|m| m.len()).unwrap_or(0)
+                std::fs::metadata(video_input).map_or(0, |m| m.len())
+                    + std::fs::metadata(audio_input).map_or(0, |m| m.len())
             };
             let mut bytes_written: u64 = 0;
             let mut last_progress = Instant::now();
@@ -372,22 +443,12 @@ impl FFmpegRunner {
             // from buffering an entire stream while waiting for the other.
             // Errors are captured and propagated after cleanup.
             let merge_result: Result<()> = (|| {
-                // SAFETY: av_packet_alloc returns a fully initialised AVPacket on the
-                // heap. Null check guards against allocation failure. av_packet_free
-                // is called in all exit paths to prevent leaks.
-                let vpkt = ffi::av_packet_alloc();
-                if vpkt.is_null() {
-                    return Err(PostProcessError::FFmpegLibraryError {
-                        message: "av_packet_alloc failed for video packet".into(),
-                    });
-                }
-                let apkt = ffi::av_packet_alloc();
-                if apkt.is_null() {
-                    ffi::av_packet_free(&mut (vpkt as *mut _));
-                    return Err(PostProcessError::FFmpegLibraryError {
-                        message: "av_packet_alloc failed for audio packet".into(),
-                    });
-                }
+                // RAII-owned packets: dropped on every exit path (success, ?,
+                // panic), so `rescale_and_write_raw(...)?` no longer leaks.
+                let vpkt_owned = AvPacketOwned::alloc()?;
+                let apkt_owned = AvPacketOwned::alloc()?;
+                let vpkt = vpkt_owned.as_ptr();
+                let apkt = apkt_owned.as_ptr();
 
                 let mut have_video = read_next_raw(ifmt_video, video_stream_idx, vpkt);
                 let mut have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);
@@ -456,8 +517,9 @@ impl FFmpegRunner {
 
                 ffi::av_packet_unref(vpkt);
                 ffi::av_packet_unref(apkt);
-                ffi::av_packet_free(&mut (vpkt as *mut _));
-                ffi::av_packet_free(&mut (apkt as *mut _));
+                // vpkt_owned / apkt_owned dropped here — frees both packets.
+                drop(vpkt_owned);
+                drop(apkt_owned);
 
                 // Emit final 1.0 on completion
                 if let Some(ref progress) = progress_fn {
@@ -482,5 +544,29 @@ impl FFmpegRunner {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Allocating a packet succeeds and `as_ptr` returns a non-null handle.
+    /// Drop runs at end of scope; this test relies on miri / leak sanitizers
+    /// to catch missed frees, but at minimum exercises the alloc path.
+    #[test]
+    fn av_packet_owned_alloc_returns_non_null() {
+        let p = AvPacketOwned::alloc().expect("alloc must succeed");
+        assert!(!p.as_ptr().is_null());
+        // Drop here frees the packet via av_packet_free.
+    }
+
+    /// Two independent allocations are independent — dropping one must not
+    /// affect the other (regression guard against accidental aliasing).
+    #[test]
+    fn av_packet_owned_two_allocations_are_independent() {
+        let a = AvPacketOwned::alloc().expect("a");
+        let b = AvPacketOwned::alloc().expect("b");
+        assert_ne!(a.as_ptr(), b.as_ptr());
     }
 }

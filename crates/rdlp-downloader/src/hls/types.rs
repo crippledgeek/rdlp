@@ -6,7 +6,7 @@
 /// the next `EXT-X-MAP` tag. A playlist may therefore contain multiple
 /// init segments (e.g. codec change mid-stream, ad insertion).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct InitSegmentInfo {
+pub struct InitSegmentInfo {
     /// Fully-resolved URL of the initialization segment
     pub url: String,
     /// Optional byte range `(length, offset)` when the init data is
@@ -16,7 +16,7 @@ pub(crate) struct InitSegmentInfo {
 
 /// Information about an HLS segment including its duration
 #[derive(Clone, Debug)]
-pub(crate) struct SegmentInfo {
+pub struct SegmentInfo {
     /// Segment URL
     pub url: String,
     /// Segment duration in seconds (from EXTINF)
@@ -27,7 +27,7 @@ pub(crate) struct SegmentInfo {
 
 /// Result of parsing an HLS playlist
 #[derive(Clone, Debug)]
-pub(crate) struct PlaylistParseResult {
+pub struct PlaylistParseResult {
     /// Media segments (each carrying its own init segment reference)
     pub segments: Vec<SegmentInfo>,
 }

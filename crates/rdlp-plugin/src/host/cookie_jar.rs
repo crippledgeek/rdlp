@@ -6,9 +6,18 @@
 //! cookie reads/writes for any other effective domain are refused. This is
 //! the vector A3 mitigation (cookie-jar cross-contamination).
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::cast_possible_wrap,
+    clippy::missing_errors_doc,
+    clippy::option_if_let_else
+)]
+
 use crate::instance::PluginStoreData;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use wasmtime::component::Linker;
 
 /// Per-plugin cookie context. Holds a clone of the shared `SimpleCookieJar`
@@ -20,9 +29,6 @@ pub struct CookieJarCtx {
     /// Allowed effective domains (eTLD+1 form) derived from the plugin's
     /// match patterns. Lower-case, no scheme, no port.
     pub allowed_etld_plus_one: Vec<String>,
-    /// Tracks whether the `get_cookies` stub-warning has fired for this
-    /// plugin instance — emit at most once per ctx so logs don't drown.
-    pub get_warned: AtomicBool,
 }
 
 impl CookieJarCtx {
@@ -32,7 +38,6 @@ impl CookieJarCtx {
         Self {
             jar,
             allowed_etld_plus_one: allowed_hosts_from_matches(match_patterns),
-            get_warned: AtomicBool::new(false),
         }
     }
 
@@ -48,7 +53,6 @@ impl CookieJarCtx {
         Self {
             jar: Arc::new(rdlp_cookies::SimpleCookieJar::new()),
             allowed_etld_plus_one,
-            get_warned: AtomicBool::new(false),
         }
     }
 
@@ -142,12 +146,10 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
     /// - the URL is invalid, or
     /// - the URL's host is outside the plugin's allowed match-pattern scope.
     ///
-    /// NOTE: The underlying `SimpleCookieJar` exposes `get_cookies(url) ->
-    /// Result<Vec<String>>` which returns `"name=value"` strings, not structured
-    /// `Cookie` records. Mapping those strings to WIT `Cookie` records requires
-    /// a cookie parser (not yet wired). This implementation returns an empty
-    /// `Vec` when cookies exist but correctly enforces the scoping gate — the
-    /// real read is a follow-up task.
+    /// The returned `Cookie` records have `name` and `value` populated from the
+    /// underlying jar. The `domain`, `path`, `secure`, and `http_only` fields are
+    /// inferred from the request URL since the Cookie header format does not carry
+    /// attributes; `expires` is always `None` for the same reason.
     async fn get_cookies(
         &mut self,
         url: String,
@@ -164,20 +166,51 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
         if !ctx.host_in_scope(host) {
             return Vec::new();
         }
-        // Surface the stub to plugin authors exactly once per plugin so they
-        // don't waste hours debugging "0 cookies" — the scoping gate above
-        // works, but the read-side cookie parser is a follow-up task.
-        if !ctx
-            .get_warned
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            log::warn!(
-                target: &self.log_target,
-                "host:cookie-jar get_cookies returns an empty list — \
-                 cookie record parsing not yet wired (security scoping IS enforced)"
-            );
-        }
-        Vec::new()
+
+        use rdlp_core::CookieJar as _;
+        let raw_cookies = match ctx.jar.get_cookies(&url).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!(
+                    target: &self.log_target,
+                    "host:cookie-jar get_cookies error: {e}"
+                );
+                return Vec::new();
+            }
+        };
+
+        // The jar returns "name=value" strings (Cookie header format). Parse
+        // each one back into a WIT Cookie record. Attributes (Domain, Path,
+        // Secure, HttpOnly, Expires) are not available from the Cookie header;
+        // fill in defaults derived from the request URL.
+        let url_host = host.to_string();
+        let url_path = parsed.path().to_string();
+        let is_secure = parsed.scheme() == "https";
+
+        raw_cookies
+            .into_iter()
+            .filter_map(|pair| {
+                // pair format: "name=value" (the jar strips attributes)
+                let (name, value) = if let Some((n, v)) = pair.split_once('=') {
+                    (n.to_string(), v.to_string())
+                } else {
+                    // name-only cookie (rare but valid per RFC 6265)
+                    (pair, String::new())
+                };
+                if name.is_empty() {
+                    return None;
+                }
+                Some(crate::bindings::rdlp::plugin::host_cookie_jar::Cookie {
+                    name,
+                    value,
+                    domain: url_host.clone(),
+                    path: url_path.clone(),
+                    secure: is_secure,
+                    http_only: false,
+                    expires: None,
+                })
+            })
+            .collect()
     }
 
     /// Store a cookie from a plugin, scoped to the plugin's match-pattern domains.
@@ -187,11 +220,9 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
     /// - the URL is invalid or has no host, or
     /// - the URL's host falls outside the plugin's allowed match-pattern scope.
     ///
-    /// NOTE: `SimpleCookieJar::add_cookie(url, cookie_str)` expects a
-    /// `"name=value"` string. Converting the WIT `Cookie` record to that format
-    /// (including `Domain`, `Path`, `Secure`, `HttpOnly`, `Expires` attributes)
-    /// is wired here as a best-effort `"name=value"` write. Full attribute
-    /// propagation is a follow-up task.
+    /// All attributes from the WIT `Cookie` record — `Domain`, `Path`,
+    /// `Secure`, `HttpOnly`, and `Expires` — are propagated into the
+    /// Set-Cookie header string fed to the underlying jar.
     async fn set_cookie(
         &mut self,
         url: String,
@@ -209,11 +240,38 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
                 "cookie-jar access denied: {host} not in plugin's match-pattern scope"
             ));
         }
-        // Wire the actual write via the CookieJar trait's `add_cookie` method.
-        // We format the cookie as "name=value"; full attribute support is a
-        // follow-up (Domain/Path/Secure/HttpOnly/Expires directives).
+
+        // Build a full Set-Cookie header value including all attributes so that
+        // the jar records Domain, Path, Secure, HttpOnly, and Expires faithfully.
+        let mut cookie_str = format!("{}={}", c.name, c.value);
+        if !c.domain.is_empty() {
+            cookie_str.push_str(&format!("; Domain={}", c.domain));
+        }
+        if !c.path.is_empty() {
+            cookie_str.push_str(&format!("; Path={}", c.path));
+        }
+        if c.secure {
+            cookie_str.push_str("; Secure");
+        }
+        if c.http_only {
+            cookie_str.push_str("; HttpOnly");
+        }
+        if let Some(expires_unix) = c.expires {
+            // Use Max-Age rather than Expires so the value is wall-clock
+            // independent and avoids timezone/formatting complexity.
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let max_age_secs = (expires_unix as i64) - (now_secs as i64);
+            // Only set Max-Age when the cookie hasn't already expired.
+            if max_age_secs > 0 {
+                cookie_str.push_str(&format!("; Max-Age={max_age_secs}"));
+            }
+        }
+
         use rdlp_core::CookieJar as _;
-        let cookie_str = format!("{}={}", c.name, c.value);
         ctx.jar
             .add_cookie(&url, &cookie_str)
             .await

@@ -22,6 +22,7 @@
 //! No async runtime, HTTP client, or I/O operations are included.
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 pub mod audio_format;
 pub mod browser_emulation;

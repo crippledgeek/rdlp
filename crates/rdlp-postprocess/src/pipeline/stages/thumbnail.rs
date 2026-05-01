@@ -1,11 +1,11 @@
-//! ThumbnailStage — embeds thumbnail images into media files.
+//! `ThumbnailStage` — embeds thumbnail images into media files.
 //!
 //! This stage runs at index 7 (last) when `config.embed_thumbnail` is true.
 //! Uses `msg.original_stem` for thumbnail discovery (not the UUID-renamed stem).
 //! Non-fatal: failure logs a warning and passes through.
 //!
 //! For MP4-family containers: two-pass embedding —
-//! 1. FFmpeg `attached_pic` stream (media player support)
+//! 1. `FFmpeg` `attached_pic` stream (media player support)
 //! 2. `mp4ameta` iTunes `covr` atom (Windows Explorer visibility)
 
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use crate::pipeline::{PipelineMessage, PipelineStage};
 /// Supported thumbnail image formats.
 const THUMBNAIL_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
-/// Containers that support thumbnail embedding via FFmpeg.
+/// Containers that support thumbnail embedding via `FFmpeg`.
 const SUPPORTED_CONTAINERS: &[&str] = &[
     "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
 ];
@@ -38,7 +38,7 @@ pub struct ThumbnailStage {
 impl ThumbnailStage {
     /// Create a new `ThumbnailStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -122,7 +122,7 @@ impl ThumbnailStage {
 
 #[async_trait]
 impl PipelineStage for ThumbnailStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "ThumbnailStage"
     }
 
@@ -134,6 +134,7 @@ impl PipelineStage for ThumbnailStage {
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn process(&self, mut msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
         if msg.tracker.current_files.is_empty() {
             return Ok(msg);
@@ -147,7 +148,9 @@ impl PipelineStage for ThumbnailStage {
             .to_string();
 
         // Auto-remux containers that don't support thumbnail embedding (e.g. .ts → .mp4).
-        let (media_file, extension) = if !Self::supports_thumbnail(&extension) {
+        let (media_file, extension) = if Self::supports_thumbnail(&extension) {
+            (media_file, extension)
+        } else {
             let remuxed_path = msg.tracker.temp_path(&media_file, "mp4");
             debug!(
                 "ThumbnailStage: auto-remuxing {} → mp4 for thumbnail embedding",
@@ -176,8 +179,6 @@ impl PipelineStage for ThumbnailStage {
                     return Ok(msg);
                 }
             }
-        } else {
-            (media_file, extension)
         };
 
         // Use original_stem for thumbnail discovery (per architecture constraint 5).

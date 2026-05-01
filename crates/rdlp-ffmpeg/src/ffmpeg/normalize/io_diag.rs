@@ -2,6 +2,16 @@
 //!
 //! Post-header-write checks: threading knobs, AVIO state dump,
 //! seekability assertion, and file size validation.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `u64` file-size values converted to `i64` for `FFmpeg`
+//!   seekability check. The values are filesystem sizes (always positive, well
+//!   within `i64::MAX`).
+//! - `clippy::redundant_pub_crate`: `pub(crate)` function accessed from sibling
+//!   normalize modules via `crate::` path.
+
+#![allow(clippy::cast_possible_wrap, clippy::redundant_pub_crate)]
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -35,7 +45,7 @@ pub(super) unsafe fn validate_mux_header_state(
         let mux_flags = (*octx.as_mut_ptr()).flags;
         let pb_buf_size = {
             let pb = (*octx.as_mut_ptr()).pb;
-            if !pb.is_null() { (*pb).buffer_size } else { 0 }
+            if pb.is_null() { 0 } else { (*pb).buffer_size }
         };
         info!(
             "[{label}] decoder: thread_count={dec_tc}, \
@@ -79,7 +89,7 @@ pub(super) unsafe fn validate_mux_header_state(
     }
     // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
     #[allow(clippy::disallowed_methods)]
-    let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+    let file_size = std::fs::metadata(output).map_or(0, |m| m.len());
     if file_size == 0 {
         return Err(PostProcessError::FFmpegLibraryError {
             message: format!(
@@ -101,7 +111,7 @@ pub(super) unsafe fn validate_mux_header_state(
 /// # Safety
 ///
 /// `octx_ptr` must point to a valid, header-written `AVFormatContext`.
-pub(crate) unsafe fn dump_io_state(
+pub unsafe fn dump_io_state(
     octx_ptr: *mut ffmpeg_the_third::ffi::AVFormatContext,
     rust_output_path: &Path,
     label: &str,
@@ -116,12 +126,12 @@ pub(crate) unsafe fn dump_io_state(
             "unknown".to_string()
         };
 
-        let url = if !(*octx_ptr).url.is_null() {
+        let url = if (*octx_ptr).url.is_null() {
+            "NULL".to_string()
+        } else {
             CStr::from_ptr((*octx_ptr).url)
                 .to_string_lossy()
                 .into_owned()
-        } else {
-            "NULL".to_string()
         };
 
         let flags = (*octx_ptr).flags;
@@ -146,9 +156,7 @@ pub(crate) unsafe fn dump_io_state(
 
         // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
         #[allow(clippy::disallowed_methods)]
-        let file_size = std::fs::metadata(rust_output_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(-1);
+        let file_size = std::fs::metadata(rust_output_path).map_or(-1, |m| m.len() as i64);
 
         info!(
             "[{label}] IO dump: muxer={muxer_name}, url={url}, flags=0x{flags:x}, \

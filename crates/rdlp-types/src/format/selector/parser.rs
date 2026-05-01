@@ -4,18 +4,18 @@
 //! structured [`FormatSpec`] trees.
 //!
 //! Grammar (operator precedence: `+` > `/` > `,`):
-//!   selector_list = selector ("," selector)*         -- loosest: multiple download targets
+//!   `selector_list` = selector ("," selector)*         -- loosest: multiple download targets
 //!   selector      = stream ("/" stream)*             -- fallback chain
 //!   stream        = atom ("+" atom)*                 -- merge (video+audio)
-//!   atom          = (token | "(" selector_list ")") filter*
+//!   atom          = (token | "(" `selector_list` ")") filter*
 //!                 | filter+                           -- implicit "best"
-//!   token         = keyword [".N"] | format_id
+//!   token         = keyword [`.N`] | `format_id`
 //!   keyword       = "bestvideo*" | "bestaudio*" | "bestvideo" | "bestaudio"
 //!                 | "worstvideo" | "worstaudio" | "best" | "worst"
 //!                 | "bv*" | "ba*" | "bv" | "ba" | "wv" | "wa" | "b" | "w"
 //!                 | "all" | "mergeall"
-//!                 | <extension_shorthand>
-//!   filter        = "[" field op value "]"
+//!                 | <`extension_shorthand`>
+//!   filter        = `[` field op value `]`
 
 use winnow::ascii::digit1;
 use winnow::combinator::{alt, cut_err, delimited, opt, peek, repeat, separated};
@@ -150,8 +150,7 @@ fn keyword_boundary(input: &str) -> bool {
     input
         .chars()
         .next()
-        .map(|c| !c.is_alphanumeric() && c != '_')
-        .unwrap_or(true)
+        .is_none_or(|c| !c.is_alphanumeric() && c != '_')
 }
 
 /// Try to match a keyword literal and assert a clean word boundary after it.
@@ -263,7 +262,7 @@ fn parse_nth_suffix(input: &mut &str) -> ModalResult<Option<u32>> {
 /// Extensions are matched only when the word is not followed by characters
 /// that could extend it into an arbitrary format ID. The set of
 /// format-id-continuation characters must stay in sync with
-/// [`parse_format_id`], otherwise IDs like `mp4-hd` (XVideos emits these)
+/// [`parse_format_id`], otherwise IDs like `mp4-hd` (`XVideos` emits these)
 /// get eaten as `Extension("mp4")` with a leftover `-hd` that fails the
 /// outer parse.
 fn parse_extension_shorthand(input: &mut &str) -> ModalResult<FormatToken> {
@@ -276,8 +275,7 @@ fn parse_extension_shorthand(input: &mut &str) -> ModalResult<FormatToken> {
             && input[ext.len()..]
                 .chars()
                 .next()
-                .map(is_token_terminator)
-                .unwrap_or(true);
+                .is_none_or(is_token_terminator);
         if matched {
             // Advance the input past the extension.
             *input = &input[ext.len()..];
@@ -289,7 +287,7 @@ fn parse_extension_shorthand(input: &mut &str) -> ModalResult<FormatToken> {
 
 /// Characters that end a bare token (extension shorthand, keyword, format id)
 /// in the selector grammar. Inverse of the accept-set in [`parse_format_id`].
-fn is_token_terminator(c: char) -> bool {
+const fn is_token_terminator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '+' | '/' | '[' | ']' | ',' | '(' | ')')
 }
 
@@ -351,7 +349,6 @@ fn parse_filter_field(input: &mut &str) -> ModalResult<FilterField> {
         "width" => FilterField::Width,
         "filesize" | "filesize_approx" => FilterField::Filesize,
         "format_id" => FilterField::FormatId,
-        "format_note" => FilterField::Other(name.to_owned()),
         "protocol" => FilterField::Protocol,
         "vcodec" => FilterField::Vcodec,
         "acodec" => FilterField::Acodec,
@@ -361,6 +358,7 @@ fn parse_filter_field(input: &mut &str) -> ModalResult<FilterField> {
         "vbr" => FilterField::Vbr,
         "abr" => FilterField::Abr,
         "asr" => FilterField::Asr,
+        // "format_note" and all other field names map to Other
         _ => FilterField::Other(name.to_owned()),
     };
     Ok(field)

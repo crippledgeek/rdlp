@@ -1,9 +1,9 @@
 //! HLS segment merging and cleanup.
 //!
-//! std::sync::Mutex is intentional for `Arc<Mutex<HlsDownloadState>>`: guards
+//! `std::sync::Mutex` is intentional for `Arc<Mutex<HlsDownloadState>>`: guards
 //! never cross an .await point. Snapshots are cloned out of the lock before
 //! any `.save().await` call, and all critical sections are pure sync
-//! (HashSet edits, counter updates, clone-out-for-save).
+//! (`HashSet` edits, counter updates, clone-out-for-save).
 //! See docs/implementation/tls-impersonation/phase-1-report.md Finding 2.2.
 
 use std::collections::HashSet;
@@ -49,9 +49,9 @@ use crate::http::HttpDownloader;
 /// # Returns
 /// * `Ok(Vec<PathBuf>)` - Paths to ALL segment files (in order, including pre-existing)
 /// * `Err(_)` - Download error (network, I/O, etc.)
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[instrument(skip(http_downloader, retry_config, segments, progress_counter, segments_counter, duration_counter, state, log_callback), fields(segments = segments.len()))]
-pub(crate) async fn download_segments_with_resume(
+pub async fn download_segments_with_resume(
     http_downloader: &HttpDownloader,
     retry_config: Arc<RetryConfig>,
     buffer_size: usize,
@@ -72,7 +72,7 @@ pub(crate) async fn download_segments_with_resume(
     // Get already completed segments and validate they exist on disk
     let original_completed: HashSet<usize> = state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .completed_segments
         .clone();
 
@@ -81,9 +81,7 @@ pub(crate) async fn download_segments_with_resume(
         let segment_path = temp_dir.join(format!("{base_filename}.part{idx}"));
         // Safe: HLS segment-merge path runs inside spawn_blocking; no async runtime active on this thread.
         #[allow(clippy::disallowed_methods)]
-        std::fs::metadata(&segment_path)
-            .map(|meta| meta.len() > 0)
-            .unwrap_or(false)
+        std::fs::metadata(&segment_path).is_ok_and(|meta| meta.len() > 0)
     };
     let completed: HashSet<usize> = original_completed
         .iter()
@@ -105,7 +103,9 @@ pub(crate) async fn download_segments_with_resume(
         );
         // Update state to remove invalid entries
         {
-            let mut state_guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state_guard = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for idx in &missing_segments {
                 state_guard.completed_segments.remove(idx);
             }
@@ -200,7 +200,9 @@ pub(crate) async fn download_segments_with_resume(
                     let bytes = meta.len();
                     // Mark as completed in state
                     {
-                        let mut state_guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut state_guard = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         state_guard.mark_completed(idx, bytes);
                     }
                     segments.fetch_add(1, Ordering::Relaxed);
@@ -241,7 +243,9 @@ pub(crate) async fn download_segments_with_resume(
 
                         // Update state on success; clone if periodic save needed
                         let snapshot = {
-                            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut guard = state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             guard.mark_completed(idx, *bytes);
                             if guard.completed_segments.len().is_multiple_of(50) {
                                 Some(guard.clone())
@@ -261,7 +265,10 @@ pub(crate) async fn download_segments_with_resume(
                     }
                     Err(e) => {
                         // Save state on error before propagating
-                        let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let snapshot = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
                         if let Err(save_err) = snapshot.save(&output_path).await {
                             warn!("Failed to save HLS state on error: {save_err}");
                         }
@@ -289,7 +296,10 @@ pub(crate) async fn download_segments_with_resume(
                     "Segment failed: {e}"
                 );
                 if segment_failures >= max_segment_failures {
-                    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let snapshot = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
                     let _ = snapshot.save(output_path).await;
                     return Err(RdlpError::Download {
                         message: format!(
@@ -306,7 +316,10 @@ pub(crate) async fn download_segments_with_resume(
     }
 
     // Save final state (clone under lock, then save outside lock)
-    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let snapshot = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     if let Err(e) = snapshot.save(output_path).await {
         warn!("Failed to save final HLS state: {e}");
     }
@@ -354,7 +367,7 @@ pub(crate) async fn download_segments_with_resume(
 ///
 /// `segment_init_paths[i]` is the init segment file for `segment_paths[i]`,
 /// or `None` for plain TS segments.
-pub(crate) async fn merge_segments(
+pub async fn merge_segments(
     buffer_size: usize,
     merge_timeout: Duration,
     segment_paths: &[PathBuf],
@@ -362,7 +375,7 @@ pub(crate) async fn merge_segments(
     segment_init_paths: &[Option<PathBuf>],
 ) -> Result<u64> {
     tokio::time::timeout(merge_timeout, async {
-        let has_init = segment_init_paths.iter().any(|p| p.is_some());
+        let has_init = segment_init_paths.iter().any(std::option::Option::is_some);
         debug!(
             segments = segment_paths.len(),
             fmp4 = has_init;
@@ -476,7 +489,7 @@ pub(crate) async fn merge_segments(
 ///
 /// # Arguments
 /// * `segment_paths` - Paths to segment files to delete
-pub(crate) async fn cleanup_segments(segment_paths: &[PathBuf]) {
+pub async fn cleanup_segments(segment_paths: &[PathBuf]) {
     debug!(count = segment_paths.len(); "Cleaning up segment files");
 
     let mut deleted = 0;

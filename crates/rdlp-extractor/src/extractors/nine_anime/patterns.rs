@@ -7,8 +7,7 @@
 //! - Watch: `https://9animetv.to/watch/{slug}-{id}?ep={ep-id}`
 //! - Home/search pages are not yet supported.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for 9anime episode watch pages.
 ///
@@ -16,20 +15,15 @@ use std::sync::LazyLock;
 /// - `slug` — anime slug (kebab-case title)
 /// - `anime_id` — numeric anime ID
 /// - `ep_id` — numeric episode ID (from query string)
-pub static WATCH_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)\?ep=(?P<ep_id>\d+)",
-    )
-    .expect("Valid 9anime watch URL pattern")
-});
+pub static WATCH_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)\?ep=(?P<ep_id>\d+)"
+);
 
 /// Looser pattern that matches watch URLs without the `?ep=` query parameter.
 ///
 /// Used by `suitable()` to match anime pages that might not have an episode selected.
-pub static WATCH_URL_LOOSE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)")
-        .expect("Valid 9anime loose watch URL pattern")
-});
+pub static WATCH_URL_LOOSE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?9animetv\.to/watch/(?P<slug>[\w-]+)-(?P<anime_id>\d+)");
 
 /// Check if a URL is suitable for this extractor.
 pub fn is_suitable(url: &str) -> bool {

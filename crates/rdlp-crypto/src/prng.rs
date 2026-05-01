@@ -1,93 +1,121 @@
 //! Pseudo-random number generator implementations.
 //!
-//! This module provides PRNG algorithms used for XHamster URL decryption.
+//! This module provides PRNG algorithms used for `XHamster` URL decryption.
 //! The generators implement various algorithms that match the JavaScript
 //! implementations used by the target sites.
+//!
+//! ## JavaScript Integer Semantics
+//!
+//! All arithmetic here intentionally emulates JavaScript's 32-bit signed integer
+//! behavior. JavaScript bitwise operators coerce operands to `i32`; Python's
+//! yt-dlp uses `n % (sign * 2^32)`. In Rust we use `i64` intermediate values
+//! and truncate with `as i32`, which matches the JS semantics exactly.
+//! Clippy warnings about sign-change and truncation casts are suppressed
+//! per-function with explanatory comments; they are intentional.
 
 // =============================================================================
 // Constants
 // =============================================================================
 
 /// Golden ratio constant (2^32 / φ), commonly used in hash functions.
-const PHI: u32 = 0x9e3779b9;
+const PHI: u32 = 0x9e37_79b9;
 
 // MurmurHash3 fmix32 constants
 // Reference: https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
-const FMIX32_C1: u32 = 0x85ebca77;
-const FMIX32_C2: u32 = 0xc2b2ae3d;
+const FMIX32_C1: u32 = 0x85eb_ca77;
+const FMIX32_C2: u32 = 0xc2b2_ae3d;
 
 // Numerical Recipes LCG constants (Knuth MMIX)
 const LCG_MULT: u32 = 1_664_525;
 const LCG_INC: u32 = 1_013_904_223;
 
 // PCG-style LCG constants
-const PCG_MULT: u32 = 0x2c9277b5;
-const PCG_INC: u32 = 0xac564b05;
+const PCG_MULT: u32 = 0x2c92_77b5;
+const PCG_INC: u32 = 0xac56_4b05;
 
 // Algorithm-specific constants
-const WEYL_ROL_INC: u32 = 0x6d2b79f5;
-const ROL_SCRAMBLE_MULT: u32 = 0x27d4eb2d;
-const XORSHIFT_ADD_CONST: u32 = 0xa5a5a5a5;
-const MXS_MULT1: u32 = 0x7feb352d;
-const MXS_MULT2: u32 = 0x846ca68b;
+const WEYL_ROL_INC: u32 = 0x6d2b_79f5;
+const ROL_SCRAMBLE_MULT: u32 = 0x27d4_eb2d;
+const XORSHIFT_ADD_CONST: u32 = 0xa5a5_a5a5;
+const MXS_MULT1: u32 = 0x7feb_352d;
+const MXS_MULT2: u32 = 0x846c_a68b;
 
 /// Convert a value to signed 32-bit integer matching JavaScript's behavior.
 ///
 /// JavaScript bitwise operators work on signed 32-bit integers. Python's
 /// yt-dlp uses `n % (sign * 2^32)` to emulate this. In Rust we simply
 /// truncate to i32 via wrapping.
+#[allow(clippy::cast_possible_truncation)]
 #[inline]
 #[must_use]
-pub fn to_signed_32(n: i64) -> i32 {
+pub const fn to_signed_32(n: i64) -> i32 {
     n as i32
 }
 
 /// Xorshift with configurable shift values (left, right, left pattern).
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Xorshift>
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
 #[inline]
-fn xorshift(s: i32, a: u8, b: u8, c: u8) -> i32 {
-    let mut x = s;
-    x = to_signed_32((x as i64) ^ ((x as i64) << a));
-    x = to_signed_32((x as i64) ^ (((x as u32) >> b) as i64));
-    to_signed_32((x as i64) ^ ((x as i64) << c))
+fn xorshift(state: i32, shift_left1: u8, shift_right: u8, shift_left2: u8) -> i32 {
+    let mut x = state;
+    x = to_signed_32(i64::from(x) ^ (i64::from(x) << shift_left1));
+    x = to_signed_32(i64::from(x) ^ ((x as u32 >> shift_right) as i64));
+    to_signed_32(i64::from(x) ^ (i64::from(x) << shift_left2))
 }
 
 /// Linear Congruential Generator step: `s * multiplier + increment`.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Linear_congruential_generator>
+#[allow(clippy::cast_sign_loss, clippy::cast_lossless)]
 #[inline]
 fn lcg_step(s: i32, multiplier: u32, increment: u32) -> i32 {
-    to_signed_32(s as i64 * multiplier as i64 + increment as i64)
+    to_signed_32(i64::from(s) * i64::from(multiplier) + i64::from(increment))
 }
 
 /// Weyl sequence step: add irrational constant to state.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Weyl_sequence>
+#[allow(clippy::cast_possible_wrap)]
 #[inline]
-fn weyl_step(s: i32, increment: u32) -> i32 {
+const fn weyl_step(s: i32, increment: u32) -> i32 {
     s.wrapping_add(increment as i32)
 }
 
-/// MurmurHash3 32-bit finalizer (fmix32).
+/// `MurmurHash3` 32-bit finalizer (fmix32).
 ///
 /// Reference: <https://en.wikipedia.org/wiki/MurmurHash>
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
 #[inline]
 fn fmix32(mut s: i32) -> i32 {
     s ^= (s as u32 >> 16) as i32;
-    s = to_signed_32(s as i64 * FMIX32_C1 as i64);
+    s = to_signed_32(i64::from(s) * i64::from(FMIX32_C1));
     s ^= (s as u32 >> 13) as i32;
-    s = to_signed_32(s as i64 * FMIX32_C2 as i64);
+    s = to_signed_32(i64::from(s) * i64::from(FMIX32_C2));
     s ^ ((s as u32 >> 16) as i32)
 }
 
 /// Rotate-left scrambler: ROL + add + xor-shift + multiply.
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
+)]
 #[inline]
-fn rol_scramble(s: i32, rotation: u32) -> i32 {
+const fn rol_scramble(s: i32, rotation: u32) -> i32 {
     let mut x = (s as u32).rotate_left(rotation) as i32;
     x = x.wrapping_add(PHI as i32);
     x ^= (x as u32 >> 11) as i32;
-    to_signed_32(x as i64 * ROL_SCRAMBLE_MULT as i64)
+    // Intentional: JS-emulation truncation from i64 to i32
+    (i64::wrapping_mul(x as i64, ROL_SCRAMBLE_MULT as i64)) as i32
 }
 
 /// Pseudo-random number generator with 7 algorithm variants.
@@ -99,7 +127,7 @@ fn rol_scramble(s: i32, rotation: u32) -> i32 {
 ///
 /// 1. `lcg` - Linear Congruential Generator (Numerical Recipes)
 /// 2. `xorshift32` - Xorshift32 (shifts: 13, 17, 5)
-/// 3. `weyl_fmix32` - Weyl Sequence + MurmurHash3 fmix32
+/// 3. `weyl_fmix32` - Weyl Sequence + `MurmurHash3` fmix32
 /// 4. `weyl_rol7` - Weyl Sequence + ROL-7 scrambling
 /// 5. `xorshift_add` - Xorshift variant with constant addition
 /// 6. `lcg_pcg` - LCG with PCG-style variable right-shift scrambler
@@ -130,6 +158,7 @@ impl ByteGenerator {
     }
 
     /// Generate the next byte (0-255) from the PRNG stream.
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     pub fn next_byte(&mut self) -> u8 {
         let result = match self.algo_id {
             1 => self.lcg(),
@@ -160,44 +189,56 @@ impl ByteGenerator {
         self.state
     }
 
-    /// Weyl Sequence + MurmurHash3 fmix32.
+    /// Weyl Sequence + `MurmurHash3` fmix32.
     ///
     /// Uses the golden ratio constant (`PHI`) as the Weyl increment,
-    /// then applies the MurmurHash3 32-bit finalizer (fmix32) for mixing.
+    /// then applies the `MurmurHash3` 32-bit finalizer (fmix32) for mixing.
     fn weyl_fmix32(&mut self) -> i32 {
         self.state = weyl_step(self.state, PHI);
         fmix32(self.state)
     }
 
     /// Weyl Sequence + ROL-7 scrambling.
-    fn weyl_rol7(&mut self) -> i32 {
+    const fn weyl_rol7(&mut self) -> i32 {
         self.state = weyl_step(self.state, WEYL_ROL_INC);
         rol_scramble(self.state, 7)
     }
 
     /// Xorshift variant with constant addition (shifts: 7, 9, 8).
+    #[allow(clippy::cast_possible_wrap)]
     fn xorshift_add(&mut self) -> i32 {
         self.state = xorshift(self.state, 7, 9, 8).wrapping_add(XORSHIFT_ADD_CONST as i32);
         self.state
     }
 
     /// LCG with PCG-style variable right-shift scrambler.
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation
+    )]
     fn lcg_pcg(&mut self) -> i32 {
         self.state = lcg_step(self.state, PCG_MULT, PCG_INC);
         // PCG output function: xor-shift then variable right-shift
-        let s2 = to_signed_32((self.state as i64) ^ (((self.state as u32) >> 18) as i64));
-        let shift = ((self.state as u32) >> 27) & 31;
-        ((s2 as u32) >> shift) as i32
+        let s2 = to_signed_32(i64::from(self.state) ^ i64::from(self.state as u32 >> 18));
+        let shift = (self.state as u32 >> 27) & 31;
+        (s2 as u32 >> shift) as i32
     }
 
     /// Weyl Sequence + multiply-xor-shift (MXS) mixing.
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation
+    )]
     fn weyl_mxs(&mut self) -> i32 {
         self.state = weyl_step(self.state, PHI);
         // MXS: xor-shift, multiply, xor-shift, multiply
-        let mut x = to_signed_32((self.state as i64) ^ ((self.state as i64) << 5));
-        x = to_signed_32(x as i64 * MXS_MULT1 as i64);
-        x = to_signed_32((x as i64) ^ (((x as u32) >> 15) as i64));
-        to_signed_32(x as i64 * MXS_MULT2 as i64)
+        // All casts are intentional JS-emulation truncation
+        let mut x = to_signed_32(i64::from(self.state) ^ (i64::from(self.state) << 5));
+        x = to_signed_32(i64::from(x) * i64::from(MXS_MULT1));
+        x = to_signed_32(i64::from(x) ^ i64::from(x as u32 >> 15));
+        to_signed_32(i64::from(x) * i64::from(MXS_MULT2))
     }
 }
 

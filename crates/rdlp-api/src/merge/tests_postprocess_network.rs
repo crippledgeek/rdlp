@@ -1,4 +1,4 @@
-//! Tests for PostProcessOptions and NetworkOptions merge overrides
+//! Tests for `PostProcessOptions` and `NetworkOptions` merge overrides
 
 use super::*;
 use std::path::PathBuf;

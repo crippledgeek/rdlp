@@ -11,6 +11,7 @@ use wreq::header::HeaderValue;
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.
 ///
 /// Returns `true` if the cookie was successfully inserted.
+#[allow(clippy::redundant_pub_crate)] // pub(crate) in private mod is more defensive than pub
 pub(crate) fn insert_cookie_into_jar(
     jar: &impl CookieStore,
     domain: &str,
@@ -55,13 +56,14 @@ pub(crate) fn insert_cookie_into_jar(
 
 /// Copy a database file to a temp location, run a callback, then clean up.
 ///
-/// Browsers lock their SQLite databases while running. Copying to a temp file
+/// Browsers lock their `SQLite` databases while running. Copying to a temp file
 /// avoids `SQLITE_BUSY` / `SQLITE_LOCKED` errors.
 ///
 /// On Windows, Chrome holds an exclusive lock via `LockFileEx`. If the
 /// standard `fs::copy` fails with a permission/sharing error, this falls
 /// back to opening the file with `FILE_SHARE_READ | FILE_SHARE_WRITE |
 /// FILE_SHARE_DELETE` via Win32 `CreateFileW` to bypass the lock.
+#[allow(clippy::redundant_pub_crate)] // pub(crate) in private mod is more defensive than pub
 pub(crate) fn with_temp_db_copy<F, T>(
     db_path: &Path,
     temp_name: &str,
@@ -91,8 +93,8 @@ where
         "{}-shm",
         db_path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    let wal_dst2 = temp_db.with_file_name(format!("{}-wal", temp_name));
-    let shm_dst2 = temp_db.with_file_name(format!("{}-shm", temp_name));
+    let wal_dst2 = temp_db.with_file_name(format!("{temp_name}-wal"));
+    let shm_dst2 = temp_db.with_file_name(format!("{temp_name}-shm"));
 
     // Try both naming patterns; ignore errors (files may not exist)
     for (src, dst) in [
@@ -136,10 +138,7 @@ fn copy_db_file(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
             || e.raw_os_error() == Some(32) /* ERROR_SHARING_VIOLATION */ =>
         {
-            debug!(
-                "Standard copy failed ({}), trying Win32 share-read fallback",
-                e
-            );
+            debug!("Standard copy failed ({e}), trying Win32 share-read fallback");
             copy_with_share_read(src, dst)
         }
         Err(e) => Err(e),
@@ -166,8 +165,8 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         OPEN_EXISTING,
     };
 
-    // GENERIC_READ = 0x80000000 — not re-exported by windows-sys FileSystem
-    const GENERIC_READ: u32 = 0x80000000;
+    // GENERIC_READ = 0x8000_0000 — not re-exported by windows-sys FileSystem
+    const GENERIC_READ: u32 = 0x8000_0000;
 
     // Convert path to wide string with null terminator
     let wide_path: Vec<u16> = src
@@ -204,6 +203,8 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         if n == 0 {
             break;
         }
+        // `Read::read` contract guarantees `n <= buf.len()`, so the slice cannot panic.
+        #[allow(clippy::indexing_slicing)]
         dst_file.write_all(&buf[..n])?;
     }
     dst_file.flush()?;
@@ -213,6 +214,7 @@ fn copy_with_share_read(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 
 /// Read the `HOME` environment variable, returning an `io::Error` if unset.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn home_dir() -> Result<std::path::PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)

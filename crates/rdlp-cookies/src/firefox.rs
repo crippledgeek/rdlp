@@ -1,6 +1,6 @@
 //! Firefox cookie extraction.
 //!
-//! Extracts cookies from Firefox's SQLite database.
+//! Extracts cookies from Firefox's `SQLite` database.
 //! Firefox stores cookies in plaintext (no encryption needed).
 
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use crate::util;
 /// Extract cookies from Firefox and insert them into the jar.
 ///
 /// Returns the number of cookies loaded.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let cookie_db = find_cookie_db()?;
     debug!("Firefox cookie DB: {}", cookie_db.display());
@@ -182,7 +183,7 @@ fn firefox_profiles_dir() -> Result<PathBuf, std::io::Error> {
     }
 }
 
-/// Read cookies from the SQLite database and insert them into the jar.
+/// Read cookies from the `SQLite` database and insert them into the jar.
 fn read_cookies_from_db(db_path: &Path, jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let conn =
         rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)

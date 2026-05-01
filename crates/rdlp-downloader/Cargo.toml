@@ -33,5 +33,16 @@ mockito = { workspace = true }
 tempfile = { workspace = true }
 proptest = "1.4"
 
-[lints]
-workspace = true
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+must_use_candidate = "warn"
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"

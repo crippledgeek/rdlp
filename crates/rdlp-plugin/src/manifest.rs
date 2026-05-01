@@ -6,6 +6,10 @@
 //! This module re-exports the canonical surface and bridges the leaf's
 //! [`ManifestError`] into [`PluginError`] for in-host call sites.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::use_self)]
+
 use crate::error::PluginError;
 
 pub use rdlp_plugin_manifest::{
@@ -22,6 +26,13 @@ impl From<ManifestError> for PluginError {
             ManifestError::InvalidPluginName { name, reason } => {
                 PluginError::InvalidPluginName { name, reason }
             }
+            ManifestError::ClaimsOverrideOutsideMatches { host } => PluginError::InvalidManifest {
+                path: std::path::PathBuf::new(),
+                reason: format!(
+                    "claims_override entry '{host}' does not correspond \
+                         to any host in the matches patterns"
+                ),
+            },
             ManifestError::Toml(e) => PluginError::Toml(e),
             ManifestError::Io(e) => PluginError::Io(e),
         }

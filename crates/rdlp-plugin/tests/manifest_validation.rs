@@ -1,3 +1,16 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs
+)]
+
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 use rdlp_plugin::manifest::{Signature, parse_manifest_str};
 
 const VALID_TOML: &str = r#"
@@ -63,7 +76,7 @@ fn unknown_capability_rejected() {
 fn url_regex_too_long_rejected() {
     let huge = "a".repeat(3000);
     let toml = VALID_TOML.replace(
-        "url_regex = '^https?://(?:www\\.)?youtube\\.com/watch\\?v=(?P<id>[A-Za-z0-9_-]{11})'",
+        r"url_regex = '^https?://(?:www\.)?youtube\.com/watch\?v=(?P<id>[A-Za-z0-9_-]{11})'",
         &format!("url_regex = '{huge}'"),
     );
     let err = parse_manifest_str(&toml).unwrap_err();

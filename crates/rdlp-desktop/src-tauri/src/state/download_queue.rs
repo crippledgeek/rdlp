@@ -109,9 +109,15 @@ impl DownloadQueue {
     /// * `title` - Optional title to display immediately (e.g. from search results).
     /// * `playlist` - Optional playlist membership context for batch downloads.
     ///
+    /// # Panics
+    ///
+    /// Panics if the job cannot be found immediately after insertion, which
+    /// indicates a logic error in the internal [`HashMap`] (should never occur).
+    ///
     /// # Returns
     ///
     /// A reference to the newly created [`DownloadJob`].
+    #[allow(clippy::expect_used)]
     pub fn add_job(
         &mut self,
         id: impl Into<String>,
@@ -275,6 +281,7 @@ impl fmt::Debug for DownloadQueue {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -355,7 +362,7 @@ mod tests {
             called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
         });
 
-        let ts = 1700000000;
+        let ts = 1_700_000_000;
         assert!(queue.start_job("job-1", cancel_fn, ts));
 
         let job = queue.get_job("job-1").expect("job should exist");
@@ -416,12 +423,12 @@ mod tests {
 
         // Re-add job since take_cancel removed nothing
         let cancel_fn: Box<dyn Fn() + Send + Sync> = Box::new(|| {});
-        queue.start_job("job-1", cancel_fn, 1700000000);
+        queue.start_job("job-1", cancel_fn, 1_700_000_000);
 
         // After start_job: Running AND has cancel — both set atomically
         let job = queue.get_job("job-1").unwrap();
         assert_eq!(job.status, JobStatus::Running);
-        assert_eq!(job.started_at, Some(1700000000));
+        assert_eq!(job.started_at, Some(1_700_000_000));
         assert!(queue.take_cancel("job-1").is_some());
     }
 }

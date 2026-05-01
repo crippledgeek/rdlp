@@ -1,4 +1,4 @@
-//! RemuxStage — remuxes to a target container format.
+//! `RemuxStage` — remuxes to a target container format.
 //!
 //! This stage runs at index 3. It handles:
 //! - Explicit remux via `config.remux_container`
@@ -28,7 +28,7 @@ pub struct RemuxStage {
 impl RemuxStage {
     /// Create a new `RemuxStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -53,7 +53,7 @@ impl RemuxStage {
 
 #[async_trait]
 impl PipelineStage for RemuxStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "RemuxStage"
     }
 
@@ -78,10 +78,7 @@ impl PipelineStage for RemuxStage {
             .unwrap_or("");
 
         let Some(target_ext) = Self::target_ext(&msg, input_ext) else {
-            debug!(
-                "RemuxStage: file already in target container ({}), skipping",
-                input_ext
-            );
+            debug!("RemuxStage: file already in target container ({input_ext}), skipping");
             return Ok(msg);
         };
 
@@ -98,8 +95,7 @@ impl PipelineStage for RemuxStage {
             output_format: Some(
                 msg.config
                     .remux_container
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "mp4".to_string()),
+                    .map_or_else(|| "mp4".to_string(), |c| c.to_string()),
             ),
             encoding_tool_override: msg.encoding_tool.clone(),
         };

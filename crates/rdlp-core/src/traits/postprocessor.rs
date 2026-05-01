@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 /// Callback for reporting post-processing progress.
 ///
-/// Implementations receive [`Progress`] updates during FFmpeg post-processing
+/// Implementations receive [`Progress`] updates during `FFmpeg` post-processing
 /// stages. The fraction is always in `[0.0, 1.0]`; call [`Progress::percent`]
 /// at display sites to scale to `0.0..=100.0`.
 ///

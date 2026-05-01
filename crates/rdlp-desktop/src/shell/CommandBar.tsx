@@ -55,7 +55,14 @@ export function CommandBar() {
         return () => window.removeEventListener("rdlp-focus-search", onFocusSearch);
     }, []);
 
-    // Auto-paste on Ctrl+V when command bar is not focused
+    // Auto-paste on Ctrl+V when command bar is not focused.
+    // `handleAnalyzeUrl` only calls `setView`/`setAnalyzeUrl` which are
+    // module-level stable store setters — no component state in the closure.
+    // The React Compiler (babel-plugin-react-compiler, target:"18") auto-memoizes
+    // `handleAnalyzeUrl`, so an explicit `useCallback` + deps array here would
+    // be redundant. The empty deps array is intentional: the listener
+    // captures no component state that could become stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         async function onPaste(e: ClipboardEvent) {
             const target = e.target as HTMLElement;

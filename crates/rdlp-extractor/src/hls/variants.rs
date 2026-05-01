@@ -154,6 +154,16 @@ impl HlsSizeDetector {
     /// * `Ok(Some(HlsInfo))` - Metadata extracted from the playlist
     /// * `Ok(None)` - Metadata could not be determined (non-fatal)
     /// * `Err(_)` - Fatal error (network failure, invalid playlist, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
+    ///
+    /// # Panics
+    ///
+    /// Panics if a master playlist has variants but none can be selected
+    /// (programmer error — the filter + `or_else` fallback should always find one).
     pub async fn detect_hls_metadata(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
@@ -310,6 +320,18 @@ impl HlsSizeDetector {
     /// playlist and applied to all entries.
     ///
     /// For media playlists (non-master), returns an empty Vec.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
+    /// - Master playlist URL parsing fails (`RdlpError::Extraction`)
+    /// - Media URL join fails (`RdlpError::Extraction`)
+    ///
+    /// # Panics
+    ///
+    /// Panics if a master playlist has non-I-frame variants but none can be selected
+    /// (programmer error — the filter + `or_else` fallback should always find one).
     pub async fn detect_hls_variants(&self, m3u8_url: &str) -> Result<Vec<HlsVariantInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 

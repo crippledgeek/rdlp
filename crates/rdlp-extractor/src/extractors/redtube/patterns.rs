@@ -3,9 +3,8 @@
 //! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
 //! Includes search URL builders and filter descriptors for the JSON API.
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::SearchFilter;
-use regex::Regex;
-use std::sync::LazyLock;
 use url::form_urlencoded;
 
 /// Static URL pattern regex for RedTube (initialized once at first use)
@@ -14,21 +13,15 @@ use url::form_urlencoded;
 /// - Standard URLs: https://www.redtube.com/123456
 /// - Brazilian domain: https://www.redtube.com.br/123456
 /// - Embed URLs: https://embed.redtube.com/?id=123456
-pub static REDTUBE_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"https?://(?:(?:\w+\.)?redtube\.com(?:\.br)?/|embed\.redtube\.com/\?.*\bid=)(?P<id>\d+)",
-    )
-    .expect("Valid RedTube URL pattern")
-});
+pub static REDTUBE_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:(?:\w+\.)?redtube\.com(?:\.br)?/|embed\.redtube\.com/\?.*\bid=)(?P<id>\d+)"
+);
 
 /// Regex to extract JavaScript sources object: sources: {"720": "url", ...}
-pub static SOURCES_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"sources\s*:\s*(\{[^}]+\})"#).expect("Valid sources pattern"));
+pub static SOURCES_PATTERN: Lazy<Regex> = lazy_regex!(r#"sources\s*:\s*(\{[^}]+\})"#);
 
 /// Regex to extract mediaDefinition array: mediaDefinition: [{...}, ...]
-pub static MEDIA_DEF_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)mediaDefinition\s*:\s*(\[.+?\])").expect("Valid mediaDefinition pattern")
-});
+pub static MEDIA_DEF_PATTERN: Lazy<Regex> = lazy_regex!(r"(?s)mediaDefinition\s*:\s*(\[.+?\])");
 
 /// Regex to extract video cards from HTML search results.
 ///
@@ -37,19 +30,15 @@ pub static MEDIA_DEF_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// - `title`: Video title (title attribute)
 /// - `thumb`: Thumbnail image URL (src attribute)
 /// - `duration`: Duration text (e.g. "12:34")
-pub static HTML_VIDEO_CARD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"<a[^>]+href="(?P<url>https?://(?:www\.)?redtube\.com/\d+)"[^>]+title="(?P<title>[^"]*)"[^>]*>.*?(?:<img[^>]+src="(?P<thumb>[^"]*)")?.*?(?:<span[^>]*class="[^"]*duration[^"]*"[^>]*>(?P<duration>[\d:]+)</span>)?"#,
-    )
-    .expect("Valid HTML video card pattern")
-});
+pub static HTML_VIDEO_CARD_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<a[^>]+href="(?P<url>https?://(?:www\.)?redtube\.com/\d+)"[^>]+title="(?P<title>[^"]*)"[^>]*>.*?(?:<img[^>]+src="(?P<thumb>[^"]*)")?.*?(?:<span[^>]*class="[^"]*duration[^"]*"[^>]*>(?P<duration>[\d:]+)</span>)?"#
+);
 
 /// Per-card uploader marker. RedTube emits `data-uploader-name="…"` on
 /// the outer `<li>` of every search result; the Nth match pairs with the
 /// Nth `HTML_VIDEO_CARD_PATTERN` hit by document order.
-pub static HTML_UPLOADER_NAME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"data-uploader-name="(?P<name>[^"]+)""#).expect("Valid uploader-name pattern")
-});
+pub static HTML_UPLOADER_NAME_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"data-uploader-name="(?P<name>[^"]+)""#);
 
 /// Number of results per API page.
 pub(crate) const API_RESULTS_PER_PAGE: u32 = 20;

@@ -24,7 +24,7 @@ impl BrowserType {
     /// Canonical name for display and matching.
     #[inline]
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Chrome => "chrome",
             Self::Firefox => "firefox",

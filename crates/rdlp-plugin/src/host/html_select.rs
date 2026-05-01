@@ -5,6 +5,10 @@
 //! return an empty list rather than failing, matching browser-extension
 //! semantics where authors are tolerant of malformed inputs.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc)]
+
 use crate::instance::PluginStoreData;
 use wasmtime::component::Linker;
 

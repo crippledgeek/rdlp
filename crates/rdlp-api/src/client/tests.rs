@@ -1,4 +1,4 @@
-//! Tests for RdlpClient and RdlpClientBuilder
+//! Tests for `RdlpClient` and `RdlpClientBuilder`
 
 use super::*;
 
@@ -23,7 +23,7 @@ fn test_new_with_default_config() {
 #[test]
 fn test_client_is_clone() {
     let client = RdlpClient::new(Config::default()).unwrap();
-    let _clone = client.clone();
+    let _clone = client;
 }
 
 #[test]

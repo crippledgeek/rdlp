@@ -1,5 +1,7 @@
 //! Tests for HTTP downloader module
 
+#![allow(clippy::unreadable_literal)] // byte-count literals in HTTP range tests
+
 use super::*;
 use rdlp_core::Downloader;
 use std::sync::atomic::AtomicU64;

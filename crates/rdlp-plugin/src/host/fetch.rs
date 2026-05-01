@@ -8,6 +8,15 @@
 //! 3. `tokio::select!` against the per-call `CancellationToken` so Ctrl+C aborts in-flight requests.
 //! 4. Body size cap (32 MB) — prevents adversarial servers from exhausting plugin memory.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::items_after_statements,
+    clippy::cast_lossless,
+    clippy::missing_errors_doc,
+    clippy::manual_let_else
+)]
+
 use crate::PluginError;
 use crate::host::fetch_fixtures::SharedFixtures;
 use crate::instance::PluginStoreData;

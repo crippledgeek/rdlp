@@ -1,3 +1,7 @@
+// Lint-tightening for the binary entrypoint. `pedantic` / `nursery` are
+// stylistic; `indexing_slicing` prevents silent out-of-bounds panics.
+// See `Cargo.toml` `[lints.clippy]` for crate-level baseline.
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 //! `rdlp-probe` — extractor authoring toolkit.
 //!
 //! Every command runs through the same code paths the production extractors

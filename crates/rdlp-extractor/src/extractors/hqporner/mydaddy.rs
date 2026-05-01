@@ -4,29 +4,23 @@
 //! direct MP4 URLs from the inline JavaScript. No JS execution needed —
 //! URLs are static string literals in the HTML.
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::Format;
-use regex::Regex;
-use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 
 /// Pattern to extract MP4 source URLs from the embed page.
 ///
 /// Matches: `//s57.bigcdn.cc/pubs/69af3debebaf77.86372927/1080.mp4`
-static CDN_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(//s\d+\.bigcdn\.cc/pubs/[^"'\\]+\.mp4)"#).expect("Valid CDN URL pattern")
-});
+static CDN_URL_PATTERN: Lazy<Regex> = lazy_regex!(r#"(//s\d+\.bigcdn\.cc/pubs/[^"'\\]+\.mp4)"#);
 
 /// Pattern to extract the poster/thumbnail URL.
-static POSTER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(//s\d+\.bigcdn\.cc/pubs/[^"'\\]+/main\.jpg)"#).expect("Valid poster URL pattern")
-});
+static POSTER_PATTERN: Lazy<Regex> = lazy_regex!(r#"(//s\d+\.bigcdn\.cc/pubs/[^"'\\]+/main\.jpg)"#);
 
 /// Pattern to extract quality from CDN filename (e.g., "1080" from "/1080.mp4").
-static QUALITY_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/(\d+)\.mp4$").expect("Valid quality pattern"));
+static QUALITY_PATTERN: Lazy<Regex> = lazy_regex!(r"/(\d+)\.mp4$");
 
 /// Resolved formats and metadata from a mydaddy.cc embed.
 pub(crate) struct MyDaddyResult {

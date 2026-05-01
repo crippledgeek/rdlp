@@ -43,7 +43,7 @@ impl Orchestrator {
                 ))
             })?;
 
-        let path = self.sanitize_template_path(&rendered);
+        let path = Self::sanitize_template_path(&rendered);
 
         let full_path = if path.is_absolute() {
             path
@@ -75,11 +75,8 @@ impl Orchestrator {
     ///
     /// Splits on `/` (the template directory separator), sanitizes each component
     /// with `sanitize_filename()`, and reassembles as a `PathBuf`.
-    fn sanitize_template_path(&self, rendered: &str) -> PathBuf {
-        rendered
-            .split('/')
-            .map(|component| self.sanitize_filename(component))
-            .collect()
+    fn sanitize_template_path(rendered: &str) -> PathBuf {
+        rendered.split('/').map(Self::sanitize_filename).collect()
     }
 
     /// Determine the actual file extension for a format
@@ -130,7 +127,7 @@ impl Orchestrator {
     ///
     /// This function is critical for security. Never use unsanitized filenames
     /// directly from external sources (video titles, URLs, etc.).
-    pub(super) fn sanitize_filename(&self, name: &str) -> String {
+    pub(super) fn sanitize_filename(name: &str) -> String {
         // Step 1: Replace invalid filesystem characters and filter control characters
         let sanitized: String = name
             .chars()
@@ -151,11 +148,9 @@ impl Orchestrator {
         let trimmed = sanitized.trim_matches(|c| c == '.' || c == ' ');
 
         // Step 3: Check for Windows reserved names
-        let base_name = if let Some(dot_pos) = trimmed.rfind('.') {
-            &trimmed[..dot_pos]
-        } else {
-            trimmed
-        };
+        let base_name = trimmed
+            .rfind('.')
+            .map_or(trimmed, |dot_pos| &trimmed[..dot_pos]);
 
         let result = if Self::WINDOWS_RESERVED_NAMES
             .iter()

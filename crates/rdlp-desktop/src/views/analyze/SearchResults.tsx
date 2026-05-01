@@ -6,17 +6,17 @@
 // the search-page card markup couldn't surface. Cached per-row at the
 // TanStack Query layer for an hour.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import {
     flexRender,
     getCoreRowModel,
     getSortedRowModel,
-    useReactTable,
     type Row,
 } from "@tanstack/react-table";
 import type { SortingState } from "@tanstack/react-table";
+import { useTable } from "@/hooks/useTable";
 import { searchStore } from "@/stores/searchStore";
 import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/api/search";
 import { setAnalyzeUrl } from "@/stores/uiStore";
@@ -191,14 +191,28 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         };
     }, [allResults]);
 
-    const table = useReactTable({
-        data: allResults,
-        columns: searchResultColumns,
-        state: { sorting, columnVisibility },
-        onSortingChange: setSorting,
-        getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
-    });
+    // Stable callback so the memoized options object below keeps a stable
+    // identity when sorting state hasn't changed.
+    const onSortingChange = useCallback(setSorting, [setSorting]);
+
+    // useMemo wrapping is required when the React Compiler is enabled:
+    // useReactTable (via the useTable wrapper) triggers an "IncompatibleLibrary"
+    // bail-out; passing a non-memoized options object would cause the parent
+    // component to re-run the full table computation on every render.
+    // See memory/feedback_tanstack_table_react_compiler.md.
+    const tableOptions = useMemo(
+        () => ({
+            data: allResults,
+            columns: searchResultColumns,
+            state: { sorting, columnVisibility },
+            onSortingChange,
+            getCoreRowModel: getCoreRowModel(),
+            getSortedRowModel: getSortedRowModel(),
+        }),
+        [allResults, sorting, columnVisibility, onSortingChange],
+    );
+
+    const table = useTable(tableOptions);
 
     // Compute percentage widths from visible columns' TanStack `size` totals.
     // Per CSS 2.2 §17.5.2.1, percentage widths on <col> under

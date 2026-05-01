@@ -1,5 +1,13 @@
-// Test fixtures use std::fs for synchronous I/O — allowed per clippy.toml policy (c).
-#![allow(clippy::disallowed_methods)]
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs
+)]
 
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;

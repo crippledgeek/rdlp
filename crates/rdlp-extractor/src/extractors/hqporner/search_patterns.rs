@@ -1,17 +1,14 @@
 //! URL builders for HQPorner search and listing pages.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use url::form_urlencoded;
 
 /// HQPorner search base URL.
 const SEARCH_BASE: &str = "https://hqporner.com/";
 
 /// Pattern to extract the "Next" page URL from pagination.
-static NEXT_PAGE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"href="([^"]+)"[^>]*class="[^"]*pagi-btn[^"]*">Next"#)
-        .expect("Valid next page pattern")
-});
+static NEXT_PAGE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"href="([^"]+)"[^>]*class="[^"]*pagi-btn[^"]*">Next"#);
 
 /// Build a search URL.
 ///

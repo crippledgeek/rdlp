@@ -3,7 +3,7 @@
 //! Implements stages 2-4 of the subtitle pipeline:
 //! 1. **Extractor** -- site-specific, handled by extractors (not this module)
 //! 2. **Validator** -- HEAD/GET URL pre-checks ([`validate_subtitle_urls`])
-//! 3. **Normalizer** -- InfoDict -> SubtitleResult ([`normalize_subtitles`])
+//! 3. **Normalizer** -- `InfoDict` -> `SubtitleResult` ([`normalize_subtitles`])
 //! 4. **Policy** -- apply user flags, decide warn vs error ([`apply_subtitle_policy`])
 
 use log::{debug, warn};
@@ -118,7 +118,7 @@ async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation 
 
 // --- Stage 3: Normalizer ---
 
-/// Normalize InfoDict subtitle maps into a [`SubtitleResult`].
+/// Normalize `InfoDict` subtitle maps into a [`SubtitleResult`].
 ///
 /// Converts the legacy `HashMap<String, Vec<Subtitle>>` fields into
 /// [`SubtitleTrack`] entries with proper status and reason inference.
@@ -137,7 +137,7 @@ pub(super) struct SubtitlePolicyOutcome {
     pub warnings: Vec<String>,
     /// Whether the download should be aborted
     pub should_fail: bool,
-    /// Error message if should_fail is true
+    /// Error message if `should_fail` is true
     pub error_message: Option<String>,
 }
 
@@ -270,6 +270,8 @@ fn pick_best_track(
     candidates: &[&SubtitleTrack],
     preferred_format: Option<SubtitleFormat>,
 ) -> Option<SubtitleTrack> {
+    const FALLBACK_ORDER: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
+
     if candidates.is_empty() {
         return None;
     }
@@ -283,13 +285,13 @@ fn pick_best_track(
     }
 
     // Fallback order: srt > vtt > ass > ssa > lrc > first
-    const FALLBACK_ORDER: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
     for pref in FALLBACK_ORDER {
         if let Some(track) = candidates.iter().find(|t| t.ext.eq_ignore_ascii_case(pref)) {
             return Some((*track).clone());
         }
     }
 
+    #[allow(clippy::indexing_slicing)] // candidates non-empty; early return for empty above
     Some(candidates[0].clone())
 }
 

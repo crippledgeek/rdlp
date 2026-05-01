@@ -15,6 +15,7 @@ Each entry is sourced verbatim from
 tag 2026.03.17. URLs marked `'only_matching': True` upstream still
 need to dispatch correctly even if their info_dict isn't asserted.
 """
+
 import importlib
 import sys
 import tempfile
@@ -22,19 +23,15 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Fake yt_dlp/ package contents — kept in sync with the Rust constants in
 # crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs (EXTRACTOR_COMMON_PY,
 # UTILS_INIT_PY, UTILS_HELPERS_PY, UTILS_TRAVERSAL_PY, YT_DLP_INIT_PY).
 # ---------------------------------------------------------------------------
 
-_FAKE_YT_DLP_INIT = (
-    '"""rdlp shim — fake yt_dlp package staged by build-from-ytdlp."""\n'
-    '__version__ = "rdlp-shim/0.2"\n'
-)
+_FAKE_YT_DLP_INIT = '"""rdlp shim — fake yt_dlp package staged by build-from-ytdlp."""\n__version__ = "rdlp-shim/0.2"\n'
 
-_FAKE_EXTRACTOR_COMMON = "from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n"
+_FAKE_EXTRACTOR_COMMON = 'from rdlp_ytdlp_compat import InfoExtractor  # noqa: F401\n'
 
 _FAKE_UTILS_INIT = """\
 from .traversal import *  # noqa: F401, F403
@@ -68,23 +65,23 @@ def _load_svt_module():
     imports resolve. Mirrors the build-from-ytdlp staging done at
     plugin-build time (see stage_build_dir in build_from_ytdlp.rs)."""
     repo_root = Path(__file__).resolve().parents[3]
-    svt_src = repo_root / "examples/plugins/svt/svt.py"
-    assert svt_src.exists(), f"missing source: {svt_src}"
+    svt_src = repo_root / 'examples/plugins/svt/svt.py'
+    assert svt_src.exists(), f'missing source: {svt_src}'
 
-    stage = Path(tempfile.mkdtemp(prefix="ytdlp-shim-test-"))
-    yt = stage / "yt_dlp"
-    (yt / "extractor").mkdir(parents=True)
-    (yt / "utils").mkdir(parents=True)
-    (yt / "__init__.py").write_text(_FAKE_YT_DLP_INIT)
-    (yt / "extractor" / "__init__.py").write_text("")
-    (yt / "extractor" / "common.py").write_text(_FAKE_EXTRACTOR_COMMON)
-    (yt / "utils" / "__init__.py").write_text(_FAKE_UTILS_INIT)
-    (yt / "utils" / "_utils.py").write_text(_FAKE_UTILS_HELPERS)
-    (yt / "utils" / "traversal.py").write_text(_FAKE_UTILS_TRAVERSAL)
-    (yt / "extractor" / "svt.py").write_bytes(svt_src.read_bytes())
+    stage = Path(tempfile.mkdtemp(prefix='ytdlp-shim-test-'))
+    yt = stage / 'yt_dlp'
+    (yt / 'extractor').mkdir(parents=True)
+    (yt / 'utils').mkdir(parents=True)
+    (yt / '__init__.py').write_text(_FAKE_YT_DLP_INIT)
+    (yt / 'extractor' / '__init__.py').write_text('')
+    (yt / 'extractor' / 'common.py').write_text(_FAKE_EXTRACTOR_COMMON)
+    (yt / 'utils' / '__init__.py').write_text(_FAKE_UTILS_INIT)
+    (yt / 'utils' / '_utils.py').write_text(_FAKE_UTILS_HELPERS)
+    (yt / 'utils' / 'traversal.py').write_text(_FAKE_UTILS_TRAVERSAL)
+    (yt / 'extractor' / 'svt.py').write_bytes(svt_src.read_bytes())
 
     sys.path.insert(0, str(stage))
-    return importlib.import_module("yt_dlp.extractor.svt")
+    return importlib.import_module('yt_dlp.extractor.svt')
 
 
 SVT = _load_svt_module()
@@ -92,7 +89,6 @@ from rdlp_ytdlp_compat._dispatch import (  # noqa: E402
     discover_ie_classes,
     dispatch_url,
 )
-
 
 CANDIDATES = discover_ie_classes(SVT)
 
@@ -102,36 +98,45 @@ CANDIDATES = discover_ie_classes(SVT)
 # the upstream test type (full info_dict assertion vs. only_matching).
 SVT_PLAY_URLS = [
     # Full info_dict tests
-    ("https://www.svtplay.se/video/eXYgwZb/sverige-och-kriget/1-utbrottet", "SVTPlayIE"),
-    ("https://www.svtplay.se/video/30479064", "SVTPlayIE"),
-    ("https://www.svtplay.se/video/emBxBQj", "SVTPlayIE"),
-    ("https://www.svtplay.se/video/jz2rYz7/anders-hansen-moter/james-fallon?info=visa", "SVTPlayIE"),
+    ('https://www.svtplay.se/video/eXYgwZb/sverige-och-kriget/1-utbrottet', 'SVTPlayIE'),
+    ('https://www.svtplay.se/video/30479064', 'SVTPlayIE'),
+    ('https://www.svtplay.se/video/emBxBQj', 'SVTPlayIE'),
+    ('https://www.svtplay.se/video/jz2rYz7/anders-hansen-moter/james-fallon?info=visa', 'SVTPlayIE'),
     # only_matching tests
-    ("https://www.svtplay.se/video/30479064/husdrommar/husdrommar-sasong-8-designdrommar-i-stenungsund?modalId=8zVbDPA", "SVTPlayIE"),
-    ("https://www.svtplay.se/video/30684086/rapport/rapport-24-apr-18-00-7?id=e72gVpa", "SVTPlayIE"),
-    ("http://www.oppetarkiv.se/video/5219710/trollflojten", "SVTPlayIE"),
-    ("http://www.svtplay.se/klipp/9023742/stopptid-om-bjorn-borg", "SVTPlayIE"),
-    ("https://www.svtplay.se/kanaler/svt1", "SVTPlayIE"),
-    ("svt:1376446-003A", "SVTPlayIE"),
-    ("svt:14278044", "SVTPlayIE"),
-    ("https://www.svt.se/barnkanalen/barnplay/kar/eWv5MLX/", "SVTPlayIE"),
-    ("svt:eWv5MLX", "SVTPlayIE"),
+    (
+        'https://www.svtplay.se/video/30479064/husdrommar/husdrommar-sasong-8-designdrommar-i-stenungsund?modalId=8zVbDPA',
+        'SVTPlayIE',
+    ),
+    ('https://www.svtplay.se/video/30684086/rapport/rapport-24-apr-18-00-7?id=e72gVpa', 'SVTPlayIE'),
+    ('http://www.oppetarkiv.se/video/5219710/trollflojten', 'SVTPlayIE'),
+    ('http://www.svtplay.se/klipp/9023742/stopptid-om-bjorn-borg', 'SVTPlayIE'),
+    ('https://www.svtplay.se/kanaler/svt1', 'SVTPlayIE'),
+    ('svt:1376446-003A', 'SVTPlayIE'),
+    ('svt:14278044', 'SVTPlayIE'),
+    ('https://www.svt.se/barnkanalen/barnplay/kar/eWv5MLX/', 'SVTPlayIE'),
+    ('svt:eWv5MLX', 'SVTPlayIE'),
 ]
 
 SVT_SERIES_URLS = [
-    ("https://www.svtplay.se/rederiet", "SVTSeriesIE"),
-    ("https://www.svtplay.se/rederiet?tab=season-2-jpmQYgn", "SVTSeriesIE"),
+    ('https://www.svtplay.se/rederiet', 'SVTSeriesIE'),
+    ('https://www.svtplay.se/rederiet?tab=season-2-jpmQYgn', 'SVTSeriesIE'),
 ]
 
 SVT_PAGE_URLS = [
-    ("https://www.svt.se/nyheter/lokalt/skane/viktor-18-forlorade-armar-och-ben-i-sepsis-vill-ateruppta-karaten-och-bli-svetsare", "SVTPageIE"),
-    ("https://www.svt.se/nyheter/lokalt/skane/forsvarsmakten-om-trafikkaoset-pa-e22-kunde-inte-varit-dar-snabbare", "SVTPageIE"),
-    ("https://www.svt.se/nyheter/svtforum/2023-tungt-ar-for-svensk-media", "SVTPageIE"),
-    ("https://www.svt.se/sport/ishockey/bakom-masken-lehners-kamp-mot-mental-ohalsa", "SVTPageIE"),
-    ("https://www.svt.se/nyheter/utrikes/svenska-andrea-ar-en-mil-fran-branderna-i-kalifornien", "SVTPageIE"),
-    ("http://www.svt.se/sport/ishockey/jagr-tacklar-giroux-under-intervjun", "SVTPageIE"),
-    ("https://www.svt.se/nyheter/lokalt/vast/svt-testar-tar-nagon-upp-skrapet-1", "SVTPageIE"),
-    ("https://www.svt.se/vader/manadskronikor/maj2018", "SVTPageIE"),
+    (
+        'https://www.svt.se/nyheter/lokalt/skane/viktor-18-forlorade-armar-och-ben-i-sepsis-vill-ateruppta-karaten-och-bli-svetsare',
+        'SVTPageIE',
+    ),
+    (
+        'https://www.svt.se/nyheter/lokalt/skane/forsvarsmakten-om-trafikkaoset-pa-e22-kunde-inte-varit-dar-snabbare',
+        'SVTPageIE',
+    ),
+    ('https://www.svt.se/nyheter/svtforum/2023-tungt-ar-for-svensk-media', 'SVTPageIE'),
+    ('https://www.svt.se/sport/ishockey/bakom-masken-lehners-kamp-mot-mental-ohalsa', 'SVTPageIE'),
+    ('https://www.svt.se/nyheter/utrikes/svenska-andrea-ar-en-mil-fran-branderna-i-kalifornien', 'SVTPageIE'),
+    ('http://www.svt.se/sport/ishockey/jagr-tacklar-giroux-under-intervjun', 'SVTPageIE'),
+    ('https://www.svt.se/nyheter/lokalt/vast/svt-testar-tar-nagon-upp-skrapet-1', 'SVTPageIE'),
+    ('https://www.svt.se/vader/manadskronikor/maj2018', 'SVTPageIE'),
 ]
 
 ALL_URLS = SVT_PLAY_URLS + SVT_SERIES_URLS + SVT_PAGE_URLS
@@ -140,33 +145,26 @@ ALL_URLS = SVT_PLAY_URLS + SVT_SERIES_URLS + SVT_PAGE_URLS
 class TestSvtClassDiscovery:
     def test_three_concrete_classes(self):
         names = sorted(c.__name__ for c in CANDIDATES)
-        assert names == ["SVTPageIE", "SVTPlayIE", "SVTSeriesIE"], (
-            f"expected SVT's 3 concrete IEs, got {names}"
-        )
+        assert names == ['SVTPageIE', 'SVTPlayIE', 'SVTSeriesIE'], f"expected SVT's 3 concrete IEs, got {names}"
 
     def test_svt_base_excluded(self):
         # `SVTBaseIE` ships in svt.py but lacks `_VALID_URL` (`None`
         # inherited from InfoExtractor) — must NOT appear as a
         # dispatch candidate.
         for cls in CANDIDATES:
-            assert cls.__name__ != "SVTBaseIE"
+            assert cls.__name__ != 'SVTBaseIE'
 
 
 class TestSvtUrlDispatch:
-    @pytest.mark.parametrize("url,expected", ALL_URLS,
-                             ids=[u for u, _ in ALL_URLS])
+    @pytest.mark.parametrize('url,expected', ALL_URLS, ids=[u for u, _ in ALL_URLS])
     def test_dispatches_to_correct_ie(self, url, expected):
         cls = dispatch_url(CANDIDATES, url)
-        assert cls is not None, (
-            f"no IE claimed {url!r} — every upstream _TEST URL must dispatch"
-        )
-        assert cls.__name__ == expected, (
-            f"{url!r}: dispatched to {cls.__name__}, expected {expected}"
-        )
+        assert cls is not None, f'no IE claimed {url!r} — every upstream _TEST URL must dispatch'
+        assert cls.__name__ == expected, f'{url!r}: dispatched to {cls.__name__}, expected {expected}'
 
     def test_unrelated_url_returns_none(self):
         # Sanity: a URL outside SVT's domain space must not match any IE.
-        assert dispatch_url(CANDIDATES, "https://example.com/foo") is None
+        assert dispatch_url(CANDIDATES, 'https://example.com/foo') is None
 
     def test_play_takes_precedence_over_series(self):
         # SVTSeriesIE.suitable explicitly yields when SVTPlayIE.suitable
@@ -176,12 +174,12 @@ class TestSvtUrlDispatch:
         # SVTSeriesIE's broader regex `/(?P<id>[^/?&#]+)` would also
         # capture `video` as the id. Without the override, dispatch
         # ordering would matter.
-        url = "https://www.svtplay.se/video/eXYgwZb/sverige-och-kriget/1-utbrottet"
+        url = 'https://www.svtplay.se/video/eXYgwZb/sverige-och-kriget/1-utbrottet'
         cls = dispatch_url(CANDIDATES, url)
-        assert cls.__name__ == "SVTPlayIE"
+        assert cls.__name__ == 'SVTPlayIE'
 
     def test_play_takes_precedence_over_page(self):
         # SVTPageIE.suitable yields when SVTPlayIE matches. Pin similarly.
-        url = "https://www.svt.se/barnkanalen/barnplay/kar/eWv5MLX/"
+        url = 'https://www.svt.se/barnkanalen/barnplay/kar/eWv5MLX/'
         cls = dispatch_url(CANDIDATES, url)
-        assert cls.__name__ == "SVTPlayIE"
+        assert cls.__name__ == 'SVTPlayIE'

@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 ///
 /// The level index is an index into this array. Level 0 = 64 KB (minimum),
 /// level 7 = 8 MB (maximum).
-pub(crate) const CHUNK_LEVELS: [usize; 8] = [
+pub const CHUNK_LEVELS: [usize; 8] = [
     64 * 1024,       // 64 KB
     128 * 1024,      // 128 KB
     256 * 1024,      // 256 KB
@@ -59,7 +59,7 @@ const MD_THRESHOLD: f64 = 0.30;
 /// Threshold for "mild noise" (within 10 %, hold steady).
 const NOISE_THRESHOLD: f64 = 0.10;
 
-/// Number of consecutive plateaus in SlowStart before transitioning to Steady.
+/// Number of consecutive plateaus in `SlowStart` before transitioning to Steady.
 const SLOW_START_PLATEAU_LIMIT: usize = 3;
 
 // ─── Phase ────────────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ struct AdaptiveState {
     phase: Phase,
     /// Segment-to-realtime ratio (bytes/s / segment-bitrate).
     realtime_ratio: Option<f64>,
-    /// Consecutive plateau count during SlowStart.
+    /// Consecutive plateau count during `SlowStart`.
     slow_start_plateaus: usize,
     /// EWMA throughput from the previous adjustment, used to detect trend.
     last_ewma: Option<f64>,
@@ -233,7 +233,7 @@ impl AdaptiveController {
     ///
     /// # Returns
     /// A reference to the `Arc<Semaphore>` controlling parallelism.
-    pub fn semaphore(&self) -> &Arc<Semaphore> {
+    pub const fn semaphore(&self) -> &Arc<Semaphore> {
         &self.semaphore
     }
 
@@ -243,7 +243,10 @@ impl AdaptiveController {
     /// `Some(ChunkRequest)` with the next byte range, or `None` when all bytes
     /// have been assigned.
     pub fn next_chunk(&self) -> Option<ChunkRequest> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if state.bytes_assigned >= self.total_size {
             return None;
@@ -263,7 +266,10 @@ impl AdaptiveController {
     /// * `bytes` - Number of bytes downloaded in this chunk.
     /// * `duration` - Wall-clock time taken to download the chunk.
     pub fn report_chunk_complete(&self, bytes: u64, duration: Duration) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         self.record_sample(&mut state, bytes, duration);
     }
@@ -281,7 +287,10 @@ impl AdaptiveController {
         duration: Duration,
         segment_duration_secs: Option<f64>,
     ) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Compute the realtime ratio if the segment's declared duration is known.
         if let Some(seg_dur) = segment_duration_secs
@@ -323,7 +332,7 @@ impl AdaptiveController {
         let mut iter = history.iter();
         let first = iter.next()?;
         let ewma = iter.fold(*first, |acc, &sample| {
-            EWMA_ALPHA * sample + (1.0 - EWMA_ALPHA) * acc
+            EWMA_ALPHA.mul_add(sample, (1.0 - EWMA_ALPHA) * acc)
         });
         Some(ewma)
     }
@@ -334,9 +343,8 @@ impl AdaptiveController {
     fn adjust(&self, state: &mut AdaptiveState) {
         state.chunks_since_last_adjust = 0;
 
-        let current_ewma = match Self::compute_ewma(&state.throughput_history) {
-            Some(e) => e,
-            None => return,
+        let Some(current_ewma) = Self::compute_ewma(&state.throughput_history) else {
+            return;
         };
 
         let prev_ewma = state.last_ewma;
@@ -348,7 +356,7 @@ impl AdaptiveController {
         }
     }
 
-    /// SlowStart phase AIMD adjustments.
+    /// `SlowStart` phase AIMD adjustments.
     fn adjust_slow_start(
         &self,
         state: &mut AdaptiveState,
@@ -473,7 +481,7 @@ impl AdaptiveController {
         self.log(&msg);
     }
 
-    /// Adjust the chunk level by `delta`, clamped to [MIN_CHUNK_LEVEL, 7].
+    /// Adjust the chunk level by `delta`, clamped to [`MIN_CHUNK_LEVEL`, 7].
     ///
     /// In HLS mode the chunk level is not adjusted.
     fn bump_chunk_level(&self, state: &mut AdaptiveState, delta: i8) {
@@ -481,7 +489,8 @@ impl AdaptiveController {
             return;
         }
         let old_level = state.current_chunk_level;
-        let new_level = (old_level as i16 + delta as i16).clamp(MIN_CHUNK_LEVEL as i16, 7) as u8;
+        let new_level =
+            (i16::from(old_level) + i16::from(delta)).clamp(i16::from(MIN_CHUNK_LEVEL), 7) as u8;
         state.current_chunk_level = new_level;
         if new_level != old_level {
             let msg = format!(
@@ -537,7 +546,7 @@ impl AdaptiveController {
 mod tests {
     use super::*;
 
-    /// Build a default controller for HTTP mode with given total_size.
+    /// Build a default controller for HTTP mode with given `total_size`.
     fn make_controller(total_size: u64) -> AdaptiveController {
         AdaptiveController::new(
             total_size,

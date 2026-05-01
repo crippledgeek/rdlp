@@ -1,4 +1,12 @@
 //! Tests for the orchestrator module
+#![allow(
+    clippy::indexing_slicing,
+    clippy::unreadable_literal,
+    clippy::match_wildcard_for_single_variants,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::needless_collect,
+    unused_variables
+)]
 
 mod property_tests;
 mod resume_tests;
@@ -24,7 +32,7 @@ pub(super) fn create_test_orchestrator() -> Orchestrator {
     Orchestrator::new(config, tx, id, token, None)
 }
 
-/// Helper function to wrap formats in an InfoDict for testing
+/// Helper function to wrap formats in an `InfoDict` for testing
 fn create_test_info_dict(formats: Vec<Format>) -> InfoDict {
     let mut info = InfoDict::new(
         "test_id",
@@ -59,27 +67,27 @@ fn test_sanitize_filename() {
     let orchestrator = create_test_orchestrator();
 
     assert_eq!(
-        orchestrator.sanitize_filename("valid_filename"),
+        Orchestrator::sanitize_filename("valid_filename"),
         "valid_filename"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("file/with/slashes"),
+        Orchestrator::sanitize_filename("file/with/slashes"),
         "file_with_slashes"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("file\\with\\backslashes"),
+        Orchestrator::sanitize_filename("file\\with\\backslashes"),
         "file_with_backslashes"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("file:with:colons"),
+        Orchestrator::sanitize_filename("file:with:colons"),
         "file_with_colons"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("file*with?special<chars>"),
+        Orchestrator::sanitize_filename("file*with?special<chars>"),
         "file_with_special_chars_"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("file|with\"pipes"),
+        Orchestrator::sanitize_filename("file|with\"pipes"),
         "file_with_pipes"
     );
 }
@@ -88,9 +96,9 @@ fn test_sanitize_filename() {
 fn test_sanitize_filename_null_bytes() {
     let orchestrator = create_test_orchestrator();
     // Null bytes should be removed
-    assert_eq!(orchestrator.sanitize_filename("file\0name"), "filename");
+    assert_eq!(Orchestrator::sanitize_filename("file\0name"), "filename");
     assert_eq!(
-        orchestrator.sanitize_filename("before\0\0after"),
+        Orchestrator::sanitize_filename("before\0\0after"),
         "beforeafter"
     );
 }
@@ -100,50 +108,56 @@ fn test_sanitize_filename_control_characters() {
     let orchestrator = create_test_orchestrator();
     // Control characters should be removed (except space)
     assert_eq!(
-        orchestrator.sanitize_filename("file\x01\x02name"),
+        Orchestrator::sanitize_filename("file\x01\x02name"),
         "filename"
     );
     // Tab and newline are control chars
-    assert_eq!(orchestrator.sanitize_filename("file\tname"), "filename");
-    assert_eq!(orchestrator.sanitize_filename("file\nname"), "filename");
+    assert_eq!(Orchestrator::sanitize_filename("file\tname"), "filename");
+    assert_eq!(Orchestrator::sanitize_filename("file\nname"), "filename");
     // Space is preserved
-    assert_eq!(orchestrator.sanitize_filename("file name"), "file name");
+    assert_eq!(Orchestrator::sanitize_filename("file name"), "file name");
 }
 
 #[test]
 fn test_sanitize_filename_windows_reserved() {
     let orchestrator = create_test_orchestrator();
     // Windows reserved names get prefixed with underscore
-    assert_eq!(orchestrator.sanitize_filename("CON"), "_CON");
-    assert_eq!(orchestrator.sanitize_filename("con"), "_con");
-    assert_eq!(orchestrator.sanitize_filename("PRN.txt"), "_PRN.txt");
-    assert_eq!(orchestrator.sanitize_filename("AUX"), "_AUX");
-    assert_eq!(orchestrator.sanitize_filename("NUL"), "_NUL");
-    assert_eq!(orchestrator.sanitize_filename("COM1"), "_COM1");
-    assert_eq!(orchestrator.sanitize_filename("LPT9"), "_LPT9");
+    assert_eq!(Orchestrator::sanitize_filename("CON"), "_CON");
+    assert_eq!(Orchestrator::sanitize_filename("con"), "_con");
+    assert_eq!(Orchestrator::sanitize_filename("PRN.txt"), "_PRN.txt");
+    assert_eq!(Orchestrator::sanitize_filename("AUX"), "_AUX");
+    assert_eq!(Orchestrator::sanitize_filename("NUL"), "_NUL");
+    assert_eq!(Orchestrator::sanitize_filename("COM1"), "_COM1");
+    assert_eq!(Orchestrator::sanitize_filename("LPT9"), "_LPT9");
     // Not reserved (has suffix that's not extension)
-    assert_eq!(orchestrator.sanitize_filename("CONX"), "CONX");
-    assert_eq!(orchestrator.sanitize_filename("CONSOLE"), "CONSOLE");
+    assert_eq!(Orchestrator::sanitize_filename("CONX"), "CONX");
+    assert_eq!(Orchestrator::sanitize_filename("CONSOLE"), "CONSOLE");
 }
 
 #[test]
 fn test_sanitize_filename_leading_trailing_dots_spaces() {
     let orchestrator = create_test_orchestrator();
     // Leading/trailing dots and spaces are trimmed
-    assert_eq!(orchestrator.sanitize_filename("  filename  "), "filename");
-    assert_eq!(orchestrator.sanitize_filename("..filename.."), "filename");
-    assert_eq!(orchestrator.sanitize_filename(". .filename. ."), "filename");
+    assert_eq!(Orchestrator::sanitize_filename("  filename  "), "filename");
+    assert_eq!(Orchestrator::sanitize_filename("..filename.."), "filename");
+    assert_eq!(
+        Orchestrator::sanitize_filename(". .filename. ."),
+        "filename"
+    );
     // Mixed
-    assert_eq!(orchestrator.sanitize_filename(" . filename . "), "filename");
+    assert_eq!(
+        Orchestrator::sanitize_filename(" . filename . "),
+        "filename"
+    );
 }
 
 #[test]
 fn test_sanitize_filename_empty_string() {
     let orchestrator = create_test_orchestrator();
-    assert_eq!(orchestrator.sanitize_filename(""), "unnamed");
-    assert_eq!(orchestrator.sanitize_filename("   "), "unnamed");
-    assert_eq!(orchestrator.sanitize_filename("..."), "unnamed");
-    assert_eq!(orchestrator.sanitize_filename("\0\0"), "unnamed");
+    assert_eq!(Orchestrator::sanitize_filename(""), "unnamed");
+    assert_eq!(Orchestrator::sanitize_filename("   "), "unnamed");
+    assert_eq!(Orchestrator::sanitize_filename("..."), "unnamed");
+    assert_eq!(Orchestrator::sanitize_filename("\0\0"), "unnamed");
 }
 
 #[test]
@@ -151,7 +165,7 @@ fn test_sanitize_filename_length_truncation() {
     let orchestrator = create_test_orchestrator();
     // Create a very long filename (300 chars)
     let long_name = "a".repeat(300);
-    let result = orchestrator.sanitize_filename(&long_name);
+    let result = Orchestrator::sanitize_filename(&long_name);
     assert!(
         result.len() <= 200,
         "Filename should be truncated to 200 chars"
@@ -159,7 +173,7 @@ fn test_sanitize_filename_length_truncation() {
 
     // With extension - extension should be preserved
     let long_with_ext = format!("{}.mp4", "b".repeat(300));
-    let result = orchestrator.sanitize_filename(&long_with_ext);
+    let result = Orchestrator::sanitize_filename(&long_with_ext);
     assert!(result.len() <= 200);
     assert!(result.ends_with(".mp4"), "Extension should be preserved");
 }
@@ -367,11 +381,11 @@ fn test_sanitize_filename_preserves_valid_chars() {
     let orchestrator = create_test_orchestrator();
 
     assert_eq!(
-        orchestrator.sanitize_filename("My-Video_2024.mp4"),
+        Orchestrator::sanitize_filename("My-Video_2024.mp4"),
         "My-Video_2024.mp4"
     );
     assert_eq!(
-        orchestrator.sanitize_filename("test-file_name.mkv"),
+        Orchestrator::sanitize_filename("test-file_name.mkv"),
         "test-file_name.mkv"
     );
 }
@@ -381,10 +395,10 @@ fn test_sanitize_filename_handles_unicode() {
     let orchestrator = create_test_orchestrator();
 
     // Unicode should be preserved
-    let result = orchestrator.sanitize_filename("日本語タイトル.mp4");
+    let result = Orchestrator::sanitize_filename("日本語タイトル.mp4");
     assert!(result.contains("日本語タイトル"));
     assert!(result.ends_with(".mp4"));
 
-    let result = orchestrator.sanitize_filename("Видео на русском.mp4");
+    let result = Orchestrator::sanitize_filename("Видео на русском.mp4");
     assert!(result.contains("Видео на русском"));
 }

@@ -79,32 +79,30 @@ pub enum AppError {
 impl From<RdlpApiError> for AppError {
     fn from(err: RdlpApiError) -> Self {
         match &err {
-            RdlpApiError::InvalidInput { message } => AppError::InvalidInput {
+            RdlpApiError::InvalidInput { message } => Self::InvalidInput {
                 field: "url".to_owned(),
                 message: message.clone(),
             },
-            RdlpApiError::UnsupportedUrl { url } => AppError::InvalidInput {
+            RdlpApiError::UnsupportedUrl { url } => Self::InvalidInput {
                 field: "url".to_owned(),
                 message: format!("Unsupported URL: {url}"),
             },
-            RdlpApiError::ExtractError { .. } => AppError::ExtractionFailed {
-                message: err.user_message().into_owned(),
-            },
-            RdlpApiError::NetworkError {
+            RdlpApiError::ExtractError { .. }
+            | RdlpApiError::NetworkError {
                 status: Some(404), ..
-            } => AppError::ExtractionFailed {
+            } => Self::ExtractionFailed {
                 message: err.user_message().into_owned(),
             },
             RdlpApiError::NetworkError {
                 status: Some(429), ..
-            } => AppError::RateLimited {
+            } => Self::RateLimited {
                 retry_after_ms: Some(5000),
             },
-            RdlpApiError::NetworkError { .. } => AppError::NetworkError {
+            RdlpApiError::NetworkError { .. } => Self::NetworkError {
                 message: err.user_message().into_owned(),
                 retryable: err.is_retryable(),
             },
-            _ => AppError::Internal {
+            _ => Self::Internal {
                 message: err.user_message().into_owned(),
             },
         }
@@ -143,6 +141,7 @@ impl fmt::Display for AppError {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

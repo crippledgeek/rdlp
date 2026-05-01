@@ -16,6 +16,10 @@
 //! - Typical: 500 MB video in 60-90 seconds
 //! - Bottleneck: Server throttling (not client)
 
+// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
+// workspace MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 mod merge;
 mod playlist;
 mod segment;
@@ -115,7 +119,7 @@ impl HlsDownloader {
 
     /// Set buffer size for segment merging
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_buffer_size(mut self, size: usize) -> Self {
+    pub const fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
         self
     }
@@ -132,33 +136,33 @@ impl HlsDownloader {
     /// This allows the progress bar to show accurate percentage and ETA
     /// even though HLS streams don't have a known total size upfront.
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_expected_size(mut self, size: u64) -> Self {
+    pub const fn with_expected_size(mut self, size: u64) -> Self {
         self.expected_size = Some(size);
         self
     }
 
     /// Set total download timeout
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_download_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_download_timeout(mut self, timeout: Duration) -> Self {
         self.download_timeout = timeout;
         self
     }
 
     /// Set merge operation timeout
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_merge_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_merge_timeout(mut self, timeout: Duration) -> Self {
         self.merge_timeout = timeout;
         self
     }
 
     /// Set maximum number of segment failures before aborting
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_max_segment_failures(mut self, max: usize) -> Self {
+    pub const fn with_max_segment_failures(mut self, max: usize) -> Self {
         self.max_segment_failures = max;
         self
     }
 
-    /// Set extra HTTP headers sent with every request (delegates to inner HttpDownloader)
+    /// Set extra HTTP headers sent with every request (delegates to inner `HttpDownloader`)
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_extra_headers(
         mut self,
@@ -177,12 +181,16 @@ impl Default for HlsDownloader {
 
 #[async_trait]
 impl Downloader for HlsDownloader {
-    fn protocol(&self) -> &str {
+    fn protocol(&self) -> &'static str {
         "hls"
     }
 
     fn supports(&self, url: &str) -> bool {
-        url.ends_with(".m3u8") || url.contains("/playlist.m3u8") || url.contains(".m3u8?")
+        std::path::Path::new(url)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("m3u8"))
+            || url.contains("/playlist.m3u8")
+            || url.contains(".m3u8?")
     }
 
     async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
@@ -216,38 +224,34 @@ impl Downloader for HlsDownloader {
             );
 
             // Step 2: Load or create state for resume support
-            let state = match HlsDownloadState::load(path, url, total_segments).await {
-                Some(existing_state) => {
-                    let completed = existing_state.completed_segments.len();
-                    let remaining = total_segments - completed;
-                    info!(
-                        completed,
-                        total = total_segments,
-                        remaining;
-                        "Resuming HLS download"
-                    );
-                    Arc::new(Mutex::new(existing_state))
-                }
-                None => {
-                    debug!("Starting fresh HLS download");
-                    Arc::new(Mutex::new(HlsDownloadState::new(
-                        url.to_string(),
-                        total_segments,
-                    )))
-                }
+            let state = if let Some(existing_state) =
+                HlsDownloadState::load(path, url, total_segments).await
+            {
+                let completed = existing_state.completed_segments.len();
+                let remaining = total_segments - completed;
+                info!(
+                    completed,
+                    total = total_segments,
+                    remaining;
+                    "Resuming HLS download"
+                );
+                Arc::new(Mutex::new(existing_state))
+            } else {
+                debug!("Starting fresh HLS download");
+                Arc::new(Mutex::new(HlsDownloadState::new(url, total_segments)))
             };
 
             // Step 3: Setup progress tracking
             let downloaded = Arc::new(AtomicU64::new(
                 state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .total_bytes_downloaded,
             ));
             let segments_completed = Arc::new(AtomicU64::new(
                 state
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .completed_segments
                     .len() as u64,
             ));
@@ -297,7 +301,10 @@ impl Downloader for HlsDownloader {
                 Ok(paths) => paths,
                 Err(e) => {
                     // Save state on error (so we can resume later)
-                    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let snapshot = state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
                     if let Err(save_err) = snapshot.save(path).await {
                         warn!("Failed to save HLS state: {save_err}");
                     }

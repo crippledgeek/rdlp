@@ -1,6 +1,6 @@
 //! Chrome/Chromium cookie extraction.
 //!
-//! Extracts cookies from Chrome's SQLite database and decrypts them.
+//! Extracts cookies from Chrome's `SQLite` database and decrypts them.
 //! On Windows, uses DPAPI + AES-256-GCM (Chrome v80+).
 
 use std::path::{Path, PathBuf};
@@ -23,6 +23,7 @@ const V10_PREFIX: &[u8] = b"v10";
 /// Extract cookies from Chrome and insert them into the jar.
 ///
 /// Returns the number of cookies loaded.
+#[allow(clippy::redundant_pub_crate)] // pub(crate) in private mod is more defensive than pub
 pub(crate) fn extract_cookies(jar: &impl CookieStore) -> Result<usize, std::io::Error> {
     let cookie_db = find_cookie_db()?;
     let local_state = find_local_state()?;
@@ -135,13 +136,15 @@ fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Erro
         )
     })?;
 
-    // Strip "DPAPI" prefix (5 bytes)
+    // Strip "DPAPI" prefix (5 bytes). Both slices guarded by the len < 5 check.
+    #[allow(clippy::indexing_slicing)]
     if encrypted_key.len() < 5 || &encrypted_key[..5] != b"DPAPI" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "Encrypted key missing DPAPI prefix",
         ));
     }
+    #[allow(clippy::indexing_slicing)]
     let dpapi_encrypted = &encrypted_key[5..];
 
     // Decrypt with platform-specific method
@@ -149,7 +152,19 @@ fn load_encryption_key(local_state_path: &Path) -> Result<Vec<u8>, std::io::Erro
 }
 
 /// Decrypt a DPAPI-encrypted key.
+// Windows DPAPI FFI: the cast/borrow patterns below are dictated by the Win32
+// ABI (CRYPT_INTEGER_BLOB requires `*mut u8` even for read-only input,
+// CryptUnprotectData takes `*const`/`*mut` raw pointers, LocalFree takes HLOCAL
+// = isize). The clippy suggestions either change the ABI shape or are no-ops
+// after rewriting; allow the FFI-shape lints in this scoped block.
 #[cfg(target_os = "windows")]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::ptr_as_ptr,
+    clippy::ptr_cast_constness,
+    clippy::as_ptr_cast_mut,
+    clippy::borrow_as_ptr
+)]
 fn decrypt_dpapi_key(encrypted: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     use windows_sys::Win32::Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData};
 
@@ -202,6 +217,9 @@ fn decrypt_dpapi_key(_encrypted: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 }
 
 /// Decrypt a Chrome AES-256-GCM encrypted cookie value.
+///
+/// All slice indexing below is guarded by the length checks above.
+#[allow(clippy::indexing_slicing)]
 fn decrypt_cookie_value(encrypted_value: &[u8], key: &[u8]) -> Option<String> {
     if encrypted_value.is_empty() {
         return None;
@@ -234,7 +252,7 @@ fn decrypt_cookie_value(encrypted_value: &[u8], key: &[u8]) -> Option<String> {
     String::from_utf8(plaintext).ok()
 }
 
-/// Read cookies from the SQLite database and insert them into the jar.
+/// Read cookies from the `SQLite` database and insert them into the jar.
 fn read_cookies_from_db(
     db_path: &Path,
     key: &[u8],
@@ -284,15 +302,15 @@ fn read_cookies_from_db(
                 }
             };
 
-        // Decrypt the value
-        let value = if !plaintext_value.is_empty() {
-            plaintext_value
-        } else {
+        // Decrypt the value — try plaintext first, then decrypt
+        let value = if plaintext_value.is_empty() {
             let Some(v) = decrypt_cookie_value(&encrypted_value, key) else {
                 debug!("Failed to decrypt cookie: {name} for {host_key}");
                 continue;
             };
             v
+        } else {
+            plaintext_value
         };
 
         if value.is_empty() {

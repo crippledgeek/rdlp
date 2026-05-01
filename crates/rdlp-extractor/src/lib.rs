@@ -1,3 +1,13 @@
+// `clippy::pedantic` / `clippy::nursery` / `clippy::indexing_slicing` are
+// intentionally NOT applied to this crate. The codebase has ~1400 stylistic
+// hits under those families (mostly `doc_markdown`, `redundant_pub_crate`,
+// `non_std_lazy_statics` — the last fires on every `lazy_regex::Lazy<Regex>`,
+// which is `once_cell::sync::Lazy` re-exported and IS the documented idiom
+// for compile-time-validated static regex). The strict surface that matters
+// for security correctness — `unwrap_used`, `expect_used`,
+// `missing_errors_doc`, `missing_panics_doc` — lives in `Cargo.toml`
+// `[lints.clippy]` and applies to ALL targets, not just lib.
+
 //! # rdlp-extractor
 //!
 //! Extractor framework and site-specific extractors for rdlp.

@@ -29,10 +29,10 @@ mod search_patterns;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::{debug, warn};
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
-use regex::Regex;
 use scraper::Html;
 use std::sync::LazyLock;
 
@@ -45,9 +45,7 @@ pub use patterns::HQPORNER_VIDEO_PATTERN;
 const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Pattern to extract duration from text like "26m 52s", "1h 6m 39s", or "45s".
-static DURATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s").expect("Valid duration pattern")
-});
+static DURATION_PATTERN: Lazy<Regex> = lazy_regex!(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s");
 
 /// HQPorner extractor.
 ///

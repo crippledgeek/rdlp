@@ -22,6 +22,7 @@
 //! ```
 
 #![warn(missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 mod convert;
 mod polyfills;
@@ -43,13 +44,13 @@ pub struct BoaJsEngine;
 impl BoaJsEngine {
     /// Create a new Boa JavaScript engine instance.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
     /// Create a fresh Boa context with polyfills injected and runtime limits set.
     ///
-    /// The runtime limits are the host-side guard against pure-CPU JS DoS
+    /// The runtime limits are the host-side guard against pure-CPU JS `DoS`
     /// (infinite `while(true)` loops, deep recursion). Boa's `RuntimeLimit`
     /// errors **cannot be caught from JS** (`try/catch` does not intercept
     /// them), so a malicious or buggy script eventually returns control to
@@ -59,7 +60,7 @@ impl BoaJsEngine {
     ///
     /// Limit defaults are deliberately generous so that legitimate extractor
     /// scripts (URL deobfuscation, hash computation, tokenisation passes
-    /// like the EPorner `calc_hash`) finish well within them.
+    /// like the `EPorner` `calc_hash`) finish well within them.
     fn make_context() -> std::result::Result<Context, String> {
         let mut ctx = Context::default();
 
@@ -196,6 +197,8 @@ impl JsEngine for BoaJsEngine {
             ));
         }
 
+        // args[0] and args[1..] are guarded by the is_empty() check above
+        #[allow(clippy::indexing_slicing)]
         let code = args[0]
             .as_str()
             .ok_or_else(|| {
@@ -204,6 +207,7 @@ impl JsEngine for BoaJsEngine {
                 )
             })?
             .to_owned();
+        #[allow(clippy::indexing_slicing)]
         let func_args = args[1..].to_vec();
 
         tokio::task::spawn_blocking(move || {
@@ -216,6 +220,13 @@ impl JsEngine for BoaJsEngine {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
 
@@ -360,7 +371,7 @@ mod tests {
     /// Regression: verify that an infinite loop in plugin-supplied JS
     /// terminates with an error rather than hanging the host. Without
     /// `runtime_limits_mut().set_loop_iteration_limit`, this would wedge
-    /// the spawn_blocking thread forever.
+    /// the `spawn_blocking` thread forever.
     #[tokio::test]
     async fn infinite_loop_is_aborted_by_runtime_limit() {
         let engine = BoaJsEngine::new();
@@ -378,7 +389,7 @@ mod tests {
 
     /// Regression: a tight try/catch around the offending construct must
     /// NOT swallow the runtime-limit error. Boa documents that
-    /// RuntimeLimit errors are uncatchable from JS.
+    /// `RuntimeLimit` errors are uncatchable from JS.
     #[tokio::test]
     async fn runtime_limit_is_uncatchable_from_js() {
         let engine = BoaJsEngine::new();

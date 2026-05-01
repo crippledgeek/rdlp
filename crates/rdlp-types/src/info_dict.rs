@@ -1,4 +1,4 @@
-//! InfoDict and related types for video metadata
+//! `InfoDict` and related types for video metadata
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -181,7 +181,7 @@ pub struct InfoDict {
 }
 
 impl InfoDict {
-    /// Create a new InfoDict with required fields
+    /// Create a new `InfoDict` with required fields
     #[must_use]
     pub fn new(
         id: impl Into<String>,

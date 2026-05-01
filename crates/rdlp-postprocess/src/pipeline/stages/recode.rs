@@ -1,4 +1,4 @@
-//! RecodeStage — transcodes video to a different container format.
+//! `RecodeStage` — transcodes video to a different container format.
 //!
 //! This stage runs at index 4 when `config.recode_video` is `Some` or
 //! `config.recode_container` is `Some`.
@@ -26,7 +26,7 @@ pub struct RecodeStage {
 impl RecodeStage {
     /// Create a new `RecodeStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -67,7 +67,7 @@ impl RecodeStage {
 
     /// Pick the default video codec to encode toward when no explicit
     /// encoder override is given.
-    fn default_codec_for(target: ContainerFormat) -> &'static str {
+    const fn default_codec_for(target: ContainerFormat) -> &'static str {
         match target {
             ContainerFormat::WebM | ContainerFormat::Ivf => "vp9",
             ContainerFormat::Ogg => "theora",
@@ -91,7 +91,7 @@ impl RecodeStage {
     /// Build video conversion options.
     ///
     /// Returns `None` when an explicit encoder override is requested but not
-    /// available in this FFmpeg build. `audio_codec` is `None` for copy,
+    /// available in this `FFmpeg` build. `audio_codec` is `None` for copy,
     /// `Some(name)` for re-encode.
     fn build_convert_options(
         target: ContainerFormat,
@@ -156,7 +156,7 @@ impl RecodeStage {
 
 #[async_trait]
 impl PipelineStage for RecodeStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "RecodeStage"
     }
 
@@ -164,6 +164,7 @@ impl PipelineStage for RecodeStage {
         msg.config.recode_video.is_some() || msg.config.recode_container.is_some()
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn process(&self, mut msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
         if msg.tracker.current_files.is_empty() {
             return Ok(msg);
@@ -265,24 +266,21 @@ impl PipelineStage for RecodeStage {
 
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
 
-        let mut opts = match Self::build_convert_options(
+        let Some(mut opts) = Self::build_convert_options(
             target,
             can_remux,
             msg.config.video_encoder.as_deref(),
             audio_copy,
             audio_codec,
-        ) {
-            Some(o) => o,
-            None => {
-                let requested = msg.config.video_encoder.as_deref().unwrap_or("");
-                return Err(PostProcessError::UnsupportedFormat {
-                    format: requested.to_string(),
-                    operation: format!(
-                        "video encoder '{requested}' is not available in this FFmpeg build"
-                    ),
-                }
-                .into());
+        ) else {
+            let requested = msg.config.video_encoder.as_deref().unwrap_or("");
+            return Err(PostProcessError::UnsupportedFormat {
+                format: requested.to_string(),
+                operation: format!(
+                    "video encoder '{requested}' is not available in this FFmpeg build"
+                ),
             }
+            .into());
         };
 
         opts.verbose = msg.verbose;
@@ -297,7 +295,9 @@ impl PipelineStage for RecodeStage {
         if let Some(ref cb) = stage_callback {
             let video_info = opts.video_codec.as_deref().unwrap_or("copy");
             let preset_info = opts.preset.as_deref().unwrap_or("default");
-            let crf_info = opts.crf.map_or("default".to_string(), |c| c.to_string());
+            let crf_info = opts
+                .crf
+                .map_or_else(|| "default".to_string(), |c| c.to_string());
             cb.on_log(&format!(
                 "Recode: video={video_info} preset={preset_info} crf={crf_info}"
             ));
@@ -311,16 +311,14 @@ impl PipelineStage for RecodeStage {
 
         let progress_callback =
             stage_callback
-                .as_ref()
-                .cloned()
+                .clone()
                 .map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
                     Arc::new(move |frac| cb.on_progress(rdlp_types::Progress::from_f64(frac)))
                 });
 
         let log_callback: Option<Arc<dyn Fn(&str) + Send + Sync>> = if opts.verbose {
             stage_callback
-                .as_ref()
-                .cloned()
+                .clone()
                 .map(|cb| -> Arc<dyn Fn(&str) + Send + Sync> {
                     Arc::new(move |msg| cb.on_log(msg))
                 })

@@ -1,7 +1,14 @@
-//! MergeStage — merges separate video and audio streams into a single file.
+//! `MergeStage` — merges separate video and audio streams into a single file.
 //!
 //! This stage runs first (index 0) when there are 2+ current files.
 //! Uses `rdlp_ffmpeg::FFmpegRunner::merge()` via stream copy (no re-encoding).
+//!
+//! # Lint allowances
+//!
+//! - `clippy::indexing_slicing`: `current_files[0]` and `current_files[1]`
+//!   are accessed only after `should_run()` checks `len() >= 2`.
+
+#![allow(clippy::indexing_slicing)]
 
 use std::sync::Arc;
 
@@ -24,7 +31,7 @@ pub struct MergeStage {
 impl MergeStage {
     /// Create a new `MergeStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 
@@ -49,7 +56,7 @@ impl MergeStage {
 
 #[async_trait]
 impl PipelineStage for MergeStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "MergeStage"
     }
 

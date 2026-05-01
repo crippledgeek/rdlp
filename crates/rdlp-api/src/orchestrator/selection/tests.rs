@@ -1,4 +1,5 @@
 //! Tests for format selection logic
+#![allow(clippy::indexing_slicing, clippy::match_wildcard_for_single_variants)]
 
 use crate::events::Event;
 use crate::handle::DownloadId;
@@ -35,7 +36,7 @@ fn make_combined(id: &str, height: u32, quality: i32) -> Format {
     f.acodec = Codec::from("aac".to_string());
     f.height = Some(height);
     f.quality = Some(quality);
-    f.tbr = Some(height as f64 * 2.0);
+    f.tbr = Some(f64::from(height) * 2.0);
     f
 }
 
@@ -44,7 +45,7 @@ fn make_video_only(id: &str, height: u32) -> Format {
     f.vcodec = Codec::from("h264".to_string());
     f.acodec = Codec::Absent;
     f.height = Some(height);
-    f.vbr = Some(height as f64 * 1.5);
+    f.vbr = Some(f64::from(height) * 1.5);
     f
 }
 

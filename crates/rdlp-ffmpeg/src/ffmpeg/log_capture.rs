@@ -1,18 +1,35 @@
-//! Thread-safe FFmpeg log capture via `av_log_set_callback`.
+//! Thread-safe `FFmpeg` log capture via `av_log_set_callback`.
 //!
-//! Provides an RAII guard that installs a custom FFmpeg log callback to capture
+//! Provides an RAII guard that installs a custom `FFmpeg` log callback to capture
 //! log messages (e.g., loudnorm JSON output). On drop, restores the default
 //! callback and error-only log level.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `usize`→`i32` cast for `av_log_format_line2` buffer length
+//!   argument is safe: the buffer is 2048 bytes, well within `i32::MAX`.
+//! - `clippy::borrow_as_ptr`: `buf.as_mut_ptr() as *mut c_char` required by the
+//!   `av_log_format_line2` C signature.
+//! - `clippy::redundant_pub_crate`: `pub(crate)` items in this private module are
+//!   accessed from sibling modules via `crate::ffmpeg::log_capture::*`.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::borrow_as_ptr,
+    clippy::redundant_pub_crate
+)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::{Arc, Mutex};
 
 use crate::error::PostProcessError;
 
-/// Platform-specific `va_list` parameter type for FFmpeg log callbacks.
+/// Platform-specific `va_list` parameter type for `FFmpeg` log callbacks.
 ///
-/// On Linux x86_64, `va_list` is `[__va_list_tag; 1]` (a fixed-size array),
-/// but FFmpeg 7+ bindgen generates callback function pointer signatures with
+/// On Linux `x86_64`, `va_list` is `[__va_list_tag; 1]` (a fixed-size array),
+/// but `FFmpeg` 7+ bindgen generates callback function pointer signatures with
 /// `*mut __va_list_tag` (pointer to first element). These are ABI-compatible
 /// in C (array decays to pointer) but Rust treats them as distinct types.
 ///
@@ -24,7 +41,7 @@ type VaListParam = *mut ffmpeg_the_third::ffi::__va_list_tag;
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 type VaListParam = ffmpeg_the_third::ffi::va_list;
 
-/// RAII guard that suppresses FFmpeg's internal C log messages.
+/// RAII guard that suppresses `FFmpeg`'s internal C log messages.
 ///
 /// Saves the current log level on creation, sets the requested suppression
 /// level, then restores the saved level on drop. Used during audio
@@ -67,7 +84,61 @@ impl Drop for LogSuppressGuard {
     }
 }
 
-/// Global buffer for captured FFmpeg log messages.
+// ── H2 fix: process-wide spinlock for av_log_set_callback ─────────────────
+
+/// Process-wide serialization flag for `av_log_set_callback`.
+///
+/// `FFmpeg`'s `av_log_set_callback` + `capture_callback` share two process-global
+/// pointers (`LOG_BUFFER`, `LOG_FORWARDER`) and a single global C callback
+/// slot. Two concurrent callers to `bridge_ffmpeg_logs` (or two independent
+/// `LogCaptureGuard::begin()` calls) would race on all three.
+///
+/// `FFMPEG_LOG_LOCKED` acts as a spinlock: `LogCaptureGuard::begin()` spins
+/// until it can CAS `false → true`, then resets it to `false` on drop.
+///
+/// Using an `AtomicBool` spinlock instead of `std::sync::Mutex` avoids the
+/// `!Send` bound that `MutexGuard<'static, ()>` would impose on
+/// `FfmpegLogBridge`, which must cross `.await` points inside async stage
+/// `process()` fns.
+///
+/// Contention is expected to be rare (only two `spawn_blocking` workers
+/// racing on a single job boundary), so spinning is acceptable here.
+static FFMPEG_LOG_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// RAII guard that holds the `FFMPEG_LOG_LOCKED` spinlock for the duration of
+/// a capture session. Released on drop.
+///
+/// `Send` because the spinlock state is an `AtomicBool` — no thread-affinity
+/// constraint. The guard may be held across an `.await` point (inside
+/// `FfmpegLogBridge`) because `FfmpegLogBridge` is dropped after the
+/// `spawn_blocking` future resolves, not inside the blocking thread itself.
+struct FfmpegLogLockGuard;
+
+impl FfmpegLogLockGuard {
+    /// Spin until the spinlock can be acquired (`false → true` CAS).
+    fn acquire() -> Self {
+        use std::sync::atomic::Ordering;
+        // Spin with a hint to yield the CPU. This avoids burning a core
+        // while another spawn_blocking worker is tearing down its session.
+        while FFMPEG_LOG_LOCKED
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            std::hint::spin_loop();
+        }
+        Self
+    }
+}
+
+impl Drop for FfmpegLogLockGuard {
+    fn drop(&mut self) {
+        FFMPEG_LOG_LOCKED.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+// ── end H2 fix ─────────────────────────────────────────────────────────────
+
+/// Global buffer for captured `FFmpeg` log messages.
 ///
 /// Protected by a Mutex. Only populated when a `LogCaptureGuard` is active.
 ///
@@ -76,8 +147,8 @@ impl Drop for LogSuppressGuard {
 /// At most **one** `LogCaptureGuard` may be active at any time. Nested or
 /// concurrent `begin()` calls would silently overwrite the in-progress buffer,
 /// corrupting the capture results. The invariant is enforced by:
-/// - Callers using `spawn_blocking` serialization (primary guarantee).
-/// - A `debug_assert!` in `begin()` that fires in debug builds if violated.
+/// - `FFMPEG_LOG_LOCKED` spinlock (primary guarantee — serialises all callers).
+/// - Callers using `spawn_blocking` (secondary guarantee — typically one at a time).
 static LOG_BUFFER: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 /// Type alias for the real-time log forwarding callback.
@@ -94,7 +165,7 @@ static LOG_FORWARDER: Mutex<Option<LogForwarder>> = Mutex::new(None);
 
 /// Install a real-time log forwarder.
 ///
-/// While active, each FFmpeg log message captured by `capture_callback` is also
+/// While active, each `FFmpeg` log message captured by `capture_callback` is also
 /// forwarded through `cb(level, message)`. The callback is called while the
 /// `LOG_FORWARDER` mutex is held — it must not block or panic.
 pub fn set_log_forwarder(cb: Arc<dyn Fn(i32, String) + Send + Sync>) {
@@ -132,16 +203,16 @@ impl Drop for LogForwarderGuard {
 /// Opaque guard that holds both a `LogCaptureGuard` (installs `capture_callback`)
 /// and a `LogForwarderGuard` (routes messages through `PostProcessCallback::on_log`).
 ///
-/// Hold this until the FFmpeg operation completes. Both guards are dropped together.
+/// Hold this until the `FFmpeg` operation completes. Both guards are dropped together.
 pub struct FfmpegLogBridge {
     _capture: LogCaptureGuard,
     _forwarder: LogForwarderGuard,
 }
 
-/// Activate both FFmpeg log capture and real-time forwarding to a
+/// Activate both `FFmpeg` log capture and real-time forwarding to a
 /// `PostProcessCallback`.
 ///
-/// Returns an opaque `FfmpegLogBridge` — hold it until the FFmpeg operation
+/// Returns an opaque `FfmpegLogBridge` — hold it until the `FFmpeg` operation
 /// completes. Internally creates a `LogCaptureGuard` (installs
 /// `capture_callback`) and a `LogForwarderGuard` (routes messages through
 /// `cb.on_log()`).
@@ -150,6 +221,11 @@ pub struct FfmpegLogBridge {
 /// - `AV_LOG_ERROR` / `AV_LOG_FATAL` → `[ERROR] message`
 /// - `AV_LOG_WARNING` → `[WARN] message`
 /// - `AV_LOG_INFO` → `message` (no prefix)
+///
+/// # Errors
+///
+/// Returns an error if the `FFmpeg` log lock is already held by another capture
+/// session on the same thread (re-entrancy is not supported).
 pub fn bridge_ffmpeg_logs(
     cb: &Arc<dyn rdlp_core::PostProcessCallback>,
 ) -> std::result::Result<FfmpegLogBridge, PostProcessError> {
@@ -173,22 +249,33 @@ pub fn bridge_ffmpeg_logs(
     })
 }
 
-/// RAII guard for FFmpeg log capture.
+/// RAII guard for `FFmpeg` log capture.
 ///
-/// While active, FFmpeg log messages at `AV_LOG_INFO` level and below (i.e.,
+/// While active, `FFmpeg` log messages at `AV_LOG_INFO` level and below (i.e.,
 /// more important) are captured into a global buffer. On drop, the default
 /// callback is restored and log level is set back to error-only.
+///
+/// Holds `FFMPEG_LOG_LOCKED` (spinlock) for its entire lifetime, preventing
+/// concurrent `bridge_ffmpeg_logs` / `begin()` calls from racing on the global
+/// callback and buffer state (audit finding H2).
 pub(crate) struct LogCaptureGuard {
-    _private: (), // prevent external construction
+    /// Serializes all concurrent `FFmpeg` log capture sessions process-wide.
+    _lock: FfmpegLogLockGuard,
 }
 
 impl LogCaptureGuard {
-    /// Begin capturing FFmpeg log messages.
+    /// Begin capturing `FFmpeg` log messages.
     ///
-    /// Installs a custom `av_log_set_callback` that buffers messages. Only one
-    /// capture session should be active at a time (enforced by `spawn_blocking`
-    /// serialization).
+    /// Acquires `FFMPEG_LOG_LOCKED` (spinlock) and installs a custom
+    /// `av_log_set_callback` that buffers messages. Holding the spinlock
+    /// prevents concurrent callers from racing on the global callback slot
+    /// and `LOG_BUFFER` (audit finding H2).
+    ///
+    /// The spinlock is released when this guard is dropped.
     pub(crate) fn begin() -> Result<Self, PostProcessError> {
+        // Acquire the process-wide serialization spinlock first.
+        let lock_guard = FfmpegLogLockGuard::acquire();
+
         // Initialize buffer
         let mut buf = LOG_BUFFER
             .lock()
@@ -209,10 +296,15 @@ impl LogCaptureGuard {
             ffmpeg_the_third::ffi::av_log_set_callback(Some(capture_callback));
         }
 
-        Ok(Self { _private: () })
+        Ok(Self { _lock: lock_guard })
     }
 
     /// Take all captured log lines, draining the buffer.
+    ///
+    /// `&self` is used intentionally: the caller must hold the guard alive
+    /// (keeping `FFMPEG_LOG_LOCKED` locked) for the full duration of the
+    /// capture session. The method accesses `LOG_BUFFER` global state.
+    #[allow(clippy::unused_self)]
     pub(crate) fn take_captured(&self) -> Result<Vec<String>, PostProcessError> {
         let mut buf = LOG_BUFFER
             .lock()
@@ -238,15 +330,16 @@ impl Drop for LogCaptureGuard {
         if let Ok(mut buf) = LOG_BUFFER.lock() {
             *buf = None;
         }
+        // _lock drops here → FFMPEG_LOG_LOCKED reset to false.
     }
 }
 
-/// Custom FFmpeg log callback that captures messages into the global buffer.
+/// Custom `FFmpeg` log callback that captures messages into the global buffer.
 ///
 /// # Safety
 ///
-/// Called by FFmpeg's internal logging system. All pointer parameters are
-/// guaranteed valid by FFmpeg for the duration of the call. Uses
+/// Called by `FFmpeg`'s internal logging system. All pointer parameters are
+/// guaranteed valid by `FFmpeg` for the duration of the call. Uses
 /// `av_log_format_line2` to safely format the `va_list` arguments.
 ///
 /// The `vl` parameter uses `VaListParam` to handle platform differences
@@ -272,15 +365,15 @@ unsafe extern "C" fn capture_callback(
             level,
             fmt,
             vl,
-            buf.as_mut_ptr() as *mut c_char,
+            buf.as_mut_ptr().cast::<c_char>(),
             buf.len() as c_int,
-            &mut prefix,
+            &raw mut prefix,
         )
     };
 
     if len > 0 {
         // SAFETY: av_log_format_line2 null-terminates the buffer
-        let msg = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        let msg = unsafe { CStr::from_ptr(buf.as_ptr().cast::<c_char>()) }
             .to_string_lossy()
             .to_string();
         if let Ok(mut guard) = LOG_BUFFER.lock()
@@ -298,19 +391,28 @@ unsafe extern "C" fn capture_callback(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,        // msgs[0] is guarded by assert!(!msgs.is_empty())
+    clippy::items_after_statements,  // use Arc inside test fn body is intentional for clarity
+    clippy::significant_drop_tightening, // _lock must stay alive for full test scope
+)]
 mod tests {
     use super::*;
 
     /// All tests in this module share process-global state (`LOG_BUFFER`,
     /// `LOG_FORWARDER`, `av_log_set_level`, `av_log_set_callback`). This mutex
     /// serializes them to prevent races when `cargo test` runs in parallel.
+    ///
+    /// Note: `TEST_MUTEX` must be acquired BEFORE `LogCaptureGuard::begin()`
+    /// so it is held for the full duration of each test. `LogCaptureGuard`
+    /// acquires `FFMPEG_LOG_LOCKED` internally; the test mutex is an extra
+    /// layer that prevents test-level interference (e.g. stale `LOG_FORWARDER`
+    /// from a prior test leaking into the next).
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_log_forwarder_receives_messages() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -321,7 +423,7 @@ mod tests {
             }
         }));
 
-        // Begin capture (installs capture_callback)
+        // Begin capture (installs capture_callback, acquires FFMPEG_LOG_LOCKED)
         let guard = LogCaptureGuard::begin().unwrap();
 
         // Trigger an FFmpeg log message by setting level to INFO then logging
@@ -354,8 +456,6 @@ mod tests {
     #[test]
     fn test_clear_log_forwarder_stops_forwarding() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -393,8 +493,6 @@ mod tests {
     #[test]
     fn test_bridge_ffmpeg_logs_captures_and_forwards() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let received_clone = received.clone();
 
@@ -442,10 +540,8 @@ mod tests {
     #[test]
     fn test_log_forwarder_guard_drop_clears() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        use std::sync::Arc;
-
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
-        let received_clone = received.clone();
+        let received_clone = received;
 
         {
             let _guard = LogForwarderGuard::new(Arc::new(move |level, msg| {
@@ -523,5 +619,65 @@ mod tests {
         assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_WARNING);
         // Restore process-wide level to a clean state
         unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR) };
+    }
+
+    // ── H2 regression: FFMPEG_LOG_LOCKED serialises concurrent bridge callers ─
+    //
+    // Two `spawn_blocking` tasks both call `LogCaptureGuard::begin()`.
+    // Without `FFMPEG_LOG_LOCKED` the second caller would overwrite the first's
+    // callback and buffer mid-session, producing interleaved or missing lines.
+    // With the spinlock, the second task blocks until the first's guard drops.
+    //
+    // The test asserts:
+    // 1. Neither task panics.
+    // 2. Each task's captured lines contain only that task's own sentinel
+    //    (no cross-contamination from the other task).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_concurrent_bridge_callers_do_not_race() {
+        // Deliberately do NOT hold TEST_MUTEX here — this test specifically
+        // exercises the production spinlock (FFMPEG_LOG_LOCKED). The two tasks
+        // race to acquire it; the spinlock must serialise them safely.
+
+        let task_a = tokio::task::spawn_blocking(|| {
+            let guard = LogCaptureGuard::begin().expect("begin a");
+            // Inject a unique sentinel directly into the buffer.
+            if let Ok(mut buf) = LOG_BUFFER.lock()
+                && let Some(v) = buf.as_mut()
+            {
+                v.push("task-A-sentinel".to_string());
+            }
+            let captured = guard.take_captured().expect("take a");
+            drop(guard);
+            captured
+        });
+
+        let task_b = tokio::task::spawn_blocking(|| {
+            let guard = LogCaptureGuard::begin().expect("begin b");
+            if let Ok(mut buf) = LOG_BUFFER.lock()
+                && let Some(v) = buf.as_mut()
+            {
+                v.push("task-B-sentinel".to_string());
+            }
+            let captured = guard.take_captured().expect("take b");
+            drop(guard);
+            captured
+        });
+
+        let (a_lines, b_lines) = tokio::join!(task_a, task_b);
+        let a_lines = a_lines.expect("task-a join");
+        let b_lines = b_lines.expect("task-b join");
+
+        // Cross-contamination would mean one task sees the other's sentinel.
+        let a_has_b = a_lines.iter().any(|l| l.contains("task-B-sentinel"));
+        let b_has_a = b_lines.iter().any(|l| l.contains("task-A-sentinel"));
+
+        assert!(
+            !a_has_b,
+            "task-A must not see task-B sentinel (cross-contamination)"
+        );
+        assert!(
+            !b_has_a,
+            "task-B must not see task-A sentinel (cross-contamination)"
+        );
     }
 }

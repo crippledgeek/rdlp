@@ -1,16 +1,12 @@
 //! URL patterns for EPorner.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Captures the id from `/video-{id}/...`, `/hd-porn/{id}/...`, `/embed/{id}/...`
 /// across any EPorner lang subdomain.
-pub static VIDEO_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^https?://(?:[a-z]{2}\.)?(?:www\.)?eporner\.com/(?:video-|hd-porn/|embed/)([A-Za-z0-9]+)",
-    )
-    .unwrap()
-});
+pub static VIDEO_URL: Lazy<Regex> = lazy_regex!(
+    r"^https?://(?:[a-z]{2}\.)?(?:www\.)?eporner\.com/(?:video-|hd-porn/|embed/)([A-Za-z0-9]+)"
+);
 
 #[cfg(test)]
 mod tests {

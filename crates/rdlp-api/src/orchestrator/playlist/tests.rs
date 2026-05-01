@@ -1,4 +1,5 @@
 //! Tests for playlist helper functions
+#![allow(clippy::indexing_slicing)]
 
 use super::*;
 

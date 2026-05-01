@@ -1,6 +1,9 @@
 //! Download execution and progress tracking via events
 
-use super::{Orchestrator, errors::*};
+use super::{
+    Orchestrator,
+    errors::{OrchestratorError, Result},
+};
 use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, info};
@@ -19,7 +22,7 @@ struct EventProgressCallback {
 }
 
 impl EventProgressCallback {
-    fn new(event_tx: mpsc::Sender<Event>, download_id: DownloadId) -> Self {
+    const fn new(event_tx: mpsc::Sender<Event>, download_id: DownloadId) -> Self {
         Self {
             event_tx,
             download_id,
@@ -69,6 +72,7 @@ impl Orchestrator {
     /// # Errors
     /// Returns an error if download fails
     #[instrument(skip(self, downloader), fields(url = %url, output = %output_path.display()))]
+    #[allow(clippy::used_underscore_binding)] // _expected_size is a reserved parameter slot
     pub(super) async fn execute_download(
         &self,
         downloader: &Arc<dyn Downloader>,

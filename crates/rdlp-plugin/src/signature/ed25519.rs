@@ -4,6 +4,14 @@
 //! implementations in other languages must reproduce this byte vector exactly
 //! to interop with rdlp.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::manual_let_else,
+    clippy::match_wildcard_for_single_variants
+)]
+
 use crate::PluginError;
 use crate::manifest::{Manifest, Signature, canonical_bytes};
 use base64::Engine as _;

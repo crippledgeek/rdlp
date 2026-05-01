@@ -50,27 +50,36 @@ pub struct WgczJsonLd {
 
 impl WgczNetworkBase {
     /// Extract HLS and MP4 format URLs from inline `html5player` calls.
+    ///
+    /// Each captured value is validated by `require_http_scheme` (L5 fix):
+    /// non-http(s) values (e.g. `javascript:alert(1)`) are discarded.
     #[must_use]
     pub fn extract_format_urls(html: &str) -> WgczFormatUrls {
         WgczFormatUrls {
-            hls: patterns::VIDEO_HLS.captures(html).map(|c| c[1].to_string()),
+            hls: patterns::VIDEO_HLS
+                .captures(html)
+                .and_then(|c| patterns::require_http_scheme(&c[1]).map(str::to_string)),
             mp4_low: patterns::VIDEO_URL_LOW
                 .captures(html)
-                .map(|c| c[1].to_string()),
+                .and_then(|c| patterns::require_http_scheme(&c[1]).map(str::to_string)),
             mp4_high: patterns::VIDEO_URL_HIGH
                 .captures(html)
-                .map(|c| c[1].to_string()),
+                .and_then(|c| patterns::require_http_scheme(&c[1]).map(str::to_string)),
         }
     }
 
     /// Extract title, thumbnail, and uploader from inline `html5player` calls.
+    ///
+    /// The thumbnail URL is validated by `require_http_scheme` (L5 fix).
     #[must_use]
     pub fn extract_inline_meta(html: &str) -> WgczInlineMeta {
         WgczInlineMeta {
             title: patterns::VIDEO_TITLE
                 .captures(html)
                 .map(|c| c[1].to_string()),
-            thumbnail_url: patterns::THUMB_URL.captures(html).map(|c| c[1].to_string()),
+            thumbnail_url: patterns::THUMB_URL
+                .captures(html)
+                .and_then(|c| patterns::require_http_scheme(&c[1]).map(str::to_string)),
             uploader: patterns::UPLOADER_NAME
                 .captures(html)
                 .map(|c| c[1].to_string()),
@@ -80,6 +89,11 @@ impl WgczNetworkBase {
     /// Extract the first `VideoObject` JSON-LD block from the page.
     ///
     /// Handles both `"thumbnailUrl": "url"` and `"thumbnailUrl": ["url1", ...]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the CSS selector is invalid (programmer error — the selector is
+    /// a hardcoded string literal).
     #[must_use]
     pub fn extract_json_ld(html: &str) -> WgczJsonLd {
         let doc = scraper::Html::parse_document(html);

@@ -195,7 +195,7 @@ fn drain_discard(
     Ok(())
 }
 
-/// Read a metadata value from an FFmpeg frame as f64.
+/// Read a metadata value from an `FFmpeg` frame as f64.
 ///
 /// # Safety
 ///
@@ -298,6 +298,7 @@ impl FFmpegRunner {
     /// Runs loudnorm pass 1 on the **output** file and compares measured
     /// levels against targets. Warns on significant deviations but does
     /// not fail — the output is already written.
+    #[allow(clippy::unnecessary_wraps)] // callers use `?` for consistency with fallible callers
     pub(super) fn verify_loudness_sync(
         output: &Path,
         opts: &NormalizeOptions,

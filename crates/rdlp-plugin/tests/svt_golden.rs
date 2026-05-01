@@ -1,3 +1,15 @@
+// Integration tests aren't covered by clippy's `allow-unwrap-in-tests`
+// (rust-clippy#13981) — re-allow at file scope. `disallowed_methods` permitted
+// for `std::fs` test fixtures per clippy.toml policy (c). `missing_docs`
+// exempt because integration tests aren't public API.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    missing_docs
+)]
+// Lints suppressed for test code — panicking on unexpected errors is intentional here.
+
 //! Slice-2 SVT golden test — proves a real upstream yt-dlp `.py`
 //! source builds, loads, dispatches, and produces a correct `InfoDict`
 //! through the `host:fetch` fixture-replay harness.
@@ -26,8 +38,6 @@
 //! See also the `Slice 2.5` memory note (`project_ytdlp-shim-slice2_5-host-helpers`)
 //! — when host-side helpers ship, parts of this test (m3u8 fixturing)
 //! become simpler because the host returns formats directly.
-
-#![allow(clippy::disallowed_methods)] // test fixture I/O is allowed
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

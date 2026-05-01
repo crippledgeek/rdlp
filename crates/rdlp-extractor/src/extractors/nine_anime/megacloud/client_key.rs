@@ -9,48 +9,32 @@
 //! 6. Window variable: `window._xy_ws = "KEY"`
 
 use anyhow::Context as _;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_core::{ExtractionContext, RdlpError, Result};
-use regex::Regex;
-use std::sync::LazyLock;
 
 use super::MEGACLOUD_API;
 
 /// Regex patterns for extracting the client key from the embed page.
-static CLIENT_KEY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r#"<meta name="_gg_fb" content="[a-zA-Z0-9]+">"#)
-            .expect("Valid meta pattern"),
-        Regex::new(r#"<!--\s+_is_th:[0-9a-zA-Z]+\s+-->"#)
-            .expect("Valid comment pattern"),
-        Regex::new(
-            r#"<script>window\._lk_db\s+=\s+\{[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["']\};</script>"#,
-        )
-        .expect("Valid lk_db pattern"),
-        Regex::new(r#"<div\s+data-dpi="[0-9a-zA-Z]+"\s+[^>]*></div>"#)
-            .expect("Valid div pattern"),
-        Regex::new(r#"<script nonce="[0-9a-zA-Z]+">"#)
-            .expect("Valid nonce pattern"),
-        Regex::new(r#"<script>window\._xy_ws = ['"`][0-9a-zA-Z]+['"`];</script>"#)
-            .expect("Valid window var pattern"),
-    ]
-});
+static META_PATTERN: Lazy<Regex> = lazy_regex!(r#"<meta name="_gg_fb" content="[a-zA-Z0-9]+">"#);
+static COMMENT_PATTERN: Lazy<Regex> = lazy_regex!(r#"<!--\s+_is_th:[0-9a-zA-Z]+\s+-->"#);
+static LK_DB_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<script>window\._lk_db\s+=\s+\{[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["'],\s+[xyz]:\s+["'][a-zA-Z0-9]+["']\};</script>"#
+);
+static DIV_PATTERN: Lazy<Regex> = lazy_regex!(r#"<div\s+data-dpi="[0-9a-zA-Z]+"\s+[^>]*></div>"#);
+static NONCE_PATTERN: Lazy<Regex> = lazy_regex!(r#"<script nonce="[0-9a-zA-Z]+">"#);
+static WINDOW_VAR_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<script>window\._xy_ws = ['"`][0-9a-zA-Z]+['"`];</script>"#);
 
 /// General quoted-key pattern for most obfuscation methods.
-static QUOTED_KEY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""[a-zA-Z0-9]+""#).expect("Valid quoted key pattern"));
+static QUOTED_KEY: Lazy<Regex> = lazy_regex!(r#""[a-zA-Z0-9]+""#);
 
 /// Pattern for the 3-part `_lk_db` key components.
-static LK_DB_PARTS: LazyLock<[Regex; 3]> = LazyLock::new(|| {
-    [
-        Regex::new(r#"x:\s+"[a-zA-Z0-9]+""#).expect("Valid x pattern"),
-        Regex::new(r#"y:\s+"[a-zA-Z0-9]+""#).expect("Valid y pattern"),
-        Regex::new(r#"z:\s+"[a-zA-Z0-9]+""#).expect("Valid z pattern"),
-    ]
-});
+static LK_DB_X: Lazy<Regex> = lazy_regex!(r#"x:\s+"[a-zA-Z0-9]+""#);
+static LK_DB_Y: Lazy<Regex> = lazy_regex!(r#"y:\s+"[a-zA-Z0-9]+""#);
+static LK_DB_Z: Lazy<Regex> = lazy_regex!(r#"z:\s+"[a-zA-Z0-9]+""#);
 
 /// Comment key pattern (no quotes, colon-delimited).
-static COMMENT_KEY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r":[a-zA-Z0-9]+ ").expect("Valid comment key pattern"));
+static COMMENT_KEY: Lazy<Regex> = lazy_regex!(r":[a-zA-Z0-9]+ ");
 
 /// Fetch the v3 embed page and extract the client key.
 pub(super) async fn extract_client_key(source_id: &str, ctx: &ExtractionContext) -> Result<String> {
@@ -86,11 +70,19 @@ async fn extract_client_key_impl(
 
 /// Parse the client key from embed page HTML using pattern matching.
 pub(super) fn parse_client_key(html: &str) -> anyhow::Result<String> {
-    // Find the first matching obfuscation pattern
-    let (pattern_idx, text) = CLIENT_KEY_PATTERNS
+    // Try each pattern in order
+    let patterns = [
+        (0, &*META_PATTERN),
+        (1, &*COMMENT_PATTERN),
+        (2, &*LK_DB_PATTERN),
+        (3, &*DIV_PATTERN),
+        (4, &*NONCE_PATTERN),
+        (5, &*WINDOW_VAR_PATTERN),
+    ];
+
+    let (pattern_idx, text) = patterns
         .iter()
-        .enumerate()
-        .find_map(|(idx, pattern)| pattern.find(html).map(|m| (idx, m.as_str().to_string())))
+        .find_map(|(idx, pattern)| pattern.find(html).map(|m| (*idx, m.as_str().to_string())))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "could not find megacloud client key in embed page (no pattern matched)"
@@ -107,8 +99,9 @@ pub(super) fn parse_client_key(html: &str) -> anyhow::Result<String> {
         }
         // Pattern 2: 3-part _lk_db script -- assemble x+y+z
         2 => {
+            let part_regexes = [&*LK_DB_X, &*LK_DB_Y, &*LK_DB_Z];
             let mut parts = Vec::new();
-            for part_re in LK_DB_PARTS.iter() {
+            for part_re in part_regexes.iter() {
                 let part_match = part_re.find(&text).ok_or_else(|| {
                     anyhow::anyhow!("failed to extract _lk_db key part from megacloud embed")
                 })?;

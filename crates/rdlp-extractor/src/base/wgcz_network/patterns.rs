@@ -4,32 +4,47 @@
 //! inline `<script>` on the video page. These patterns capture the string
 //! argument for the subset of calls we care about.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, lazy_regex};
 
 /// `html5player.setVideoHLS('<m3u8 url>')`
-pub static VIDEO_HLS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoHLS\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_HLS: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setVideoHLS\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoUrlLow('<mp4 url>')`
-pub static VIDEO_URL_LOW: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_URL_LOW: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoUrlHigh('<mp4 url>')`
-pub static VIDEO_URL_HIGH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_URL_HIGH: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoTitle('<title>')`
-pub static VIDEO_TITLE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoTitle\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_TITLE: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setVideoTitle\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setThumbUrl('<url>')`
-pub static THUMB_URL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setThumbUrl\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static THUMB_URL: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setThumbUrl\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setUploaderName('<name>')`
-pub static UPLOADER_NAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setUploaderName\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static UPLOADER_NAME: Lazy<regex::Regex> =
+    lazy_regex!(r#"html5player\.setUploaderName\(['"]([^'"]+)['"]\)"#);
+
+/// Validate that a URL captured from inline JS starts with `http://` or
+/// `https://`. Returns `None` for values with any other scheme (e.g.
+/// `javascript:`, `data:`) so they are silently discarded by callers.
+///
+/// This is a post-extraction filter applied to URL-bearing patterns
+/// (`VIDEO_HLS`, `VIDEO_URL_LOW`, `VIDEO_URL_HIGH`, `THUMB_URL`) to guard
+/// against XSS-style injections embedded in the page's inline JavaScript.
+#[must_use]
+pub fn require_http_scheme(url: &str) -> Option<&str> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Some(url)
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -73,5 +88,67 @@ mod tests {
             "https://thumb.example/xv_13_t.jpg"
         );
         assert_eq!(&UPLOADER_NAME.captures(SAMPLE).unwrap()[1], "Acme");
+    }
+
+    /// Regression guard for L5: `require_http_scheme` must reject non-http(s)
+    /// schemes so that injected values like `javascript:alert(1)` cannot be
+    /// forwarded to the downloader as a video URL.
+    ///
+    /// Before the fix there was no scheme validation; the captured value was
+    /// used as-is.
+    #[test]
+    fn require_http_scheme_rejects_javascript_scheme() {
+        assert_eq!(
+            require_http_scheme("javascript:alert(1)"),
+            None,
+            "javascript: scheme must be rejected"
+        );
+    }
+
+    #[test]
+    fn require_http_scheme_rejects_data_uri() {
+        assert_eq!(
+            require_http_scheme("data:text/html,<h1>hello</h1>"),
+            None,
+            "data: URI must be rejected"
+        );
+    }
+
+    #[test]
+    fn require_http_scheme_rejects_empty_string() {
+        assert_eq!(
+            require_http_scheme(""),
+            None,
+            "empty string must be rejected"
+        );
+    }
+
+    #[test]
+    fn require_http_scheme_accepts_https() {
+        let url = "https://hls-cdn77.xvideos-cdn.com/TOK,123/uuid/3/hls.m3u8";
+        assert_eq!(require_http_scheme(url), Some(url));
+    }
+
+    #[test]
+    fn require_http_scheme_accepts_http() {
+        let url = "http://example.com/video.mp4";
+        assert_eq!(require_http_scheme(url), Some(url));
+    }
+
+    /// Regression guard: simulate a page where `setVideoHLS` contains a
+    /// `javascript:` injection. The captured group value must be rejected by
+    /// `require_http_scheme`.
+    #[test]
+    fn video_hls_injection_rejected_by_scheme_filter() {
+        let html = r#"html5player.setVideoHLS('javascript:alert(1)')"#;
+        let captured = VIDEO_HLS
+            .captures(html)
+            .map(|c| c[1].to_string())
+            .unwrap_or_default();
+        assert_eq!(
+            require_http_scheme(&captured),
+            None,
+            "javascript: injection in setVideoHLS must be rejected"
+        );
     }
 }

@@ -10,12 +10,7 @@
 //! - Country-code subdomains: `de.xhamster.com`, `pt.xhamster.com`
 //! - Mobile: `m.xhamster.com` (rewritten to desktop in extractor)
 
-use regex::Regex;
-use std::sync::LazyLock;
-
-/// Shared domain pattern for all xHamster URL regexes.
-pub(super) const DOMAINS: &str =
-    r"(?:xhamster\.(?:com|one|desi)|xhms\.pro|xhamster\d+\.(?:com|desi)|xhday\.com|xhvid\.com)";
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for xHamster videos.
 ///
@@ -24,87 +19,61 @@ pub(super) const DOMAINS: &str =
 /// - New: `/videos/{slug}-{id}`
 ///
 /// Video IDs can be numeric or alphanumeric (e.g. `xhnBJZx`).
-pub static XHAMSTER_VIDEO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r"https?://(?:[^/?#]+\.)?{DOMAINS}/(?:movies/(?P<id>[0-9A-Za-z]+)/(?P<display_id>[^/]*)\.html|videos/(?P<display_id_2>[^/]*)-(?P<id_2>[0-9A-Za-z]+))"
-    ))
-    .expect("Valid xHamster video URL pattern")
-});
+pub static XHAMSTER_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:[^/?#]+\.)?(?:xhamster\.(?:com|one|desi)|xhms\.pro|xhamster\d+\.(?:com|desi)|xhday\.com|xhvid\.com)/(?:movies/(?P<id>[0-9A-Za-z]+)/(?P<display_id>[^/]*)\.html|videos/(?P<display_id_2>[^/]*)-(?P<id_2>[0-9A-Za-z]+))"
+);
 
 /// URL pattern for xHamster embed pages.
 ///
 /// Matches: `https://xhamster.com/xembed.php?video=12345`
-pub static XHAMSTER_EMBED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r"https?://(?:[^/?#]+\.)?{DOMAINS}/xembed\.php\?video=(?P<id>\d+)"
-    ))
-    .expect("Valid xHamster embed URL pattern")
-});
+pub static XHAMSTER_EMBED_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:[^/?#]+\.)?(?:xhamster\.(?:com|one|desi)|xhms\.pro|xhamster\d+\.(?:com|desi)|xhday\.com|xhvid\.com)/xembed\.php\?video=(?P<id>\d+)"
+);
 
 /// URL pattern for xHamster user/creator pages.
 ///
 /// Matches:
 /// - `https://xhamster.com/users/netvideogirls/videos`
 /// - `https://xhamster.com/creators/squirt-orgasm-69`
-pub static XHAMSTER_USER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r"https?://(?:[^/?#]+\.)?{DOMAINS}/(?:(?P<user>users)|creators)/(?P<id>[^/?#&]+)"
-    ))
-    .expect("Valid xHamster user URL pattern")
-});
+pub static XHAMSTER_USER_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"https?://(?:[^/?#]+\.)?(?:xhamster\.(?:com|one|desi)|xhms\.pro|xhamster\d+\.(?:com|desi)|xhday\.com|xhvid\.com)/(?:(?P<user>users)|creators)/(?P<id>[^/?#&]+)"
+);
 
 /// Regex to extract `window.initials` JSON from page source.
 ///
 /// Uses `(?s)` (DOTALL) so `.` matches newlines — the JSON often spans multiple lines.
-pub static INITIALS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;\s*(?:</script>|$)")
-        .expect("Valid initials pattern")
-});
+pub static INITIALS_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;\s*(?:</script>|$)");
 
 /// Fallback pattern for `window.initials` (less strict).
-pub static INITIALS_FALLBACK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;")
-        .expect("Valid initials fallback pattern")
-});
+pub static INITIALS_FALLBACK_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)window\.initials\s*=\s*(\{.+?\})\s*;");
 
 /// Pattern for legacy `sources: {...}` JS object.
-pub static LEGACY_SOURCES_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"sources\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid legacy sources pattern")
-});
+pub static LEGACY_SOURCES_PATTERN: Lazy<Regex> = lazy_regex!(r"sources\s*:\s*(\{.+?\})\s*,?\s*\n");
 
 /// Pattern for legacy `file: "url"` variable.
-pub static LEGACY_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"file\s*:\s*["'](?P<url>.+?)["']"#).expect("Valid legacy file pattern")
-});
+pub static LEGACY_FILE_PATTERN: Lazy<Regex> = lazy_regex!(r#"file\s*:\s*["'](?P<url>.+?)["']"#);
 
 /// Pattern for `<a class="mp4Thumb" href="url">`.
-pub static LEGACY_MP4_THUMB_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<a\s+href=["'](?P<url>.+?)["']\s+class=["']mp4Thumb"#)
-        .expect("Valid legacy mp4Thumb pattern")
-});
+pub static LEGACY_MP4_THUMB_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<a\s+href=["'](?P<url>.+?)["']\s+class=["']mp4Thumb"#);
 
 /// Pattern for `<video file="url">`.
-pub static LEGACY_VIDEO_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<video[^>]+file=["'](?P<url>.+?)["'][^>]*>"#)
-        .expect("Valid legacy video file pattern")
-});
+pub static LEGACY_VIDEO_FILE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<video[^>]+file=["'](?P<url>.+?)["'][^>]*>"#);
 
 /// Pattern for error/closed video detection.
-pub static VIDEO_CLOSED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<div[^>]+id=["']videoClosed["'][^>]*>(.+?)</div>"#)
-        .expect("Valid videoClosed pattern")
-});
+pub static VIDEO_CLOSED_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<div[^>]+id=["']videoClosed["'][^>]*>(.+?)</div>"#);
 
 /// Pattern for embed page video URL extraction.
-pub static EMBED_VIDEO_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"href="(https?://xhamster\.com/(?:movies/\d+/[^"]*\.html|videos/[^/]*-[0-9A-Za-z]+))[^"]*""#)
-        .expect("Valid embed video URL pattern")
-});
+pub static EMBED_VIDEO_URL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"href="(https?://xhamster\.com/(?:movies/\d+/[^"]*\.html|videos/[^/]*-[0-9A-Za-z]+))[^"]*""#
+);
 
 /// Pattern for embed page `vars` JSON.
-pub static EMBED_VARS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n").expect("Valid embed vars pattern")
-});
+pub static EMBED_VARS_PATTERN: Lazy<Regex> = lazy_regex!(r"vars\s*:\s*(\{.+?\})\s*,?\s*\n");
 
 /// Check if a URL matches any xHamster pattern (video, embed, or user).
 pub fn is_suitable(url: &str) -> bool {
@@ -152,8 +121,7 @@ pub fn extract_user_info(url: &str) -> Option<(String, bool)> {
 }
 
 /// Pattern to strip `m.` subdomain from mobile xHamster URLs.
-static MOBILE_URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(https?://(?:.+?\.)?)m\.").expect("Valid mobile URL pattern"));
+static MOBILE_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"^(https?://(?:.+?\.)?)m\.");
 
 /// Rewrite mobile URL to desktop (strip `m.` subdomain).
 pub fn rewrite_mobile_url(url: &str) -> String {

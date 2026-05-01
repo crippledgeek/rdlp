@@ -18,9 +18,10 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use super::config::PROGRESS_UPDATE_INTERVAL;
 use super::{HttpDownloader, with_retry};
 
+#[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 #[async_trait]
 impl Downloader for HttpDownloader {
-    fn protocol(&self) -> &str {
+    fn protocol(&self) -> &'static str {
         "http"
     }
 
@@ -37,7 +38,7 @@ impl Downloader for HttpDownloader {
 
             debug!(
                 "Download analysis: size={} MB, concurrent={}, ranges={}",
-                size.map(|s| s / 1024 / 1024).unwrap_or(0),
+                size.map_or(0, |s| s / 1024 / 1024),
                 self.config.concurrent_fragments,
                 supports_ranges
             );
@@ -83,21 +84,23 @@ impl Downloader for HttpDownloader {
                 size
             };
 
-            let use_parallel = match size {
+            let parallel_size = match size {
                 Some(s) if s > super::config::PARALLEL_THRESHOLD => {
-                    self.config.concurrent_fragments > 1 && supports_ranges
+                    if self.config.concurrent_fragments > 1 && supports_ranges {
+                        Some(s)
+                    } else {
+                        None
+                    }
                 }
-                _ => false,
+                _ => None,
             };
 
-            if use_parallel {
+            if let Some(ps) = parallel_size {
                 debug!(
                     "Using parallel download mode ({} connections)",
                     self.config.concurrent_fragments
                 );
-                return self
-                    .download_parallel(url, path, size.expect("size is Some when use_parallel is true"), progress)
-                    .await;
+                return self.download_parallel(url, path, ps, progress).await;
             }
 
             let reason = match size {

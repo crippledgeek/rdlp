@@ -14,7 +14,7 @@
 //! thumbnail, models, post date, …) so no per-result page fetch is needed.
 
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, warn};
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
@@ -52,10 +52,42 @@ fn resolved_sort(filters: &[SearchFilter]) -> &'static str {
     "relevance"
 }
 
+/// Return `true` if `s` is safe to embed as a URL path segment: only
+/// alphanumeric characters, hyphens, and underscores are allowed.
+///
+/// This guards against path-traversal injections such as `../../evil` that a
+/// malicious or compromised API response could smuggle in via `video_id` or
+/// `dir` fields.
+fn is_safe_path_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Convert one `videos[]` JSON entry into a `SearchResultPreview`.
+///
+/// Returns `None` (and logs a warning) when `video_id` or `dir` contain
+/// characters that are not safe to embed as URL path segments.
 fn entry_to_preview(entry: &Value) -> Option<SearchResultPreview> {
     let video_id = entry.get("video_id").and_then(|v| v.as_str())?;
     let dir = entry.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Validate path components to prevent path-traversal via API response (M3).
+    if !is_safe_path_segment(video_id) {
+        warn!(
+            "[ABXXX] dropping entry: video_id contains unsafe characters: {:?}",
+            video_id
+        );
+        return None;
+    }
+    if !dir.is_empty() && !is_safe_path_segment(dir) {
+        warn!(
+            "[ABXXX] dropping entry: dir contains unsafe characters: {:?}",
+            dir
+        );
+        return None;
+    }
+
     let title = entry
         .get("title")
         .and_then(|v| v.as_str())
@@ -336,6 +368,87 @@ mod tests {
     fn entry_to_preview_skips_entry_without_id() {
         let entry: Value = serde_json::json!({"title": "no id"});
         assert!(entry_to_preview(&entry).is_none());
+    }
+
+    /// Regression guard for M3: API path components containing path-traversal
+    /// sequences must be rejected so a malicious API response cannot construct
+    /// URLs like `https://abxxx.com/video/1/../../evil/`.
+    ///
+    /// Before the fix `dir` and `video_id` were interpolated directly into the
+    /// URL without validation.
+    #[test]
+    fn entry_to_preview_rejects_path_traversal_in_dir() {
+        let entry: Value = serde_json::json!({
+            "video_id": "157044",
+            "dir": "../../evil",
+            "title": "Malicious"
+        });
+        assert!(
+            entry_to_preview(&entry).is_none(),
+            "entry with path-traversal dir must be dropped"
+        );
+    }
+
+    #[test]
+    fn entry_to_preview_rejects_path_traversal_in_video_id() {
+        let entry: Value = serde_json::json!({
+            "video_id": "../admin",
+            "dir": "",
+            "title": "Malicious"
+        });
+        assert!(
+            entry_to_preview(&entry).is_none(),
+            "entry with path-traversal video_id must be dropped"
+        );
+    }
+
+    #[test]
+    fn entry_to_preview_accepts_valid_segments() {
+        let entry: Value = serde_json::json!({
+            "video_id": "157044",
+            "dir": "katie-gets-kinky",
+            "title": "Katie gets kinky"
+        });
+        assert!(
+            entry_to_preview(&entry).is_some(),
+            "entry with valid path segments must be kept"
+        );
+    }
+
+    #[test]
+    fn is_safe_path_segment_rejects_traversal() {
+        assert!(!is_safe_path_segment("../../evil"));
+        assert!(!is_safe_path_segment("../foo"));
+        assert!(!is_safe_path_segment("foo/bar"));
+        assert!(!is_safe_path_segment("foo bar"));
+        assert!(!is_safe_path_segment(""));
+    }
+
+    #[test]
+    fn is_safe_path_segment_accepts_valid() {
+        assert!(is_safe_path_segment("157044"));
+        assert!(is_safe_path_segment("katie-gets-kinky"));
+        assert!(is_safe_path_segment("some_video"));
+        assert!(is_safe_path_segment("abc123"));
+    }
+
+    /// Regression guard: parse_response must drop entries with unsafe path
+    /// components but keep valid ones in the same array.
+    #[test]
+    fn parse_response_drops_unsafe_entries() {
+        let body = serde_json::json!({
+            "total_count": "3",
+            "pages": 1,
+            "videos": [
+                {"video_id": "1", "dir": "good-dir", "title": "Good"},
+                {"video_id": "2", "dir": "../../evil", "title": "Bad dir"},
+                {"video_id": "../admin", "dir": "", "title": "Bad id"}
+            ]
+        })
+        .to_string();
+        let (previews, _total, _max) = parse_response(&body).expect("parse ok");
+        assert_eq!(previews.len(), 1, "only the safe entry should survive");
+        assert_eq!(previews[0].title, "Good");
     }
 
     #[test]

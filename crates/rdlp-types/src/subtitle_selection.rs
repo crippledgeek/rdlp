@@ -58,6 +58,7 @@ use crate::subtitle_format::SubtitleFormat;
 /// assert_eq!(result[0].0, "en");
 /// ```
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn select_subtitles(
     subtitles: &HashMap<String, Vec<Subtitle>>,
     auto_captions: Option<&HashMap<String, Vec<Subtitle>>>,
@@ -144,6 +145,7 @@ pub fn subtitle_filename(base_stem: &str, lang: &str, ext: &str) -> String {
 }
 
 /// Find a language in a subtitle map using case-insensitive matching.
+#[allow(clippy::implicit_hasher)]
 fn find_lang<'a>(
     map: &'a HashMap<String, Vec<Subtitle>>,
     lang: &str,
@@ -170,6 +172,13 @@ fn pick_subtitle(subs: &[Subtitle], preferred_format: Option<SubtitleFormat>) ->
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
 

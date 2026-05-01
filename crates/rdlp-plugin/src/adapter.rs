@@ -2,6 +2,21 @@
 //! plugins can be registered into the existing extractor registry alongside
 //! built-in extractors.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::needless_raw_string_hashes,
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
+    clippy::expect_used,
+    clippy::missing_const_for_fn,
+    clippy::cast_possible_wrap,
+    clippy::doc_markdown,
+    clippy::option_if_let_else,
+    clippy::single_match_else,
+    clippy::needless_pass_by_value
+)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;

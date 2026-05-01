@@ -22,7 +22,7 @@ pub enum OrchestratorError {
         url: String,
     },
 
-    /// Video extraction failed (wraps domain RdlpError)
+    /// Video extraction failed (wraps domain `RdlpError`)
     #[error("Failed to extract video information: {0}")]
     ExtractionFailed(#[source] RdlpError),
 
@@ -45,7 +45,7 @@ pub enum OrchestratorError {
         url: String,
     },
 
-    /// Download failed (wraps domain RdlpError)
+    /// Download failed (wraps domain `RdlpError`)
     #[error("Download failed: {0}")]
     DownloadFailed(#[source] RdlpError),
 
@@ -99,7 +99,7 @@ pub enum OrchestratorError {
 /// CDN failures (Cloudflare challenges, expired tokens, server errors)
 /// return `Extraction` errors containing "invalid M3U8". These can be
 /// resolved by calling `extract_lazy()` again for a fresh CDN assignment.
-pub(crate) fn is_reextractable_error(err: &OrchestratorError) -> bool {
+pub fn is_reextractable_error(err: &OrchestratorError) -> bool {
     match err {
         OrchestratorError::DownloadFailed(RdlpError::Extraction { message, .. }) => {
             message.contains("invalid M3U8")

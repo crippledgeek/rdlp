@@ -36,6 +36,9 @@ impl RateLimiter {
     /// Create a new rate limiter with the given bytes-per-second limit.
     #[must_use]
     pub fn new(bytes_per_second: u64) -> Self {
+        // Intentional: u64 -> f64 precision loss is acceptable for bandwidth values
+        // (rates above 2^53 bytes/s = 8 petabytes/s are not realistic)
+        #[allow(clippy::cast_precision_loss)]
         let bps = bytes_per_second as f64;
         Self {
             bytes_per_second: bps,
@@ -46,34 +49,46 @@ impl RateLimiter {
         }
     }
 
+    /// Compute the sleep duration needed after consuming `bytes` tokens.
+    ///
+    /// Returns the sleep duration if tokens went negative (throttling needed),
+    /// or `None` if there are sufficient tokens. The mutex is released
+    /// before this function returns so the caller can sleep without holding it.
+    #[allow(clippy::cast_precision_loss)] // usize->f64: chunk sizes are never > 2^52
+    fn compute_sleep(&self, bytes: usize) -> Option<Duration> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        let elapsed = now.duration_since(state.last_refill).as_secs_f64();
+
+        // Refill tokens based on elapsed time, capped at burst size (1s)
+        state.tokens = elapsed
+            .mul_add(self.bytes_per_second, state.tokens)
+            .min(self.bytes_per_second);
+        state.last_refill = now;
+
+        // Consume tokens
+        state.tokens -= bytes as f64;
+
+        // If tokens went negative, calculate sleep time for the deficit.
+        // Drop `state` (MutexGuard) before returning — caller will sleep.
+        if state.tokens < 0.0 {
+            let deficit = -state.tokens;
+            drop(state);
+            Some(Duration::from_secs_f64(deficit / self.bytes_per_second))
+        } else {
+            None
+        }
+    }
+
     /// Acquire permission to transfer `bytes` bytes.
     ///
     /// If insufficient tokens are available, sleeps until enough accumulate.
     /// The mutex is released before sleeping so other tasks are not blocked.
     pub async fn acquire(&self, bytes: usize) {
-        let sleep_duration = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let now = Instant::now();
-            let elapsed = now.duration_since(state.last_refill).as_secs_f64();
-
-            // Refill tokens based on elapsed time, capped at burst size (1s)
-            state.tokens =
-                (state.tokens + elapsed * self.bytes_per_second).min(self.bytes_per_second);
-            state.last_refill = now;
-
-            // Consume tokens
-            state.tokens -= bytes as f64;
-
-            // If tokens went negative, calculate sleep time for the deficit
-            if state.tokens < 0.0 {
-                let deficit = -state.tokens;
-                Some(Duration::from_secs_f64(deficit / self.bytes_per_second))
-            } else {
-                None
-            }
-        }; // Mutex released here — before sleeping
-
-        if let Some(duration) = sleep_duration {
+        if let Some(duration) = self.compute_sleep(bytes) {
             tokio::time::sleep(duration).await;
         }
     }

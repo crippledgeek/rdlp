@@ -1,7 +1,7 @@
-//! FinalizeMetadataStage — post-download probe to backfill or correct
+//! `FinalizeMetadataStage` — post-download probe to backfill or correct
 //! `info_dict` fields against the ground-truth bytes on disk.
 //!
-//! Runs LAST in the pipeline (after FixupStage), so it sees the final
+//! Runs LAST in the pipeline (after `FixupStage`), so it sees the final
 //! container — including any repair, remux, or recode the prior stages
 //! applied. Calls `FFmpegRunner::probe()` (a libavformat header read,
 //! not a subprocess) on the primary file, then:
@@ -10,13 +10,9 @@
 //!   existing duration is `None` OR differs by more than 5% (catches
 //!   manifest lies — godresource's playlist had no duration entry; the
 //!   site's player UI claimed 2:01:38 against the actual 1h39m56s).
-//! - **Logs discrepancies for width / height / fps / video_codec /
-//!   audio_codec** as `INFO` lines. InfoDict doesn't carry these fields
-//!   today (they live per-Format and the Format is already consumed by
-//!   the time postprocess starts), so logging is the value the stage
-//!   delivers for those keys. Future scope: extend InfoDict + emit a
-//!   new `Event::MetadataCorrected` so the GUI can re-render its
-//!   "Quality" column post-download.
+//! - **Logs and pushes warnings for width / height / fps / `video_codec` /
+//!   `audio_codec`** so GUI and CLI consumers can see the ground-truth values
+//!   (audit finding M7: previously only logged, not visible in `msg.warnings`).
 //!
 //! **Non-fatal.** A probe failure here is informational only — the
 //! file is already on disk and playable. We push a warning into
@@ -27,13 +23,20 @@
 //! multi-GB files; not worth a flag until someone reports it. If
 //! that changes, add `PostProcess.finalize_metadata: bool` defaulting
 //! to true and wire it through `should_run`.
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: `f64`-to-`u32` cast for percentage formatting. The
+//!   threshold is `0.05 * 100.0 = 5.0`, always positive and within `u32` range.
+
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{info, warn};
 
-use rdlp_ffmpeg::FFmpegRunner;
+use rdlp_ffmpeg::{FFmpegRunner, MediaInfo};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -44,8 +47,8 @@ use crate::pipeline::{PipelineMessage, PipelineStage};
 const DURATION_DRIFT_THRESHOLD: f64 = 0.05;
 
 /// Probe the final output and patch `info_dict.duration` from the
-/// container's actual stream metadata. Logs codec/resolution/fps
-/// truths for downstream visibility.
+/// container's actual stream metadata. Appends codec/resolution/fps
+/// ground-truth values to `msg.warnings` for downstream visibility.
 pub struct FinalizeMetadataStage {
     ffmpeg: Arc<FFmpegRunner>,
 }
@@ -53,14 +56,14 @@ pub struct FinalizeMetadataStage {
 impl FinalizeMetadataStage {
     /// Create a new `FinalizeMetadataStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 }
 
 #[async_trait]
 impl PipelineStage for FinalizeMetadataStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "FinalizeMetadataStage"
     }
 
@@ -119,24 +122,45 @@ impl PipelineStage for FinalizeMetadataStage {
             }
         }
 
-        // ── codec / resolution / fps (log-only for now) ───────────
-        // InfoDict doesn't carry these fields; surface them so the
-        // CLI's --verbose log records the truth and operators have
-        // a paper trail for "site claimed X, file is Y" disputes.
-        if let (Some(w), Some(h)) = (media_info.width, media_info.height) {
-            info!("FinalizeMetadataStage: file resolution {w}x{h}");
-        }
-        if let Some(fps) = media_info.fps {
-            info!("FinalizeMetadataStage: file fps {fps:.3}");
-        }
-        if let Some(ref vc) = media_info.video_codec {
-            info!("FinalizeMetadataStage: video codec {vc}");
-        }
-        if let Some(ref ac) = media_info.audio_codec {
-            info!("FinalizeMetadataStage: audio codec {ac}");
-        }
+        // ── codec / resolution / fps ──────────────────────────────
+        // InfoDict doesn't carry these fields today (they live per-Format
+        // and the Format is already consumed by the time postprocess
+        // starts). Surface them via `msg.warnings` so the event pipeline,
+        // GUI, and CLI consumers can display ground-truth values
+        // (audit finding M7: previously only logged, invisible to callers).
+        apply_probe_media_info(&media_info, &mut msg);
 
         Ok(msg)
+    }
+}
+
+/// Apply width/height/fps/codec information from a probe result to the message.
+///
+/// Logs each discovered value as INFO and appends it to `msg.warnings` so the
+/// information is visible to GUI and CLI consumers (audit finding M7).
+///
+/// Separated from `process()` so it can be unit-tested without a real
+/// `FFmpegRunner` or media file.
+pub(crate) fn apply_probe_media_info(probe: &MediaInfo, msg: &mut PipelineMessage) {
+    if let (Some(w), Some(h)) = (probe.width, probe.height) {
+        let note = format!("FinalizeMetadata: file resolution {w}x{h}");
+        info!("{note}");
+        msg.warnings.push(note);
+    }
+    if let Some(fps) = probe.fps {
+        let note = format!("FinalizeMetadata: file fps {fps:.3}");
+        info!("{note}");
+        msg.warnings.push(note);
+    }
+    if let Some(ref vc) = probe.video_codec {
+        let note = format!("FinalizeMetadata: video codec {vc}");
+        info!("{note}");
+        msg.warnings.push(note);
+    }
+    if let Some(ref ac) = probe.audio_codec {
+        let note = format!("FinalizeMetadata: audio codec {ac}");
+        info!("{note}");
+        msg.warnings.push(note);
     }
 }
 
@@ -157,6 +181,117 @@ fn duration_drifts(claimed: f64, probed: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use rdlp_ffmpeg::MediaInfo;
+    use rdlp_types::{InfoDict, PostProcess};
+
+    use crate::pipeline::{FileTracker, PipelineMessage, TempRegistry};
+
+    fn make_msg() -> PipelineMessage {
+        let info = InfoDict::new(
+            "id".to_string(),
+            "Test".to_string(),
+            "TestExtractor".to_string(),
+            "https://example.com/v".to_string(),
+        );
+        let reg = Arc::new(TempRegistry::new());
+        let tracker = FileTracker::new(vec![PathBuf::from("/tmp/test.mp4")], reg);
+        PipelineMessage {
+            info,
+            tracker,
+            config: Arc::new(PostProcess::default()),
+            original_stem: "test".to_string(),
+            is_hls: false,
+            verbose: false,
+            callback_factory: None,
+            error_tx: None,
+            warnings: Vec::new(),
+            encoding_tool: None,
+        }
+    }
+
+    // ── M7 regression: apply_probe_media_info pushes warnings ───────────────
+    //
+    // Before the fix, probe results were only logged (INFO). They were invisible
+    // to callers consuming `msg.warnings`. These tests verify that each
+    // discovered media property adds an entry to `msg.warnings`.
+
+    #[test]
+    fn probe_resolution_appended_to_warnings() {
+        let mut msg = make_msg();
+        let probe = MediaInfo {
+            width: Some(1920),
+            height: Some(1080),
+            ..Default::default()
+        };
+        apply_probe_media_info(&probe, &mut msg);
+        assert!(
+            msg.warnings.iter().any(|w| w.contains("1920x1080")),
+            "warnings must contain resolution; got: {:?}",
+            msg.warnings
+        );
+    }
+
+    #[test]
+    fn probe_fps_appended_to_warnings() {
+        let mut msg = make_msg();
+        let probe = MediaInfo {
+            fps: Some(29.97),
+            ..Default::default()
+        };
+        apply_probe_media_info(&probe, &mut msg);
+        assert!(
+            msg.warnings.iter().any(|w| w.contains("fps")),
+            "warnings must contain fps entry; got: {:?}",
+            msg.warnings
+        );
+    }
+
+    #[test]
+    fn probe_video_codec_appended_to_warnings() {
+        let mut msg = make_msg();
+        let probe = MediaInfo {
+            video_codec: Some("h264".to_string()),
+            ..Default::default()
+        };
+        apply_probe_media_info(&probe, &mut msg);
+        assert!(
+            msg.warnings.iter().any(|w| w.contains("h264")),
+            "warnings must contain video codec; got: {:?}",
+            msg.warnings
+        );
+    }
+
+    #[test]
+    fn probe_audio_codec_appended_to_warnings() {
+        let mut msg = make_msg();
+        let probe = MediaInfo {
+            audio_codec: Some("aac".to_string()),
+            ..Default::default()
+        };
+        apply_probe_media_info(&probe, &mut msg);
+        assert!(
+            msg.warnings.iter().any(|w| w.contains("aac")),
+            "warnings must contain audio codec; got: {:?}",
+            msg.warnings
+        );
+    }
+
+    #[test]
+    fn probe_empty_media_info_adds_no_warnings() {
+        let mut msg = make_msg();
+        let probe = MediaInfo::default();
+        apply_probe_media_info(&probe, &mut msg);
+        assert!(
+            msg.warnings.is_empty(),
+            "no warnings expected for empty probe; got: {:?}",
+            msg.warnings
+        );
+    }
+
+    // ── duration_drifts unit tests ───────────────────────────────────────────
 
     #[test]
     fn duration_within_threshold_is_not_drift() {

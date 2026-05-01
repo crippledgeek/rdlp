@@ -55,5 +55,35 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
 rand = "0.8.5"
 
-[lints]
-workspace = true
+# Per-crate lint config — extends workspace lints (which cannot be composed
+# with workspace = true once per-crate tables are added).
+# Workspace lint baselines replicated here:
+#   clippy::must_use_candidate = warn
+#   clippy::await_holding_lock = deny
+#   clippy::await_holding_refcell_ref = deny
+#   clippy::disallowed_methods = deny
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+# Workspace baseline (replicated — cannot use workspace = true alongside
+# per-crate tables).
+must_use_candidate = "warn"
+disallowed_methods = "deny"
+# Security-relevant lints applied to ALL targets (lib + integration tests +
+# benches): async-correctness, panic-on-failure, bounds-check skipping.
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+# `indexing_slicing` and the style-polish families (`clippy::pedantic`,
+# `clippy::nursery`) are applied LIB-ONLY via `#![warn(...)]` inside
+# `src/lib.rs`. Integration tests under `tests/` are separate compilation
+# units; in tests, `vec[0]` guarded by a preceding `assert_eq!(len, …)` IS
+# the assertion form, so panicking-on-bad-index is intentional.
+# Wasmtime's "opt-in lints per target" guidance is the basis for this split:
+#   https://docs.wasmtime.dev/contributing-coding-guidelines.html

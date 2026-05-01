@@ -3,8 +3,7 @@
 //! Scans page source for JW Player, KVS Player, Video.js, and generic
 //! `file=`/`source=` parameters in inline JavaScript.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 use super::detection::{
     Confidence, DetectedFormat, DetectionStrategy, PageContext, ext_from_url, resolve_url,
@@ -15,41 +14,29 @@ use super::detection::{
 // ============================================================================
 
 // JW Player patterns
-static JW_SETUP_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"jwplayer\s*\(\s*["']?\w+["']?\s*\)\s*\.\s*setup\s*\(\s*\{[\s\S]*?["']?file["']?\s*:\s*["']([^"']+)["']"#)
-        .expect("valid JW Player setup regex")
-});
+static JW_SETUP_FILE: Lazy<Regex> = lazy_regex!(
+    r#"jwplayer\s*\(\s*["']?\w+["']?\s*\)\s*\.\s*setup\s*\(\s*\{[\s\S]*?["']?file["']?\s*:\s*["']([^"']+)["']"#
+);
 
-static JW_PLAYER_OPTIONS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?:JWPlayerOptions|jwConfig|playerInstance)\s*=\s*\{[\s\S]*?["']?file["']?\s*:\s*["']([^"']+)["']"#,
-    )
-    .expect("valid JW Player options regex")
-});
+static JW_PLAYER_OPTIONS: Lazy<Regex> = lazy_regex!(
+    r#"(?:JWPlayerOptions|jwConfig|playerInstance)\s*=\s*\{[\s\S]*?["']?file["']?\s*:\s*["']([^"']+)["']"#
+);
 
-static JW_FLASHVARS_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"flashvars\s*[=:]\s*[{"][\s\S]*?["']?file["']?\s*[=:]\s*["']([^"']+)["']"#)
-        .expect("valid flashvars file regex")
-});
+static JW_FLASHVARS_FILE: Lazy<Regex> =
+    lazy_regex!(r#"flashvars\s*[=:]\s*[{"][\s\S]*?["']?file["']?\s*[=:]\s*["']([^"']+)["']"#);
 
 // Video.js patterns
-static VIDEOJS_SOURCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"videojs\s*\(\s*["']?\w+["']?[\s\S]*?sources\s*:\s*\[\s*\{[\s\S]*?src\s*:\s*["']([^"']+)["']"#)
-        .expect("valid Video.js source regex")
-});
+static VIDEOJS_SOURCE: Lazy<Regex> = lazy_regex!(
+    r#"videojs\s*\(\s*["']?\w+["']?[\s\S]*?sources\s*:\s*\[\s*\{[\s\S]*?src\s*:\s*["']([^"']+)["']"#
+);
 
-static VIDEOJS_DATA_SETUP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"data-setup\s*=\s*'[\s\S]*?"src"\s*:\s*"([^"]+)""#)
-        .expect("valid Video.js data-setup regex")
-});
+static VIDEOJS_DATA_SETUP: Lazy<Regex> =
+    lazy_regex!(r#"data-setup\s*=\s*'[\s\S]*?"src"\s*:\s*"([^"]+)""#);
 
 // Generic JS parameters
-static GENERIC_FILE_PARAM: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?:file|source|video_url|videoUrl|videoSrc|mp4|hls_url)\s*[:=]\s*["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm|flv|mkv|mov)(?:\?[^"'\s]*)?)["']"#,
-    )
-    .expect("valid generic file param regex")
-});
+static GENERIC_FILE_PARAM: Lazy<Regex> = lazy_regex!(
+    r#"(?:file|source|video_url|videoUrl|videoSrc|mp4|hls_url)\s*[:=]\s*["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm|flv|mkv|mov)(?:\?[^"'\s]*)?)["']"#
+);
 
 // ============================================================================
 // JW Player Strategy
@@ -227,10 +214,8 @@ impl DetectionStrategy for GenericJsParamsStrategy {
 // ============================================================================
 
 /// Last-resort scan: regex for media URLs anywhere in page source.
-static DIRECT_LINK_SCAN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm)(?:\?[^"'\s]*)?)["']"#)
-        .expect("valid direct link scan regex")
-});
+static DIRECT_LINK_SCAN: Lazy<Regex> =
+    lazy_regex!(r#"["'](https?://[^"'\s]+\.(?:mp4|m3u8|webm)(?:\?[^"'\s]*)?)["']"#);
 
 pub(crate) struct DirectLinkScanStrategy;
 

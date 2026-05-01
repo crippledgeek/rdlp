@@ -13,11 +13,12 @@ pub(super) fn format_as_string(val: &serde_json::Value) -> String {
             let items: Vec<String> = arr.iter().map(format_as_string).collect();
             items.join(", ")
         }
-        other => other.to_string(),
+        other @ serde_json::Value::Object(_) => other.to_string(),
     }
 }
 
 /// Format as integer (type `d`)
+#[allow(clippy::cast_possible_truncation)] // JSON number → i64: truncation is expected/desired
 pub(super) fn format_as_integer(val: &serde_json::Value, spec: &FormatSpec) -> String {
     let num = match val {
         serde_json::Value::Number(n) => n
@@ -168,6 +169,7 @@ pub(super) fn format_as_html(val: &serde_json::Value) -> String {
 }
 
 /// Format integer as character (type `c`)
+#[allow(clippy::cast_possible_truncation)] // u64 → u32 for char code point: valid Unicode fits in u32
 pub(super) fn format_as_char(val: &serde_json::Value) -> String {
     let num = match val {
         serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) as u32,
@@ -188,6 +190,7 @@ pub(super) fn format_as_unicode(val: &serde_json::Value, _nfd: bool) -> String {
 }
 
 /// Format with thousands separator (type `R`)
+#[allow(clippy::cast_possible_truncation)] // JSON number → i64: truncation is expected/desired
 pub(super) fn format_as_thousands(val: &serde_json::Value) -> String {
     let num = match val {
         serde_json::Value::Number(n) => n

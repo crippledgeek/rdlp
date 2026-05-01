@@ -1,4 +1,4 @@
-//! FixupStage — detect and repair container/codec issues.
+//! `FixupStage` — detect and repair container/codec issues.
 //!
 //! Non-fatal: on failure, logs a warning and passes the file through unchanged.
 
@@ -24,14 +24,14 @@ pub struct FixupStage {
 impl FixupStage {
     /// Create a new `FixupStage`.
     #[must_use]
-    pub fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
+    pub const fn new(ffmpeg: Arc<FFmpegRunner>) -> Self {
         Self { ffmpeg }
     }
 }
 
 #[async_trait]
 impl PipelineStage for FixupStage {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "FixupStage"
     }
 

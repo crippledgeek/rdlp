@@ -3,6 +3,10 @@
 //! Provides configuration for HTTP downloads including buffer sizes,
 //! retry settings, and concurrent download settings.
 
+// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
+// workspace MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 use crate::chunking::ChunkSizeStrategy;
 use rdlp_core::RetryConfig;
 use std::time::Duration;
@@ -35,14 +39,14 @@ const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 /// Downloader configuration (shared across clones via Arc)
 ///
 /// This struct consolidates all config fields into a single Arc,
-/// making HttpDownloader clones truly zero-cost (~5ns Arc clone vs ~24 bytes field copies).
+/// making `HttpDownloader` clones truly zero-cost (~5ns Arc clone vs ~24 bytes field copies).
 ///
 /// **Memory optimization:**
 /// - Before: 591 clones × 24 bytes = ~14 KB copied
 /// - After: 591 Arc clones × 8 bytes = ~5 KB pointers
 /// - **Savings: ~9 KB per download**
 #[derive(Clone)]
-pub(crate) struct DownloaderConfig {
+pub struct DownloaderConfig {
     pub buffer_size: usize,
     pub retry_config: RetryConfig,
     pub concurrent_fragments: usize,
@@ -68,8 +72,7 @@ impl Default for DownloaderConfig {
         //   * Too few: underutilizes bandwidth
         //   * Too many: connection overhead, server rate limiting
         let concurrent_fragments = std::thread::available_parallelism()
-            .map(|n| n.get().min(MAX_CONCURRENT_CONNECTIONS))
-            .unwrap_or(4);
+            .map_or(4, |n| n.get().min(MAX_CONCURRENT_CONNECTIONS));
 
         Self {
             buffer_size: DEFAULT_BUFFER_SIZE,

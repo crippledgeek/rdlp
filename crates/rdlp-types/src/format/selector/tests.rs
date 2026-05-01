@@ -1,5 +1,20 @@
 //! Tests for the format selector parser and evaluator.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    clippy::missing_docs_in_private_items,
+    clippy::indexing_slicing,
+    clippy::too_many_lines,
+    clippy::cast_lossless,
+    clippy::explicit_iter_loop,
+    clippy::similar_names,
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::doc_markdown
+)]
+
 use super::*;
 use crate::format::{Codec, Format};
 use crate::protocol::DownloadProtocol;

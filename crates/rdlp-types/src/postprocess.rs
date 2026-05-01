@@ -9,10 +9,11 @@ use crate::container::ContainerFormat;
 use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
 
-/// Post-processing configuration controlling FFmpeg transforms and file handling.
+/// Post-processing configuration controlling `FFmpeg` transforms and file handling.
 ///
 /// This struct is the canonical post-processing config type. It is placed in
 /// `rdlp-types` so all crates can reference it without depending on `rdlp-core`.
+#[allow(clippy::struct_excessive_bools)] // PostProcess carries many boolean pipeline flags
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PostProcess {
@@ -40,9 +41,9 @@ pub struct PostProcess {
     pub write_subtitles: bool,
     /// Keep the original video file after audio extraction.
     pub keep_video: bool,
-    /// Path to the FFmpeg binary or directory.
+    /// Path to the `FFmpeg` binary or directory.
     pub ffmpeg_location: Option<PathBuf>,
-    /// Extra FFmpeg arguments passed verbatim to the FFmpeg invocation.
+    /// Extra `FFmpeg` arguments passed verbatim to the `FFmpeg` invocation.
     pub ffmpeg_args: Vec<String>,
     /// Normalise audio (peak mode) after download.
     pub normalize_audio: bool,
@@ -66,7 +67,7 @@ pub struct PostProcess {
     pub normalize_boost: bool,
     /// Gain applied by the limiter-boost stage (dB).
     pub normalize_boost_db: Option<f64>,
-    /// FFmpeg encoder name for the video stream (e.g. `"libx265"`).
+    /// `FFmpeg` encoder name for the video stream (e.g. `"libx265"`).
     pub video_encoder: Option<String>,
     /// How to handle audio during video recode.
     pub recode_audio: RecodeAudioMode,

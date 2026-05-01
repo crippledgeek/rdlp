@@ -16,7 +16,7 @@
 //! 2. **Fine-Grained Parallelism**: Batch processing with `buffer_unordered`
 //! 3. **Multi-Threaded Runtime**: Tokio with 2x CPU cores for I/O workloads
 //! 4. **Buffered I/O**: 2 MB write buffers for reduced syscalls
-//! 5. **HTTP Optimizations**: Connection pooling, TCP_NODELAY, keepalive
+//! 5. **HTTP Optimizations**: Connection pooling, `TCP_NODELAY`, keepalive
 //! 6. **Intelligent Size Detection**: HEAD/Range request fallbacks
 //! 7. **Real-Time Progress**: Atomic counters across all parallel chunks
 //!
@@ -59,7 +59,7 @@
 //!
 //! ## Performance
 //!
-//! **Benchmark**: 590 MB file download from TNAFlix
+//! **Benchmark**: 590 MB file download from `TNAFlix`
 //!
 //! | Optimization Level | Time | Speed | Improvement |
 //! |-------------------|------|-------|-------------|
@@ -114,7 +114,7 @@
 //! # }
 //! ```
 //!
-//! ### Using DownloaderRegistry
+//! ### Using `DownloaderRegistry`
 //!
 //! ```rust,no_run
 //! use rdlp_downloader::DownloaderRegistry;
@@ -202,7 +202,7 @@
 //! The HTTP client is configured with:
 //! - **Connection pooling**: 10 connections per host, 90s idle timeout
 //! - **TCP keepalive**: 60-second intervals prevent connection drops
-//! - **TCP_NODELAY**: Disables Nagle's algorithm for lower latency
+//! - **`TCP_NODELAY`**: Disables Nagle's algorithm for lower latency
 //! - **Smart timeouts**: 30s connect, 60s idle (no total time limit)
 //!
 //! ### Chunk File Format
@@ -237,6 +237,37 @@
 //! - `proxy`: HTTP/HTTPS proxy URL
 
 #![warn(missing_docs)]
+#![warn(clippy::all)]
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![warn(clippy::indexing_slicing)]
+// ── Crate-wide lint allowances ────────────────────────────────────────────────
+//
+// `clippy::cast_*`: download arithmetic (byte counts, offsets, progress ratios)
+//   requires mixed u64/usize/f64 types matching tokio/reqwest API surfaces.
+//   All casts are audited for valid-range invariants.
+//
+// `clippy::significant_drop_tightening`: adaptive controller locks are held
+//   across branches intentionally to keep controller state consistent.
+//
+// `clippy::redundant_pub_crate`: `pub(crate)` in private modules is kept for
+//   documentation of intended visibility.
+//
+// `clippy::indexing_slicing`: `CHUNK_LEVELS[level]` and similar accesses are
+//   guarded by prior clamping to valid index ranges.
+//
+// `clippy::items_after_statements`: test helper closures follow setup statements.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::significant_drop_tightening,
+    clippy::redundant_pub_crate,
+    clippy::indexing_slicing,
+    clippy::items_after_statements
+)]
 
 /// Adaptive chunk sizing and connection tuning (AIMD controller)
 pub(crate) mod adaptive;
@@ -323,7 +354,7 @@ impl DownloaderRegistry {
         let rate_limiter = config.rate_limit.map(|bps| Arc::new(RateLimiter::new(bps)));
 
         // Create HTTP downloader with optimized settings
-        let http_downloader = HttpDownloader::with_client(client.clone())
+        let http_downloader = HttpDownloader::with_client(client)
             .with_buffer_size(config.buffer_size)
             .with_concurrent_fragments(config.concurrent_fragments)
             .with_rate_limiter(rate_limiter)
@@ -385,7 +416,7 @@ impl DownloaderRegistry {
     /// Get all registered downloader protocol names
     ///
     /// # Returns
-    /// A vector of protocol names (e.g., ["http", "hls", "dash"])
+    /// A vector of protocol names (e.g., \["http", "hls", "dash"\])
     #[must_use]
     pub fn list_downloaders(&self) -> Vec<&str> {
         self.downloaders.iter().map(|d| d.protocol()).collect()
@@ -409,7 +440,7 @@ impl DownloaderRegistryTrait for DownloaderRegistry {
         headers: Option<&std::collections::HashMap<String, String>>,
     ) -> Option<Arc<dyn Downloader>> {
         // If no headers, use shared downloader
-        if headers.is_none_or(|h| h.is_empty()) {
+        if headers.is_none_or(std::collections::HashMap::is_empty) {
             return self.find_downloader(url);
         }
 

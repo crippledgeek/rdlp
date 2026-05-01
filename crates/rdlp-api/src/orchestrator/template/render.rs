@@ -1,6 +1,10 @@
 //! Template rendering: field resolution, accessor application, and value formatting
 
-use super::format_types::*;
+use super::format_types::{
+    apply_width, format_as_bytes, format_as_char, format_as_decimal, format_as_float,
+    format_as_html, format_as_integer, format_as_json, format_as_list, format_as_quote,
+    format_as_sanitize, format_as_string, format_as_thousands, format_as_unicode,
+};
 use super::{
     Accessor, ArithOp, FieldRef, FieldSpec, FormatSpec, FormatType, OutputTemplate, RenderContext,
     Segment, TemplateError,
@@ -13,8 +17,8 @@ impl OutputTemplate {
     ///
     /// Field resolution priority:
     /// 1. Special computed fields (`ext`, `epoch`, `autonumber`)
-    /// 2. InfoDict fields (via serde_json serialization)
-    /// 3. Format fields (via serde_json serialization)
+    /// 2. `InfoDict` fields (via `serde_json` serialization)
+    /// 3. Format fields (via `serde_json` serialization)
     /// 4. Conditional replacement / default / `"NA"`
     pub(in crate::orchestrator) fn render(
         &self,
@@ -32,7 +36,7 @@ impl OutputTemplate {
             match segment {
                 Segment::Literal(text) => output.push_str(text),
                 Segment::Field(spec) => {
-                    let value = self.resolve_field(spec, &info_json, &format_json, ext, ctx)?;
+                    let value = Self::resolve_field(spec, &info_json, &format_json, ext, ctx)?;
                     // Sanitize Windows-restricted characters from field values
                     // so they don't create invalid paths or unintended
                     // subdirectories. Also strip null bytes and non-whitespace
@@ -62,8 +66,8 @@ impl OutputTemplate {
     }
 
     /// Resolve a single field spec to its formatted string value
+    #[allow(clippy::unnecessary_wraps)] // may return Err in future date/arithmetic expansion
     fn resolve_field(
-        &self,
         spec: &FieldSpec,
         info_json: &serde_json::Value,
         format_json: &serde_json::Value,
@@ -72,8 +76,8 @@ impl OutputTemplate {
     ) -> Result<String, TemplateError> {
         // Try each field in the fallback chain
         for field_ref in &spec.names {
-            if let Some(val) = self.lookup_field(field_ref, info_json, format_json, ext, ctx) {
-                return Ok(self.format_value(&val, &spec.format));
+            if let Some(val) = Self::lookup_field(field_ref, info_json, format_json, ext, ctx) {
+                return Ok(Self::format_value(&val, &spec.format));
             }
         }
 
@@ -84,11 +88,17 @@ impl OutputTemplate {
 
         // Try explicit default
         if let Some(ref default) = spec.default {
-            return Ok(self.format_value(&serde_json::Value::String(default.clone()), &spec.format));
+            return Ok(Self::format_value(
+                &serde_json::Value::String(default.clone()),
+                &spec.format,
+            ));
         }
 
         // yt-dlp behavior: missing fields produce "NA" (not an error)
-        Ok(self.format_value(&serde_json::Value::String("NA".to_string()), &spec.format))
+        Ok(Self::format_value(
+            &serde_json::Value::String("NA".to_string()),
+            &spec.format,
+        ))
     }
 
     /// Look up a single field reference, applying accessors/arithmetic/date format.
@@ -101,7 +111,6 @@ impl OutputTemplate {
     /// output filename and the user gets `.mp4` instead of `NA.mp4`
     /// or `Unknown.mp4`.
     fn lookup_field(
-        &self,
         field_ref: &FieldRef,
         info_json: &serde_json::Value,
         format_json: &serde_json::Value,
@@ -158,7 +167,7 @@ impl OutputTemplate {
     }
 
     /// Format a JSON value according to the format specifier
-    fn format_value(&self, val: &serde_json::Value, spec: &FormatSpec) -> String {
+    fn format_value(val: &serde_json::Value, spec: &FormatSpec) -> String {
         let raw = match spec.type_char {
             FormatType::String => format_as_string(val),
             FormatType::Integer => format_as_integer(val, spec),
@@ -214,6 +223,12 @@ fn apply_accessor(val: &serde_json::Value, accessor: &Accessor) -> Option<serde_
         Accessor::Key(key) => val.get(key.as_str()).cloned().filter(|v| !v.is_null()),
         Accessor::Index(idx) => {
             if let serde_json::Value::Array(arr) = val {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_possible_wrap
+                )]
+                // yt-dlp Python array indexing semantics: negative idx wraps from end
                 let actual_idx = if *idx < 0 {
                     (arr.len() as i64 + idx) as usize
                 } else {
@@ -227,24 +242,38 @@ fn apply_accessor(val: &serde_json::Value, accessor: &Accessor) -> Option<serde_
         Accessor::Slice { start, end } => match val {
             serde_json::Value::String(s) => {
                 let chars: Vec<char> = s.chars().collect();
+                #[allow(clippy::cast_possible_wrap)] // string len ≤ isize::MAX in practice
                 let len = chars.len() as i64;
                 let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
                 let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
                 if start_idx >= end_idx {
                     Some(serde_json::Value::String(String::new()))
                 } else {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::indexing_slicing
+                    )]
+                    // Python-style slicing; resolve_slice_bound guarantees 0 ≤ indices ≤ len
                     let sliced: String =
                         chars[start_idx as usize..end_idx as usize].iter().collect();
                     Some(serde_json::Value::String(sliced))
                 }
             }
             serde_json::Value::Array(arr) => {
+                #[allow(clippy::cast_possible_wrap)] // array len ≤ isize::MAX in practice
                 let len = arr.len() as i64;
                 let start_idx = resolve_slice_bound(start.unwrap_or(0), len);
                 let end_idx = resolve_slice_bound(end.unwrap_or(len), len);
                 if start_idx >= end_idx {
                     Some(serde_json::Value::Array(Vec::new()))
                 } else {
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::indexing_slicing
+                    )]
+                    // Python-style slicing; resolve_slice_bound guarantees 0 ≤ indices ≤ len
                     let sliced = arr[start_idx as usize..end_idx as usize].to_vec();
                     Some(serde_json::Value::Array(sliced))
                 }

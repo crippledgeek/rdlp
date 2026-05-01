@@ -6,6 +6,18 @@
 //! All functions sync (pure CPU) except `extract_m3u8` which fetches
 //! via the existing `host:fetch` wreq client.
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::needless_raw_string_hashes,
+    clippy::too_long_first_doc_paragraph,
+    clippy::expect_used,
+    clippy::missing_errors_doc
+)]
+
 use std::sync::LazyLock;
 
 use crate::instance::PluginStoreData;
@@ -59,13 +71,21 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
     ) -> Option<String> {
         let pat = build_regex(&pattern, re_flags).ok()?;
         let m = pat.captures(&haystack)?;
-        // Return the first non-None capture group, falling back to group 0.
-        for i in 1..m.len() {
-            if let Some(g) = m.get(i) {
-                return Some(g.as_str().to_string());
-            }
+        // Mirror yt-dlp's `_search_regex` group semantics:
+        // if there are any named/unnamed capture groups (`m.len() > 1`),
+        // return group 1 unconditionally — even if it captured an empty string.
+        // Only fall back to group 0 (the whole match) when there are no groups.
+        if m.len() > 1 {
+            // `m.get(1)` is always Some when the overall match succeeded and
+            // m.len() > 1, UNLESS the group is optional and did not participate.
+            // Return the captured string, which may be empty ("").
+            Some(
+                m.get(1)
+                    .map_or_else(String::new, |g| g.as_str().to_string()),
+            )
+        } else {
+            Some(m.get(0)?.as_str().to_string())
         }
-        Some(m.get(0)?.as_str().to_string())
     }
 
     async fn html_search_regex(
@@ -82,13 +102,27 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         // Mirrors yt-dlp's `_html_search_meta` (extractor/common.py:1492+).
         // Tries 5 attribute names: itemprop / name / property / id / http-equiv.
         // Tries content-after AND content-before patterns.
+        //
+        // L3 fix: the old `[^"']*` content pattern truncated on mixed-quote
+        // content (e.g. `content="a'b"` → returned `"a"` instead of `"a'b"`).
+        // We now use two separate regexes per layout — one for double-quoted
+        // content and one for single-quoted — so each pattern uses the *same*
+        // quote character that opened the value.
         let escaped = regex::escape(&name);
         let attrs = "(?:itemprop|name|property|id|http-equiv)";
-        let pat1 =
-            format!(r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content=["']([^"']*)["']"#);
-        let pat2 =
-            format!(r#"<meta[^>]+content=["']([^"']*)["'][^>]*(?:{attrs})=["']{escaped}["']"#);
-        for pat in [&pat1, &pat2] {
+        // Each (name_attr, content_attr) pattern comes in two quote flavours.
+        // Group 1 always captures the content value.
+        let patterns: &[String] = &[
+            // content-after, double-quoted content
+            format!(r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content="([^"]*)"#),
+            // content-after, single-quoted content
+            format!(r#"<meta[^>]+(?:{attrs})=["']{escaped}["'][^>]*content='([^']*)'"#),
+            // content-before, double-quoted content
+            format!(r#"<meta[^>]+content="([^"]*)"[^>]*(?:{attrs})=["']{escaped}["']"#),
+            // content-before, single-quoted content
+            format!(r#"<meta[^>]+content='([^']*)'[^>]*(?:{attrs})=["']{escaped}["']"#),
+        ];
+        for pat in patterns {
             let re = regex::RegexBuilder::new(pat)
                 .case_insensitive(true)
                 .build()
@@ -322,6 +356,69 @@ mod tests {
         assert_eq!(r, Some("42".to_string()));
     }
 
+    /// Regression guard for L2: `_search_regex` must return group 1 even when
+    /// it captures an empty string (i.e. when `group(1)` exists but is empty).
+    ///
+    /// Before the fix the loop skipped `None`/empty groups and fell through to
+    /// group 0, diverging from yt-dlp's `m.group(1)` unconditional return.
+    ///
+    /// Pattern `(a)(b)?` against `"a"`:
+    ///   - group 1 = "a", group 2 = None (optional, didn't match)
+    ///   - expected: "a" (group 1)
+    #[tokio::test]
+    async fn search_regex_group1_wins_over_group0_regression() {
+        let mut c = ctx();
+        let r = c
+            .search_regex(
+                r"(a)(b)?".to_string(),
+                "a".to_string(),
+                crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+            )
+            .await;
+        assert_eq!(r, Some("a".to_string()), "group 1 must be returned");
+    }
+
+    /// Regression guard for L2 (empty capture): pattern `(x)?(y)` against `"y"`:
+    ///   - group 1 did not participate (optional `x` not present) → captured empty/None
+    ///   - group 2 = "y"
+    ///   - yt-dlp returns `m.group(1)` which is `""` (empty string)
+    ///   - before the fix: old loop skipped the non-participating group and returned "y" (group 2)
+    ///
+    /// Note: in the `regex` crate, a non-participating optional group returns
+    /// `None` from `m.get(1)`. Our implementation maps that to `""` to match
+    /// yt-dlp's `m.group(1)` returning `""` for a non-participating group in Python's re.
+    #[tokio::test]
+    async fn search_regex_returns_empty_string_for_non_participating_group1() {
+        let mut c = ctx();
+        let r = c
+            .search_regex(
+                r"(x)?(y)".to_string(),
+                "y".to_string(),
+                crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+            )
+            .await;
+        // group 1 did not participate → empty string (not "y" from group 2)
+        assert_eq!(
+            r,
+            Some(String::new()),
+            "non-participating group 1 must yield empty string, not group 2's value"
+        );
+    }
+
+    /// Sanity check: no capture groups → return the whole match (group 0).
+    #[tokio::test]
+    async fn search_regex_no_groups_returns_whole_match() {
+        let mut c = ctx();
+        let r = c
+            .search_regex(
+                r"\d+".to_string(),
+                "abc 42 def".to_string(),
+                crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+            )
+            .await;
+        assert_eq!(r, Some("42".to_string()));
+    }
+
     #[tokio::test]
     async fn search_regex_no_match_returns_none() {
         let mut c = ctx();
@@ -405,6 +502,41 @@ mod tests {
             .html_search_meta("nope".to_string(), "<html></html>".to_string())
             .await;
         assert_eq!(r, None);
+    }
+
+    /// Regression guard for L3: `_html_search_meta` must not truncate content
+    /// at a single-quote when the content is enclosed in double quotes.
+    ///
+    /// Before the fix `[^"']*` stopped at the first `'` inside `"a'b"`,
+    /// returning `"a"` instead of `"a'b"`.
+    #[tokio::test]
+    async fn html_search_meta_mixed_quote_content_not_truncated_regression() {
+        let mut c = ctx();
+        // content is double-quoted but contains an apostrophe
+        let r = c
+            .html_search_meta(
+                "x".to_string(),
+                r#"<meta name="x" content="a'b">"#.to_string(),
+            )
+            .await;
+        assert_eq!(
+            r,
+            Some("a'b".to_string()),
+            "content containing single-quote inside double-quoted attribute must not be truncated"
+        );
+    }
+
+    /// Companion: content in single quotes may contain a double-quote.
+    #[tokio::test]
+    async fn html_search_meta_double_quote_inside_single_quoted_content() {
+        let mut c = ctx();
+        let r = c
+            .html_search_meta(
+                "x".to_string(),
+                r#"<meta name='x' content='say "hello"'>"#.to_string(),
+            )
+            .await;
+        assert_eq!(r, Some(r#"say "hello""#.to_string()));
     }
 
     #[tokio::test]
@@ -512,11 +644,7 @@ mod tests {
     async fn search_json_no_match_returns_none() {
         let mut c = ctx();
         let r = c
-            .search_json(
-                r"NOPE".to_string(),
-                "".to_string(),
-                "irrelevant".to_string(),
-            )
+            .search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string())
             .await;
         assert_eq!(r, None);
     }
@@ -557,7 +685,8 @@ hi.m3u8\n";
             .await
             .unwrap();
         assert_eq!(r.formats.len(), 1);
-        assert_eq!(r.formats[0].width, Some(1920));
+        let fmt = r.formats.first().expect("len asserted above");
+        assert_eq!(fmt.width, Some(1920));
     }
 
     #[tokio::test]

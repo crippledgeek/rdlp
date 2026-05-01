@@ -28,7 +28,7 @@ impl Orchestrator {
             if !missing_subs.is_empty() && !saved_sub_langs.is_empty() {
                 // Report missing subs even when not retrying
                 warn!("Missing subtitles for {} episode(s)", missing_subs.len());
-                self.log_missing_subs(missing_subs, infos, total);
+                Self::log_missing_subs(missing_subs, infos, total);
                 if !self.config.retry_subs {
                     info!("Hint: re-run with --retry-subs to attempt subtitle download");
                 }
@@ -62,7 +62,7 @@ impl Orchestrator {
         &self,
         infos: &mut [rdlp_types::InfoDict],
         existing_files: &HashMap<String, PathBuf>,
-        selected_audio: &mut Option<String>,
+        selected_audio: Option<&str>,
     ) -> Instant {
         const RESOLVE_CONCURRENCY: usize = 4;
 
@@ -71,7 +71,7 @@ impl Orchestrator {
             .iter()
             .enumerate()
             .filter_map(|(i, ep)| {
-                let sanitized = self.sanitize_filename(&ep.title);
+                let sanitized = Self::sanitize_filename(&ep.title);
                 if existing_files.contains_key(&sanitized) || ep.webpage_url.is_empty() {
                     None
                 } else {
@@ -94,13 +94,14 @@ impl Orchestrator {
             .collect()
             .await;
 
+        #[allow(clippy::indexing_slicing)] // i comes from infos.enumerate(); always in-bounds
         for (i, result) in results {
             match result {
                 Ok(resolved) => {
                     let mut formats = resolved.formats;
 
                     // Apply audio type filter
-                    if let Some(lang) = selected_audio.as_deref() {
+                    if let Some(lang) = selected_audio {
                         formats.retain(|f| f.language.as_deref() == Some(lang));
                     }
 
@@ -123,7 +124,7 @@ impl Orchestrator {
 
         // Clear formats for already-downloaded episodes
         for ep in infos.iter_mut() {
-            let sanitized = self.sanitize_filename(&ep.title);
+            let sanitized = Self::sanitize_filename(&ep.title);
             if existing_files.contains_key(&sanitized) {
                 ep.formats.clear();
             }

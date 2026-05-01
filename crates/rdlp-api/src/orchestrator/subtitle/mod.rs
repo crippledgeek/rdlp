@@ -32,7 +32,7 @@ pub(super) struct SubtitleMenuItem {
     pub display_name: String,
     /// Whether this entry comes from automatic captions
     pub is_auto: bool,
-    /// Available subtitle format extensions (e.g. ["srt", "vtt"])
+    /// Available subtitle format extensions (e.g. `["srt", "vtt"]`)
     pub formats: Vec<String>,
 }
 
@@ -175,7 +175,8 @@ impl Orchestrator {
         }
 
         let defaults = preselect_indices(&items, &self.config.subtitle_langs);
-        let display_items: Vec<String> = items.iter().map(|i| i.display_string()).collect();
+        let display_items: Vec<String> =
+            items.iter().map(SubtitleMenuItem::display_string).collect();
 
         info!("Available subtitles:");
 
@@ -200,6 +201,8 @@ impl Orchestrator {
         // Map selected indices back to (lang, best_subtitle) pairs
         let mut result = Vec::new();
         for &idx in &selected_indices {
+            #[allow(clippy::indexing_slicing)]
+            // idx comes from interactive selection bounded by items.len()
             let item = &items[idx];
             // Find the best subtitle entry for this language
             if let Some(sub) = self.pick_best_subtitle_for_lang(info, &item.lang, item.is_auto) {
@@ -297,6 +300,7 @@ impl Orchestrator {
         }
 
         // Fallback to first entry
+        #[allow(clippy::indexing_slicing)] // entries non-empty; early return for empty above
         Some(entries[0].clone())
     }
 

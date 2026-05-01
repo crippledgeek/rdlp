@@ -41,6 +41,17 @@ impl Format {
     }
 
     /// Returns the size column text for this format (e.g. `"837.9 MB"`, `"50:16 (754 seg)"`)
+    ///
+    /// # Casts
+    ///
+    /// The casts here are intentional: `dur as u64` truncates sub-second fractions for
+    /// display purposes only; `u64 as f64` may lose precision on very large file sizes but
+    /// the rounding is acceptable at MB/GB display granularity.
+    #[allow(
+        clippy::cast_possible_truncation, // dur as u64: sub-second truncation acceptable for display
+        clippy::cast_sign_loss,           // dur as u64: duration is always non-negative
+        clippy::cast_precision_loss       // u64 as f64: MB/GB display tolerates precision loss
+    )]
     #[must_use]
     pub fn size_text(&self) -> String {
         if self.is_hls() {

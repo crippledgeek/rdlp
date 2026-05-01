@@ -157,15 +157,14 @@ export function DownloadConfig() {
     const codecInfo = CODEC_MAP[recodeCodec];
     const resolvedContainer = recodeContainerOverride || codecInfo?.container || "";
 
-    // Fetch available codecs for expert mode
-    const { data: videoCodecs = [] } = useQuery({
-        ...codecsQueryOptions(),
-        enabled: expertMode,
-    });
-    const { data: audioCodecs = [] } = useQuery({
-        ...audioCodecsQueryOptions(resolvedContainer || null),
-        enabled: recodeActive && !!resolvedContainer,
-    });
+    // Fetch available codecs for expert mode.
+    // Gated via skipToken in the queryFn slot (v5 documented pattern) so the
+    // queryFn identity changes on the first false->true transition instead of
+    // relying on the `enabled` flag which silently no-ops under React 19.
+    const { data: videoCodecs = [] } = useQuery(codecsQueryOptions(expertMode));
+    const { data: audioCodecs = [] } = useQuery(
+        audioCodecsQueryOptions(resolvedContainer || null, recodeActive && !!resolvedContainer),
+    );
 
     if (!formatData || !analyzeUrl) return null;
 
@@ -396,13 +395,13 @@ export function DownloadConfig() {
                         <form.Field name="recodeContainerOverride">
                             {(field) => (
                                 <div className="flex items-center justify-between pl-3">
-                                    <span className="text-[10px] text-[#888888]">Container</span>
+                                    <span className="text-[10px] text-[var(--text-muted)]">Container</span>
                                     <Select
                                         selectedKey={field.state.value || NONE_SENTINEL}
                                         onSelectionChange={(key) => field.handleChange(key === NONE_SENTINEL ? "" : String(key))}
                                         aria-label="Output container"
                                     >
-                                        <SelectTrigger className="h-5 min-h-0 px-1.5 py-0 text-[10px] bg-[var(--surface-elevated)] border-[#2a2a3e] rounded-[3px] text-[#888888] w-[90px]">
+                                        <SelectTrigger className="h-5 min-h-0 px-1.5 py-0 text-[10px] bg-[var(--surface-elevated)] border-[#2a2a3e] rounded-[3px] text-[var(--text-muted)] w-[90px]">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectPopover>
@@ -429,13 +428,13 @@ export function DownloadConfig() {
                         <form.Field name="recodeAudioMode">
                             {(field) => (
                                 <div className="flex items-center justify-between pl-3">
-                                    <span className="text-[10px] text-[#888888]">Audio</span>
+                                    <span className="text-[10px] text-[var(--text-muted)]">Audio</span>
                                     <Select
                                         selectedKey={field.state.value}
                                         onSelectionChange={(key) => field.handleChange(String(key))}
                                         aria-label="Audio handling"
                                     >
-                                        <SelectTrigger className="h-5 min-h-0 px-1.5 py-0 text-[10px] bg-[var(--surface-elevated)] border-[#2a2a3e] rounded-[3px] text-[#888888] w-[90px]">
+                                        <SelectTrigger className="h-5 min-h-0 px-1.5 py-0 text-[10px] bg-[var(--surface-elevated)] border-[#2a2a3e] rounded-[3px] text-[var(--text-muted)] w-[90px]">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectPopover>

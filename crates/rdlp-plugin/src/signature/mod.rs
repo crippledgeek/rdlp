@@ -1,5 +1,9 @@
 //! Plugin signature verification (Sigstore + Ed25519).
 
+// Lints below are from the new per-crate pedantic/nursery config; these
+// pre-existing patterns are accepted for now — addressed in a separate pass.
+#![allow(clippy::missing_errors_doc)]
+
 pub mod ed25519;
 pub mod sigstore;
 

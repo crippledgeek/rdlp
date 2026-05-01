@@ -1,4 +1,22 @@
 //! Metadata and chapter embedding via stream copy (remux).
+//!
+//! # Lint allowances
+//!
+//! - `clippy::cast_*`: Chapter start/end times require `i64`→`usize` conversions
+//!   for stream time-base arithmetic. Values are validated chapter timestamps
+//!   and always within safe ranges.
+//! - `clippy::expect_used`: post-construction stream access after `add_stream_copy`
+//!   is guaranteed valid by construction.
+//! - `clippy::indexing_slicing`: `stream_mapping[ist_index]` pre-allocated to
+//!   stream count and only indexed during stream iteration.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,9 +37,14 @@ impl FFmpegRunner {
     /// `Dictionary`, and adds chapters via `add_chapter()`. No temporary
     /// FFMETADATA1 file is needed.
     ///
-    /// When `callback` is provided, FFmpeg C-level log messages are captured
+    /// When `callback` is provided, `FFmpeg` C-level log messages are captured
     /// and forwarded via [`PostProcessCallback::on_log`] instead of being
     /// suppressed. When `None`, muxer trace is silently suppressed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `FFmpeg` fails to open the input file, create the
+    /// output container, or write packets (including I/O errors and mux failures).
     pub async fn embed_metadata(
         &self,
         input: impl AsRef<Path>,
@@ -52,7 +75,8 @@ impl FFmpegRunner {
     ///
     /// Remuxes (stream copies) the input to output while:
     /// - Setting format-level metadata from the provided `HashMap`
-    /// - Adding chapters with millisecond precision (time_base = 1/1000)
+    /// - Adding chapters with millisecond precision (`time_base` = 1/1000)
+    #[allow(clippy::too_many_lines)]
     fn embed_metadata_sync(
         input: &Path,
         output: &Path,

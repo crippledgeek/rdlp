@@ -20,22 +20,38 @@ fn require_valid_name(name: &str) -> Result<()> {
 }
 
 /// Return the rdlp config directory (`~/.config/rdlp` on most platforms).
+///
+/// # Errors
+///
+/// Returns an error if the platform has no config directory and `HOME` is unset.
 pub fn config_path() -> Result<PathBuf> {
     Ok(dirs::config_dir().context("no config dir")?.join("rdlp"))
 }
 
 /// Return the path to the plugin trust store file.
+///
+/// # Errors
+///
+/// Returns an error if the platform has no config directory.
 pub fn trust_store_path() -> Result<PathBuf> {
     Ok(config_path()?.join("plugin-trust.toml"))
 }
 
 /// Return the path to the plugin disabled-list file.
+///
+/// # Errors
+///
+/// Returns an error if the platform has no config directory.
 pub fn disabled_list_path() -> Result<PathBuf> {
     Ok(config_path()?.join("plugin-disabled.toml"))
 }
 
 /// `rdlp plugin list` — list all installed plugins with their trust state.
-pub async fn run_list(config: &Config) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the trust store cannot be opened.
+pub fn run_list(config: &Config) -> Result<()> {
     let trust = TrustStore::open(trust_store_path()?)?;
     if config.plugin_directories.is_empty() {
         println!("(no plugin directories configured; set Config::plugin_directories)");
@@ -44,9 +60,8 @@ pub async fn run_list(config: &Config) -> Result<()> {
     let mut found = 0usize;
     for dir in &config.plugin_directories {
         #[allow(clippy::disallowed_methods)] // startup/CLI commands — sync I/O is acceptable
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -62,8 +77,7 @@ pub async fn run_list(config: &Config) -> Result<()> {
                     found += 1;
                     let trust_state = trust
                         .lookup(&m.name)
-                        .map(|e| e.identity.clone())
-                        .unwrap_or_else(|| "(untrusted)".into());
+                        .map_or_else(|| "(untrusted)".into(), |e| e.identity.clone());
                     println!(
                         "{}  v{}  identity={}  caps=[{}]",
                         m.name,
@@ -85,7 +99,11 @@ pub async fn run_list(config: &Config) -> Result<()> {
 }
 
 /// `rdlp plugin info <name>` — show detailed info for a specific plugin.
-pub async fn run_info(name: &str, config: &Config) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the plugin name is invalid or the manifest cannot be parsed.
+pub fn run_info(name: &str, config: &Config) -> Result<()> {
     require_valid_name(name)?;
     for dir in &config.plugin_directories {
         let plugin_dir = dir.join(name);
@@ -127,7 +145,11 @@ pub async fn run_info(name: &str, config: &Config) -> Result<()> {
 }
 
 /// `rdlp plugin retrust <name>` — clear the recorded identity so the next load re-prompts.
-pub async fn run_retrust(name: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the trust store cannot be opened or written.
+pub fn run_retrust(name: &str) -> Result<()> {
     let mut trust = TrustStore::open(trust_store_path()?)?;
     if trust.lookup(name).is_some() {
         trust.forget(name)?;
@@ -139,7 +161,11 @@ pub async fn run_retrust(name: &str) -> Result<()> {
 }
 
 /// `rdlp plugin disable <name>` — add the plugin to the disabled list.
-pub async fn run_disable(name: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the plugin name is invalid or the disabled list cannot be written.
+pub fn run_disable(name: &str) -> Result<()> {
     require_valid_name(name)?;
     let path = disabled_list_path()?;
     // Fail loudly on a corrupted disabled list. Silently treating it as
@@ -159,7 +185,11 @@ pub async fn run_disable(name: &str) -> Result<()> {
 }
 
 /// `rdlp plugin enable <name>` — remove the plugin from the disabled list.
-pub async fn run_enable(name: &str) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the plugin name is invalid or the disabled list cannot be updated.
+pub fn run_enable(name: &str) -> Result<()> {
     require_valid_name(name)?;
     let path = disabled_list_path()?;
     let mut current = read_disabled(&path)
@@ -176,7 +206,12 @@ pub async fn run_enable(name: &str) -> Result<()> {
 }
 
 /// `rdlp plugin uninstall <name>` — delete the plugin directory and forget its trust entry.
-pub async fn run_uninstall(name: &str, config: &Config) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if the plugin name is invalid, the directory cannot be removed,
+/// or the trust store cannot be updated.
+pub fn run_uninstall(name: &str, config: &Config) -> Result<()> {
     require_valid_name(name)?;
     let mut found = false;
     for dir in &config.plugin_directories {

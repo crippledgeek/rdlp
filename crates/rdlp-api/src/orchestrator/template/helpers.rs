@@ -7,16 +7,12 @@ pub(super) fn split_last_unescaped(s: &str, sep: char) -> (&str, Option<String>)
     if let Some(pos) = s.rfind(sep) {
         // Don't split on `|` or `&` inside strftime (after `>`)
         let before = &s[..pos];
-        if before.contains('>') {
-            // Check if the separator is inside a strftime format
-            let gt_pos = before
-                .rfind('>')
-                .expect("'>' was confirmed present by contains check");
-            if pos > gt_pos {
-                // The separator is after `>`, could be part of strftime — but yt-dlp
-                // considers `|` and `&` as higher-level separators. Use the split.
-                return (&s[..pos], Some(s[pos + sep.len_utf8()..].to_string()));
-            }
+        // If `>` appears before `pos`, check if `sep` is after it (inside strftime).
+        // `rfind('>')` is always `Some` when `before.contains('>')` is true.
+        if before.rfind('>').is_some_and(|gt_pos| pos > gt_pos) {
+            // The separator is after `>`, could be part of strftime — but yt-dlp
+            // considers `|` and `&` as higher-level separators. Use the split.
+            return (&s[..pos], Some(s[pos + sep.len_utf8()..].to_string()));
         }
         (&s[..pos], Some(s[pos + sep.len_utf8()..].to_string()))
     } else {
@@ -43,6 +39,7 @@ pub(super) fn split_fallback_fields(s: &str) -> Vec<&str> {
 }
 
 /// Parse a number string (possibly negative) from chars at position
+#[allow(clippy::indexing_slicing)] // all accesses guarded by `*i < chars.len()` in condition
 pub(super) fn parse_number_str(chars: &[char], i: &mut usize) -> String {
     let mut s = String::new();
     if *i < chars.len() && chars[*i] == '-' {
@@ -57,6 +54,7 @@ pub(super) fn parse_number_str(chars: &[char], i: &mut usize) -> String {
 }
 
 /// Parse a float string (possibly with decimal point) from chars at position
+#[allow(clippy::indexing_slicing)] // all accesses guarded by `*i < chars.len()` in condition
 pub(super) fn parse_float_str(chars: &[char], i: &mut usize) -> String {
     let mut s = String::new();
     let mut has_dot = false;

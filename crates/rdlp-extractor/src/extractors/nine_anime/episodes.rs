@@ -5,10 +5,9 @@
 
 use crate::utils::decode_html_entities;
 use anyhow::Context as _;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
-use regex::Regex;
-use std::sync::LazyLock;
 
 use super::api::BASE_URL;
 
@@ -34,27 +33,28 @@ pub struct EpisodeListEntry {
 }
 
 /// Pattern to match episode items: `<a ... data-id="26565" data-number="1" title="The World of Swords" ...>`
-static EP_ITEM_DATA_ID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid ep data-id pattern"));
+static EP_ITEM_DATA_ID: Lazy<Regex> = lazy_regex!(r#"\bdata-id="(\d+)""#);
 
 /// Extract `data-number` from an episode item.
-static EP_DATA_NUMBER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdata-number="(\d+)""#).expect("Valid ep data-number pattern"));
+static EP_DATA_NUMBER: Lazy<Regex> = lazy_regex!(r#"\bdata-number="(\d+)""#);
 
 /// Extract `title` from an episode item.
-static EP_TITLE_ATTR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\btitle="([^"]+)""#).expect("Valid ep title pattern"));
+static EP_TITLE_ATTR: Lazy<Regex> = lazy_regex!(r#"\btitle="([^"]+)""#);
 
 /// Pattern to match episode `<a>` blocks.
-static EP_ITEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)<a[^>]*\bclass="[^"]*ep-item[^"]*"[^>]*>.*?</a>"#)
-        .expect("Valid ep-item block pattern")
-});
+static EP_ITEM_BLOCK: Lazy<Regex> =
+    lazy_regex!(r#"(?s)<a[^>]*\bclass="[^"]*ep-item[^"]*"[^>]*>.*?</a>"#);
 
 /// Fetch episode info for a specific episode data-id.
 ///
 /// Calls `/ajax/episode/list/{anime_id}` and finds the episode matching
 /// the given `episode_data_id` to extract its number and title.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_episode_info(
     anime_id: &str,
     episode_data_id: &str,
@@ -155,6 +155,12 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
 /// Fetch the full episode list for an anime.
 ///
 /// Calls `/ajax/episode/list/{anime_id}` and parses all episode entries.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_all_episodes(
     anime_id: &str,
     ctx: &ExtractionContext,

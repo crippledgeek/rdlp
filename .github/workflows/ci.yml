@@ -54,20 +54,30 @@ jobs:
       - name: Install system dependencies (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg7
+          # FFmpeg dev libs come from BtbN/FFmpeg-Builds (GitHub-hosted) instead
+          # of a Launchpad PPA — Launchpad PPAs go down whenever Canonical is
+          # under DDoS, taking the whole CI matrix with them.
+          #
+          # Upgrade path: when a new major (e.g. n9.0) is needed, bump FFMPEG_TAG
+          # below. Tags follow `n<MAJOR>.<MINOR>` upstream
+          # (https://github.com/BtbN/FFmpeg-Builds/releases/latest). Stick to
+          # `lgpl-shared` to avoid pulling in GPL-licensed FFmpeg components.
+          FFMPEG_TAG=n8.1
+          FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_TAG}-latest-linux64-lgpl-shared-${FFMPEG_TAG#n}.tar.xz"
+          curl -fsSL "$FFMPEG_URL" | sudo tar xJ -C /usr/local --strip-components=1
+          # Ubuntu 22.04 doesn't include /usr/local/lib in the default ld.so
+          # config or pkg-config search path; expose both so cargo's linker
+          # and ffmpeg-sys-the-third's build script find the FFmpeg libs.
+          echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/usr-local.conf
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib" >> "$GITHUB_ENV"
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
             cmake \
             perl \
             libclang-dev \
@@ -272,20 +282,30 @@ jobs:
       # depends on ffmpeg-sys-the-third — same dev libs the matrix job needs.
       - name: Install system dependencies (Linux)
         run: |
-          sudo add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg7
+          # FFmpeg dev libs come from BtbN/FFmpeg-Builds (GitHub-hosted) instead
+          # of a Launchpad PPA — Launchpad PPAs go down whenever Canonical is
+          # under DDoS, taking the whole CI matrix with them.
+          #
+          # Upgrade path: when a new major (e.g. n9.0) is needed, bump FFMPEG_TAG
+          # below. Tags follow `n<MAJOR>.<MINOR>` upstream
+          # (https://github.com/BtbN/FFmpeg-Builds/releases/latest). Stick to
+          # `lgpl-shared` to avoid pulling in GPL-licensed FFmpeg components.
+          FFMPEG_TAG=n8.1
+          FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_TAG}-latest-linux64-lgpl-shared-${FFMPEG_TAG#n}.tar.xz"
+          curl -fsSL "$FFMPEG_URL" | sudo tar xJ -C /usr/local --strip-components=1
+          # Ubuntu 22.04 doesn't include /usr/local/lib in the default ld.so
+          # config or pkg-config search path; expose both so cargo's linker
+          # and ffmpeg-sys-the-third's build script find the FFmpeg libs.
+          echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/usr-local.conf
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=/usr/local/lib" >> "$GITHUB_ENV"
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
             cmake \
             perl \
             libclang-dev \

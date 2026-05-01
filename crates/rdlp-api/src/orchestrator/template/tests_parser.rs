@@ -1,4 +1,5 @@
-//! Parser tests for OutputTemplate
+//! Parser tests for `OutputTemplate`
+#![allow(clippy::indexing_slicing, clippy::match_wildcard_for_single_variants)]
 
 use super::*;
 

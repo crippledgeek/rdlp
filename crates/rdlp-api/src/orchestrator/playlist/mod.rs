@@ -3,6 +3,9 @@
 //! Provides batch download support with progress tracking, resume capability,
 //! and graceful degradation for failed videos.
 
+// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 mod episode;
 mod execution;
 mod helpers;
@@ -23,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Download result: (downloaded file paths, is_hls, merge formats if applicable).
+/// Download result: (downloaded file paths, `is_hls`, merge formats if applicable).
 type DownloadResult = Option<(Vec<PathBuf>, bool, Option<Vec<Format>>)>;
 
 /// Maximum age of batch-resolved tokens before proactive re-extraction.
@@ -43,12 +46,12 @@ const RESUME_SUB_FORMATS: &[SubtitleFormat] = &[
 /// Resume detection result for a playlist folder.
 #[derive(Debug)]
 pub(super) struct ResumeDetection {
-    /// Completed episodes: sanitized_title -> video file path
+    /// Completed episodes: `sanitized_title` -> video file path
     pub completed: HashMap<String, PathBuf>,
     /// Count of episodes with leftover segment files
     pub partial_count: usize,
     /// Episodes with video complete but subtitle files missing:
-    /// sanitized_title -> video file path
+    /// `sanitized_title` -> video file path
     pub missing_subs: HashMap<String, PathBuf>,
 }
 
@@ -64,6 +67,7 @@ impl Orchestrator {
     ///
     /// Automatically detects already-downloaded videos in the playlist folder
     /// and skips them, allowing interrupted downloads to be resumed.
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn download_playlist_internal(
         &self,
         mut infos: Vec<rdlp_types::InfoDict>,
@@ -71,13 +75,14 @@ impl Orchestrator {
         archive: Option<HashSet<String>>,
     ) -> Result<Option<Vec<PathBuf>>> {
         let total = infos.len();
+        #[allow(clippy::indexing_slicing)] // infos is non-empty (callers assert this)
         let playlist_title = infos[0]
             .playlist_title
             .clone()
             .unwrap_or_else(|| "Unnamed Playlist".to_string());
 
         // Create playlist folder
-        let playlist_folder_name = self.sanitize_filename(&playlist_title);
+        let playlist_folder_name = Self::sanitize_filename(&playlist_title);
         let playlist_dir = self.config.output_directory.join(&playlist_folder_name);
 
         // Detect available audio/language types across all episodes
@@ -86,6 +91,7 @@ impl Orchestrator {
         // Load saved session state early so resume detection can use subtitle
         // selections to verify VTT files exist alongside video files.
         let state_path = session_state::playlist_state_path(&playlist_dir);
+        #[allow(clippy::indexing_slicing)] // infos non-empty; asserted at call sites
         let source_url = infos
             .iter()
             .find_map(|i| i.playlist_id.clone())
@@ -213,6 +219,7 @@ impl Orchestrator {
                 if let Some(idx) = selection
                     && idx < type_count
                 {
+                    #[allow(clippy::indexing_slicing)] // guarded by idx < type_count above
                     let selected = &audio_types[idx];
                     debug!(audio:% = selected; "Filtering to selected audio type");
                     selected_audio = Some(selected.clone());
@@ -274,7 +281,7 @@ impl Orchestrator {
 
         // Batch-resolve all episode URLs upfront with bounded parallelism.
         let batch_resolved_at = self
-            .batch_resolve_episodes(&mut infos, &existing_files, &mut selected_audio)
+            .batch_resolve_episodes(&mut infos, &existing_files, selected_audio.as_deref())
             .await;
 
         // Create playlist directory if it doesn't exist

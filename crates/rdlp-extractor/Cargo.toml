@@ -20,6 +20,7 @@ scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
+lazy-regex = { workspace = true }
 url = { workspace = true }
 inventory = { workspace = true }
 base64 = { workspace = true }
@@ -34,5 +35,46 @@ mockito = { workspace = true }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 
-[lints]
-workspace = true
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+# Workspace baseline (replicated — cannot use workspace = true alongside
+# per-crate tables).
+must_use_candidate = "warn"
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+# Documentation completeness (applies to all targets).
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+#
+# `unwrap_used` and `expect_used` are deliberately NOT enabled on this crate.
+#
+# Reason: the codebase has ~105 `Selector::parse(LITERAL).unwrap()` /
+# `.expect("...")` sites for static CSS selectors (in `LazyLock<Selector>`
+# blocks). These follow the SAME idiom as the static-regex pattern that
+# motivated the lazy-regex migration shipped in this branch — hardcoded
+# selector failure = programming error caught at first use, identical to a
+# const. There is no `lazy-css-selector` analog of `lazy-regex` published
+# today, so closing the gap requires either:
+#   (a) adopting / writing a static-selector wrapper crate or in-tree macro
+#       (the cleanest answer; mirrors what `lazy-regex` did for regexes),
+#   (b) ~105 individual `#[allow(clippy::expect_used)]` attributes (the
+#       "many exceptions" anti-pattern the workspace has explicitly
+#       rejected), or
+#   (c) enabling these lints workspace-wide and accepting per-call allows
+#       (same anti-pattern, larger scope).
+#
+# Option (a) is the right path but is out of scope for this PR — open as a
+# follow-up. Until then the lazy-regex migration's compile-time-validation
+# win still applies for every regex literal, but selector literals retain
+# runtime validation.
+#
+# `pedantic`, `nursery`, and `indexing_slicing` are also intentionally off:
+# applying them to this crate produces ~1300 stylistic hits (`doc_markdown`,
+# `redundant_pub_crate`, `non_std_lazy_statics` — the last fires on every
+# `lazy_regex::Lazy<Regex>` because it re-exports `once_cell::sync::Lazy`,
+# which IS the documented pattern for compile-time-validated static regex).
+# Wasmtime's "opt-in lints per target" guidance applies here:
+#   https://docs.wasmtime.dev/contributing-coding-guidelines.html

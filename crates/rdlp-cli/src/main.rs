@@ -1,3 +1,7 @@
+// Lint-tightening for the binary entrypoint. `pedantic` / `nursery` are
+// stylistic; `indexing_slicing` prevents silent out-of-bounds panics.
+// See `Cargo.toml` `[lints.clippy]` for crate-level baseline.
+#![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 //! # rdlp CLI
 //!
 //! Command-line interface for rdlp (Rust Download Program).
@@ -29,9 +33,7 @@ use config::build_config;
 fn optimal_worker_threads() -> usize {
     // For I/O-bound work (downloads), use 2x CPU cores
     // This allows more concurrent I/O operations
-    let cpu_count = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let cpu_count = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
     (cpu_count * 2).min(32) // Cap at 32 threads
 }
@@ -53,7 +55,7 @@ impl std::io::Write for SuspendingWriter {
 }
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
-    type Writer = SuspendingWriter;
+    type Writer = Self;
 
     fn make_writer(&'a self) -> Self::Writer {
         self.clone()
@@ -71,6 +73,7 @@ fn main() -> Result<()> {
     runtime.block_on(async_main())
 }
 
+#[allow(clippy::too_many_lines)] // top-level CLI dispatch; extracting sub-functions would add indirection without clarity
 async fn async_main() -> Result<()> {
     let args = Args::parse();
 
@@ -87,12 +90,12 @@ async fn async_main() -> Result<()> {
     // Plugin management subcommands — handle before any download logic.
     if let Some(PluginSubcommand::Plugin(plugin_args)) = args.plugin {
         match plugin_args.cmd {
-            PluginCmd::List => plugin_cmd::run_list(&config).await?,
-            PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config).await?,
-            PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name).await?,
-            PluginCmd::Disable { name } => plugin_cmd::run_disable(&name).await?,
-            PluginCmd::Enable { name } => plugin_cmd::run_enable(&name).await?,
-            PluginCmd::Uninstall { name } => plugin_cmd::run_uninstall(&name, &config).await?,
+            PluginCmd::List => plugin_cmd::run_list(&config)?,
+            PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config)?,
+            PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name)?,
+            PluginCmd::Disable { name } => plugin_cmd::run_disable(&name)?,
+            PluginCmd::Enable { name } => plugin_cmd::run_enable(&name)?,
+            PluginCmd::Uninstall { name } => plugin_cmd::run_uninstall(&name, &config)?,
             PluginCmd::BuildFromYtdlp {
                 plugin_py,
                 output_dir,
@@ -198,9 +201,9 @@ async fn async_main() -> Result<()> {
     if let Some(ref query_text) = args.search {
         let site = args.search_site.as_deref().unwrap_or_else(|| {
             let sites = client.list_search_sites();
-            if sites.len() == 1 {
+            if let [only] = sites.as_slice() {
                 // Leak is fine for a single CLI run
-                return Box::leak(sites[0].name.clone().into_boxed_str());
+                return Box::leak(only.name.clone().into_boxed_str());
             }
             eprintln!(
                 "Error: --search-site is required. Available sites: {}",
@@ -216,12 +219,11 @@ async fn async_main() -> Result<()> {
         // Parse filters from key=value strings
         let mut filters = Vec::new();
         for raw in &args.search_filter {
-            let (key, value) = match raw.split_once('=') {
-                Some((k, v)) => (k.to_string(), v.to_string()),
-                None => {
-                    eprintln!("Error: Invalid filter format '{raw}'. Expected key=value.");
-                    std::process::exit(1);
-                }
+            let (key, value) = if let Some((k, v)) = raw.split_once('=') {
+                (k.to_string(), v.to_string())
+            } else {
+                eprintln!("Error: Invalid filter format '{raw}'. Expected key=value.");
+                std::process::exit(1);
             };
             filters.push(rdlp_api::SearchFilter { key, value });
         }
@@ -248,7 +250,10 @@ async fn async_main() -> Result<()> {
                         eprintln!("{:>3}. {}", i + 1, r.title);
                         eprintln!("     {}", r.video_url);
                         if let Some(d) = r.duration {
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            // d is a non-negative duration in seconds; values up to ~136 years fit u32
                             let mins = d as u32 / 60;
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                             let secs = d as u32 % 60;
                             eprint!("     Duration: {mins}:{secs:02}");
                         }
@@ -262,7 +267,7 @@ async fn async_main() -> Result<()> {
                     }
                 }
             }
-            Err(e) => fail_with(e, verbose),
+            Err(e) => fail_with(&e, verbose),
         }
 
         return Ok(());
@@ -277,7 +282,7 @@ async fn async_main() -> Result<()> {
     if args.list_subs_only {
         let infos = match client.extract_info(&url).await {
             Ok(infos) => infos,
-            Err(e) => fail_with(e, verbose),
+            Err(e) => fail_with(&e, verbose),
         };
 
         // Use the first video's metadata for subtitle selection
@@ -295,7 +300,7 @@ async fn async_main() -> Result<()> {
                 Ok(None) => {
                     debug!("Subtitle selection cancelled");
                 }
-                Err(e) => fail_with(e, verbose),
+                Err(e) => fail_with(&e, verbose),
             }
         }
 
@@ -306,7 +311,7 @@ async fn async_main() -> Result<()> {
     if args.dump_json || args.print.is_some() || args.list_formats || args.simulate {
         let infos = match client.extract_info(&url).await {
             Ok(infos) => infos,
-            Err(e) => fail_with(e, verbose),
+            Err(e) => fail_with(&e, verbose),
         };
 
         if args.dump_json {
@@ -366,7 +371,7 @@ async fn async_main() -> Result<()> {
                 }
                 Ok(())
             }
-            Err(e) => fail_with(e, verbose),
+            Err(e) => fail_with(&e, verbose),
         };
     }
 
@@ -401,7 +406,7 @@ async fn async_main() -> Result<()> {
             // User cancelled - already printed message via events
             Ok(())
         }
-        Err(e) => fail_with(e, verbose),
+        Err(e) => fail_with(&e, verbose),
     };
 
     // Clean up any temp files created during this session (e.g. aborted

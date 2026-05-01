@@ -8,33 +8,25 @@
 //! And one async helper:
 //! - [`fetch_player_js`] — downloads player JS bundle from discovered URLs
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::JsEngine;
-use regex::Regex;
-use std::sync::LazyLock;
 
 /// Bundled JS decryption code (port of rdlp-crypto PRNG algorithms).
 const BUNDLED_DECRYPT_JS: &str = include_str!("decrypt.js");
 
 /// Pattern to find script blocks that assign window.initials.
-static INITIALS_SCRIPT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<script[^>]*>\s*(window\.initials\s*=\s*\{.+?\})\s*;?\s*</script>")
-        .expect("Valid initials script pattern")
-});
+static INITIALS_SCRIPT_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)<script[^>]*>\s*(window\.initials\s*=\s*\{.+?\})\s*;?\s*</script>");
 
 /// Pattern to find player script URLs (matches xplayer or player in src).
-static PLAYER_SCRIPT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<script[^>]+src=["']([^"']*(?:xplayer|player)[^"']*)["']"#)
-        .expect("Valid player script pattern")
-});
+static PLAYER_SCRIPT_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"<script[^>]+src=["']([^"']*(?:xplayer|player)[^"']*)["']"#);
 
 /// Known decryption function signatures in player JS bundles.
-pub(crate) static DECRYPT_FUNC_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?s)function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*(?:1664525|0x85ebca77|charCodeAt)[^}]*\}",
-    )
-    .expect("Valid decrypt function pattern")
-});
+pub(crate) static DECRYPT_FUNC_PATTERN: Lazy<Regex> = lazy_regex!(
+    r"(?s)function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*(?:1664525|0x85ebca77|charCodeAt)[^}]*\}"
+);
 
 /// Evaluate `window.initials` from the page HTML using boa.
 ///

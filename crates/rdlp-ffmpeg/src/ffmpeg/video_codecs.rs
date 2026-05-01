@@ -2,7 +2,7 @@
 //!
 //! Provides a static `CODEC_PREFERENCES` table mapping codec names to ordered
 //! encoder preference lists. Runtime detection via `ffmpeg_the_third::codec::encoder::find_by_name()`
-//! determines which encoders are actually available in the linked FFmpeg build.
+//! determines which encoders are actually available in the linked `FFmpeg` build.
 //!
 //! Use [`preferred_video_encoder()`] to resolve the best available encoder for a
 //! given codec name. Use [`list_available_codecs()`] to enumerate all codecs with
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoEncoderInfo {
-    /// FFmpeg encoder name (e.g., "libx264", "libsvtav1")
+    /// `FFmpeg` encoder name (e.g., "libx264", "libsvtav1")
     pub encoder_name: String,
     /// Human-readable display name (e.g., "x264 (H.264)")
     pub display_name: String,
@@ -32,7 +32,7 @@ pub struct VideoCodecInfo {
     pub codec: String,
     /// Human-readable display name (e.g., "H.264 / AVC")
     pub display_name: String,
-    /// Encoders available in the current FFmpeg build, in preference order
+    /// Encoders available in the current `FFmpeg` build, in preference order
     pub encoders: Vec<VideoEncoderInfo>,
 }
 
@@ -42,7 +42,7 @@ struct CodecEntry {
     codec: &'static str,
     /// Human-readable display name for the codec
     display_name: &'static str,
-    /// Ordered encoder preference list: (encoder_name, display_name)
+    /// Ordered encoder preference list: (`encoder_name`, `display_name`)
     encoders: &'static [(&'static str, &'static str)],
 }
 
@@ -152,7 +152,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
     },
 ];
 
-/// Returns `true` if `encoder` is available in the current FFmpeg build.
+/// Returns `true` if `encoder` is available in the current `FFmpeg` build.
 ///
 /// Uses `ffmpeg_the_third::codec::encoder::find_by_name()` for detection.
 /// Requires [`super::ensure_init`] to have been called first.
@@ -260,7 +260,7 @@ pub fn available_encoders_for_codec(codec: &str) -> Vec<VideoEncoderInfo> {
 }
 
 /// Lists all codecs that have at least one available encoder in the current
-/// FFmpeg build.
+/// `FFmpeg` build.
 ///
 /// Alias entries (e.g., "hevc" / "h265") that share the same encoder list are
 /// both included if their encoders are available. Callers that want a deduplicated

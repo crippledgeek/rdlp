@@ -3,7 +3,7 @@
 //! Provides a static preference table mapping audio codec names to encoder
 //! preference lists and container compatibility information. Runtime detection
 //! via `ffmpeg_the_third::codec::encoder::find_by_name()` determines which
-//! encoders are actually available in the linked FFmpeg build.
+//! encoders are actually available in the linked `FFmpeg` build.
 //!
 //! Mirrors the pattern of `video_codecs.rs`.
 //!
@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioEncoderInfo {
-    /// FFmpeg encoder name (e.g., "libfdk_aac", "libopus").
+    /// `FFmpeg` encoder name (e.g., "`libfdk_aac`", "libopus").
     pub encoder_name: String,
     /// Human-readable display name (e.g., "FDK AAC", "Opus (libopus)").
     pub display_name: String,
@@ -41,7 +41,7 @@ pub struct AudioCodecInfo {
     pub codec: String,
     /// Human-readable display name (e.g., "AAC", "Opus").
     pub display_name: String,
-    /// Encoders available in the current FFmpeg build, in preference order.
+    /// Encoders available in the current `FFmpeg` build, in preference order.
     pub encoders: Vec<AudioEncoderInfo>,
     /// Containers this codec is compatible with.
     pub supported_containers: Vec<ContainerFormat>,
@@ -53,7 +53,7 @@ struct AudioCodecEntry {
     codec: &'static str,
     /// Human-readable display name.
     display_name: &'static str,
-    /// Ordered encoder preference list: (encoder_name, display_name).
+    /// Ordered encoder preference list: (`encoder_name`, `display_name`).
     encoders: &'static [(&'static str, &'static str)],
     /// Container formats this codec is compatible with.
     supported_containers: &'static [ContainerFormat],
@@ -184,7 +184,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     },
 ];
 
-/// Returns `true` if the named audio encoder is available in the current FFmpeg build.
+/// Returns `true` if the named audio encoder is available in the current `FFmpeg` build.
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
@@ -229,7 +229,7 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
 /// Resolves an audio encoder name.
 ///
 /// Accepts either a codec name (e.g., "aac") or a direct encoder name
-/// (e.g., "libfdk_aac"). For codec names, returns the best available encoder
+/// (e.g., "`libfdk_aac`"). For codec names, returns the best available encoder
 /// via [`preferred_audio_encoder`]. For encoder names, checks availability
 /// directly and returns the static str if available.
 ///
@@ -286,7 +286,7 @@ pub fn available_audio_encoders_for_codec(codec: &str) -> Vec<AudioEncoderInfo> 
 }
 
 /// Lists all audio codecs that have at least one available encoder in the
-/// current FFmpeg build.
+/// current `FFmpeg` build.
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
@@ -361,7 +361,7 @@ pub fn container_supports_audio_codec(container: ContainerFormat, codec: &str) -
 ///
 /// Selection is based on what is most universally compatible:
 /// - MP4, MOV, TS → AAC (best available)
-/// - WebM → Opus
+/// - `WebM` → Opus
 /// - OGG → Opus (if available) or Vorbis
 /// - MKV → Opus (quality/size efficiency)
 /// - AVI → MP3
@@ -440,9 +440,11 @@ mod tests {
     #[test]
     fn audio_codecs_for_mkv_includes_all() {
         let codecs = audio_codecs_for_container(ContainerFormat::Mkv);
-        let codec_names: Vec<&str> = codecs.iter().map(|c| c.codec.as_str()).collect();
         // MKV supports everything; at minimum aac should be present
-        assert!(codec_names.contains(&"aac"), "mkv should support aac");
+        assert!(
+            codecs.iter().any(|c| c.codec.as_str() == "aac"),
+            "mkv should support aac"
+        );
     }
 
     #[test]
