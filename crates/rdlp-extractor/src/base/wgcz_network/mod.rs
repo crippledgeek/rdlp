@@ -97,12 +97,8 @@ impl WgczNetworkBase {
     #[must_use]
     pub fn extract_json_ld(html: &str) -> WgczJsonLd {
         let doc = scraper::Html::parse_document(html);
-        // INVARIANT: hardcoded selector literal — failure is a programming error
-        // caught at first call, identical to a compile-time constant.
-        #[allow(clippy::expect_used)]
-        let selector = scraper::Selector::parse(r#"script[type="application/ld+json"]"#)
-            .expect("static selector");
-        for el in doc.select(&selector) {
+        let selector = crate::selector!(r#"script[type="application/ld+json"]"#);
+        for el in doc.select(selector) {
             let raw = el.text().collect::<String>();
             let v: Value = match serde_json::from_str(&raw) {
                 Ok(v) => v,
