@@ -5,10 +5,9 @@
 //! - `/ajax/episode/sources?id={data-id}` — resolves to an embed iframe URL
 
 use anyhow::Context as _;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
-use regex::Regex;
-use std::sync::LazyLock;
 
 /// Base URL for the 9anime site.
 pub(crate) const BASE_URL: &str = "https://9animetv.to";
@@ -58,22 +57,20 @@ pub struct SourceResult {
 /// Captures the full block from the opening `<div` (or any tag) with `data-id`
 /// through to the next `</div>`. Attribute extraction is done separately to
 /// handle any attribute ordering. The `(?s)` flag enables `.` to match newlines.
-static SERVER_ITEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)<div[^>]*\bdata-id="\d+"[^>]*>.*?</div>"#)
-        .expect("Valid server item block pattern")
-});
+static SERVER_ITEM_BLOCK: Lazy<Regex> =
+    lazy_regex!(r#"(?s)<div[^>]*\bdata-id="\d+"[^>]*>.*?</div>"#);
 
 /// Extract `data-id` value from a tag's attributes.
-static DATA_ID_ATTR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdata-id="(\d+)""#).expect("Valid data-id pattern"));
+static DATA_ID_ATTR: Lazy<Regex> =
+    lazy_regex!(r#"\bdata-id="(\d+)""#);
 
 /// Extract `data-server-id` value from a tag's attributes.
-static SERVER_ID_ATTR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdata-server-id="(\d+)""#).expect("Valid server-id pattern"));
+static SERVER_ID_ATTR: Lazy<Regex> =
+    lazy_regex!(r#"\bdata-server-id="(\d+)""#);
 
 /// Extract `data-type` value from a tag's attributes.
-static DATA_TYPE_ATTR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bdata-type="([^"]+)""#).expect("Valid data-type pattern"));
+static DATA_TYPE_ATTR: Lazy<Regex> =
+    lazy_regex!(r#"\bdata-type="([^"]+)""#);
 
 /// Fetch the list of streaming servers for an episode.
 ///
@@ -124,8 +121,8 @@ async fn fetch_servers_impl(
 /// Scans for `>text<` pairs and returns the first non-whitespace match.
 /// Handles nested elements like `<div ...><a ...>ServerName</a></div>`.
 fn extract_inner_text(html: &str) -> Option<String> {
-    static INNER_TEXT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#">([^<]+)<"#).expect("Valid inner text pattern"));
+    static INNER_TEXT: Lazy<Regex> =
+        lazy_regex!(r#">([^<]+)<"#);
 
     INNER_TEXT.captures_iter(html).find_map(|c| {
         let text = c[1].trim();

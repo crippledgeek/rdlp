@@ -1,8 +1,7 @@
 //! URL builders, regex patterns, and filter descriptors for NineAnime search.
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::{SearchFilterDescriptor, SearchFilterValue, SearchQuery};
-use regex::Regex;
-use std::sync::LazyLock;
 
 /// Base URL for 9anime.
 const BASE_URL: &str = "https://9animetv.to";
@@ -15,35 +14,30 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Extract film-name links from 9anime search results.
 /// Captures: (1) href, (2) title.
-pub(crate) static FILM_NAME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"<h3\s+class="film-name">\s*<a\s+href="([^"]+)"\s+title="([^"]+)"[^>]*class="dynamic-name"#,
-    )
-    .expect("Valid film-name pattern")
-});
+pub(crate) static FILM_NAME_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<h3\s+class="film-name">\s*<a\s+href="([^"]+)"\s+title="([^"]+)"[^>]*class="dynamic-name"#
+);
 
 /// Extract thumbnail from img with data-src.
 /// Captures: (1) thumbnail URL, (2) alt text.
-pub(crate) static THUMBNAIL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<img\s+data-src="([^"]+)"[^>]*class="film-poster-img[^"]*"[^>]*alt="([^"]+)""#)
-        .expect("Valid thumbnail pattern")
-});
+pub(crate) static THUMBNAIL_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<img\s+data-src="([^"]+)"[^>]*class="film-poster-img[^"]*"[^>]*alt="([^"]+)""#
+);
 
 /// Extract episode count text from tick-eps div.
 /// Captures: (1) episode text like "Ep 34/34" or "Ep Full".
-pub(crate) static EPISODE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"<div\s+class="tick-item\s+tick-eps">\s*([^<]+?)\s*</div>"#)
-        .expect("Valid episode pattern")
-});
+pub(crate) static EPISODE_PATTERN: Lazy<Regex> = lazy_regex!(
+    r#"<div\s+class="tick-item\s+tick-eps">\s*([^<]+?)\s*</div>"#
+);
 
 /// Detect "Next" pagination link.
-pub(crate) static NEXT_PAGE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#">Next\s*<"#).expect("Valid next page pattern"));
+pub(crate) static NEXT_PAGE_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#">Next\s*<"#);
 
 /// Extract total page count from "of {N}" text.
 /// Captures: (1) total pages number.
-pub(crate) static TOTAL_PAGES_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"of\s+(\d+)"#).expect("Valid total pages pattern"));
+pub(crate) static TOTAL_PAGES_PATTERN: Lazy<Regex> =
+    lazy_regex!(r#"of\s+(\d+)"#);
 
 /// Build the search URL for a given query and page.
 ///
