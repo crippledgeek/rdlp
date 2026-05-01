@@ -94,8 +94,7 @@ macro_rules! static_selector {
 #[macro_export]
 macro_rules! selector {
     ($pat:literal) => {{
-        static __S: ::std::sync::LazyLock<::scraper::Selector> =
-            $crate::static_selector!($pat);
+        static __S: ::std::sync::LazyLock<::scraper::Selector> = $crate::static_selector!($pat);
         &*__S
     }};
 }
