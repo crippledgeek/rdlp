@@ -1,11 +1,9 @@
 //! URL patterns and media type helpers for the generic extractor.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Catch-all URL pattern: matches any HTTP/HTTPS URL.
-pub(crate) static GENERIC_URL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^https?://").expect("valid generic URL regex"));
+pub(crate) static GENERIC_URL_PATTERN: Lazy<Regex> = lazy_regex!(r"^https?://");
 
 /// Known media file extensions for direct URL detection.
 #[allow(dead_code)]
