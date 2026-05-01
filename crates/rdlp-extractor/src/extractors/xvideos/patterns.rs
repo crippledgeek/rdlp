@@ -1,9 +1,8 @@
 //! URL patterns for XVideos extractor.
 //!
-//! Static regex patterns compiled once at first use via `std::sync::LazyLock`.
+//! Static regex patterns compiled once at first use via `lazy_regex`.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for XVideos video pages.
 ///
@@ -12,20 +11,14 @@ use std::sync::LazyLock;
 /// - Four-segment redirect: `/video.ooumovia9b7/47370580/0/slug`
 /// - Language subdomains: `fr.xvideos.com`, `de.xvideos.es`
 /// - `xvideos2.com` and `.es` TLD variants
-pub static VIDEO_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)^https?://(?:[a-z]{2}\.)?(?:www\.)?xvideos(?:2)?\.(?:com|es)/video\.([a-z0-9]+)(?:/|$)",
-    )
-    .expect("Valid XVideos VIDEO_URL pattern")
-});
+pub static VIDEO_URL: Lazy<Regex> = lazy_regex!(
+    r"(?i)^https?://(?:[a-z]{2}\.)?(?:www\.)?xvideos(?:2)?\.(?:com|es)/video\.([a-z0-9]+)(?:/|$)"
+);
 
 /// URL pattern for XVideos embed pages.
-pub static EMBED_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)^https?://(?:[a-z]{2}\.)?(?:www\.)?xvideos(?:2)?\.(?:com|es)/embedframe/([a-z0-9]+)",
-    )
-    .expect("Valid XVideos EMBED_URL pattern")
-});
+pub static EMBED_URL: Lazy<Regex> = lazy_regex!(
+    r"(?i)^https?://(?:[a-z]{2}\.)?(?:www\.)?xvideos(?:2)?\.(?:com|es)/embedframe/([a-z0-9]+)"
+);
 
 /// Extract the video EID (alphanumeric slug after `video.`) from a URL.
 pub fn extract_eid(url: &str) -> Option<String> {
