@@ -104,9 +104,7 @@ fn evaluate_comparison(op: ComparisonOp, actual: &Value, filter_val: &FilterValu
         ComparisonOp::Regex => {
             let actual_str = as_string(actual);
             let filter_str = filter_value_as_string(filter_val);
-            regex::Regex::new(&filter_str)
-                .map(|re| re.is_match(&actual_str))
-                .unwrap_or(false)
+            regex::Regex::new(&filter_str).is_ok_and(|re| re.is_match(&actual_str))
         }
     }
 }
