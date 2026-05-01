@@ -6,8 +6,7 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::disallowed_methods,
-    missing_docs,
-    unsafe_code, // integration test uses set_var to isolate XDG dirs from user config
+    missing_docs
 )]
 
 //! Regression test for the plugin dispatch wiring bug.
@@ -51,27 +50,31 @@ fn list_extractors_includes_loaded_plugin() {
     }
 
     let tempdir = tempfile::tempdir().expect("tempdir");
+    let path_str = tempdir.path().to_str().expect("tempdir path is utf-8");
+
     // Isolate the trust store from any pre-existing global state. The bootstrap
     // resolves the trust store via dirs::config_dir() → XDG_CONFIG_HOME → HOME.
     // Pointing all three at the tempdir guarantees a clean slate.
-    // SAFETY: tests run with --test-threads=1 in this crate by default; the env
-    // vars are scoped to this process and tempdir lives until the test exits.
-    unsafe {
-        std::env::set_var("XDG_CONFIG_HOME", tempdir.path());
-        std::env::set_var("HOME", tempdir.path());
-    }
-    let plugin_dir = tempdir.path().join("example");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
+    // temp-env's internal mutex serialises this against any other test that
+    // reads or writes these vars.
+    temp_env::with_vars(
+        [
+            ("XDG_CONFIG_HOME", Some(path_str)),
+            ("HOME", Some(path_str)),
+        ],
+        || {
+            let plugin_dir = tempdir.path().join("example");
+            std::fs::create_dir_all(&plugin_dir).unwrap();
 
-    let wasm_bytes = std::fs::read(&wasm_src).expect("read example wasm");
-    std::fs::write(plugin_dir.join("plugin.wasm"), &wasm_bytes).unwrap();
+            let wasm_bytes = std::fs::read(&wasm_src).expect("read example wasm");
+            std::fs::write(plugin_dir.join("plugin.wasm"), &wasm_bytes).unwrap();
 
-    let signing_key: SigningKey = SigningKey::generate(&mut OsRng);
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().as_bytes());
+            let signing_key: SigningKey = SigningKey::generate(&mut OsRng);
+            let pubkey_b64 = base64::engine::general_purpose::STANDARD
+                .encode(signing_key.verifying_key().as_bytes());
 
-    let template = format!(
-        r#"name = "example"
+            let template = format!(
+                r#"name = "example"
 version = "0.1.0"
 wit_version = "0.1.0"
 matches = ["https://example.com/video/*"]
@@ -86,36 +89,38 @@ type = "ed25519"
 pubkey = "{pubkey_b64}"
 signature = "PLACEHOLDER"
 "#
-    );
+            );
 
-    let manifest = parse_manifest_str(&template.replace("PLACEHOLDER", "AAAA")).unwrap();
-    let mut to_sign = canonical_bytes(&manifest);
-    to_sign.extend_from_slice(&wasm_bytes);
-    let sig = signing_key.sign(&to_sign);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-    let final_toml = template.replace("PLACEHOLDER", &sig_b64);
+            let manifest = parse_manifest_str(&template.replace("PLACEHOLDER", "AAAA")).unwrap();
+            let mut to_sign = canonical_bytes(&manifest);
+            to_sign.extend_from_slice(&wasm_bytes);
+            let sig = signing_key.sign(&to_sign);
+            let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+            let final_toml = template.replace("PLACEHOLDER", &sig_b64);
 
-    std::fs::write(plugin_dir.join("plugin.toml"), final_toml).unwrap();
+            std::fs::write(plugin_dir.join("plugin.toml"), final_toml).unwrap();
 
-    // Pre-trust the publisher so the loader's prompter approves the plugin
-    // without interactive input. Identity must match
-    // `Signature::identity_string()` exactly, which is `ed25519:<hex of full
-    // SHA-256 over the base64-encoded pubkey>` post-MVP-hardening.
-    use sha2::{Digest, Sha256};
-    let pub_hash_hex = hex::encode(Sha256::digest(pubkey_b64.as_bytes()));
-    let identity = format!("ed25519:{pub_hash_hex}");
+            // Pre-trust the publisher so the loader's prompter approves the plugin
+            // without interactive input. Identity must match
+            // `Signature::identity_string()` exactly, which is `ed25519:<hex of full
+            // SHA-256 over the base64-encoded pubkey>` post-MVP-hardening.
+            use sha2::{Digest, Sha256};
+            let pub_hash_hex = hex::encode(Sha256::digest(pubkey_b64.as_bytes()));
+            let identity = format!("ed25519:{pub_hash_hex}");
 
-    let config = Config {
-        progress: false,
-        plugin_directories: vec![tempdir.path().to_path_buf()],
-        plugin_trusted_publishers: vec![identity.clone()],
-        ..Default::default()
-    };
+            let config = Config {
+                progress: false,
+                plugin_directories: vec![tempdir.path().to_path_buf()],
+                plugin_trusted_publishers: vec![identity.clone()],
+                ..Default::default()
+            };
 
-    let client = RdlpClient::new(config).expect("client");
-    let extractors = client.list_extractors();
-    assert!(
-        extractors.contains(&"example"),
-        "expected `example` plugin in list_extractors() output, got: {extractors:?}"
+            let client = RdlpClient::new(config).expect("client");
+            let extractors = client.list_extractors();
+            assert!(
+                extractors.contains(&"example"),
+                "expected `example` plugin in list_extractors() output, got: {extractors:?}"
+            );
+        },
     );
 }
