@@ -14,17 +14,13 @@ use super::parse_duration;
 static TOTAL_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)\s+HD movies");
 
 /// Selector for search result title links.
-static LINK_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("h3.meta-data-title a").expect("Valid link selector"));
+static LINK_SELECTOR: LazyLock<Selector> = crate::static_selector!("h3.meta-data-title a");
 
 /// Selector for search result thumbnail images.
-static THUMB_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a.image img, a.atfib img").expect("Valid thumb selector"));
+static THUMB_SELECTOR: LazyLock<Selector> = crate::static_selector!("a.image img, a.atfib img");
 
 /// Selector for search result duration spans.
-static DURATION_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("span.fa-clock-o.meta-data").expect("Valid duration selector")
-});
+static DURATION_SELECTOR: LazyLock<Selector> = crate::static_selector!("span.fa-clock-o.meta-data");
 
 /// Parse search/listing page HTML into search result previews.
 ///
