@@ -155,8 +155,8 @@ impl PornHubExtractor {
 
     /// Paginated search across all pages, collecting up to `max_results` results.
     ///
-    /// Uses the JSON API as the primary source with a 500ms rate limit between pages.
-    /// Falls back to the HTML search page on page 1 API failures.
+    /// Uses the HTML search page as the primary source with a 500ms rate limit between pages.
+    /// Falls back to the JSON API on page 1 HTML failures or empty results.
     ///
     /// # Arguments
     /// * `query` - Search query with optional filters and result cap.
@@ -172,42 +172,35 @@ impl PornHubExtractor {
         let mut all_results = Vec::new();
         let mut page = 1_u32;
 
-        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
-
         loop {
-            let page_url = if page == 1 {
-                base_url.clone()
-            } else {
-                search_patterns::build_api_search_url_page(&base_url, page)
-            };
+            let html_url = search_patterns::build_html_search_url(&query.query, page);
+            debug!(page, url:? = rdlp_security::sanitize_for_logging(&html_url); "[PornHub] Fetching HTML search page");
 
-            debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[PornHub] Fetching search page");
-
-            let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
-                Ok(results) => results,
-                Err(e) => {
+            let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
+                Ok(results) if !results.is_empty() => results,
+                outcome => {
                     if page == 1 {
-                        debug!("[PornHub] API search failed, trying HTML fallback: {e}");
-                        let html_url = search_patterns::build_html_search_url(&query.query, 1);
-                        match self.fetch_html_search_page(&html_url, ctx).await {
-                            Ok(results) => results,
-                            Err(html_err) => {
-                                warn!("[PornHub] HTML fallback also failed: {html_err}");
+                        let reason = match &outcome {
+                            Ok(_) => "HTML returned 0 results".to_string(),
+                            Err(e) => format!("{e}"),
+                        };
+                        debug!("[PornHub] HTML search failed/empty on page 1, falling back to API: {reason}");
+                        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+                        match self.fetch_api_search_page(&base_url, ctx).await {
+                            Ok(api_results) => api_results,
+                            Err(api_err) => {
+                                warn!("[PornHub] API fallback also failed on page 1: {api_err}");
                                 break;
                             }
                         }
                     } else {
-                        debug!(
-                            page;
-                            "[PornHub] Failed to fetch search page, returning partial results: {e}"
-                        );
+                        debug!(page; "[PornHub] HTML search failed on later page, returning partial results");
                         break;
                     }
                 }
             };
 
             if page_results.is_empty() {
-                debug!(page; "[PornHub] No results on page, stopping pagination");
                 break;
             }
 
@@ -222,11 +215,7 @@ impl PornHubExtractor {
             tokio::time::sleep(Duration::from_millis(SEARCH_RATE_LIMIT_MS)).await;
         }
 
-        debug!(
-            count = all_results.len(), pages = page;
-            "[PornHub] Search complete"
-        );
-
+        debug!(count = all_results.len(), pages = page; "[PornHub] Search complete");
         Ok(all_results)
     }
 }
@@ -257,29 +246,27 @@ impl SearchExtractor for PornHubExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1);
-        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+        let html_url = search_patterns::build_html_search_url(&query.query, page);
 
-        let page_url = if page == 1 {
-            base_url
-        } else {
-            search_patterns::build_api_search_url_page(&base_url, page)
-        };
-
-        let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
-            Ok(results) => results,
-            Err(e) => {
-                if page == 1 {
-                    debug!("[PornHub] API search failed, trying HTML fallback: {e}");
-                    let html_url = search_patterns::build_html_search_url(&query.query, 1);
-                    self.fetch_html_search_page(&html_url, ctx).await?
+        let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
+            Ok(results) if !results.is_empty() => results,
+            outcome => {
+                let reason = match &outcome {
+                    Ok(_) => "HTML returned 0 results".to_string(),
+                    Err(e) => format!("{e}"),
+                };
+                debug!("[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}");
+                let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+                let page_url = if page == 1 {
+                    base_url
                 } else {
-                    return Err(e);
-                }
+                    search_patterns::build_api_search_url_page(&base_url, page)
+                };
+                self.fetch_api_search_page(&page_url, ctx).await?
             }
         };
 
-        let has_more = !page_results.is_empty() && page_results.len() >= API_RESULTS_PER_PAGE;
-
+        let has_more = page_results.len() >= API_RESULTS_PER_PAGE;
         Ok(SearchPageResponse {
             results: page_results,
             page,
