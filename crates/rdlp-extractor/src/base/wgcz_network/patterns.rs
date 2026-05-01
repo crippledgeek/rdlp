@@ -4,32 +4,25 @@
 //! inline `<script>` on the video page. These patterns capture the string
 //! argument for the subset of calls we care about.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, lazy_regex};
 
 /// `html5player.setVideoHLS('<m3u8 url>')`
-pub static VIDEO_HLS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoHLS\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_HLS: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setVideoHLS\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoUrlLow('<mp4 url>')`
-pub static VIDEO_URL_LOW: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_URL_LOW: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoUrlHigh('<mp4 url>')`
-pub static VIDEO_URL_HIGH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_URL_HIGH: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setVideoTitle('<title>')`
-pub static VIDEO_TITLE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setVideoTitle\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static VIDEO_TITLE: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setVideoTitle\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setThumbUrl('<url>')`
-pub static THUMB_URL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setThumbUrl\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static THUMB_URL: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setThumbUrl\(['"]([^'"]+)['"]\)"#);
 
 /// `html5player.setUploaderName('<name>')`
-pub static UPLOADER_NAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"html5player\.setUploaderName\(['"]([^'"]+)['"]\)"#).unwrap());
+pub static UPLOADER_NAME: Lazy<regex::Regex> = lazy_regex!(r#"html5player\.setUploaderName\(['"]([^'"]+)['"]\)"#);
 
 /// Validate that a URL captured from inline JS starts with `http://` or
 /// `https://`. Returns `None` for values with any other scheme (e.g.
