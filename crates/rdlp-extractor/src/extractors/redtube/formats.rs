@@ -4,13 +4,12 @@
 //! and the `getVideoById` JSON API response.
 
 use anyhow::Context as _;
+use lazy_regex::{lazy_regex, Lazy, Regex};
 use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::{Format, Thumbnail};
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use std::sync::LazyLock;
 
 use crate::base::common::BaseExtractor;
 use crate::utils::{extract_extension_from_url, make_absolute_url};
@@ -197,9 +196,7 @@ pub fn parse_quality(item: &Value) -> String {
 fn extract_bitrate_from_url(url: &str) -> Option<f64> {
     // Pattern: digits followed by K (case insensitive) before file extension
     // Example: 4000K, 2000K, 1500K
-    static BITRATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(\d+)[Kk]_\d+\.[a-zA-Z0-9]+$").expect("Valid bitrate pattern")
-    });
+    static BITRATE_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)[Kk]_\d+\.[a-zA-Z0-9]+$");
 
     BITRATE_PATTERN
         .captures(url)
