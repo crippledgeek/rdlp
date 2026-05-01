@@ -36,6 +36,16 @@ use crate::base::common::BaseExtractor;
 /// 4. Fully resolve **one episode** via `resolve_episode_formats()` (tries up to 3)
 /// 5. Build remaining episodes as lightweight `InfoDict` with proper `webpage_url`
 /// 6. Return `Vec<InfoDict>` with playlist fields set
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - Anime ID cannot be extracted from URL (`RdlpError::Extraction`)
+/// - Webpage fetch fails (`RdlpError::Network`)
+/// - Episode list fetch fails (`RdlpError::Extraction`)
+/// - No episodes found for the anime (`RdlpError::Extraction`)
+/// - Playlist size exceeds `MAX_PLAYLIST_SIZE` (`RdlpError::Extraction`)
+/// - All episode resolution attempts fail (`RdlpError::Extraction`)
 pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
     let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
         message: format!("Could not extract anime ID from URL: {url}"),

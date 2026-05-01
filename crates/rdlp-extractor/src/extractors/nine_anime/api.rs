@@ -61,21 +61,24 @@ static SERVER_ITEM_BLOCK: Lazy<Regex> =
     lazy_regex!(r#"(?s)<div[^>]*\bdata-id="\d+"[^>]*>.*?</div>"#);
 
 /// Extract `data-id` value from a tag's attributes.
-static DATA_ID_ATTR: Lazy<Regex> =
-    lazy_regex!(r#"\bdata-id="(\d+)""#);
+static DATA_ID_ATTR: Lazy<Regex> = lazy_regex!(r#"\bdata-id="(\d+)""#);
 
 /// Extract `data-server-id` value from a tag's attributes.
-static SERVER_ID_ATTR: Lazy<Regex> =
-    lazy_regex!(r#"\bdata-server-id="(\d+)""#);
+static SERVER_ID_ATTR: Lazy<Regex> = lazy_regex!(r#"\bdata-server-id="(\d+)""#);
 
 /// Extract `data-type` value from a tag's attributes.
-static DATA_TYPE_ATTR: Lazy<Regex> =
-    lazy_regex!(r#"\bdata-type="([^"]+)""#);
+static DATA_TYPE_ATTR: Lazy<Regex> = lazy_regex!(r#"\bdata-type="([^"]+)""#);
 
 /// Fetch the list of streaming servers for an episode.
 ///
 /// Calls `/ajax/episode/servers?episodeId={episode_id}` and parses
 /// the HTML response for SUB and DUB server entries.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_servers(episode_id: &str, ctx: &ExtractionContext) -> Result<Vec<ServerEntry>> {
     fetch_servers_impl(episode_id, ctx)
         .await
@@ -121,8 +124,7 @@ async fn fetch_servers_impl(
 /// Scans for `>text<` pairs and returns the first non-whitespace match.
 /// Handles nested elements like `<div ...><a ...>ServerName</a></div>`.
 fn extract_inner_text(html: &str) -> Option<String> {
-    static INNER_TEXT: Lazy<Regex> =
-        lazy_regex!(r#">([^<]+)<"#);
+    static INNER_TEXT: Lazy<Regex> = lazy_regex!(r#">([^<]+)<"#);
 
     INNER_TEXT.captures_iter(html).find_map(|c| {
         let text = c[1].trim();
@@ -200,6 +202,12 @@ pub fn sort_by_preference(servers: &mut [ServerEntry]) {
 /// Resolve a server data-id to an embed iframe URL.
 ///
 /// Calls `/ajax/episode/sources?id={data_id}` and returns the embed URL.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_source(data_id: &str, ctx: &ExtractionContext) -> Result<SourceResult> {
     fetch_source_impl(data_id, ctx)
         .await

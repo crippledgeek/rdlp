@@ -62,8 +62,7 @@ pub struct SubtitleTrack {
 /// Captures the source ID from paths like:
 /// - `/embed-2/v2/e-1/{id}?z=`
 /// - `/e-1/{id}?z=`
-static SOURCE_ID_PATTERN: Lazy<Regex> =
-    lazy_regex!(r"/(?:e-\d+|embed-\d+/v\d+/e-\d+)/([^?]+)");
+static SOURCE_ID_PATTERN: Lazy<Regex> = lazy_regex!(r"/(?:e-\d+|embed-\d+/v\d+/e-\d+)/([^?]+)");
 
 /// Pattern to extract the embed base path (scheme + host + path before the
 /// source ID). Used to construct the getSources URL on the same domain.
@@ -93,6 +92,12 @@ const KEYS_URL: &str = "https://raw.githubusercontent.com/yogesh-hacker/Megaclou
 ///    (works for `rapid-cloud.co` embeds — usually returns unencrypted sources)
 /// 2. **v3 megacloud.blog**: Client key extraction + custom 3-layer cipher
 ///    (works for `megacloud.blog` embeds)
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - Source ID cannot be extracted from the embed URL (`RdlpError::Extraction`)
+/// - Both extraction strategies fail (`RdlpError::Extraction`)
 pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result<MegacloudSources> {
     let source_id = extract_source_id(embed_url).ok_or_else(|| RdlpError::Extraction {
         message: format!("Could not extract source ID from embed URL: {embed_url}"),

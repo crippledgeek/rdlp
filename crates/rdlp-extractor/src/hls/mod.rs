@@ -95,6 +95,13 @@ pub struct M3u8Variant {
 /// `master_url`. Returns an empty Vec if `text` is a media playlist
 /// (yt-dlp's `_extract_m3u8_formats_and_subtitles` handles media
 /// playlists via a different code path).
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - M3U8 playlist parsing fails (`String` error from `m3u8_rs`)
+/// - `master_url` is not a valid URL (`String` error message)
+/// - Relative URI join fails (`String` error message)
 pub fn parse_master_playlist(master_url: &str, text: &str) -> Result<Vec<M3u8Variant>, String> {
     use m3u8_rs::Playlist;
     let parsed =

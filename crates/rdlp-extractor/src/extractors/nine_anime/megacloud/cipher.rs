@@ -36,6 +36,13 @@ fn char_array() -> Vec<char> {
 ///
 /// # Returns
 /// The decrypted JSON string containing video source URLs.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - Base64 decoding fails (`RdlpError::Extraction`)
+/// - The decrypted data length prefix is invalid or missing (`RdlpError::Extraction`)
+/// - The decrypted data is too short to contain the claimed length (`RdlpError::Extraction`)
 pub fn decrypt_src(src: &str, client_key: &str, megacloud_key: &str) -> Result<String> {
     decrypt_src_impl(src, client_key, megacloud_key).map_err(|e| RdlpError::Extraction {
         message: format!("{e:#}"),

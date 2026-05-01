@@ -89,6 +89,11 @@ impl WgczNetworkBase {
     /// Extract the first `VideoObject` JSON-LD block from the page.
     ///
     /// Handles both `"thumbnailUrl": "url"` and `"thumbnailUrl": ["url1", ...]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the CSS selector is invalid (programmer error — the selector is
+    /// a hardcoded string literal).
     #[must_use]
     pub fn extract_json_ld(html: &str) -> WgczJsonLd {
         let doc = scraper::Html::parse_document(html);

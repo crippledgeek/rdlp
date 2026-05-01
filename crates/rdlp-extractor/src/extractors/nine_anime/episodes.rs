@@ -33,16 +33,13 @@ pub struct EpisodeListEntry {
 }
 
 /// Pattern to match episode items: `<a ... data-id="26565" data-number="1" title="The World of Swords" ...>`
-static EP_ITEM_DATA_ID: Lazy<Regex> =
-    lazy_regex!(r#"\bdata-id="(\d+)""#);
+static EP_ITEM_DATA_ID: Lazy<Regex> = lazy_regex!(r#"\bdata-id="(\d+)""#);
 
 /// Extract `data-number` from an episode item.
-static EP_DATA_NUMBER: Lazy<Regex> =
-    lazy_regex!(r#"\bdata-number="(\d+)""#);
+static EP_DATA_NUMBER: Lazy<Regex> = lazy_regex!(r#"\bdata-number="(\d+)""#);
 
 /// Extract `title` from an episode item.
-static EP_TITLE_ATTR: Lazy<Regex> =
-    lazy_regex!(r#"\btitle="([^"]+)""#);
+static EP_TITLE_ATTR: Lazy<Regex> = lazy_regex!(r#"\btitle="([^"]+)""#);
 
 /// Pattern to match episode `<a>` blocks.
 static EP_ITEM_BLOCK: Lazy<Regex> =
@@ -52,6 +49,12 @@ static EP_ITEM_BLOCK: Lazy<Regex> =
 ///
 /// Calls `/ajax/episode/list/{anime_id}` and finds the episode matching
 /// the given `episode_data_id` to extract its number and title.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_episode_info(
     anime_id: &str,
     episode_data_id: &str,
@@ -152,6 +155,12 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
 /// Fetch the full episode list for an anime.
 ///
 /// Calls `/ajax/episode/list/{anime_id}` and parses all episode entries.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - HTTP fetch fails or returns non-2xx status (`RdlpError::Extraction`)
+/// - JSON deserialization fails (`RdlpError::Extraction`)
 pub async fn fetch_all_episodes(
     anime_id: &str,
     ctx: &ExtractionContext,

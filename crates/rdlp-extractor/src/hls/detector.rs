@@ -87,6 +87,12 @@ impl HlsSizeDetector {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
+    /// - Delegated `detect_info` call fails (`RdlpError::Network` or `RdlpError::Extraction`)
     pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
         // Use detect_info and extract just the size
         Ok(self
@@ -103,6 +109,11 @@ impl HlsSizeDetector {
     /// # Performance
     /// - 1-2 HTTP requests (master + media playlist)
     /// - Typical time: 100-500ms
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
     pub async fn count_segments(&self, m3u8_url: &str) -> Result<Option<usize>> {
         // Validate the input URL for security (SSRF protection)
         BaseExtractor::validate_url_security(m3u8_url)?;
@@ -141,6 +152,12 @@ impl HlsSizeDetector {
     /// * `Ok(Some(HlsInfo))` - Total size and segment count
     /// * `Ok(None)` - Info could not be determined (non-fatal)
     /// * `Err(_)` - Fatal error (network failure, invalid playlist, etc.)
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
+    /// - Playlist URL parsing fails (`RdlpError::Extraction`)
     pub async fn detect_info(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
         let start = std::time::Instant::now();
 
