@@ -16,17 +16,13 @@ use crate::base::common::BaseExtractor;
 
 const EPORNER_ROOT: &str = "https://www.eporner.com";
 
-static RESULT_LINK: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a[href^='/video-']").unwrap());
-static MBCONTENT_SEL: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("div.mbcontent").unwrap());
-static MBTIT_LINK_SEL: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("p.mbtit a[href^='/video-']").unwrap());
-static MBTIM_SEL: LazyLock<Selector> = LazyLock::new(|| Selector::parse("span.mbtim").unwrap());
-static MBVIE_SEL: LazyLock<Selector> = LazyLock::new(|| Selector::parse("span.mbvie").unwrap());
-static MB_UPLOADER_SEL: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("span.mb-uploader a").unwrap());
-static MBIMG_SEL: LazyLock<Selector> = LazyLock::new(|| Selector::parse("img").unwrap());
+static RESULT_LINK: LazyLock<Selector> = crate::static_selector!("a[href^='/video-']");
+static MBCONTENT_SEL: LazyLock<Selector> = crate::static_selector!("div.mbcontent");
+static MBTIT_LINK_SEL: LazyLock<Selector> = crate::static_selector!("p.mbtit a[href^='/video-']");
+static MBTIM_SEL: LazyLock<Selector> = crate::static_selector!("span.mbtim");
+static MBVIE_SEL: LazyLock<Selector> = crate::static_selector!("span.mbvie");
+static MB_UPLOADER_SEL: LazyLock<Selector> = crate::static_selector!("span.mb-uploader a");
+static MBIMG_SEL: LazyLock<Selector> = crate::static_selector!("img");
 
 /// Normalize "Beach Sunset" → "beach-sunset", collapsing runs of non-alnum
 /// to single hyphens and trimming edges.
