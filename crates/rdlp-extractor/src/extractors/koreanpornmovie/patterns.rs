@@ -1,14 +1,11 @@
 //! URL patterns for KoreanPornMovie.
 
-use regex::Regex;
-use std::sync::LazyLock;
+use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// Matches any path on koreanpornmovie.com with a slug.
 /// Non-video paths are filtered by `is_video_url()`.
-pub(crate) static VIDEO_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?koreanpornmovie\.com/(?P<slug>[a-z0-9%][a-z0-9%\-]+)/?")
-        .expect("valid KoreanPornMovie URL pattern")
-});
+pub(crate) static VIDEO_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?koreanpornmovie\.com/(?P<slug>[a-z0-9%][a-z0-9%\-]+)/?");
 
 /// Non-video path prefixes to exclude.
 const EXCLUDED_SLUGS: &[&str] = &[
@@ -45,10 +42,8 @@ pub(crate) fn is_video_url(url: &str) -> bool {
 
 /// Matches search URLs: `https://koreanpornmovie.com/?s=<query>`
 #[allow(dead_code)]
-pub(crate) static SEARCH_URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"https?://(?:www\.)?koreanpornmovie\.com/\?s=")
-        .expect("valid KoreanPornMovie search URL pattern")
-});
+pub(crate) static SEARCH_URL_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"https?://(?:www\.)?koreanpornmovie\.com/\?s=");
 
 /// Extract slug from a video page URL.
 pub(crate) fn extract_slug(url: &str) -> Option<String> {
