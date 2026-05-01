@@ -11,14 +11,11 @@ use super::detection::{
 // Selectors
 // ============================================================================
 
-static VIDEO_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("video").expect("valid video selector"));
+static VIDEO_SELECTOR: LazyLock<Selector> = crate::static_selector!("video");
 
-static SOURCE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("source").expect("valid source selector"));
+static SOURCE_SELECTOR: LazyLock<Selector> = crate::static_selector!("source");
 
-static IFRAME_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("iframe").expect("valid iframe selector"));
+static IFRAME_SELECTOR: LazyLock<Selector> = crate::static_selector!("iframe");
 
 // ============================================================================
 // HTML5 Video/Source Strategy
