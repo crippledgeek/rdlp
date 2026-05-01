@@ -21,7 +21,7 @@ pub(crate) type VideoMetadata = (String, String, String, Option<u32>, Option<u32
 
 /// Selector for video source tags: <source src="..." type="video/mp4">
 pub(crate) static SOURCE_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("source[src][type='video/mp4']").expect("Valid CSS selector"));
+    crate::static_selector!("source[src][type='video/mp4']");
 
 /// Regex to extract CDN URL from MovieFap JavaScript
 pub(crate) static CDN_URL_REGEX: Lazy<Regex> =
