@@ -9,7 +9,7 @@ use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
-use scraper::{Html, Selector};
+use scraper::Html;
 
 use super::XVideosExtractor;
 use crate::base::common::BaseExtractor;
@@ -77,27 +77,26 @@ fn has_next_page(html: &str, next_page: u32) -> bool {
 pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     let doc = Html::parse_document(html);
 
-    let block_sel = Selector::parse("div.thumb-block").expect("static selector");
-    let anchor_sel =
-        Selector::parse("div.thumb-inside a[href^='/video.']").expect("static selector");
-    let title_sel = Selector::parse("p.title a").expect("static selector");
-    let img_sel = Selector::parse("div.thumb-inside img").expect("static selector");
-    let dur_sel = Selector::parse(".duration, span.duration").expect("static selector");
-    let metadata_sel = Selector::parse("p.metadata").expect("static selector");
+    let block_sel = crate::selector!("div.thumb-block");
+    let anchor_sel = crate::selector!("div.thumb-inside a[href^='/video.']");
+    let title_sel = crate::selector!("p.title a");
+    let img_sel = crate::selector!("div.thumb-inside img");
+    let dur_sel = crate::selector!(".duration, span.duration");
+    let metadata_sel = crate::selector!("p.metadata");
     // Uploader link inside p.metadata. XVideos uses many href shapes for
     // uploaders — `/profiles/<user>`, `/channels/<slug>`, `/amateur-channels/…`,
     // `/pornstar-channels/…`, AND bare vanity URLs like `/young-libertines` or
     // `/tommy_cabrio_official`. The reliable common denominator across all of
     // them is `p.metadata a .name`, so use that rather than an href-prefix
     // allow-list (which caught only ~4% of cards in testing).
-    let uploader_sel = Selector::parse("p.metadata a .name").expect("static selector");
+    let uploader_sel = crate::selector!("p.metadata a .name");
 
     let mut results = Vec::new();
 
-    for block in doc.select(&block_sel) {
+    for block in doc.select(block_sel) {
         // Extract video URL from the anchor inside thumb-inside
         let video_url = block
-            .select(&anchor_sel)
+            .select(anchor_sel)
             .next()
             .and_then(|a| a.value().attr("href"))
             .map(|href| {
@@ -114,7 +113,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 
         // Title from p.title a[title] attribute, fall back to text content
         let title = block
-            .select(&title_sel)
+            .select(title_sel)
             .next()
             .and_then(|a| {
                 a.value().attr("title").map(|t| t.to_string()).or_else(|| {
@@ -132,7 +131,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         // — we substitute with `1` (the first-frame thumb, universally
         // available). Falls back to `data-mzl` (mosaique listing image)
         // if neither works, then `src` as last resort.
-        let thumbnail_url = block.select(&img_sel).next().and_then(|img| {
+        let thumbnail_url = block.select(img_sel).next().and_then(|img| {
             let attrs = img.value();
             attrs
                 .attr("data-src")
@@ -143,14 +142,14 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         });
 
         // Duration from .duration or span.duration
-        let duration = block.select(&dur_sel).next().and_then(|el| {
+        let duration = block.select(dur_sel).next().and_then(|el| {
             let text: String = el.text().collect::<String>();
             parse_duration_text(text.trim())
         });
 
         // Uploader from the first profile/channel link in p.metadata
         let uploader = block
-            .select(&uploader_sel)
+            .select(uploader_sel)
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
             .filter(|s| !s.is_empty());
@@ -160,7 +159,7 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         // — concatenate all text under p.metadata and pull out `<num>[KMB]?` immediately
         // before the literal `Views` token.
         let view_count = block
-            .select(&metadata_sel)
+            .select(metadata_sel)
             .next()
             .and_then(|m| extract_view_count(&m.text().collect::<String>()));
 
