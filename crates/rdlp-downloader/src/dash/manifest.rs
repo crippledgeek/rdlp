@@ -17,6 +17,9 @@ use std::time::Duration;
 use url::Url;
 
 use crate::dash::errors::DashError;
+use crate::dash::segments::{
+    SegmentListPlan, SegmentPlan, SegmentTemplatePlan, SegmentTimelinePlan, TimelineEntry,
+};
 
 /// Result of parsing an MPD manifest. Owns enough state to drive segment
 /// downloads in a later task — the actual `SegmentPlan` is attached in Task 3.
@@ -60,7 +63,9 @@ pub struct RepresentationInfo {
     /// MPD BaseURL ▸ Period BaseURL ▸ AdaptationSet BaseURL ▸ Representation BaseURL.
     /// Always non-empty.
     pub base_urls: Vec<Url>,
-    // Task 3 will add: pub plan: SegmentPlan,
+    /// Segment plan. Populated by [`parse_mpd`]. Drives URL enumeration
+    /// during download.
+    pub plan: SegmentPlan,
 }
 
 /// Parse an MPD body and select the highest-bandwidth video representation
@@ -108,8 +113,8 @@ pub fn parse_mpd(body: &str, base_url: &Url) -> Result<ParsedManifest, DashError
         .or(mpd.mediaPresentationDuration)
         .unwrap_or_default();
 
-    let video = pick_video(period, &period_base_urls)?;
-    let audio = match pick_audio(period, &period_base_urls) {
+    let video = pick_video(period, &period_base_urls, period_duration)?;
+    let audio = match pick_audio(period, &period_base_urls, period_duration) {
         Ok(info) => Some(info),
         Err(DashError::NoAudioRepresentation) => None,
         Err(e) => return Err(e),
@@ -228,9 +233,13 @@ fn is_audio_aset(aset: &dash_mpd::AdaptationSet) -> bool {
 fn pick_video(
     period: &dash_mpd::Period,
     period_base_urls: &[Url],
+    period_duration: Duration,
 ) -> Result<RepresentationInfo, DashError> {
-    pick_representation(period, period_base_urls, is_video_aset)
-        .ok_or(DashError::NoVideoRepresentation)
+    match pick_representation(period, period_base_urls, period_duration, is_video_aset) {
+        Ok(Some(info)) => Ok(info),
+        Ok(None) => Err(DashError::NoVideoRepresentation),
+        Err(e) => Err(e),
+    }
 }
 
 /// Pick the highest-bandwidth audio Representation across all audio
@@ -238,18 +247,27 @@ fn pick_video(
 fn pick_audio(
     period: &dash_mpd::Period,
     period_base_urls: &[Url],
+    period_duration: Duration,
 ) -> Result<RepresentationInfo, DashError> {
-    pick_representation(period, period_base_urls, is_audio_aset)
-        .ok_or(DashError::NoAudioRepresentation)
+    match pick_representation(period, period_base_urls, period_duration, is_audio_aset) {
+        Ok(Some(info)) => Ok(info),
+        Ok(None) => Err(DashError::NoAudioRepresentation),
+        Err(e) => Err(e),
+    }
 }
 
 /// Generic Representation picker: filter AdaptationSets by `match_aset`,
 /// then pick the highest-bandwidth Representation from the union.
+///
+/// Returns `Ok(None)` when no Representation matched the filter; returns
+/// `Err` when a Representation was selected but its segment plan could not
+/// be built (no SegmentTemplate / SegmentList found, missing required attrs).
 fn pick_representation(
     period: &dash_mpd::Period,
     period_base_urls: &[Url],
+    period_duration: Duration,
     match_aset: fn(&dash_mpd::AdaptationSet) -> bool,
-) -> Option<RepresentationInfo> {
+) -> Result<Option<RepresentationInfo>, DashError> {
     let mut best: Option<(u64, &dash_mpd::AdaptationSet, &dash_mpd::Representation)> = None;
 
     for aset in &period.adaptations {
@@ -265,7 +283,10 @@ fn pick_representation(
         }
     }
 
-    let (bandwidth, aset, repr) = best?;
+    let Some((bandwidth, aset, repr)) = best else {
+        return Ok(None);
+    };
+
     let aset_base_urls = resolve_aset_base_urls(aset, period_base_urls);
     let base_urls = resolve_repr_base_urls(repr, &aset_base_urls);
 
@@ -277,7 +298,9 @@ fn pick_representation(
     let codecs = repr.codecs.clone().or_else(|| aset.codecs.clone());
     let mime_type = repr.mimeType.clone().or_else(|| aset.mimeType.clone());
 
-    Some(RepresentationInfo {
+    let plan = build_segment_plan(aset, repr, period_duration, &id, bandwidth)?;
+
+    Ok(Some(RepresentationInfo {
         id,
         bandwidth,
         codecs,
@@ -292,5 +315,110 @@ fn pick_representation(
             .and_then(|h| u32::try_from(h).ok()),
         lang: aset.lang.clone(),
         base_urls,
-    })
+        plan,
+    }))
+}
+
+/// Build a `SegmentPlan` for the chosen Representation, applying DASH
+/// inheritance: prefer Representation-level over AdaptationSet-level for
+/// both `<SegmentTemplate>` and `<SegmentList>`.
+fn build_segment_plan(
+    aset: &dash_mpd::AdaptationSet,
+    repr: &dash_mpd::Representation,
+    period_duration: Duration,
+    representation_id: &str,
+    bandwidth: u64,
+) -> Result<SegmentPlan, DashError> {
+    if let Some(st) = repr.SegmentTemplate.as_ref().or(aset.SegmentTemplate.as_ref()) {
+        return build_template_plan(st, period_duration, representation_id, bandwidth);
+    }
+    if let Some(sl) = repr.SegmentList.as_ref().or(aset.SegmentList.as_ref()) {
+        return Ok(build_list_plan(sl));
+    }
+    Err(DashError::Parse(format!(
+        "Representation {representation_id} has no SegmentTemplate or SegmentList"
+    )))
+}
+
+fn build_template_plan(
+    st: &dash_mpd::SegmentTemplate,
+    period_duration: Duration,
+    representation_id: &str,
+    bandwidth: u64,
+) -> Result<SegmentPlan, DashError> {
+    let media = st.media.clone().ok_or_else(|| {
+        DashError::Parse(format!(
+            "Representation {representation_id} SegmentTemplate has no @media"
+        ))
+    })?;
+    let init = st.initialization.clone();
+    let start_number = st.startNumber.unwrap_or(1);
+    let timescale = st.timescale.unwrap_or(1).max(1);
+
+    if let Some(timeline) = st.SegmentTimeline.as_ref() {
+        let entries: Vec<TimelineEntry> = timeline
+            .segments
+            .iter()
+            .map(|s| TimelineEntry {
+                t: s.t,
+                d: s.d,
+                r: s.r,
+            })
+            .collect();
+        return Ok(SegmentPlan::Timeline(SegmentTimelinePlan {
+            init,
+            media,
+            start_number,
+            timescale,
+            entries,
+            representation_id: representation_id.to_string(),
+            bandwidth,
+        }));
+    }
+
+    // Plain SegmentTemplate@duration mode.
+    let seg_dur_f64 = st.duration.ok_or_else(|| {
+        DashError::Parse(format!(
+            "Representation {representation_id} SegmentTemplate has no @duration and no SegmentTimeline"
+        ))
+    })?;
+    if !seg_dur_f64.is_finite() || seg_dur_f64 <= 0.0 {
+        return Err(DashError::Parse(format!(
+            "Representation {representation_id} SegmentTemplate @duration is non-positive: {seg_dur_f64}"
+        )));
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let segment_duration_ts = seg_dur_f64.round() as u64;
+    let segment_duration_ts = segment_duration_ts.max(1);
+
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let total_segments = {
+        let period_secs = period_duration.as_secs_f64();
+        let total_ts = period_secs * timescale as f64;
+        (total_ts / seg_dur_f64).ceil() as u64
+    };
+
+    Ok(SegmentPlan::Template(SegmentTemplatePlan {
+        init,
+        media,
+        start_number,
+        timescale,
+        segment_duration_ts,
+        total_segments,
+        representation_id: representation_id.to_string(),
+        bandwidth,
+    }))
+}
+
+fn build_list_plan(sl: &dash_mpd::SegmentList) -> SegmentPlan {
+    let init = sl
+        .Initialization
+        .as_ref()
+        .and_then(|i| i.sourceURL.clone());
+    let urls = sl
+        .segment_urls
+        .iter()
+        .filter_map(|u| u.media.clone())
+        .collect();
+    SegmentPlan::List(SegmentListPlan { init, urls })
 }

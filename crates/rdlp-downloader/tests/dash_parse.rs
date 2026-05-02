@@ -66,3 +66,39 @@ fn multi_period_warns_and_returns_first_period() {
     let m = rdlp_downloader::dash::manifest::parse_mpd(&body, &base()).unwrap();
     assert!(m.period_count >= 2);
 }
+
+#[test]
+fn segment_template_fixture_produces_template_plan() {
+    let body = fixture("segment_template.mpd");
+    let m = rdlp_downloader::dash::manifest::parse_mpd(&body, &base()).unwrap();
+    match &m.video.plan {
+        rdlp_downloader::dash::segments::SegmentPlan::Template(t) => {
+            assert_eq!(t.start_number, 1);
+            assert_eq!(t.timescale, 1000);
+            // 30s @ 6000-tick segments / 1000 timescale → 5 segments.
+            assert_eq!(t.total_segments, 5);
+            assert_eq!(t.representation_id, "v1");
+        }
+        other => panic!("expected Template plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn segment_timeline_fixture_produces_timeline_plan() {
+    let body = fixture("segment_timeline.mpd");
+    let m = rdlp_downloader::dash::manifest::parse_mpd(&body, &base()).unwrap();
+    assert!(matches!(
+        m.video.plan,
+        rdlp_downloader::dash::segments::SegmentPlan::Timeline(_)
+    ));
+}
+
+#[test]
+fn segment_list_fixture_produces_list_plan() {
+    let body = fixture("segment_list.mpd");
+    let m = rdlp_downloader::dash::manifest::parse_mpd(&body, &base()).unwrap();
+    assert!(matches!(
+        m.video.plan,
+        rdlp_downloader::dash::segments::SegmentPlan::List(_)
+    ));
+}
