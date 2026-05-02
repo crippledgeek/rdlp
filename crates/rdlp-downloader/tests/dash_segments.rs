@@ -1,10 +1,6 @@
 //! Unit tests for `rdlp_downloader::dash::segments::SegmentPlan`.
 
-#![allow(
-    clippy::disallowed_methods,
-    clippy::unwrap_used,
-    clippy::expect_used
-)]
+#![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 
 use rdlp_downloader::dash::segments::{
     SegmentListPlan, SegmentPlan, SegmentTemplatePlan, SegmentTimelinePlan, TimelineEntry,

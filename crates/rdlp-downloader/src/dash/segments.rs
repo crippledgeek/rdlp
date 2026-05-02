@@ -115,9 +115,7 @@ impl SegmentPlan {
     pub fn total_duration(&self) -> Duration {
         match self {
             Self::Template(t) => Duration::from_secs(
-                t.total_segments
-                    .saturating_mul(t.segment_duration_ts)
-                    / t.timescale.max(1),
+                t.total_segments.saturating_mul(t.segment_duration_ts) / t.timescale.max(1),
             ),
             Self::Timeline(t) => {
                 let total_ts: u64 = t.entries.iter().map(timeline_entry_ts).sum();

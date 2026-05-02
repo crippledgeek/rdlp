@@ -1,10 +1,6 @@
 //! Integration tests for `rdlp_downloader::dash::manifest::parse_mpd`.
 
-#![allow(
-    clippy::disallowed_methods,
-    clippy::unwrap_used,
-    clippy::expect_used
-)]
+#![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
 use url::Url;

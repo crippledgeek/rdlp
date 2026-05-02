@@ -97,14 +97,8 @@ async fn fake_segments_fail_mux_with_intermediates_retained() {
     // Intermediates retained for diagnosis.
     let video = dir.path().join("out.video.m4s");
     let audio = dir.path().join("out.audio.m4s");
-    assert!(
-        video.exists(),
-        "video intermediate retained on mux failure"
-    );
-    assert!(
-        audio.exists(),
-        "audio intermediate retained on mux failure"
-    );
+    assert!(video.exists(), "video intermediate retained on mux failure");
+    assert!(audio.exists(), "audio intermediate retained on mux failure");
     assert_eq!(tokio::fs::read(&video).await.unwrap(), b"VINITV1V2");
     assert_eq!(tokio::fs::read(&audio).await.unwrap(), b"AINITA1A2");
     assert!(!out.exists(), "no output produced on mux failure");

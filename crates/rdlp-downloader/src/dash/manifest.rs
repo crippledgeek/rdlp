@@ -329,7 +329,11 @@ fn build_segment_plan(
     representation_id: &str,
     bandwidth: u64,
 ) -> Result<SegmentPlan, DashError> {
-    if let Some(st) = repr.SegmentTemplate.as_ref().or(aset.SegmentTemplate.as_ref()) {
+    if let Some(st) = repr
+        .SegmentTemplate
+        .as_ref()
+        .or(aset.SegmentTemplate.as_ref())
+    {
         return build_template_plan(st, period_duration, representation_id, bandwidth);
     }
     if let Some(sl) = repr.SegmentList.as_ref().or(aset.SegmentList.as_ref()) {
@@ -391,7 +395,11 @@ fn build_template_plan(
     let segment_duration_ts = seg_dur_f64.round() as u64;
     let segment_duration_ts = segment_duration_ts.max(1);
 
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     let total_segments = {
         let period_secs = period_duration.as_secs_f64();
         let total_ts = period_secs * timescale as f64;
@@ -411,10 +419,7 @@ fn build_template_plan(
 }
 
 fn build_list_plan(sl: &dash_mpd::SegmentList) -> SegmentPlan {
-    let init = sl
-        .Initialization
-        .as_ref()
-        .and_then(|i| i.sourceURL.clone());
+    let init = sl.Initialization.as_ref().and_then(|i| i.sourceURL.clone());
     let urls = sl
         .segment_urls
         .iter()

@@ -26,6 +26,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
 use url::Url;
 
+use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
@@ -85,6 +86,11 @@ pub async fn run(
     let started = Instant::now();
     let bytes_total = Arc::new(AtomicU64::new(0));
 
+    // Wrap the progress callback in Arc so it can be shared with the per-
+    // representation adaptive controllers without cloning the Box.
+    let progress_arc: Option<Arc<dyn ProgressCallback>> =
+        progress.map(|cb| Arc::from(cb) as Arc<dyn ProgressCallback>);
+
     // Resolve all paths up-front.
     let video_final = intermediate_path(output_path, "video");
     let audio_final = intermediate_path(output_path, "audio");
@@ -139,6 +145,7 @@ pub async fn run(
         &state_file,
         true,
         Arc::clone(&bytes_total),
+        progress_arc.clone(),
     )
     .await?;
 
@@ -170,6 +177,7 @@ pub async fn run(
             &state_file,
             false,
             Arc::clone(&bytes_total),
+            progress_arc.clone(),
         )
         .await?
     } else {
@@ -213,7 +221,7 @@ pub async fn run(
         bytes,
         elapsed.as_secs_f64()
     );
-    if let Some(cb) = progress {
+    if let Some(ref cb) = progress_arc {
         cb.on_log(&format!(
             "DASH download complete: {} bytes in {:.1}s",
             bytes,
@@ -295,6 +303,7 @@ async fn download_representation(
     state_path: &Path,
     is_video: bool,
     bytes_counter: Arc<AtomicU64>,
+    log_callback: Option<Arc<dyn ProgressCallback>>,
 ) -> Result<u64> {
     if let Some(parent) = final_path.parent()
         && !parent.as_os_str().is_empty()
@@ -364,9 +373,7 @@ async fn download_representation(
             } else {
                 // If state said done but file is missing or zero-length, drop
                 // the bookkeeping so we re-fetch.
-                if recorded_done
-                    && let Some(v) = s.completed_segments.get_mut(repr_id)
-                {
+                if recorded_done && let Some(v) = s.completed_segments.get_mut(repr_id) {
                     v.retain(|x| *x != i as u64);
                 }
                 to_fetch.push((i, u));
@@ -376,21 +383,52 @@ async fn download_representation(
 
     let concurrent = concurrent.max(1);
 
-    let mut stream =
-        futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
-            let http = http.clone();
-            let retry = Arc::clone(retry);
-            let parts_dir = parts_dir.to_path_buf();
-            async move {
-                let bytes = download_one(&http, &retry, &u).await?;
-                let part_path = parts_dir.join(segment_filename(i));
-                fs::write(&part_path, &bytes)
-                    .await
-                    .map_err(RdlpError::Io)?;
-                Ok::<(usize, u64), RdlpError>((i, bytes.len() as u64))
-            }
-        }))
-        .buffer_unordered(concurrent);
+    // Build an AIMD adaptive controller for this representation.
+    // `HlsSegments` mode skips chunk-level adjustments (segment sizes are
+    // server-determined), matching the HLS downloader's pattern exactly.
+    let controller = Arc::new(AdaptiveController::new(
+        0, // total_size not meaningful for segment-based downloads
+        AdaptiveConfig {
+            max_connections: concurrent,
+            initial_connections: concurrent.min(2),
+            ..AdaptiveConfig::default()
+        },
+        ControllerMode::HlsSegments,
+        log_callback,
+    ));
+    let sem = controller.semaphore().clone();
+
+    let mut stream = futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
+        let http = http.clone();
+        let retry = Arc::clone(retry);
+        let parts_dir = parts_dir.to_path_buf();
+        let sem = sem.clone();
+        let controller = Arc::clone(&controller);
+        async move {
+            // Acquire a semaphore permit so the adaptive controller governs
+            // actual concurrency (mirrors the HLS pattern in merge.rs).
+            let _permit = sem.acquire_owned().await.map_err(|_| RdlpError::Download {
+                message: "DASH adaptive semaphore closed".to_string(),
+                url: None,
+            })?;
+
+            let fetch_start = Instant::now();
+            let bytes = download_one(&http, &retry, &u).await?;
+            let len = bytes.len() as u64;
+            let elapsed = fetch_start.elapsed();
+
+            let part_path = parts_dir.join(segment_filename(i));
+            fs::write(&part_path, &bytes).await.map_err(RdlpError::Io)?;
+
+            // Report to the adaptive controller so AIMD can tune connection
+            // count based on observed throughput.  Permit is still held here;
+            // it drops at the end of this async block.
+            controller.report_segment_complete(len, elapsed, None);
+
+            Ok::<(usize, u64), RdlpError>((i, len))
+        }
+    }))
+    .buffer_unordered(concurrent);
 
     let mut completed_since_save: usize = 0;
     let mut stream_err: Option<RdlpError> = None;
@@ -523,9 +561,7 @@ async fn mux_outputs(
         // Video-only: move intermediate into place. Try rename first; fall
         // back to copy+remove on cross-mount failures.
         if let Err(rename_err) = fs::rename(video_path, output_path).await {
-            debug!(
-                "DASH video-only rename failed ({rename_err}); falling back to copy+remove"
-            );
+            debug!("DASH video-only rename failed ({rename_err}); falling back to copy+remove");
             fs::copy(video_path, output_path)
                 .await
                 .map_err(RdlpError::Io)?;

@@ -273,21 +273,21 @@
 pub(crate) mod adaptive;
 /// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
+/// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
+pub mod dash;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
 /// HLS download state persistence for resume support
 pub mod hls_state;
 /// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
-/// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
-pub mod dash;
 /// Shared progress reporting infrastructure
 pub mod progress;
 
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
+pub use dash::DashDownloader;
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
-pub use dash::DashDownloader;
 pub use progress::{
     ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter,
 };

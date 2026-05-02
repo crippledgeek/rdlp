@@ -7,10 +7,10 @@
 // workspace MSRV is 1.85.
 #![allow(clippy::duration_suboptimal_units)]
 
+mod download;
 pub mod errors;
 pub mod manifest;
 pub mod segments;
-mod download;
 pub mod state;
 
 pub use errors::DashError;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rdlp_core::{Downloader, DownloadStats, ProgressCallback, Result, RetryConfig};
+use rdlp_core::{DownloadStats, Downloader, ProgressCallback, Result, RetryConfig};
 
 use crate::http::HttpDownloader;
 
