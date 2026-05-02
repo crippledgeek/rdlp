@@ -2,6 +2,15 @@
 
 use rdlp_types::Fragment;
 
+/// Per-Representation segment count ceiling.
+///
+/// Hard cap protecting against adversarial / malformed MPDs (e.g.
+/// `period_duration_seconds = 1e9` or `duration = 0` corner cases that
+/// would otherwise saturate to `u64::MAX` and OOM `Vec::with_capacity`).
+/// 1M segments at e.g. 4s each is ~46 days of content — well beyond any
+/// realistic VoD; truncating at this point is preferable to aborting.
+pub(crate) const MAX_SEGMENTS_PER_REP: usize = 1_000_000;
+
 /// Substitute DASH SegmentTemplate placeholders.
 ///
 /// Supported tokens (per ISO/IEC 23009-1 §5.3.9.4.4):
@@ -102,10 +111,46 @@ pub fn resolve_segment_template(
     repr_id: &str,
     bandwidth: u64,
 ) -> Vec<Fragment> {
-    let segment_duration_seconds = plan.duration as f64 / plan.timescale as f64;
-    let count = (plan.period_duration_seconds / segment_duration_seconds).ceil() as u64;
+    if plan.duration == 0 || plan.timescale == 0 {
+        log::warn!(
+            "DASH SegmentTemplate has zero duration ({}) or timescale ({}); skipping rep {}",
+            plan.duration,
+            plan.timescale,
+            repr_id,
+        );
+        return Vec::new();
+    }
+    if plan.period_duration_seconds <= 0.0 || !plan.period_duration_seconds.is_finite() {
+        log::warn!(
+            "DASH SegmentTemplate has non-positive or non-finite period duration ({}); skipping rep {}",
+            plan.period_duration_seconds,
+            repr_id,
+        );
+        return Vec::new();
+    }
 
-    let mut fragments = Vec::with_capacity(count as usize + 1);
+    let segment_duration_seconds = plan.duration as f64 / plan.timescale as f64;
+    let count_f = (plan.period_duration_seconds / segment_duration_seconds).ceil();
+    let count: usize = if count_f.is_finite() && count_f >= 0.0 {
+        let raw = count_f as u64;
+        // Cap protects against adversarial inputs.
+        std::cmp::min(raw as usize, MAX_SEGMENTS_PER_REP)
+    } else {
+        log::warn!(
+            "DASH SegmentTemplate produced non-finite segment count for rep {}; skipping",
+            repr_id,
+        );
+        return Vec::new();
+    };
+    if count >= MAX_SEGMENTS_PER_REP {
+        log::warn!(
+            "DASH SegmentTemplate for rep {} would emit ≥{} segments; capping",
+            repr_id,
+            MAX_SEGMENTS_PER_REP,
+        );
+    }
+
+    let mut fragments = Vec::with_capacity(count + 1);
     if let Some(init_template) = &plan.initialization {
         let init_url = substitute_template(init_template, repr_id, bandwidth, None, None);
         fragments.push(Fragment {
@@ -114,7 +159,7 @@ pub fn resolve_segment_template(
             filesize: None,
         });
     }
-    for i in 0..count {
+    for i in 0..count as u64 {
         let number = plan.start_number + i;
         let url = substitute_template(&plan.media, repr_id, bandwidth, Some(number), None);
         fragments.push(Fragment {
@@ -160,6 +205,62 @@ mod template_tests {
         let frags = resolve_segment_template(&plan, "v", 1_000);
         assert_eq!(frags.len(), 5, "no init prepended when missing");
         assert_eq!(frags[0].url, "seg-0.m4s");
+    }
+
+    #[test]
+    fn zero_duration_returns_empty() {
+        let plan = SegmentTemplatePlan {
+            initialization: None,
+            media: "$Number$.m4s".into(),
+            start_number: 1,
+            duration: 0,
+            timescale: 1_000,
+            period_duration_seconds: 40.0,
+        };
+        let frags = resolve_segment_template(&plan, "v", 1);
+        assert!(frags.is_empty(), "duration=0 must return empty list, not OOM");
+    }
+
+    #[test]
+    fn zero_timescale_returns_empty() {
+        let plan = SegmentTemplatePlan {
+            initialization: None,
+            media: "$Number$.m4s".into(),
+            start_number: 1,
+            duration: 4_000,
+            timescale: 0,
+            period_duration_seconds: 40.0,
+        };
+        let frags = resolve_segment_template(&plan, "v", 1);
+        assert!(frags.is_empty(), "timescale=0 must return empty list, not silent NaN");
+    }
+
+    #[test]
+    fn count_capped_at_million() {
+        let plan = SegmentTemplatePlan {
+            initialization: None,
+            media: "$Number$.m4s".into(),
+            start_number: 1,
+            duration: 1,
+            timescale: 1,
+            period_duration_seconds: 1e9, // 1 billion seconds at 1s each = 1B segments naive
+        };
+        let frags = resolve_segment_template(&plan, "v", 1);
+        assert_eq!(frags.len(), super::MAX_SEGMENTS_PER_REP, "must cap, not OOM");
+    }
+
+    #[test]
+    fn negative_period_returns_empty() {
+        let plan = SegmentTemplatePlan {
+            initialization: None,
+            media: "$Number$.m4s".into(),
+            start_number: 1,
+            duration: 4_000,
+            timescale: 1_000,
+            period_duration_seconds: -5.0,
+        };
+        let frags = resolve_segment_template(&plan, "v", 1);
+        assert!(frags.is_empty());
     }
 }
 
