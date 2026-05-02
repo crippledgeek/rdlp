@@ -80,6 +80,95 @@ fn parse_token(token: &str) -> (&str, Option<usize>) {
     }
 }
 
+/// A resolved fragment from a DASH segment list.
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub url: String,
+    pub duration: Option<f64>,
+    pub filesize: Option<u64>,
+}
+
+/// Plan describing a SegmentTemplate-style fragment list.
+#[derive(Debug, Clone)]
+pub struct SegmentTemplatePlan {
+    pub initialization: Option<String>,
+    pub media: String,
+    pub start_number: u64,
+    pub duration: u64,
+    pub timescale: u64,
+    pub period_duration_seconds: f64,
+}
+
+/// Resolve a SegmentTemplate plan to an ordered fragment list.
+///
+/// The init segment (if any) is the first entry; media segments follow,
+/// numbered from `start_number`.
+pub fn resolve_segment_template(
+    plan: &SegmentTemplatePlan,
+    repr_id: &str,
+    bandwidth: u64,
+) -> Vec<Fragment> {
+    let segment_duration_seconds = plan.duration as f64 / plan.timescale as f64;
+    let count = (plan.period_duration_seconds / segment_duration_seconds).ceil() as u64;
+
+    let mut fragments = Vec::with_capacity(count as usize + 1);
+    if let Some(init_template) = &plan.initialization {
+        let init_url = substitute_template(init_template, repr_id, bandwidth, None, None);
+        fragments.push(Fragment {
+            url: init_url,
+            duration: None,
+            filesize: None,
+        });
+    }
+    for i in 0..count {
+        let number = plan.start_number + i;
+        let url = substitute_template(&plan.media, repr_id, bandwidth, Some(number), None);
+        fragments.push(Fragment {
+            url,
+            duration: Some(segment_duration_seconds),
+            filesize: None,
+        });
+    }
+    fragments
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    #[test]
+    fn ten_segment_period_with_init() {
+        let plan = SegmentTemplatePlan {
+            initialization: Some("init/$RepresentationID$.m4s".into()),
+            media: "seg/$RepresentationID$/$Number%03d$.m4s".into(),
+            start_number: 1,
+            duration: 4_000,
+            timescale: 1_000,
+            period_duration_seconds: 40.0,
+        };
+        let frags = resolve_segment_template(&plan, "v720p", 2_500_000);
+        assert_eq!(frags.len(), 11, "1 init + 10 media segments");
+        assert_eq!(frags[0].url, "init/v720p.m4s");
+        assert_eq!(frags[1].url, "seg/v720p/001.m4s");
+        assert_eq!(frags[10].url, "seg/v720p/010.m4s");
+    }
+
+    #[test]
+    fn ten_segment_period_without_init() {
+        let plan = SegmentTemplatePlan {
+            initialization: None,
+            media: "seg-$Number$.m4s".into(),
+            start_number: 0,
+            duration: 1,
+            timescale: 1,
+            period_duration_seconds: 5.0,
+        };
+        let frags = resolve_segment_template(&plan, "v", 1_000);
+        assert_eq!(frags.len(), 5, "no init prepended when missing");
+        assert_eq!(frags[0].url, "seg-0.m4s");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
