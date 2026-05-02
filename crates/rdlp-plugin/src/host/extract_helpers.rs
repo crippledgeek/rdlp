@@ -816,7 +816,7 @@ hi.m3u8\n";
 
     /// Happy-path: a valid static MPD with video and audio representations yields
     /// ≥2 formats (one video-only, one audio-only), each with non-empty fragments,
-    /// a fragment_base_url, manifest_url matching the fetch URL, and container "mp4_dash".
+    /// a `fragment_base_url`, `manifest_url` matching the fetch URL, and container `"mp4_dash"`.
     ///
     /// EXPECTED TO FAIL against the Task-4 stub (returns empty formats vec).
     #[tokio::test]
@@ -876,7 +876,7 @@ hi.m3u8\n";
         }
     }
 
-    /// Non-fatal path: when no FetchCtx is installed the fetch capability is absent.
+    /// Non-fatal path: when no `FetchCtx` is installed the fetch capability is absent.
     /// With fatal=false the error must be swallowed and an empty extraction returned.
     ///
     /// NOTE: This test MAY PASS coincidentally against the Task-4 stub, because the
@@ -884,7 +884,7 @@ hi.m3u8\n";
     /// of input — the same value this test asserts on. The coincidental pass does NOT
     /// indicate correctness; it merely means the stub and the intended behavior agree on
     /// the empty-output shape for this one case. The real non-fatal path requires the
-    /// implementation to check for a missing FetchCtx and swallow the error.
+    /// implementation to check for a missing `FetchCtx` and swallow the error.
     #[tokio::test]
     async fn extract_mpd_non_fatal_swallows_fetch_failure() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
@@ -903,7 +903,7 @@ hi.m3u8\n";
         assert!(r.subtitles.is_empty());
     }
 
-    /// Fatal path: when no FetchCtx is installed and fatal=true the error must propagate.
+    /// Fatal path: when no `FetchCtx` is installed and `fatal=true` the error must propagate.
     ///
     /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
     #[tokio::test]
@@ -957,8 +957,8 @@ hi.m3u8\n";
     /// A DRM-protected representation must be filtered out; non-DRM sibling representations
     /// must survive.
     ///
-    /// with_drm.mpd has DRM only on the video representation; the audio representation
-    /// has no ContentProtection. The extraction must drop the video and return only the audio.
+    /// `with_drm.mpd` has DRM only on the video representation; the audio representation
+    /// has no `ContentProtection`. The extraction must drop the video and return only the audio.
     #[tokio::test]
     async fn extract_mpd_drm_protected_reps_are_dropped() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
@@ -980,7 +980,7 @@ hi.m3u8\n";
             .await
             .expect("audio rep survives DRM filtering");
         assert_eq!(r.formats.len(), 1, "only the audio rep should survive");
-        let f = &r.formats[0];
+        let f = r.formats.first().expect("len asserted above");
         assert!(f.acodec.is_some(), "expected audio codec");
         assert!(f.vcodec.is_none(), "DRM video rep must be dropped");
     }
@@ -989,8 +989,8 @@ hi.m3u8\n";
     /// valid UTF-8 for parsing).
     ///
     /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
-    /// Note: FixtureResponse::ok accepts impl Into<Vec<u8>>, so raw bytes work directly —
-    /// no ok_bytes variant is needed.
+    /// Note: `FixtureResponse::ok` accepts impl `Into<Vec<u8>>`, so raw bytes work directly —
+    /// no `ok_bytes` variant is needed.
     #[tokio::test]
     async fn extract_mpd_invalid_utf8_returns_fetch_error() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
