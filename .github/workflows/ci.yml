@@ -264,7 +264,21 @@ jobs:
 
   ytdlp-plugin-golden:
     name: Run Golden Build
-    needs: [build-and-test, golden-filter]
+    needs: [golden-filter]
+    # `build-and-test` was previously a `needs:` dependency to gate Golden
+    # behind cross-platform compile success. We dropped it because:
+    #
+    # 1. Golden runs on ubuntu-22.04. Linux compile failures surface as
+    #    Golden failures directly — the matrix dependency added no signal
+    #    on top of that.
+    # 2. Windows is the slowest matrix shard (~11m). Golden waited the
+    #    extra ~7m for Windows after ubuntu/macos finished, every push,
+    #    even when Windows had nothing to do with the change. That's a
+    #    Golden-side cost paid for cross-platform parity that Golden
+    #    doesn't exercise.
+    # 3. Windows-only or macOS-only build failures are still caught
+    #    independently by the matrix's own status check.
+    #
     # Always run on push (merges into develop) and on workflow_dispatch
     # (manual reruns must exercise the golden — that's the one case where
     # you most want it). On PR, run only when the filter caught a relevant
@@ -373,6 +387,35 @@ jobs:
         with:
           shared-key: rust-ubuntu-22.04
 
+      # Cache componentize-py wasm artifacts produced by each `*_golden.rs`
+      # test's `build_*_plugin()` helper. Each plugin's wasm is a function
+      # of:
+      #   - the plugin's `.py` source (per-plugin),
+      #   - componentize-py version (pinned via requirements-dev.txt),
+      #   - the WIT contract,
+      #   - the rdlp-side compat shim and build-from-ytdlp wrapper.
+      # If any of those change, the cache key flips and we rebuild every
+      # plugin. Otherwise we restore the prior wasm and skip the
+      # ~30s componentize-py compile per plugin (3 ytdlp-goldens + svt +
+      # xxxymovies = 5 plugins ≈ 150s saved on cache hit).
+      #
+      # The test-side helpers (svt_golden::build_svt_plugin etc.) honour
+      # the `RDLP_TEST_USE_CACHED_WASM=1` env var: when set AND the wasm
+      # exists, they skip the rebuild and return the cached path. Local
+      # `cargo test` runs never set this env var, so the rebuild path
+      # remains the default — correctness over speed by default.
+      - name: Cache golden wasm artefacts
+        id: golden-wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            examples/plugins/svt/svt
+            examples/plugins/xxxymovies/xxxymovies
+            examples/plugins/ytdlp-golden/simple-html
+            examples/plugins/ytdlp-golden/json-traversal
+            examples/plugins/ytdlp-golden/m3u8-with-fallback
+          key: golden-wasm-${{ runner.os }}-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt', 'tools/ytdlp-compat/rdlp_ytdlp_compat/**/*.py', 'crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs', 'crates/rdlp-plugin/wit/**/*.wit', 'examples/plugins/svt/svt.py', 'examples/plugins/xxxymovies/xxxymovies.py', 'examples/plugins/ytdlp-golden/*.py') }}
+
       - name: Run all goldens
         # Iterates every `crates/rdlp-plugin/tests/*_golden.rs` file —
         # each new ported plugin (Slice 2.5+) auto-runs without CI
@@ -381,7 +424,13 @@ jobs:
         # pass --ignored. Sequential execution (one cargo test
         # invocation per file) avoids parallel wasm builds saturating
         # disk + CPU on the runner.
+        #
+        # `RDLP_TEST_USE_CACHED_WASM=1` opts the test helpers into the
+        # cache short-circuit — only takes effect on a cache hit, since
+        # the helpers re-check `wasm.exists()` before honouring the env.
         timeout-minutes: 30
+        env:
+          RDLP_TEST_USE_CACHED_WASM: "1"
         run: |
           set -euo pipefail
           shopt -s nullglob

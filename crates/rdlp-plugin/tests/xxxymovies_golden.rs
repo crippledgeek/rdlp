@@ -75,6 +75,17 @@ fn build_xxxymovies_plugin() -> PathBuf {
     assert!(py.exists(), "source missing: {py:?}");
 
     let plugin_dir = py.parent().unwrap().join("xxxymovies");
+    let wasm = plugin_dir.join("plugin.wasm");
+
+    // CI cache short-circuit (see svt_golden.rs::build_svt_plugin doc).
+    if std::env::var("RDLP_TEST_USE_CACHED_WASM").is_ok() && wasm.exists() {
+        eprintln!(
+            "[cache] xxxymovies: reusing cached plugin.wasm ({} bytes)",
+            std::fs::metadata(&wasm).unwrap().len()
+        );
+        return wasm;
+    }
+
     let _ = std::fs::remove_dir_all(&plugin_dir);
 
     let status = std::process::Command::new("cargo")
@@ -93,7 +104,6 @@ fn build_xxxymovies_plugin() -> PathBuf {
         .expect("invoke rdlp build-from-ytdlp");
     assert!(status.success(), "build-from-ytdlp failed");
 
-    let wasm = plugin_dir.join("plugin.wasm");
     assert!(wasm.exists(), "wasm missing at {wasm:?}");
     wasm
 }
