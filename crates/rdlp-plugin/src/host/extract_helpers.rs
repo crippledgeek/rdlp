@@ -917,7 +917,8 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("DRM-only MPD must error after representations dropped");
-        let _ = err;
+        let msg = format!("{err:?}");
+        assert!(!msg.is_empty(), "error must not be empty");
     }
 
     /// Non-UTF-8 bytes in the response body must cause an error (MPD is XML, must be
@@ -946,7 +947,8 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("invalid utf-8 must error");
-        let _ = err;
+        let msg = format!("{err:?}");
+        assert!(!msg.is_empty(), "error must not be empty");
     }
 
     /// Well-formed XML that is not an MPD document must cause an error.
@@ -973,6 +975,7 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("non-MPD XML must error");
-        let _ = err;
+        let msg = format!("{err:?}");
+        assert!(!msg.is_empty(), "error must not be empty");
     }
 }
