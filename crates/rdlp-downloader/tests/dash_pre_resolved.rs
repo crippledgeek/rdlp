@@ -53,7 +53,7 @@ async fn pre_resolved_fragments_skip_mpd_fetch() {
     let base = server.url();
     let mut format = Format::new(
         "v720p",
-        &format!("{base}/manifest.mpd"),
+        format!("{base}/manifest.mpd"),
         "mp4",
         DownloadProtocol::HttpDashSegments,
     );
@@ -90,7 +90,7 @@ async fn pre_resolved_fragments_skip_mpd_fetch() {
         .expect("download should succeed");
 
     // Output must be init + seg1 + seg2 + seg3 concatenated.
-    let body = std::fs::read(&output).unwrap();
+    let body = tokio::fs::read(&output).await.unwrap();
     assert_eq!(body, b"INITSEG1SEG2SEG3");
 
     // Stats must reflect total bytes.

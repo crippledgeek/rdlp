@@ -1,11 +1,11 @@
-//! End-to-end test: per-Repr DASH Formats → FormatSelector picks `bv*+ba` →
+//! End-to-end test: per-Repr DASH Formats → `FormatSelector` picks `bv*+ba` →
 //! orchestrator dispatches two `download_format` calls via `download_merge_pair`
 //! → both stream intermediates written to disk with the correct bytes.
 //!
 //! # Scope reduction
 //!
-//! This test does NOT exercise the MergeStage / FFmpeg mux. The segment bodies
-//! are placeholder bytes (not valid fMP4), so the pipeline would fail
+//! This test does NOT exercise the `MergeStage` / `FFmpeg` mux. The segment
+//! bodies are placeholder bytes (not valid `fMP4`), so the pipeline would fail
 //! deterministically. What this test uniquely covers:
 //!
 //!   - `select_format` returns `DownloadPlan::Merge` with the **1080p** video
@@ -16,8 +16,13 @@
 //!   - The 720p Rep's mock endpoints are never called (wrong Rep filtered out
 //!     by selector).
 //!
-//! FFmpeg mux correctness is separately covered by
+//! `FFmpeg` mux correctness is separately covered by
 //! `crates/rdlp-downloader/tests/dash_e2e.rs`.
+
+// Test scope: large fixture-driven happy-path test exceeds the workspace's
+// strict per-fn line cap and holds a `mockito::Server` across the body so
+// `expect(0)` mocks fire on drop at end of scope.
+#![allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
 
 use crate::events::Event;
 use crate::handle::DownloadId;
@@ -113,7 +118,7 @@ fn info_with_formats(formats: Vec<Format>) -> InfoDict {
 // Test
 // ---------------------------------------------------------------------------
 
-/// `bv*+ba` on a 3-format InfoDict (720p video-only, 1080p video-only, audio-only)
+/// `bv*+ba` on a 3-format `InfoDict` (720p video-only, 1080p video-only, audio-only)
 /// must:
 ///
 ///   A. Return `DownloadPlan::Merge { video=1080p, audio=a1 }`.

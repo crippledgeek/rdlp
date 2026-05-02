@@ -303,6 +303,11 @@ mod tests {
             .join(name)
     }
 
+    // Sync fixture read in a sync `#[test]` context — `tokio::fs::read_to_string`
+    // would require `#[tokio::test]` and a runtime which these unit tests don't
+    // need. The disallowed-methods lint guards against blocking I/O in async
+    // code, which doesn't apply here.
+    #[allow(clippy::disallowed_methods)]
     fn load_fixture(name: &str) -> String {
         std::fs::read_to_string(fixture_path(name))
             .unwrap_or_else(|_| panic!("fixture missing: {name}"))
