@@ -48,7 +48,7 @@ fn parse_card(card: &ElementRef<'_>) -> Option<SearchResultPreview> {
         format!("{SITE_BASE}{href}")
     };
 
-    let uploader = parse_uploader(card);
+    let (uploader, uploader_url) = parse_uploader(card);
     let duration = parse_duration(card);
     let view_count = parse_view_count(card);
     let thumbnail_url = parse_thumbnail(card);
@@ -59,30 +59,49 @@ fn parse_card(card: &ElementRef<'_>) -> Option<SearchResultPreview> {
         thumbnail_url,
         duration,
         uploader,
+        uploader_url,
         actors: Vec::new(),
         view_count,
         upload_date: None,
     })
 }
 
-fn parse_uploader(card: &ElementRef<'_>) -> Option<String> {
+/// Returns `(display_name, absolute_url)` for the uploader anchor, if present.
+///
+/// The same anchor element provides both — the text node is the display name
+/// and the `href` attribute is the channel/model/pornstar path.
+fn parse_uploader(card: &ElementRef<'_>) -> (Option<String>, Option<String>) {
     // Primary: badged link (~5% of cards observed live).
     let strict = crate::selector!(r#"div.usernameWrap span.usernameBadgesWrapper a"#);
     if let Some(el) = card.select(strict).next() {
-        let s = el.text().collect::<String>().trim().to_string();
-        if !s.is_empty() {
-            return Some(s);
+        let name = el.text().collect::<String>().trim().to_string();
+        if !name.is_empty() {
+            let url = el.value().attr("href").map(|href| {
+                if href.starts_with("http") {
+                    href.to_string()
+                } else {
+                    format!("{SITE_BASE}{href}")
+                }
+            });
+            return (Some(name), url);
         }
     }
     // Fallback: any link in the username wrapper (~95% coverage live).
     let loose = crate::selector!("div.usernameWrap a");
     if let Some(el) = card.select(loose).next() {
-        let s = el.text().collect::<String>().trim().to_string();
-        if !s.is_empty() {
-            return Some(s);
+        let name = el.text().collect::<String>().trim().to_string();
+        if !name.is_empty() {
+            let url = el.value().attr("href").map(|href| {
+                if href.starts_with("http") {
+                    href.to_string()
+                } else {
+                    format!("{SITE_BASE}{href}")
+                }
+            });
+            return (Some(name), url);
         }
     }
-    None
+    (None, None)
 }
 
 fn parse_duration(card: &ElementRef<'_>) -> Option<f64> {
