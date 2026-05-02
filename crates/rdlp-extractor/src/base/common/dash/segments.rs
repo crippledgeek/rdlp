@@ -195,14 +195,21 @@ pub fn resolve_segment_timeline(
     bandwidth: u64,
 ) -> Vec<Fragment> {
     if plan.timescale == 0 {
-        log::warn!("DASH SegmentTimeline has timescale=0; skipping rep {}", repr_id);
+        log::warn!(
+            "DASH SegmentTimeline has timescale=0; skipping rep {}",
+            repr_id
+        );
         return Vec::new();
     }
 
     let mut fragments = Vec::new();
     if let Some(init_template) = &plan.initialization {
         let url = substitute_template(init_template, repr_id, bandwidth, None, None);
-        fragments.push(Fragment { url, duration: None, filesize: None });
+        fragments.push(Fragment {
+            url,
+            duration: None,
+            filesize: None,
+        });
     }
     let mut current_time: u64 = 0;
     for entry in &plan.entries {
@@ -222,13 +229,8 @@ pub fn resolve_segment_timeline(
                 );
                 return fragments;
             }
-            let url = substitute_template(
-                &plan.media,
-                repr_id,
-                bandwidth,
-                None,
-                Some(current_time),
-            );
+            let url =
+                substitute_template(&plan.media, repr_id, bandwidth, None, Some(current_time));
             let duration_seconds = entry.d as f64 / plan.timescale as f64;
             fragments.push(Fragment {
                 url,
@@ -253,8 +255,16 @@ mod timeline_tests {
             media: "$Time$.m4s".into(),
             timescale: 1_000,
             entries: vec![
-                TimelineEntry { t: Some(0), d: 4_000, r: 2 },
-                TimelineEntry { t: None, d: 2_000, r: 0 },
+                TimelineEntry {
+                    t: Some(0),
+                    d: 4_000,
+                    r: 2,
+                },
+                TimelineEntry {
+                    t: None,
+                    d: 2_000,
+                    r: 0,
+                },
             ],
         };
         let frags = resolve_segment_timeline(&plan, "v", 1);
@@ -271,8 +281,16 @@ mod timeline_tests {
             media: "$Time$.m4s".into(),
             timescale: 1_000,
             entries: vec![
-                TimelineEntry { t: Some(100), d: 50, r: 0 },
-                TimelineEntry { t: None, d: 30, r: 1 },
+                TimelineEntry {
+                    t: Some(100),
+                    d: 50,
+                    r: 0,
+                },
+                TimelineEntry {
+                    t: None,
+                    d: 30,
+                    r: 1,
+                },
             ],
         };
         let frags = resolve_segment_timeline(&plan, "v", 1);
@@ -330,7 +348,10 @@ mod template_tests {
             period_duration_seconds: 40.0,
         };
         let frags = resolve_segment_template(&plan, "v", 1);
-        assert!(frags.is_empty(), "duration=0 must return empty list, not OOM");
+        assert!(
+            frags.is_empty(),
+            "duration=0 must return empty list, not OOM"
+        );
     }
 
     #[test]
@@ -344,7 +365,10 @@ mod template_tests {
             period_duration_seconds: 40.0,
         };
         let frags = resolve_segment_template(&plan, "v", 1);
-        assert!(frags.is_empty(), "timescale=0 must return empty list, not silent NaN");
+        assert!(
+            frags.is_empty(),
+            "timescale=0 must return empty list, not silent NaN"
+        );
     }
 
     #[test]
@@ -358,7 +382,11 @@ mod template_tests {
             period_duration_seconds: 1e9, // 1 billion seconds at 1s each = 1B segments naive
         };
         let frags = resolve_segment_template(&plan, "v", 1);
-        assert_eq!(frags.len(), super::MAX_SEGMENTS_PER_REP, "must cap, not OOM");
+        assert_eq!(
+            frags.len(),
+            super::MAX_SEGMENTS_PER_REP,
+            "must cap, not OOM"
+        );
     }
 
     #[test]
@@ -403,7 +431,11 @@ pub fn resolve_segment_list(plan: &SegmentListPlan) -> Vec<Fragment> {
     }
     let cap = std::cmp::min(total, MAX_SEGMENTS_PER_REP);
     let mut fragments = Vec::with_capacity(cap);
-    if let Some(init) = plan.initialization.as_ref().filter(|_| fragments.len() < MAX_SEGMENTS_PER_REP) {
+    if let Some(init) = plan
+        .initialization
+        .as_ref()
+        .filter(|_| fragments.len() < MAX_SEGMENTS_PER_REP)
+    {
         fragments.push(Fragment {
             url: init.clone(),
             duration: None,
@@ -432,8 +464,14 @@ mod list_tests {
         let plan = SegmentListPlan {
             initialization: Some("init.m4s".into()),
             entries: vec![
-                SegmentListEntry { media: "seg1.m4s".into(), duration_seconds: Some(4.0) },
-                SegmentListEntry { media: "seg2.m4s".into(), duration_seconds: Some(4.0) },
+                SegmentListEntry {
+                    media: "seg1.m4s".into(),
+                    duration_seconds: Some(4.0),
+                },
+                SegmentListEntry {
+                    media: "seg2.m4s".into(),
+                    duration_seconds: Some(4.0),
+                },
             ],
         };
         let frags = resolve_segment_list(&plan);
@@ -447,7 +485,10 @@ mod list_tests {
     fn enumerates_literals_without_init() {
         let plan = SegmentListPlan {
             initialization: None,
-            entries: vec![SegmentListEntry { media: "only.m4s".into(), duration_seconds: None }],
+            entries: vec![SegmentListEntry {
+                media: "only.m4s".into(),
+                duration_seconds: None,
+            }],
         };
         let frags = resolve_segment_list(&plan);
         assert_eq!(frags.len(), 1);

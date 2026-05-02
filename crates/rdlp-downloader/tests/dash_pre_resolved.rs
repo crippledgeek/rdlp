@@ -3,6 +3,7 @@
 //! When `Format.fragments` is `Some(...)`, `download_format` must fetch the
 //! listed segment URLs directly without re-fetching or re-parsing the MPD.
 
+use rdlp_core::Downloader as _;
 use rdlp_downloader::DashDownloader;
 use rdlp_types::{DownloadProtocol, Format, Fragment};
 use tempfile::TempDir;

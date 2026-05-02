@@ -74,6 +74,31 @@ pub trait Downloader: Send + Sync {
     /// Size in bytes, or `None` if size cannot be determined
     async fn get_size(&self, url: &str) -> Result<Option<u64>>;
 
+    /// Download a [`rdlp_types::Format`] to a single output file.
+    ///
+    /// The default implementation delegates to [`Self::download_to_file`] using
+    /// `format.url`. Downloaders that need access to other `Format` fields (e.g.
+    /// pre-resolved `fragments` for DASH) must override this method.
+    ///
+    /// # Arguments
+    /// * `format` - The format descriptor (provides the URL and optional fragment list)
+    /// * `path` - Local file path to save to
+    /// * `progress` - Optional progress callback
+    ///
+    /// # Returns
+    /// Download statistics
+    ///
+    /// # Errors
+    /// Returns an error if the download fails.
+    async fn download_format(
+        &self,
+        format: &rdlp_types::Format,
+        path: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        self.download_to_file(&format.url, path, progress).await
+    }
+
     /// Download with resume support
     ///
     /// # Arguments

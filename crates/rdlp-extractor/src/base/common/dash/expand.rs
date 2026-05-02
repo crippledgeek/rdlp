@@ -12,8 +12,8 @@ use super::baseurl::resolve_chain;
 use super::errors::DashExpandError;
 use super::frame_rate::parse_frame_rate;
 use super::segments::{
-    resolve_segment_list, resolve_segment_template, resolve_segment_timeline, SegmentListEntry,
-    SegmentListPlan, SegmentTemplatePlan, SegmentTimelinePlan, TimelineEntry,
+    SegmentListEntry, SegmentListPlan, SegmentTemplatePlan, SegmentTimelinePlan, TimelineEntry,
+    resolve_segment_list, resolve_segment_template, resolve_segment_timeline,
 };
 
 /// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
@@ -69,8 +69,7 @@ pub fn expand_dash_representations(
             continue;
         }
 
-        let adapt_baseurls: Vec<String> =
-            adapt.BaseURL.iter().map(|b| b.base.clone()).collect();
+        let adapt_baseurls: Vec<String> = adapt.BaseURL.iter().map(|b| b.base.clone()).collect();
         let adapt_lang = adapt.lang.clone();
 
         for (repr_idx, repr) in adapt.representations.iter().enumerate() {
@@ -79,8 +78,7 @@ pub fn expand_dash_representations(
                 continue;
             }
 
-            let repr_baseurls: Vec<String> =
-                repr.BaseURL.iter().map(|b| b.base.clone()).collect();
+            let repr_baseurls: Vec<String> = repr.BaseURL.iter().map(|b| b.base.clone()).collect();
 
             let final_base = resolve_chain(
                 base_url,
@@ -110,13 +108,8 @@ pub fn expand_dash_representations(
             };
             let format_id = repr.id.clone().unwrap_or(synth_id);
 
-            let fragments = build_fragments(
-                adapt,
-                repr,
-                &format_id,
-                bandwidth,
-                period_duration_seconds,
-            );
+            let fragments =
+                build_fragments(adapt, repr, &format_id, bandwidth, period_duration_seconds);
             if fragments.is_empty() {
                 continue;
             }
@@ -232,7 +225,11 @@ fn build_fragments(
     period_duration_seconds: f64,
 ) -> Vec<Fragment> {
     // SegmentTemplate path (most common for on-demand content).
-    if let Some(tmpl) = repr.SegmentTemplate.as_ref().or(adapt.SegmentTemplate.as_ref()) {
+    if let Some(tmpl) = repr
+        .SegmentTemplate
+        .as_ref()
+        .or(adapt.SegmentTemplate.as_ref())
+    {
         // Duration-based: compute count from period duration / segment duration.
         if let (Some(media), Some(duration), Some(timescale)) =
             (&tmpl.media, tmpl.duration, tmpl.timescale)
@@ -391,8 +388,14 @@ mod tests {
         // The 50 retained should be the highest-bandwidth Reps (v11..v60).
         // Bandwidth formula: 100000 + i * 10000 → v11 = 210000, v60 = 700000.
         // After sort-desc + truncate, v11..v60 remain.
-        assert!(formats.iter().any(|f| f.format_id == "v60"), "highest-bandwidth Rep must remain");
-        assert!(!formats.iter().any(|f| f.format_id == "v1"), "lowest-bandwidth Rep must be dropped");
+        assert!(
+            formats.iter().any(|f| f.format_id == "v60"),
+            "highest-bandwidth Rep must remain"
+        );
+        assert!(
+            !formats.iter().any(|f| f.format_id == "v1"),
+            "lowest-bandwidth Rep must be dropped"
+        );
     }
 
     #[test]

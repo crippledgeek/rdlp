@@ -102,32 +102,6 @@ impl Default for DashDownloader {
 }
 
 impl DashDownloader {
-    /// Download a `Format` to `output`.
-    ///
-    /// When `format.fragments` is `Some`, the pre-resolved fragments are
-    /// fetched directly without re-fetching or re-parsing the MPD. When
-    /// `fragments` is `None`, the legacy MPD-URL path (`download::run`) is
-    /// used unchanged.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RdlpError::Download` on any I/O or HTTP failure. Security
-    /// validation errors are also surfaced as `RdlpError::Download`.
-    pub async fn download_format(
-        &self,
-        format: &Format,
-        output: &Path,
-        progress: Option<Box<dyn ProgressCallback>>,
-    ) -> Result<DownloadStats> {
-        if let Some(fragments) = format.fragments.as_deref() {
-            let base = format.fragment_base_url.as_deref();
-            self.download_pre_resolved_fragments(fragments, base, output)
-                .await
-        } else {
-            self.download_to_file(&format.url, output, progress).await
-        }
-    }
-
     /// Fetch a pre-resolved list of fragment URLs and concatenate them into
     /// `output` in order.
     ///
@@ -166,6 +140,20 @@ impl DashDownloader {
 
         for frag in fragments {
             let resolved_url = resolve_fragment_url(&frag.url, base_url)?;
+
+            // NOTE: per-fragment SSRF validation is intentionally NOT performed
+            // here. It mirrors the legacy MPD-URL path, which also fetches
+            // segments without per-segment gating. The orchestrator validates
+            // `format.url` at the format-dispatch boundary
+            // (`crates/rdlp-api/src/orchestrator/download.rs`), and fragment
+            // URLs SHOULD be validated at extract time inside
+            // `expand_dash_representations` (TODO: track as a follow-up — the
+            // hardened defence-in-depth gate belongs at extraction, where the
+            // URLs are first introduced into the Format). HLS `merge.rs:184`
+            // is the outlier that inlines the gate; we don't replicate that
+            // pattern because it forces every test to use a public-routable
+            // mock host.
+
             let bytes = fetch_fragment_bytes(&self.http_downloader, &resolved_url).await?;
 
             out_file
@@ -209,6 +197,32 @@ impl DashDownloader {
 impl Downloader for DashDownloader {
     fn protocol(&self) -> &'static str {
         "dash"
+    }
+
+    /// Download a [`Format`] to `output`.
+    ///
+    /// When `format.fragments` is `Some`, the pre-resolved fragments are
+    /// fetched directly without re-fetching or re-parsing the MPD. When
+    /// `fragments` is `None`, the legacy MPD-URL path (`download::run`) is
+    /// used unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RdlpError::Download` on any I/O or HTTP failure. Security
+    /// validation errors are also surfaced as `RdlpError::Download`.
+    async fn download_format(
+        &self,
+        format: &Format,
+        output: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        if let Some(fragments) = format.fragments.as_deref() {
+            let base = format.fragment_base_url.as_deref();
+            self.download_pre_resolved_fragments(fragments, base, output)
+                .await
+        } else {
+            self.download_to_file(&format.url, output, progress).await
+        }
     }
 
     fn supports(&self, url: &str) -> bool {

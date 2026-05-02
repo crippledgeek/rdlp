@@ -103,10 +103,29 @@ impl Orchestrator {
                     "Primary CDN failed, trying fallback"
                 );
             }
+
+            // For the primary URL we pass the full `format` so that
+            // `download_format` can use pre-resolved fragments (DASH) or other
+            // Format fields. For fallback URLs we create a minimal Format with
+            // only the fallback URL — fallback CDN entries never carry fragment
+            // lists, they are plain HTTP/HLS redirects.
+            let fallback_format;
+            let effective_format: &Format = if i == 0 {
+                format
+            } else {
+                fallback_format = Format::new(
+                    &format.format_id,
+                    *download_url,
+                    &format.ext,
+                    format.protocol.clone(),
+                );
+                &fallback_format
+            };
+
             match self
                 .execute_download(
                     &downloader,
-                    download_url,
+                    effective_format,
                     output_path,
                     effective_resume,
                     estimated_size,
