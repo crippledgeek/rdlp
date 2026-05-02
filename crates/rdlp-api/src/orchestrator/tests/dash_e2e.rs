@@ -121,7 +121,7 @@ fn info_with_formats(formats: Vec<Format>) -> InfoDict {
 ///   C. Never fetch 720p segments.
 ///   D. Write correct concatenated bytes to the intermediate files.
 #[tokio::test]
-async fn bv_star_plus_ba_selects_1080p_and_downloads_both_streams() {
+async fn test_bv_star_plus_ba_selects_1080p_and_downloads_both_streams() {
     // -----------------------------------------------------------------------
     // 1. Spin up mockito and register segment endpoints
     // -----------------------------------------------------------------------
