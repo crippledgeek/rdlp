@@ -12,6 +12,7 @@ rdlp-http = { path = "../rdlp-http" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
 rdlp-security = { path = "../rdlp-security" }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 wreq = { workspace = true }
@@ -26,6 +27,8 @@ url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+dash-mpd = { workspace = true }
+rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

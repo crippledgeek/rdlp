@@ -5,7 +5,7 @@
 //! This crate provides downloaders for various streaming protocols:
 //! - **HTTP/HTTPS**: Power-of-two chunking with fine-grained parallelism
 //! - **HLS (m3u8)**: Parallel segment downloads with automatic playlist parsing
-//! - **DASH**: Coming soon
+//! - **DASH**: Supported (static `VoD` only)
 //!
 //! ## Overview
 //!
@@ -273,6 +273,8 @@
 pub(crate) mod adaptive;
 /// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
+/// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
+pub mod dash;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
 /// HLS download state persistence for resume support
@@ -283,6 +285,7 @@ pub mod http;
 pub mod progress;
 
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
+pub use dash::DashDownloader;
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
 pub use progress::{
@@ -366,16 +369,27 @@ impl DownloaderRegistry {
             .with_concurrent_segments(config.concurrent_fragments)
             .with_buffer_size(config.buffer_size);
 
+        // Create DASH downloader
+        let dash_downloader = DashDownloader::new()
+            .with_http_downloader(http_downloader.clone())
+            .with_concurrent_segments(config.concurrent_fragments)
+            .with_buffer_size(config.buffer_size);
+
         let mut registry = Self {
             downloaders: Vec::new(),
             http_base: http_downloader.clone(),
             hls_base: hls_downloader.clone(),
         };
 
-        // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
+        // Register HLS downloader FIRST (specific matcher for .m3u8 URLs)
         registry.register(Arc::new(hls_downloader));
 
-        // Register HTTP downloader SECOND (fallback for generic HTTP/HTTPS URLs)
+        // Register DASH downloader SECOND (specific matcher for .mpd URLs;
+        // MUST come before HTTP because HTTP's supports() matches every
+        // https URL and would eat .mpd otherwise)
+        registry.register(Arc::new(dash_downloader));
+
+        // Register HTTP downloader LAST (fallback for generic HTTP/HTTPS URLs)
         registry.register(Arc::new(http_downloader));
 
         registry
@@ -513,6 +527,7 @@ mod tests {
 
         assert!(downloaders.contains(&"http"));
         assert!(downloaders.contains(&"hls"));
-        assert_eq!(downloaders.len(), 2);
+        assert!(downloaders.contains(&"dash"));
+        assert_eq!(downloaders.len(), 3);
     }
 }

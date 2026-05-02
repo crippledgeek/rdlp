@@ -42,6 +42,7 @@
 mod audio_codecs;
 pub mod audio_encoder_registry;
 mod encoding_tag;
+pub use encoding_tag::encoding_tool_tag;
 mod ffi_helpers;
 pub mod fixup;
 pub mod log_capture;

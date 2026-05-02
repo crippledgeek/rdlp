@@ -192,6 +192,18 @@ impl InfoExtractor for GenericExtractor {
 
 /// Try to handle a direct media URL from the prefetch response.
 fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>> {
+    // Check for DASH manifest before the generic media content-type branch, since
+    // `application/dash+xml` satisfies `is_media_content_type` and would otherwise
+    // produce a wrong generic-direct format instead of `HttpDashSegments`.
+    if pf.is_dash_content_type() || pf.is_mpd_manifest() {
+        let title = title_from_url(url);
+        let video_id = generate_video_id(url);
+        let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+        let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
+        info.formats = vec![format];
+        return Ok(Some(info));
+    }
+
     if pf.is_media_content_type() && !pf.is_html_content_type() {
         let title = title_from_url(url);
         let ext = ext_from_url(url).or_else(|| {
@@ -426,5 +438,47 @@ mod tests {
         };
         let result = try_direct_media("https://example.com/page", &pf).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn direct_mpd_emits_dash_format() {
+        // Content-Type: application/dash+xml — should emit HttpDashSegments, not generic direct
+        let pf_ct = PrefetchResponse {
+            content_type: Some("application/dash+xml".to_string()),
+            bytes: b"<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema\">".to_vec(),
+            content_length: None,
+        };
+        let result = try_direct_media("https://cdn.example.com/manifest.mpd", &pf_ct).unwrap();
+        assert!(
+            result.is_some(),
+            "expected Some(InfoDict) for MPD via Content-Type"
+        );
+        let info = result.unwrap();
+        assert_eq!(info.formats.len(), 1);
+        assert_eq!(
+            info.formats[0].protocol,
+            DownloadProtocol::HttpDashSegments,
+            "format must use HttpDashSegments protocol"
+        );
+        assert_eq!(info.formats[0].ext, "mpd");
+
+        // Body sniff: <MPD start with no application/dash+xml Content-Type
+        let pf_sniff = PrefetchResponse {
+            content_type: Some("application/octet-stream".to_string()),
+            bytes: b"<MPD xmlns=\"urn:mpeg:dash:schema\" type=\"static\">".to_vec(),
+            content_length: None,
+        };
+        let result2 = try_direct_media("https://cdn.example.com/stream.mpd", &pf_sniff).unwrap();
+        assert!(
+            result2.is_some(),
+            "expected Some(InfoDict) for MPD via body sniff"
+        );
+        let info2 = result2.unwrap();
+        assert_eq!(info2.formats.len(), 1);
+        assert_eq!(
+            info2.formats[0].protocol,
+            DownloadProtocol::HttpDashSegments,
+            "body-sniffed MPD must also use HttpDashSegments protocol"
+        );
     }
 }
