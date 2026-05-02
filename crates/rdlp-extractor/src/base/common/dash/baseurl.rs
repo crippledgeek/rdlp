@@ -20,7 +20,12 @@ where
         if let Some(first) = level.first() {
             match current.join(first) {
                 Ok(joined) => current = joined,
-                Err(_) => continue,
+                Err(e) => {
+                    log::warn!(
+                        "DASH BaseURL chain: failed to resolve {first:?} against {current}: {e}; skipping this level"
+                    );
+                    continue;
+                }
             }
         }
     }
@@ -65,5 +70,26 @@ mod tests {
             [mpd_lvl.as_slice(), adapt_lvl.as_slice(), repr_lvl.as_slice()],
         );
         assert_eq!(resolved.as_str(), "https://a.com/base/video/1080p/");
+    }
+
+    #[test]
+    fn empty_inner_level_is_skipped() {
+        let mpd = Url::parse("https://a.com/m.mpd").unwrap();
+        let empty: Vec<String> = vec![];
+        let with_value: Vec<String> = vec!["video/".into()];
+        let resolved =
+            resolve_chain(&mpd, [empty.as_slice(), with_value.as_slice()]);
+        // Empty level adds nothing; chain proceeds with second level.
+        assert_eq!(resolved.as_str(), "https://a.com/video/");
+    }
+
+    #[test]
+    fn multi_entry_level_only_first_consumed() {
+        let mpd = Url::parse("https://a.com/m.mpd").unwrap();
+        // Two CDN-failover entries; spec lets us pick any, we pick first.
+        let cdn_failover: Vec<String> =
+            vec!["primary/".into(), "fallback/".into()];
+        let resolved = resolve_chain(&mpd, [cdn_failover.as_slice()]);
+        assert_eq!(resolved.as_str(), "https://a.com/primary/");
     }
 }
