@@ -1,9 +1,14 @@
 //! DASH download orchestration: MPD fetch + parallel segment fetch + concat
 //! + FFmpeg stream-copy mux into a single output container.
+//!
+//! Resume model: per-segment temp files under `<output>.<suffix>.parts/`,
+//! with init markers and completed-index tracking persisted to
+//! `<output>.dash_state.json`. State is path-only-URL-keyed (CDN-tolerant),
+//! saved every 16 successful segment fetches, and deleted on full mux
+//! success.
 
 #![allow(clippy::doc_markdown)]
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,19 +23,26 @@ use rdlp_core::{
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::sync::Mutex;
 use url::Url;
 
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
+use crate::dash::state::DashDownloadState;
 use crate::http::HttpDownloader;
+
+/// Number of successful segment fetches between state-save flushes.
+const STATE_SAVE_BATCH: usize = 16;
 
 /// Run a DASH download for `mpd_url` into `output_path`.
 ///
 /// Internally produces `<output>.video.m4s` and (when an audio repr exists)
 /// `<output>.audio.m4s`, then muxes them via FFmpeg stream-copy into
 /// `output_path`. Intermediates are deleted on success and retained on
-/// mux failure for diagnosis.
+/// mux failure for diagnosis. Resume state is tracked under
+/// `<output>.dash_state.json` and pruned on successful mux.
+#[allow(clippy::too_many_lines, clippy::similar_names)]
 pub async fn run(
     http_downloader: &HttpDownloader,
     retry_config: Arc<RetryConfig>,
@@ -73,6 +85,33 @@ pub async fn run(
     let started = Instant::now();
     let bytes_total = Arc::new(AtomicU64::new(0));
 
+    // Resolve all paths up-front.
+    let video_final = intermediate_path(output_path, "video");
+    let audio_final = intermediate_path(output_path, "audio");
+    let video_parts = parts_dir(output_path, "video");
+    let audio_parts = parts_dir(output_path, "audio");
+    let state_file = state_path(output_path);
+
+    let video_repr_id = parsed.video.id.clone();
+    let audio_repr_id = parsed.audio.as_ref().map(|a| a.id.clone());
+
+    // Load matching state, or start fresh.
+    let loaded_state = DashDownloadState::load_matching(
+        &state_file,
+        &mpd_url_parsed,
+        &video_repr_id,
+        audio_repr_id.as_deref(),
+    )
+    .await;
+    let initial_state = loaded_state.unwrap_or_else(|| {
+        DashDownloadState::new(
+            &mpd_url_parsed,
+            video_repr_id.clone(),
+            audio_repr_id.clone(),
+        )
+    });
+    let state_arc = Arc::new(Mutex::new(initial_state));
+
     // Video (always present after parse).
     let video_ts = period_duration_ts(parsed.period_duration, &parsed.video.plan);
     let video_init = parsed.video.plan.init_url(&parsed.video.base_urls);
@@ -86,34 +125,56 @@ pub async fn run(
             url: Some(mpd_url.to_string()),
         });
     }
-    let video_path = intermediate_path(output_path, "video");
     let video_bytes = download_representation(
         http_downloader,
         &retry_config,
         concurrent_segments,
         buffer_size,
-        &parsed.video.id,
+        &video_repr_id,
         video_init,
         video_seg_urls,
-        &video_path,
+        &video_final,
+        &video_parts,
+        Arc::clone(&state_arc),
+        &state_file,
+        true,
         Arc::clone(&bytes_total),
     )
     .await?;
 
     // Audio (optional).
     let has_audio = parsed.audio.is_some();
-    let audio_bytes = download_audio_if_present(
-        http_downloader,
-        &retry_config,
-        concurrent_segments,
-        buffer_size,
-        &parsed,
-        output_path,
-        mpd_url,
-        Arc::clone(&bytes_total),
-    )
-    .await?;
-    let audio_path = intermediate_path(output_path, "audio");
+    let audio_bytes = if let Some(audio_repr) = parsed.audio.as_ref() {
+        let audio_ts = period_duration_ts(parsed.period_duration, &audio_repr.plan);
+        let audio_init = audio_repr.plan.init_url(&audio_repr.base_urls);
+        let audio_seg_urls = audio_repr
+            .plan
+            .segment_urls(&audio_repr.base_urls, audio_ts);
+        if audio_seg_urls.is_empty() {
+            return Err(RdlpError::Download {
+                message: "DASH: no audio segments resolved".into(),
+                url: Some(mpd_url.to_string()),
+            });
+        }
+        download_representation(
+            http_downloader,
+            &retry_config,
+            concurrent_segments,
+            buffer_size,
+            &audio_repr.id,
+            audio_init,
+            audio_seg_urls,
+            &audio_final,
+            &audio_parts,
+            Arc::clone(&state_arc),
+            &state_file,
+            false,
+            Arc::clone(&bytes_total),
+        )
+        .await?
+    } else {
+        0
+    };
 
     // ----- Mux video + audio into the single output container -----
     //
@@ -121,7 +182,15 @@ pub async fn run(
     // output) is preserved by performing the mux here, before returning.
     // Intermediates are deleted on success and retained on failure for
     // diagnosis.
-    mux_outputs(&video_path, has_audio.then_some(&audio_path), output_path).await?;
+    mux_outputs(&video_final, has_audio.then_some(&audio_final), output_path).await?;
+
+    // Mux succeeded → wipe resume state.
+    if let Err(e) = fs::remove_file(&state_file).await {
+        debug!(
+            "DASH state cleanup: failed to remove {} ({e})",
+            state_file.display()
+        );
+    }
 
     let elapsed = started.elapsed();
     let bytes = video_bytes + audio_bytes;
@@ -156,46 +225,6 @@ pub async fn run(
     Ok(stats)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn download_audio_if_present(
-    http: &HttpDownloader,
-    retry: &Arc<RetryConfig>,
-    concurrent: usize,
-    buffer_size: usize,
-    parsed: &manifest::ParsedManifest,
-    output_path: &Path,
-    mpd_url: &str,
-    bytes_counter: Arc<AtomicU64>,
-) -> Result<u64> {
-    let Some(audio_repr) = parsed.audio.as_ref() else {
-        return Ok(0);
-    };
-    let audio_ts = period_duration_ts(parsed.period_duration, &audio_repr.plan);
-    let audio_init = audio_repr.plan.init_url(&audio_repr.base_urls);
-    let audio_seg_urls = audio_repr
-        .plan
-        .segment_urls(&audio_repr.base_urls, audio_ts);
-    if audio_seg_urls.is_empty() {
-        return Err(RdlpError::Download {
-            message: "DASH: no audio segments resolved".into(),
-            url: Some(mpd_url.to_string()),
-        });
-    }
-    let audio_path = intermediate_path(output_path, "audio");
-    download_representation(
-        http,
-        retry,
-        concurrent,
-        buffer_size,
-        &audio_repr.id,
-        audio_init,
-        audio_seg_urls,
-        &audio_path,
-        bytes_counter,
-    )
-    .await
-}
-
 fn period_duration_ts(period_duration: Duration, plan: &SegmentPlan) -> u64 {
     let timescale = match plan {
         SegmentPlan::Template(t) => t.timescale,
@@ -226,7 +255,32 @@ fn intermediate_path(output: &Path, suffix: &str) -> PathBuf {
     parent.join(name)
 }
 
-#[allow(clippy::too_many_arguments)]
+fn parts_dir(output: &Path, suffix: &str) -> PathBuf {
+    let stem = output
+        .file_stem()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    let parent = output
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let mut name = stem.into_string().unwrap_or_default();
+    name.push('.');
+    name.push_str(suffix);
+    name.push_str(".parts");
+    parent.join(name)
+}
+
+fn state_path(output: &Path) -> PathBuf {
+    let mut p = output.to_path_buf().into_os_string();
+    p.push(".dash_state.json");
+    PathBuf::from(p)
+}
+
+fn segment_filename(idx: usize) -> String {
+    format!("{idx:04}.m4s")
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn download_representation(
     http: &HttpDownloader,
     retry: &Arc<RetryConfig>,
@@ -235,61 +289,185 @@ async fn download_representation(
     repr_id: &str,
     init_url: Option<Url>,
     seg_urls: Vec<Url>,
-    output: &Path,
+    final_path: &Path,
+    parts_dir: &Path,
+    state_arc: Arc<Mutex<DashDownloadState>>,
+    state_path: &Path,
+    is_video: bool,
     bytes_counter: Arc<AtomicU64>,
 ) -> Result<u64> {
-    if let Some(parent) = output.parent()
+    if let Some(parent) = final_path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).await?;
     }
+    fs::create_dir_all(parts_dir).await?;
 
+    let mut total: u64 = 0;
+
+    // ----- Init segment -----
+    let init_part_path = parts_dir.join("init.m4s");
+    if let Some(u) = init_url {
+        let init_done = {
+            let s = state_arc.lock().await;
+            if is_video {
+                s.init_video_done
+            } else {
+                s.init_audio_done
+            }
+        };
+        let on_disk = fs::metadata(&init_part_path)
+            .await
+            .is_ok_and(|m| m.len() > 0);
+        if init_done && on_disk {
+            // Resume — count existing bytes toward total.
+            let len = fs::metadata(&init_part_path).await?.len();
+            bytes_counter.fetch_add(len, Ordering::Relaxed);
+            total += len;
+            debug!("DASH repr {repr_id}: init resumed ({len} bytes)");
+        } else {
+            let bytes = download_one(http, retry, &u).await?;
+            let len = bytes.len() as u64;
+            fs::write(&init_part_path, &bytes).await?;
+            bytes_counter.fetch_add(len, Ordering::Relaxed);
+            total += len;
+            {
+                let mut s = state_arc.lock().await;
+                if is_video {
+                    s.init_video_done = true;
+                } else {
+                    s.init_audio_done = true;
+                }
+                if let Err(e) = s.save(state_path).await {
+                    warn!("DASH state save failed (init): {e}");
+                }
+            }
+            debug!("DASH repr {repr_id}: init {len} bytes");
+        }
+    }
+
+    // ----- Segments -----
+    //
+    // Partition into "already-done on disk" (skip + count bytes) vs
+    // "needs fetch" (enqueue).
+    let total_segments = seg_urls.len();
+    let mut to_fetch: Vec<(usize, Url)> = Vec::new();
+    {
+        let mut s = state_arc.lock().await;
+        for (i, u) in seg_urls.into_iter().enumerate() {
+            let part_path = parts_dir.join(segment_filename(i));
+            let recorded_done = s.is_segment_done(repr_id, i as u64);
+            let on_disk_len = fs::metadata(&part_path).await.map_or(0, |m| m.len());
+            if recorded_done && on_disk_len > 0 {
+                bytes_counter.fetch_add(on_disk_len, Ordering::Relaxed);
+                total += on_disk_len;
+            } else {
+                // If state said done but file is missing or zero-length, drop
+                // the bookkeeping so we re-fetch.
+                if recorded_done
+                    && let Some(v) = s.completed_segments.get_mut(repr_id)
+                {
+                    v.retain(|x| *x != i as u64);
+                }
+                to_fetch.push((i, u));
+            }
+        }
+    }
+
+    let concurrent = concurrent.max(1);
+
+    let mut stream =
+        futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
+            let http = http.clone();
+            let retry = Arc::clone(retry);
+            let parts_dir = parts_dir.to_path_buf();
+            async move {
+                let bytes = download_one(&http, &retry, &u).await?;
+                let part_path = parts_dir.join(segment_filename(i));
+                fs::write(&part_path, &bytes)
+                    .await
+                    .map_err(RdlpError::Io)?;
+                Ok::<(usize, u64), RdlpError>((i, bytes.len() as u64))
+            }
+        }))
+        .buffer_unordered(concurrent);
+
+    let mut completed_since_save: usize = 0;
+    let mut stream_err: Option<RdlpError> = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok((i, len)) => {
+                bytes_counter.fetch_add(len, Ordering::Relaxed);
+                total += len;
+                let mut s = state_arc.lock().await;
+                s.record_segment(repr_id, i as u64);
+                completed_since_save += 1;
+                if completed_since_save >= STATE_SAVE_BATCH {
+                    if let Err(e) = s.save(state_path).await {
+                        warn!("DASH state save failed (batch): {e}");
+                    }
+                    completed_since_save = 0;
+                }
+            }
+            Err(e) => {
+                // Don't return immediately — drain remaining in-flight
+                // results so their bookkeeping is recorded and persisted
+                // before we propagate the error.
+                if stream_err.is_none() {
+                    stream_err = Some(e);
+                }
+            }
+        }
+    }
+
+    // Always flush state once the stream has drained — covers both the
+    // success path and the error path (so the next run can resume from
+    // whatever did complete before the failure).
+    {
+        let mut s = state_arc.lock().await;
+        if let Err(e) = s.save(state_path).await {
+            warn!("DASH state save failed (final): {e}");
+        }
+    }
+    if let Some(e) = stream_err {
+        return Err(e);
+    }
+    let _ = completed_since_save;
+
+    // ----- Concat init + sorted segments → final_path -----
     let file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(output)
+        .open(final_path)
         .await?;
     let mut writer = BufWriter::with_capacity(buffer_size, file);
 
-    let mut total: u64 = 0;
-
-    if let Some(u) = init_url {
-        let bytes = download_one(http, retry, &u).await?;
-        let len = bytes.len() as u64;
-        writer.write_all(&bytes).await?;
-        bytes_counter.fetch_add(len, Ordering::Relaxed);
-        total += len;
-        log::debug!("DASH repr {repr_id}: init {len} bytes");
+    if init_url_was_present(&init_part_path).await {
+        let init_bytes = fs::read(&init_part_path).await?;
+        writer.write_all(&init_bytes).await?;
     }
-
-    let concurrent = concurrent.max(1);
-    let mut results: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
-
-    let mut stream = futures::stream::iter(seg_urls.into_iter().enumerate().map(|(i, u)| {
-        let http = http.clone();
-        let retry = Arc::clone(retry);
-        async move {
-            let bytes = download_one(&http, &retry, &u).await?;
-            Ok::<(usize, Vec<u8>), RdlpError>((i, bytes))
-        }
-    }))
-    .buffer_unordered(concurrent);
-
-    while let Some(item) = stream.next().await {
-        let (i, bytes) = item?;
-        let len = bytes.len() as u64;
-        bytes_counter.fetch_add(len, Ordering::Relaxed);
-        total += len;
-        results.insert(i, bytes);
-    }
-
-    for (_, bytes) in results {
-        writer.write_all(&bytes).await?;
+    for i in 0..total_segments {
+        let part_path = parts_dir.join(segment_filename(i));
+        let seg_bytes = fs::read(&part_path).await?;
+        writer.write_all(&seg_bytes).await?;
     }
     writer.flush().await?;
 
+    // Best-effort cleanup of parts dir — successful concat means we don't
+    // need them anymore. Keep them on error so the next run can resume.
+    if let Err(e) = fs::remove_dir_all(parts_dir).await {
+        debug!(
+            "DASH parts cleanup: failed to remove {} ({e})",
+            parts_dir.display()
+        );
+    }
+
     Ok(total)
+}
+
+async fn init_url_was_present(init_part_path: &Path) -> bool {
+    fs::metadata(init_part_path).await.is_ok()
 }
 
 /// Mux video (+ optional audio) intermediates into `output_path` via
@@ -298,7 +476,11 @@ async fn download_representation(
 ///
 /// When `audio_path` is `None`, the video intermediate is moved (renamed,
 /// or copy+remove on cross-mount failure) into the final output path.
-async fn mux_outputs(video_path: &Path, audio_path: Option<&Path>, output_path: &Path) -> Result<()> {
+async fn mux_outputs(
+    video_path: &Path,
+    audio_path: Option<&Path>,
+    output_path: &Path,
+) -> Result<()> {
     if let Some(audio_path) = audio_path {
         let runner = FFmpegRunner::new().map_err(|e| {
             RdlpError::from(DashError::Mux(format!("FFmpegRunner init failed: {e}")))
@@ -344,7 +526,9 @@ async fn mux_outputs(video_path: &Path, audio_path: Option<&Path>, output_path: 
             debug!(
                 "DASH video-only rename failed ({rename_err}); falling back to copy+remove"
             );
-            fs::copy(video_path, output_path).await.map_err(RdlpError::Io)?;
+            fs::copy(video_path, output_path)
+                .await
+                .map_err(RdlpError::Io)?;
             if let Err(e) = fs::remove_file(video_path).await {
                 debug!(
                     "DASH cleanup: failed to remove {} ({e})",

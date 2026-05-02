@@ -11,7 +11,7 @@ pub mod errors;
 pub mod manifest;
 pub mod segments;
 mod download;
-mod state;
+pub mod state;
 
 pub use errors::DashError;
 
@@ -81,6 +81,15 @@ impl DashDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub const fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
+        self
+    }
+
+    /// Replace the retry policy used for MPD and segment fetches. Tests
+    /// override this with a tight policy to avoid burning multi-minute
+    /// backoff cycles on synthetic 503s.
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = Arc::new(config);
         self
     }
 }
