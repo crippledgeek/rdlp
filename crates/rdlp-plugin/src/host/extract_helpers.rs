@@ -294,6 +294,20 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
     }
 
+    async fn extract_mpd(
+        &mut self,
+        _url: String,
+        _video_id: String,
+        _opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
+    ) -> Result<
+        crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
+        crate::bindings::rdlp::plugin::host_fetch::FetchError,
+    > {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction;
+        // Stub — real impl in Task 6.
+        Ok(MpdExtraction { formats: vec![], subtitles: vec![] })
+    }
+
     async fn extract_json_ld(
         &mut self,
         html: String,
