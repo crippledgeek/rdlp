@@ -136,6 +136,7 @@ fn api_video_to_preview(mut video: ApiVideo) -> Option<SearchResultPreview> {
         thumbnail_url: thumbnail,
         duration,
         uploader: None,
+        uploader_url: None,
         actors: video.pornstars.drain(..).map(|p| p.pornstar_name).collect(),
         view_count: video.views,
         upload_date: video.publish_date,

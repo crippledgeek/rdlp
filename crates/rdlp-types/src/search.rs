@@ -62,6 +62,11 @@ pub struct SearchResultPreview {
     pub duration: Option<f64>,
     /// Uploader / channel name.
     pub uploader: Option<String>,
+    /// Uploader / channel page URL (absolute). Site-specific namespace —
+    /// e.g. `PornHub` exposes `/model/<slug>`, `/channels/<slug>`, and
+    /// `/pornstar/<slug>` under this field.
+    #[serde(default)]
+    pub uploader_url: Option<String>,
     /// Actors / performers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actors: Vec<String>,
@@ -135,6 +140,7 @@ mod tests {
             thumbnail_url: Some("https://thumb.jpg".to_string()),
             duration: Some(120.0),
             uploader: None,
+            uploader_url: None,
             actors: vec![],
             view_count: Some(1000),
             upload_date: None,

@@ -477,6 +477,7 @@ fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchResultPrevie
         thumbnail_url,
         duration,
         uploader: None,
+        uploader_url: None,
         actors,
         view_count: None,
         upload_date,

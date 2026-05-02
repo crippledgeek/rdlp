@@ -4,4 +4,7 @@
 mod extractor;
 
 #[cfg(test)]
+mod fetch;
+
+#[cfg(test)]
 mod search_html;

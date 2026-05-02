@@ -78,6 +78,7 @@ fn parse_search_results_json_impl(initials: &Value) -> anyhow::Result<Vec<Search
             thumbnail_url,
             duration,
             uploader: None,
+            uploader_url: None,
             actors: vec![],
             view_count,
             upload_date,
