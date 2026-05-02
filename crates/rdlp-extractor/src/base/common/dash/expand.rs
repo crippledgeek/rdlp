@@ -383,6 +383,19 @@ mod tests {
     }
 
     #[test]
+    fn mega_rep_cap_at_50() {
+        let xml = load_fixture("mega_reps.mpd");
+        let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
+        let formats = expand_dash_representations(&xml, &base).unwrap();
+        assert_eq!(formats.len(), 50, "60-Rep MPD should cap at 50");
+        // The 50 retained should be the highest-bandwidth Reps (v11..v60).
+        // Bandwidth formula: 100000 + i * 10000 → v11 = 210000, v60 = 700000.
+        // After sort-desc + truncate, v11..v60 remain.
+        assert!(formats.iter().any(|f| f.format_id == "v60"), "highest-bandwidth Rep must remain");
+        assert!(!formats.iter().any(|f| f.format_id == "v1"), "lowest-bandwidth Rep must be dropped");
+    }
+
+    #[test]
     fn missing_repr_id_synthesizes() {
         // Synthesize an MPD inline with a Rep that has no @id attribute.
         let xml = r#"<?xml version="1.0"?>
