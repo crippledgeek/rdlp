@@ -538,6 +538,41 @@ def _format_to_dict(f):
     return out
 
 
+def _location_key(url):
+    """yt-dlp convention: 'url' for absolute, 'path' for relative fragments."""
+    return 'url' if url.startswith(('http://', 'https://')) else 'path'
+
+
+def _mpd_fragment_to_dict(frag):
+    out = {_location_key(frag.url): frag.url}
+    if frag.duration is not None:
+        out['duration'] = frag.duration
+    return out
+
+
+def _mpd_format_to_dict(f, manifest_url):
+    d = {
+        'format_id': f.format_id,
+        'url': f.url,
+        'manifest_url': f.manifest_url or manifest_url,
+        'ext': f.ext,
+        'protocol': 'http_dash_segments',
+        'fragments': [_mpd_fragment_to_dict(x) for x in f.fragments],
+    }
+    if f.fragment_base_url is not None:
+        d['fragment_base_url'] = f.fragment_base_url
+    if f.container is not None:
+        d['container'] = f.container
+    for k, v in (
+        ('vcodec', f.vcodec), ('acodec', f.acodec), ('tbr', f.tbr),
+        ('width', f.width), ('height', f.height), ('fps', f.fps),
+        ('asr', f.asr), ('language', f.language),
+    ):
+        if v is not None:
+            d[k] = v
+    return d
+
+
 def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
     """Multi-group / named-group / no-host calls keep going through the
     local Python `re` module — the host helper returns a single string."""
@@ -1229,16 +1264,36 @@ class InfoExtractor:
         _host.log('debug', 'F4M format requested; not supported, returning []')
         return []
 
-    def _extract_mpd_formats_and_subtitles(self, *args, **kwargs):
-        """DASH/MPD is unimplemented in rdlp-downloader (see the
-        `project_dash-protocol-missing` memory). Stub returns
-        `([], {})` — extractors using DASH-only sources will surface a
-        `NoFormatsError` downstream rather than crash here."""
-        _host.log(
-            'debug',
-            'MPD/DASH format requested; not yet supported in rdlp, returning empty pair',
-        )
-        return [], {}
+    def _extract_mpd_formats(self, *args, **kwargs):
+        """yt-dlp's _extract_mpd_formats. Returns formats only (drops subs)."""
+        formats, _subs = self._extract_mpd_formats_and_subtitles(*args, **kwargs)
+        return formats
+
+    def _extract_mpd_formats_and_subtitles(
+        self, mpd_url, video_id, *,
+        mpd_id=None, fatal=True,
+        data=None, headers=None, query=None,
+        note=None, errnote=None,
+    ):
+        """Slice-2.5+ passthrough to host-extract-helpers.extract-mpd."""
+        if data is not None or headers is not None or query is not None:
+            raise NotImplementedError(
+                '_extract_mpd_formats_and_subtitles: data/headers/query are not '
+                'yet plumbed through WIT; track in Slice 2.5+'
+            )
+        if note is not None:
+            _host.log('info', f'{note}: {mpd_url}')
+        try:
+            result = _host.extract_mpd(
+                mpd_url, video_id, mpd_id=mpd_id, fatal=fatal,
+            )
+        except RuntimeError as e:
+            label = errnote or f'failed to extract DASH manifest {mpd_url}'
+            _host.log('warn', f'{label}: {e}')
+            if fatal:
+                raise
+            return [], {}
+        return [_mpd_format_to_dict(f, mpd_url) for f in result.formats], {}
 
     def _search_json_ld(self, html, video_id, expected_type=None, *, fatal=True, default=NO_DEFAULT):
         """Slice-2.5 passthrough to host-extract-helpers.extract-json-ld.
