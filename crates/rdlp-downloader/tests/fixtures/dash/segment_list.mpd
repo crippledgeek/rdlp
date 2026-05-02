@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     mediaPresentationDuration="PT30S"
+     minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period id="0" duration="PT30S">
+    <AdaptationSet id="0" mimeType="video/mp4" contentType="video" segmentAlignment="true">
+      <Representation id="v1" bandwidth="1000000" codecs="avc1.640028" width="1920" height="1080">
+        <SegmentList timescale="1000" duration="6000">
+          <Initialization sourceURL="video/init.mp4"/>
+          <SegmentURL media="video/seg-1.m4s"/>
+          <SegmentURL media="video/seg-2.m4s"/>
+          <SegmentURL media="video/seg-3.m4s"/>
+          <SegmentURL media="video/seg-4.m4s"/>
+          <SegmentURL media="video/seg-5.m4s"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="1" mimeType="audio/mp4" contentType="audio" lang="en" segmentAlignment="true">
+      <Representation id="a1" bandwidth="128000" codecs="mp4a.40.2" audioSamplingRate="48000">
+        <SegmentList timescale="1000" duration="6000">
+          <Initialization sourceURL="audio/init.mp4"/>
+          <SegmentURL media="audio/seg-1.m4s"/>
+          <SegmentURL media="audio/seg-2.m4s"/>
+          <SegmentURL media="audio/seg-3.m4s"/>
+          <SegmentURL media="audio/seg-4.m4s"/>
+          <SegmentURL media="audio/seg-5.m4s"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
