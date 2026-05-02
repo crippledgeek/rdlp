@@ -460,6 +460,7 @@ mod tests {
             DownloadProtocol::HttpDashSegments,
             "format must use HttpDashSegments protocol"
         );
+        assert_eq!(info.formats[0].format_id, "dash");
         assert_eq!(info.formats[0].ext, "mpd");
 
         // Body sniff: <MPD start with no application/dash+xml Content-Type
@@ -480,5 +481,7 @@ mod tests {
             DownloadProtocol::HttpDashSegments,
             "body-sniffed MPD must also use HttpDashSegments protocol"
         );
+        assert_eq!(info2.formats[0].format_id, "dash");
+        assert_eq!(info2.formats[0].ext, "mpd");
     }
 }
