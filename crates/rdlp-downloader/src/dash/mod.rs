@@ -31,13 +31,9 @@ use crate::http::HttpDownloader;
 /// single output container via `FFmpeg` stream-copy.
 #[derive(Clone)]
 pub struct DashDownloader {
-    #[allow(dead_code)]
     http_downloader: HttpDownloader,
-    #[allow(dead_code)]
     concurrent_segments: usize,
-    #[allow(dead_code)]
     buffer_size: usize,
-    #[allow(dead_code)]
     retry_config: Arc<RetryConfig>,
     #[allow(dead_code)]
     expected_size: Option<u64>,
@@ -114,15 +110,20 @@ impl Downloader for DashDownloader {
 
     async fn download_to_file(
         &self,
-        _url: &str,
-        _path: &Path,
-        _progress: Option<Box<dyn ProgressCallback>>,
+        url: &str,
+        path: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
-        // Implemented in Task 5 (download.rs::run).
-        Err(rdlp_core::RdlpError::Download {
-            message: "DashDownloader::download_to_file not yet implemented".to_string(),
-            url: None,
-        })
+        download::run(
+            &self.http_downloader,
+            Arc::clone(&self.retry_config),
+            self.concurrent_segments,
+            self.buffer_size,
+            url,
+            path,
+            progress,
+        )
+        .await
     }
 
     async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
