@@ -2,6 +2,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-02-dash-per-representation-formats-design.md`.
 
+mod baseurl;
 mod errors;
 mod expand;
 mod segments;
