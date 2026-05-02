@@ -403,14 +403,12 @@ pub fn resolve_segment_list(plan: &SegmentListPlan) -> Vec<Fragment> {
     }
     let cap = std::cmp::min(total, MAX_SEGMENTS_PER_REP);
     let mut fragments = Vec::with_capacity(cap);
-    if let Some(init) = &plan.initialization {
-        if fragments.len() < MAX_SEGMENTS_PER_REP {
-            fragments.push(Fragment {
-                url: init.clone(),
-                duration: None,
-                filesize: None,
-            });
-        }
+    if let Some(init) = plan.initialization.as_ref().filter(|_| fragments.len() < MAX_SEGMENTS_PER_REP) {
+        fragments.push(Fragment {
+            url: init.clone(),
+            duration: None,
+            filesize: None,
+        });
     }
     for entry in &plan.entries {
         if fragments.len() >= MAX_SEGMENTS_PER_REP {

@@ -4,10 +4,20 @@
 //! per-Repr-Format level. The DASH downloader is the consumer; it reads
 //! `format.fragments` directly without re-parsing the manifest.
 
-use rdlp_types::Format;
+use rdlp_types::{Codec, DownloadProtocol, Format, Fragment};
 use url::Url;
 
+use super::audio_sampling_rate::parse_audio_sampling_rate;
+use super::baseurl::resolve_chain;
 use super::errors::DashExpandError;
+use super::frame_rate::parse_frame_rate;
+use super::segments::{
+    resolve_segment_list, resolve_segment_template, resolve_segment_timeline, SegmentListEntry,
+    SegmentListPlan, SegmentTemplatePlan, SegmentTimelinePlan, TimelineEntry,
+};
+
+/// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
+pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 
 /// Parse the MPD body and project each Representation to a [`Format`].
 ///
@@ -15,15 +25,322 @@ use super::errors::DashExpandError;
 /// from (used as the root of the BaseURL resolution chain).
 ///
 /// Returns one Format per usable Representation in the **first** Period.
-/// Multi-period MPDs log a warning and skip subsequent periods (see spec's non-goals — more conservative than yt-dlp).
+/// Multi-period MPDs log a warning and skip subsequent periods (see spec's
+/// non-goals — more conservative than yt-dlp).
 ///
 /// # Errors
 ///
 /// Returns [`DashExpandError`] when the MPD cannot be parsed, declares a live
 /// stream, or contains no usable representations after filtering.
 pub fn expand_dash_representations(
-    _mpd_xml: &str,
-    _base_url: &Url,
+    mpd_xml: &str,
+    base_url: &Url,
 ) -> Result<Vec<Format>, DashExpandError> {
-    Ok(Vec::new())
+    let mpd = dash_mpd::parse(mpd_xml).map_err(|e| DashExpandError::Parse(e.to_string()))?;
+
+    if mpd.mpdtype.as_deref() == Some("dynamic") {
+        return Err(DashExpandError::DynamicMpd);
+    }
+
+    if mpd.periods.len() > 1 {
+        log::warn!(
+            "DASH: MPD has {} periods; only first is expanded (multi-period merging deferred)",
+            mpd.periods.len()
+        );
+    }
+
+    let Some(period) = mpd.periods.first() else {
+        return Err(DashExpandError::NoUsableReps);
+    };
+
+    let mpd_baseurls: Vec<String> = mpd.base_url.iter().map(|b| b.base.clone()).collect();
+    let period_duration_seconds = period
+        .duration
+        .as_ref()
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
+    let mut drm_dropped = 0usize;
+    let mut formats: Vec<Format> = Vec::new();
+
+    for (adapt_idx, adapt) in period.adaptations.iter().enumerate() {
+        if !adapt.ContentProtection.is_empty() {
+            drm_dropped += adapt.representations.len();
+            continue;
+        }
+
+        let adapt_baseurls: Vec<String> =
+            adapt.BaseURL.iter().map(|b| b.base.clone()).collect();
+        let adapt_lang = adapt.lang.clone();
+
+        for (repr_idx, repr) in adapt.representations.iter().enumerate() {
+            if !repr.ContentProtection.is_empty() {
+                drm_dropped += 1;
+                continue;
+            }
+
+            let repr_baseurls: Vec<String> =
+                repr.BaseURL.iter().map(|b| b.base.clone()).collect();
+
+            let final_base = resolve_chain(
+                base_url,
+                [
+                    mpd_baseurls.as_slice(),
+                    adapt_baseurls.as_slice(),
+                    repr_baseurls.as_slice(),
+                ],
+            );
+
+            let mime = repr
+                .mimeType
+                .as_deref()
+                .or(adapt.mimeType.as_deref())
+                .unwrap_or("");
+            let is_video = mime.starts_with("video/");
+            let is_audio = mime.starts_with("audio/");
+            if !is_video && !is_audio {
+                continue;
+            }
+
+            let bandwidth = repr.bandwidth.unwrap_or(0);
+            let synth_id = if is_video {
+                format!("dash_v_{adapt_idx}_{repr_idx}")
+            } else {
+                format!("dash_a_{adapt_idx}_{repr_idx}")
+            };
+            let format_id = repr.id.clone().unwrap_or(synth_id);
+
+            let fragments = build_fragments(
+                adapt,
+                repr,
+                &format_id,
+                bandwidth,
+                period_duration_seconds,
+            );
+            if fragments.is_empty() {
+                continue;
+            }
+
+            let codecs = repr
+                .codecs
+                .clone()
+                .or_else(|| adapt.codecs.clone())
+                .unwrap_or_default();
+
+            let (vcodec, acodec) = if is_video {
+                (Codec::Present(codecs), Codec::Absent)
+            } else {
+                (Codec::Absent, Codec::Present(codecs))
+            };
+
+            let ext = mime_to_ext(mime);
+            let container = format!("{ext}_dash");
+
+            let fps = repr.frameRate.as_deref().and_then(parse_frame_rate);
+            let asr = repr
+                .audioSamplingRate
+                .as_deref()
+                .or(adapt.audioSamplingRate.as_deref())
+                .and_then(parse_audio_sampling_rate);
+
+            let mut f = Format::new(
+                &format_id,
+                base_url.as_str(),
+                ext,
+                DownloadProtocol::HttpDashSegments,
+            );
+            f.vcodec = vcodec;
+            f.acodec = acodec;
+            f.container = Some(container);
+            f.tbr = if bandwidth > 0 {
+                Some(bandwidth as f64 / 1000.0)
+            } else {
+                None
+            };
+            f.width = repr.width.map(|w| w as u32);
+            f.height = repr.height.map(|h| h as u32);
+            f.fps = fps;
+            f.asr = if is_audio { asr } else { None };
+            f.language = adapt_lang.clone();
+            f.fragments = Some(fragments);
+            f.fragment_base_url = Some(final_base.to_string());
+
+            formats.push(f);
+        }
+    }
+
+    if drm_dropped > 0 {
+        log::warn!("DASH: dropped {drm_dropped} DRM-protected representation(s)");
+    }
+
+    if formats.len() > MAX_REPS_PER_MPD {
+        formats.sort_by(|a, b| {
+            b.tbr
+                .partial_cmp(&a.tbr)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let dropped = formats.len() - MAX_REPS_PER_MPD;
+        formats.truncate(MAX_REPS_PER_MPD);
+        log::warn!("DASH: capped representations at {MAX_REPS_PER_MPD} (dropped {dropped})");
+    }
+
+    if formats.is_empty() {
+        return Err(DashExpandError::NoUsableReps);
+    }
+    Ok(formats)
+}
+
+/// Map a MIME type to a container file extension.
+fn mime_to_ext(mime: &str) -> &'static str {
+    match mime {
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "audio/mp4" => "m4a",
+        "audio/webm" => "webm",
+        _ => "mp4",
+    }
+}
+
+/// Resolve the init URL from a `SegmentTemplate`.
+///
+/// Prefers the `@initialization` attribute (a URL string). Falls back to the
+/// `<Initialization sourceURL="…">` child element.
+fn tmpl_init_url(tmpl: &dash_mpd::SegmentTemplate) -> Option<String> {
+    // @initialization attribute takes precedence (most common form).
+    if let Some(url) = tmpl.initialization.as_ref().filter(|u| !u.is_empty()) {
+        return Some(url.clone());
+    }
+    // <Initialization sourceURL="…"> child element.
+    tmpl.Initialization
+        .as_ref()
+        .and_then(|i| i.sourceURL.clone())
+        .filter(|u| !u.is_empty())
+}
+
+/// Build a pre-resolved fragment list for one Representation.
+///
+/// Priority: Repr-level `SegmentTemplate` → AdaptationSet-level `SegmentTemplate`
+/// → Repr-level `SegmentList` → AdaptationSet-level `SegmentList`.
+///
+/// Returns an empty Vec when no segment information is found (the caller skips
+/// the Repr).
+fn build_fragments(
+    adapt: &dash_mpd::AdaptationSet,
+    repr: &dash_mpd::Representation,
+    format_id: &str,
+    bandwidth: u64,
+    period_duration_seconds: f64,
+) -> Vec<Fragment> {
+    // SegmentTemplate path (most common for on-demand content).
+    if let Some(tmpl) = repr.SegmentTemplate.as_ref().or(adapt.SegmentTemplate.as_ref()) {
+        // Duration-based: compute count from period duration / segment duration.
+        if let (Some(media), Some(duration), Some(timescale)) =
+            (&tmpl.media, tmpl.duration, tmpl.timescale)
+        {
+            let plan = SegmentTemplatePlan {
+                initialization: tmpl_init_url(tmpl),
+                media: media.clone(),
+                start_number: tmpl.startNumber.unwrap_or(1),
+                // duration is f64 in dash-mpd 0.20.2 (handles non-integer values in the wild).
+                duration: duration as u64,
+                timescale,
+                period_duration_seconds,
+            };
+            return resolve_segment_template(&plan, format_id, bandwidth);
+        }
+        // SegmentTimeline: explicit <S t d r> entries.
+        if let (Some(timeline), Some(media), Some(timescale)) =
+            (tmpl.SegmentTimeline.as_ref(), &tmpl.media, tmpl.timescale)
+        {
+            let entries: Vec<TimelineEntry> = timeline
+                .segments
+                .iter()
+                .map(|s| TimelineEntry {
+                    t: s.t,
+                    d: s.d,
+                    r: s.r.unwrap_or(0),
+                })
+                .collect();
+            let plan = SegmentTimelinePlan {
+                initialization: tmpl_init_url(tmpl),
+                media: media.clone(),
+                timescale,
+                entries,
+            };
+            return resolve_segment_timeline(&plan, format_id, bandwidth);
+        }
+    }
+
+    // SegmentList path: explicit <SegmentURL media="…"/> list.
+    if let Some(seg_list) = repr.SegmentList.as_ref().or(adapt.SegmentList.as_ref()) {
+        let plan = SegmentListPlan {
+            initialization: seg_list
+                .Initialization
+                .as_ref()
+                .and_then(|i| i.sourceURL.clone()),
+            entries: seg_list
+                .segment_urls
+                .iter()
+                .filter_map(|u| {
+                    u.media.clone().map(|m| SegmentListEntry {
+                        media: m,
+                        duration_seconds: None,
+                    })
+                })
+                .collect(),
+        };
+        return resolve_segment_list(&plan);
+    }
+
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdlp_types::DownloadProtocol;
+
+    fn fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/rdlp-downloader/tests/fixtures/dash")
+            .join(name)
+    }
+
+    fn load_fixture(name: &str) -> String {
+        std::fs::read_to_string(fixture_path(name))
+            .unwrap_or_else(|_| panic!("fixture missing: {name}"))
+    }
+
+    #[test]
+    fn segment_template_three_video_two_audio() {
+        let xml = load_fixture("segment_template.mpd");
+        let base = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
+        let formats = expand_dash_representations(&xml, &base).unwrap();
+
+        // Fixture defines at least one video Repr + one audio Repr.
+        assert!(
+            formats.len() >= 2,
+            "expected at least 2 reps from fixture, got {}",
+            formats.len()
+        );
+
+        let video_count = formats.iter().filter(|f| f.vcodec.is_present()).count();
+        let audio_count = formats.iter().filter(|f| f.acodec.is_present()).count();
+        assert!(video_count > 0, "at least one video Repr");
+        assert!(audio_count > 0, "at least one audio Repr");
+
+        for f in &formats {
+            assert_eq!(f.protocol, DownloadProtocol::HttpDashSegments);
+            assert!(f.fragments.is_some(), "fragments must be pre-resolved");
+            let frags = f.fragments.as_ref().unwrap();
+            assert!(!frags.is_empty(), "non-empty fragment list");
+            // Video-only XOR audio-only — never both, never neither.
+            assert_ne!(
+                f.vcodec.is_present(),
+                f.acodec.is_present(),
+                "format {} should be either video-only or audio-only, not both/neither",
+                f.format_id
+            );
+        }
+    }
 }
