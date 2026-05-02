@@ -31,6 +31,13 @@ impl PrefetchResponse {
             .is_some_and(|ct| patterns::is_media_content_type(ct))
     }
 
+    /// Check if Content-Type indicates a DASH manifest.
+    pub fn is_dash_content_type(&self) -> bool {
+        self.content_type
+            .as_ref()
+            .is_some_and(|ct| ct.to_lowercase().contains("dash+xml"))
+    }
+
     /// Check if Content-Type indicates HTML.
     pub fn is_html_content_type(&self) -> bool {
         self.content_type
@@ -44,7 +51,6 @@ impl PrefetchResponse {
     }
 
     /// Check if prefetched bytes look like an MPD manifest.
-    #[allow(dead_code)]
     pub fn is_mpd_manifest(&self) -> bool {
         let text = String::from_utf8_lossy(&self.bytes);
         let trimmed = text.trim_start();
