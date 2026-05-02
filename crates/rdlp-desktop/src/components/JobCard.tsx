@@ -80,6 +80,7 @@ export function JobCard({ job, onCancel, onRemove, onRetry }: JobCardProps) {
                 {isRunning && (
                     <div className="space-y-1.5">
                         <Progress
+                            aria-label="Download progress"
                             value={(job.progress ?? 0) * 100}
                             className="h-1"
                         />
