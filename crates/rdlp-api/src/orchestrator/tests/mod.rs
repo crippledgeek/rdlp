@@ -8,6 +8,7 @@
     unused_variables
 )]
 
+mod dash_e2e;
 mod property_tests;
 mod resume_tests;
 mod template_tests;
