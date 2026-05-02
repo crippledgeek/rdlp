@@ -1,7 +1,5 @@
-//! DASH download orchestration: MPD fetch + parallel segment fetch + concat.
-//!
-//! Mux to a single output container is performed by Task 5; this module
-//! produces `<output>.video.m4s` and (optionally) `<output>.audio.m4s`.
+//! DASH download orchestration: MPD fetch + parallel segment fetch + concat
+//! + FFmpeg stream-copy mux into a single output container.
 
 #![allow(clippy::doc_markdown)]
 
@@ -13,23 +11,26 @@ use std::time::{Duration, Instant};
 
 use backon::Retryable;
 use futures::StreamExt;
-use log::{info, warn};
+use log::{debug, info, warn};
 use rdlp_core::{
     DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig, is_retryable_error,
 };
+use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use url::Url;
 
+use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
 use crate::http::HttpDownloader;
 
 /// Run a DASH download for `mpd_url` into `output_path`.
 ///
-/// Produces sibling intermediates `<output>.video.m4s` and (when an audio
-/// repr exists) `<output>.audio.m4s`. The actual `output_path` is NOT
-/// written by this function — Task 5 will mux the intermediates into it.
+/// Internally produces `<output>.video.m4s` and (when an audio repr exists)
+/// `<output>.audio.m4s`, then muxes them via FFmpeg stream-copy into
+/// `output_path`. Intermediates are deleted on success and retained on
+/// mux failure for diagnosis.
 pub async fn run(
     http_downloader: &HttpDownloader,
     retry_config: Arc<RetryConfig>,
@@ -100,6 +101,7 @@ pub async fn run(
     .await?;
 
     // Audio (optional).
+    let has_audio = parsed.audio.is_some();
     let audio_bytes = download_audio_if_present(
         http_downloader,
         &retry_config,
@@ -111,6 +113,15 @@ pub async fn run(
         Arc::clone(&bytes_total),
     )
     .await?;
+    let audio_path = intermediate_path(output_path, "audio");
+
+    // ----- Mux video + audio into the single output container -----
+    //
+    // The trait's single-file contract (`download_to_file` writes one
+    // output) is preserved by performing the mux here, before returning.
+    // Intermediates are deleted on success and retained on failure for
+    // diagnosis.
+    mux_outputs(&video_path, has_audio.then_some(&audio_path), output_path).await?;
 
     let elapsed = started.elapsed();
     let bytes = video_bytes + audio_bytes;
@@ -279,6 +290,77 @@ async fn download_representation(
     writer.flush().await?;
 
     Ok(total)
+}
+
+/// Mux video (+ optional audio) intermediates into `output_path` via
+/// FFmpeg stream-copy. On success, intermediates are deleted (best-effort).
+/// On failure they are retained for diagnosis and the error is propagated.
+///
+/// When `audio_path` is `None`, the video intermediate is moved (renamed,
+/// or copy+remove on cross-mount failure) into the final output path.
+async fn mux_outputs(video_path: &Path, audio_path: Option<&Path>, output_path: &Path) -> Result<()> {
+    if let Some(audio_path) = audio_path {
+        let runner = FFmpegRunner::new().map_err(|e| {
+            RdlpError::from(DashError::Mux(format!("FFmpegRunner init failed: {e}")))
+        })?;
+        // Mirror `encoding_tool_tag("dash")` from rdlp-ffmpeg. The helper
+        // is not re-exported, but the `encoding_tool` format-level metadata
+        // shape is `rdlp/{version} ({component})` and both crates share
+        // the workspace version.
+        let opts = RemuxOptions {
+            encoding_tool_override: Some(format!(
+                "rdlp/{} (dash)",
+                env!("CARGO_PKG_VERSION")
+            )),
+            ..Default::default()
+        };
+        match runner
+            .merge(video_path, audio_path, output_path, &opts, None)
+            .await
+        {
+            Ok(()) => {
+                if let Err(e) = fs::remove_file(video_path).await {
+                    debug!(
+                        "DASH cleanup: failed to remove {} ({e})",
+                        video_path.display()
+                    );
+                }
+                if let Err(e) = fs::remove_file(audio_path).await {
+                    debug!(
+                        "DASH cleanup: failed to remove {} ({e})",
+                        audio_path.display()
+                    );
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "DASH mux failed; intermediates retained: {} {}",
+                    video_path.display(),
+                    audio_path.display()
+                );
+                Err(RdlpError::from(DashError::Mux(format!(
+                    "FFmpeg merge failed: {e}"
+                ))))
+            }
+        }
+    } else {
+        // Video-only: move intermediate into place. Try rename first; fall
+        // back to copy+remove on cross-mount failures.
+        if let Err(rename_err) = fs::rename(video_path, output_path).await {
+            debug!(
+                "DASH video-only rename failed ({rename_err}); falling back to copy+remove"
+            );
+            fs::copy(video_path, output_path).await.map_err(RdlpError::Io)?;
+            if let Err(e) = fs::remove_file(video_path).await {
+                debug!(
+                    "DASH cleanup: failed to remove {} ({e})",
+                    video_path.display()
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 async fn download_one(
