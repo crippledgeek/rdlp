@@ -1,5 +1,7 @@
 //! SegmentTemplate / SegmentTimeline / SegmentList → `Vec<Fragment>`.
 
+use rdlp_types::Fragment;
+
 /// Substitute DASH SegmentTemplate placeholders.
 ///
 /// Supported tokens (per ISO/IEC 23009-1 §5.3.9.4.4):
@@ -78,14 +80,6 @@ fn parse_token(token: &str) -> (&str, Option<usize>) {
     } else {
         (token, None)
     }
-}
-
-/// A resolved fragment from a DASH segment list.
-#[derive(Debug, Clone)]
-pub struct Fragment {
-    pub url: String,
-    pub duration: Option<f64>,
-    pub filesize: Option<u64>,
 }
 
 /// Plan describing a SegmentTemplate-style fragment list.
