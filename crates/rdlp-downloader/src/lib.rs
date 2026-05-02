@@ -5,7 +5,7 @@
 //! This crate provides downloaders for various streaming protocols:
 //! - **HTTP/HTTPS**: Power-of-two chunking with fine-grained parallelism
 //! - **HLS (m3u8)**: Parallel segment downloads with automatic playlist parsing
-//! - **DASH**: Coming soon
+//! - **DASH**: Supported (static VoD only)
 //!
 //! ## Overview
 //!
@@ -279,12 +279,15 @@ pub mod hls;
 pub mod hls_state;
 /// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
+/// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
+pub mod dash;
 /// Shared progress reporting infrastructure
 pub mod progress;
 
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
+pub use dash::DashDownloader;
 pub use progress::{
     ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter,
 };
@@ -366,16 +369,27 @@ impl DownloaderRegistry {
             .with_concurrent_segments(config.concurrent_fragments)
             .with_buffer_size(config.buffer_size);
 
+        // Create DASH downloader
+        let dash_downloader = DashDownloader::new()
+            .with_http_downloader(http_downloader.clone())
+            .with_concurrent_segments(config.concurrent_fragments)
+            .with_buffer_size(config.buffer_size);
+
         let mut registry = Self {
             downloaders: Vec::new(),
             http_base: http_downloader.clone(),
             hls_base: hls_downloader.clone(),
         };
 
-        // Register HLS downloader FIRST (more specific matcher for .m3u8 URLs)
+        // Register HLS downloader FIRST (specific matcher for .m3u8 URLs)
         registry.register(Arc::new(hls_downloader));
 
-        // Register HTTP downloader SECOND (fallback for generic HTTP/HTTPS URLs)
+        // Register DASH downloader SECOND (specific matcher for .mpd URLs;
+        // MUST come before HTTP because HTTP's supports() matches every
+        // https URL and would eat .mpd otherwise)
+        registry.register(Arc::new(dash_downloader));
+
+        // Register HTTP downloader LAST (fallback for generic HTTP/HTTPS URLs)
         registry.register(Arc::new(http_downloader));
 
         registry
