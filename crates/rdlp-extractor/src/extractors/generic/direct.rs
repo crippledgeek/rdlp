@@ -35,7 +35,7 @@ impl PrefetchResponse {
     pub fn is_dash_content_type(&self) -> bool {
         self.content_type
             .as_ref()
-            .is_some_and(|ct| ct.to_lowercase().contains("dash+xml"))
+            .is_some_and(|ct| ct.as_bytes().windows(8).any(|w| w.eq_ignore_ascii_case(b"dash+xml")))
     }
 
     /// Check if Content-Type indicates HTML.
