@@ -21,6 +21,7 @@ use std::ffi::CString;
 /// encoding_tool_tag("libx264 + libfdk_aac")  // → "rdlp/0.1.0 (libx264 + libfdk_aac)"
 /// encoding_tool_tag("remux")                  // → "rdlp/0.1.0 (remux)"
 /// ```
+#[must_use]
 pub fn encoding_tool_tag(components: &str) -> String {
     format!("rdlp/{} ({components})", env!("CARGO_PKG_VERSION"))
 }

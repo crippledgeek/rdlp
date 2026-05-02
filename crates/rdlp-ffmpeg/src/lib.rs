@@ -54,5 +54,5 @@ pub use ffmpeg::{
     AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
     FFmpegRunner, FfmpegLogBridge, LogForwarderGuard, LoudnormMeasurements, LoudnormPreset,
     MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo, VideoCodecInfo,
-    VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs, set_verbose,
+    VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs, encoding_tool_tag, set_verbose,
 };

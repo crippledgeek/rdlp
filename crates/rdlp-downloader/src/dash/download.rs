@@ -303,15 +303,8 @@ async fn mux_outputs(video_path: &Path, audio_path: Option<&Path>, output_path: 
         let runner = FFmpegRunner::new().map_err(|e| {
             RdlpError::from(DashError::Mux(format!("FFmpegRunner init failed: {e}")))
         })?;
-        // Mirror `encoding_tool_tag("dash")` from rdlp-ffmpeg. The helper
-        // is not re-exported, but the `encoding_tool` format-level metadata
-        // shape is `rdlp/{version} ({component})` and both crates share
-        // the workspace version.
         let opts = RemuxOptions {
-            encoding_tool_override: Some(format!(
-                "rdlp/{} (dash)",
-                env!("CARGO_PKG_VERSION")
-            )),
+            encoding_tool_override: Some(rdlp_ffmpeg::encoding_tool_tag("dash")),
             ..Default::default()
         };
         match runner
