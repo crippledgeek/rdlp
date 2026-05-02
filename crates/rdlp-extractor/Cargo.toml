@@ -14,13 +14,13 @@ rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 dash-mpd = { workspace = true, default-features = false }
-thiserror = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 wreq = { workspace = true }
 scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 regex = { workspace = true }
 lazy-regex = { workspace = true }
 url = { workspace = true }

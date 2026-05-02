@@ -15,7 +15,7 @@ use super::errors::DashExpandError;
 /// from (used as the root of the BaseURL resolution chain).
 ///
 /// Returns one Format per usable Representation in the **first** Period.
-/// Multi-period MPDs log a warning and skip subsequent periods.
+/// Multi-period MPDs log a warning and skip subsequent periods (see spec's non-goals — more conservative than yt-dlp).
 ///
 /// # Errors
 ///
