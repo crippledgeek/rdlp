@@ -23,7 +23,10 @@ mod formats;
 mod patterns;
 mod playlist;
 mod search;
+mod search_html;
 mod search_patterns;
+#[cfg(test)]
+mod tests;
 mod utils;
 
 use std::time::Duration;
@@ -117,31 +120,43 @@ impl PornHubExtractor {
         search::parse_api_search_results(&body)
     }
 
-    /// Fetch a single HTML search page (fallback).
-    ///
-    /// HTML parsing is not yet implemented — returns an error so callers
-    /// propagate the original API failure instead of silently returning
-    /// empty results. A full HTML parser can be added later if the API
-    /// becomes unreliable.
+    /// Fetch a single HTML search page and parse it.
     ///
     /// # Arguments
-    /// * `_url` - HTML search URL (unused until HTML parsing is implemented).
-    /// * `_ctx` - Extraction context (unused until HTML parsing is implemented).
+    /// * `url` - HTML search URL (`/video/search?search=…&page=…`).
+    /// * `ctx` - Extraction context with HTTP client.
     async fn fetch_html_search_page(
         &self,
-        _url: &str,
-        _ctx: &ExtractionContext,
+        url: &str,
+        ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        Err(RdlpError::Extraction {
-            message: "PornHub HTML search fallback not yet implemented".to_string(),
-            url: None,
-        })
+        let response = (|| async { ctx.http_client.get(url).send().await })
+            .retry(
+                ExponentialBuilder::default()
+                    .with_max_times(2)
+                    .with_min_delay(Duration::from_millis(500)),
+            )
+            .when(|e| e.is_timeout() || e.is_connect())
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch PornHub HTML search page: {e}"),
+                url: Some(url.to_string()),
+            })?;
+
+        rdlp_core::check_http_response(&response)?;
+
+        let body = response.text().await.map_err(|e| RdlpError::Network {
+            message: format!("Failed to read PornHub HTML search response: {e}"),
+            url: Some(url.to_string()),
+        })?;
+
+        search_html::parse_html_search_results(&body)
     }
 
     /// Paginated search across all pages, collecting up to `max_results` results.
     ///
-    /// Uses the JSON API as the primary source with a 500ms rate limit between pages.
-    /// Falls back to the HTML search page on page 1 API failures.
+    /// Uses the HTML search page as the primary source with a 500ms rate limit between pages.
+    /// Falls back to the JSON API on page 1 HTML failures or empty results.
     ///
     /// # Arguments
     /// * `query` - Search query with optional filters and result cap.
@@ -157,42 +172,38 @@ impl PornHubExtractor {
         let mut all_results = Vec::new();
         let mut page = 1_u32;
 
-        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
-
         loop {
-            let page_url = if page == 1 {
-                base_url.clone()
-            } else {
-                search_patterns::build_api_search_url_page(&base_url, page)
-            };
+            let html_url = search_patterns::build_html_search_url(&query.query, page);
+            debug!(page, url:? = rdlp_security::sanitize_for_logging(&html_url); "[PornHub] Fetching HTML search page");
 
-            debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[PornHub] Fetching search page");
-
-            let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
-                Ok(results) => results,
-                Err(e) => {
+            let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
+                Ok(results) if !results.is_empty() => results,
+                outcome => {
                     if page == 1 {
-                        debug!("[PornHub] API search failed, trying HTML fallback: {e}");
-                        let html_url = search_patterns::build_html_search_url(&query.query, 1);
-                        match self.fetch_html_search_page(&html_url, ctx).await {
-                            Ok(results) => results,
-                            Err(html_err) => {
-                                warn!("[PornHub] HTML fallback also failed: {html_err}");
+                        let reason = match &outcome {
+                            Ok(_) => "HTML returned 0 results".to_string(),
+                            Err(e) => format!("{e}"),
+                        };
+                        debug!(
+                            "[PornHub] HTML search failed/empty on page 1, falling back to API: {reason}"
+                        );
+                        let base_url =
+                            search_patterns::build_api_search_url(&query.query, &query.filters);
+                        match self.fetch_api_search_page(&base_url, ctx).await {
+                            Ok(api_results) => api_results,
+                            Err(api_err) => {
+                                warn!("[PornHub] API fallback also failed on page 1: {api_err}");
                                 break;
                             }
                         }
                     } else {
-                        debug!(
-                            page;
-                            "[PornHub] Failed to fetch search page, returning partial results: {e}"
-                        );
+                        debug!(page; "[PornHub] HTML search failed on later page, returning partial results");
                         break;
                     }
                 }
             };
 
             if page_results.is_empty() {
-                debug!(page; "[PornHub] No results on page, stopping pagination");
                 break;
             }
 
@@ -207,11 +218,7 @@ impl PornHubExtractor {
             tokio::time::sleep(Duration::from_millis(SEARCH_RATE_LIMIT_MS)).await;
         }
 
-        debug!(
-            count = all_results.len(), pages = page;
-            "[PornHub] Search complete"
-        );
-
+        debug!(count = all_results.len(), pages = page; "[PornHub] Search complete");
         Ok(all_results)
     }
 }
@@ -242,29 +249,29 @@ impl SearchExtractor for PornHubExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1);
-        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+        let html_url = search_patterns::build_html_search_url(&query.query, page);
 
-        let page_url = if page == 1 {
-            base_url
-        } else {
-            search_patterns::build_api_search_url_page(&base_url, page)
-        };
-
-        let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
-            Ok(results) => results,
-            Err(e) => {
-                if page == 1 {
-                    debug!("[PornHub] API search failed, trying HTML fallback: {e}");
-                    let html_url = search_patterns::build_html_search_url(&query.query, 1);
-                    self.fetch_html_search_page(&html_url, ctx).await?
+        let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
+            Ok(results) if !results.is_empty() => results,
+            outcome => {
+                let reason = match &outcome {
+                    Ok(_) => "HTML returned 0 results".to_string(),
+                    Err(e) => format!("{e}"),
+                };
+                debug!(
+                    "[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}"
+                );
+                let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+                let page_url = if page == 1 {
+                    base_url
                 } else {
-                    return Err(e);
-                }
+                    search_patterns::build_api_search_url_page(&base_url, page)
+                };
+                self.fetch_api_search_page(&page_url, ctx).await?
             }
         };
 
-        let has_more = !page_results.is_empty() && page_results.len() >= API_RESULTS_PER_PAGE;
-
+        let has_more = page_results.len() >= API_RESULTS_PER_PAGE;
         Ok(SearchPageResponse {
             results: page_results,
             page,
@@ -388,74 +395,5 @@ impl InfoExtractor for PornHubExtractor {
 
     fn priority(&self) -> i32 {
         0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extractor_creation() {
-        let extractor = PornHubExtractor::new();
-        assert_eq!(InfoExtractor::name(&extractor), "PornHub");
-    }
-
-    #[test]
-    fn test_suitable_urls() {
-        let extractor = PornHubExtractor::new();
-
-        // Video URLs
-        assert!(extractor.suitable("https://www.pornhub.com/view_video.php?viewkey=ph123"));
-        assert!(extractor.suitable("https://www.pornhub.com/embed/ph456"));
-        assert!(extractor.suitable("https://de.pornhub.com/view_video.php?viewkey=ph789"));
-
-        // Playlist URLs
-        assert!(extractor.suitable("https://www.pornhub.com/playlist/123456"));
-
-        // Invalid URLs
-        assert!(!extractor.suitable("https://youtube.com/watch?v=test"));
-    }
-
-    #[test]
-    fn test_pornhub_implements_search_extractor() {
-        let extractor = PornHubExtractor::new();
-        let filters =
-            <PornHubExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
-        assert!(!filters.is_empty());
-        assert_eq!(
-            <PornHubExtractor as rdlp_core::SearchExtractor>::name(&extractor),
-            "PornHub"
-        );
-    }
-
-    #[test]
-    fn test_search_filters_have_ordering() {
-        let extractor = PornHubExtractor::new();
-        let filters =
-            <PornHubExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
-        let ordering = filters.iter().find(|f| f.key == "ordering");
-        assert!(ordering.is_some());
-        assert_eq!(ordering.unwrap().allowed_values.len(), 4);
-    }
-
-    #[test]
-    fn test_search_filters_have_period() {
-        let extractor = PornHubExtractor::new();
-        let filters =
-            <PornHubExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
-        let period = filters.iter().find(|f| f.key == "period");
-        assert!(period.is_some());
-        assert_eq!(period.unwrap().allowed_values.len(), 3);
-    }
-
-    #[test]
-    fn test_search_filters_have_category() {
-        let extractor = PornHubExtractor::new();
-        let filters =
-            <PornHubExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
-        let category = filters.iter().find(|f| f.key == "category");
-        assert!(category.is_some());
-        assert!(!category.unwrap().allowed_values.is_empty());
     }
 }
