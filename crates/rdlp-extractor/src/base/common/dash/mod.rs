@@ -5,7 +5,9 @@
 mod baseurl;
 mod errors;
 mod expand;
+mod frame_rate;
 mod segments;
 
 pub(crate) use errors::DashExpandError;
 pub(crate) use expand::expand_dash_representations;
+pub(crate) use frame_rate::parse_frame_rate;
