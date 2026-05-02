@@ -37,6 +37,7 @@ fn workspace_root() -> PathBuf {
 #[allow(clippy::disallowed_methods)] // test fixture — sync I/O is acceptable per clippy.toml
 fn ytdlp_goldens_build_and_emit_artefacts() {
     let root = workspace_root();
+    let use_cache = std::env::var("RDLP_TEST_USE_CACHED_WASM").is_ok();
     for name in GOLDENS {
         let py = root.join(format!("examples/plugins/ytdlp-golden/{name}.py"));
         assert!(py.exists(), "source missing: {py:?}");
@@ -46,27 +47,36 @@ fn ytdlp_goldens_build_and_emit_artefacts() {
         // therefore uses the normalised stem, not the raw filename.
         let normalised = name.to_ascii_lowercase().replace('_', "-");
         let plugin_dir = py.parent().unwrap().join(&normalised);
-        // Clean any prior build output
-        let _ = std::fs::remove_dir_all(&plugin_dir);
-
-        let status = Command::new("cargo")
-            .args([
-                "run",
-                "--quiet",
-                "-p",
-                "rdlp-cli",
-                "--",
-                "plugin",
-                "build-from-ytdlp",
-            ])
-            .arg(&py)
-            .current_dir(&root)
-            .status()
-            .expect("invoke rdlp build-from-ytdlp");
-        assert!(status.success(), "build-from-ytdlp failed for {name}");
-
         let wasm = plugin_dir.join("plugin.wasm");
         let toml = plugin_dir.join("plugin.toml.template");
+
+        // CI cache short-circuit (see svt_golden.rs::build_svt_plugin doc).
+        if use_cache && wasm.exists() && toml.exists() {
+            eprintln!(
+                "[cache] ytdlp-golden/{name}: reusing cached plugin.wasm ({} bytes)",
+                std::fs::metadata(&wasm).unwrap().len()
+            );
+        } else {
+            // Clean any prior build output
+            let _ = std::fs::remove_dir_all(&plugin_dir);
+
+            let status = Command::new("cargo")
+                .args([
+                    "run",
+                    "--quiet",
+                    "-p",
+                    "rdlp-cli",
+                    "--",
+                    "plugin",
+                    "build-from-ytdlp",
+                ])
+                .arg(&py)
+                .current_dir(&root)
+                .status()
+                .expect("invoke rdlp build-from-ytdlp");
+            assert!(status.success(), "build-from-ytdlp failed for {name}");
+        }
+
         assert!(wasm.exists(), "wasm missing for {name}: {wasm:?}");
         assert!(toml.exists(), "manifest missing for {name}: {toml:?}");
 

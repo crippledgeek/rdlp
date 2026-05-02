@@ -89,6 +89,13 @@ fn fixture_path(name: &str) -> PathBuf {
 
 /// Build the SVT plugin via `cargo run -p rdlp-cli -- plugin
 /// build-from-ytdlp ...`. Returns the path to the produced `plugin.wasm`.
+///
+/// CI may set `RDLP_TEST_USE_CACHED_WASM=1` after restoring a `plugin.wasm`
+/// from the actions/cache step keyed on plugin source + componentize-py
+/// version + WIT contract. When the env var is present AND the wasm exists,
+/// the rebuild is skipped — saving ~30s of componentize-py per plugin.
+/// Local runs never set this; the rebuild path remains the default for
+/// correctness.
 fn build_svt_plugin() -> PathBuf {
     let root = workspace_root();
     let py = root.join("examples/plugins/svt/svt.py");
@@ -96,9 +103,19 @@ fn build_svt_plugin() -> PathBuf {
 
     // build-from-ytdlp normalises filenames to kebab-case plugin names
     // and emits into <output_dir>/<name>/. For svt.py the output dir
-    // ends up at examples/plugins/svt/svt/plugin.wasm. Clean any prior
-    // build so a stale wasm doesn't mask a build failure.
+    // ends up at examples/plugins/svt/svt/plugin.wasm.
     let plugin_dir = py.parent().unwrap().join("svt");
+    let wasm = plugin_dir.join("plugin.wasm");
+
+    if std::env::var("RDLP_TEST_USE_CACHED_WASM").is_ok() && wasm.exists() {
+        eprintln!(
+            "[cache] svt: reusing cached plugin.wasm ({} bytes) — skipping build",
+            std::fs::metadata(&wasm).unwrap().len()
+        );
+        return wasm;
+    }
+
+    // Clean any prior build so a stale wasm doesn't mask a build failure.
     let _ = std::fs::remove_dir_all(&plugin_dir);
 
     let status = std::process::Command::new("cargo")
@@ -117,7 +134,6 @@ fn build_svt_plugin() -> PathBuf {
         .expect("invoke rdlp build-from-ytdlp");
     assert!(status.success(), "build-from-ytdlp failed");
 
-    let wasm = plugin_dir.join("plugin.wasm");
     assert!(wasm.exists(), "wasm missing at {wasm:?}");
     wasm
 }
