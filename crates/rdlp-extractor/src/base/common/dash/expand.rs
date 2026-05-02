@@ -21,8 +21,6 @@ use super::errors::DashExpandError;
 ///
 /// Returns [`DashExpandError`] when the MPD cannot be parsed, declares a live
 /// stream, or contains no usable representations after filtering.
-// Allow until wired into the extractor registry (Task 13).
-#[allow(dead_code)]
 pub fn expand_dash_representations(
     _mpd_xml: &str,
     _base_url: &Url,

@@ -6,8 +6,6 @@
 use thiserror::Error;
 
 /// Failure modes during MPD → `Vec<Format>` expansion.
-// Allow until wired into expand_dash_representations (Task 9+).
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum DashExpandError {
     /// The XML body could not be parsed by `dash-mpd`.

@@ -1,7 +1,5 @@
 //! SegmentTemplate / SegmentTimeline / SegmentList → `Vec<Fragment>`.
 
-// Allow until called from expand.rs (Tasks 3–5).
-#[allow(dead_code)]
 /// Substitute DASH SegmentTemplate placeholders.
 ///
 /// Supported tokens (per ISO/IEC 23009-1 §5.3.9.4.4):
