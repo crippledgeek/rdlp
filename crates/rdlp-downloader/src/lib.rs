@@ -5,7 +5,7 @@
 //! This crate provides downloaders for various streaming protocols:
 //! - **HTTP/HTTPS**: Power-of-two chunking with fine-grained parallelism
 //! - **HLS (m3u8)**: Parallel segment downloads with automatic playlist parsing
-//! - **DASH**: Supported (static VoD only)
+//! - **DASH**: Supported (static `VoD` only)
 //!
 //! ## Overview
 //!
@@ -527,6 +527,7 @@ mod tests {
 
         assert!(downloaders.contains(&"http"));
         assert!(downloaders.contains(&"hls"));
-        assert_eq!(downloaders.len(), 2);
+        assert!(downloaders.contains(&"dash"));
+        assert_eq!(downloaders.len(), 3);
     }
 }

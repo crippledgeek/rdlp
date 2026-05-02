@@ -3,6 +3,10 @@
 //! Static (VoD) MPDs only; live/DRM/multi-period beyond the first period are
 //! refused at parse time. See `docs/planning/2026-05-02-dash-protocol-support-design.md`.
 
+// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
+// workspace MSRV is 1.85.
+#![allow(clippy::duration_suboptimal_units)]
+
 pub mod errors;
 pub mod manifest;
 pub mod segments;
@@ -20,9 +24,11 @@ use rdlp_core::{Downloader, DownloadStats, ProgressCallback, Result, RetryConfig
 
 use crate::http::HttpDownloader;
 
-/// DASH downloader. Resolves the highest-bandwidth video + audio reprs
-/// from the supplied MPD URL, downloads segments in parallel, and muxes
-/// the result into a single output container via FFmpeg stream-copy.
+/// DASH downloader.
+///
+/// Resolves the highest-bandwidth video + audio reprs from the supplied
+/// MPD URL, downloads segments in parallel, and muxes the result into a
+/// single output container via `FFmpeg` stream-copy.
 #[derive(Clone)]
 pub struct DashDownloader {
     #[allow(dead_code)]
@@ -54,8 +60,8 @@ impl DashDownloader {
             buffer_size: 2 * 1024 * 1024,
             retry_config: Arc::new(RetryConfig::default_config()),
             expected_size: None,
-            download_timeout: Duration::from_secs(3600),
-            merge_timeout: Duration::from_secs(1800),
+            download_timeout: Duration::from_secs(3600), // 1 hour
+            merge_timeout: Duration::from_secs(1800),    // 30 min
             max_segment_failures: 3,
         }
     }
@@ -77,7 +83,7 @@ impl DashDownloader {
 
     /// Set the file write buffer size (bytes).
     #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_buffer_size(mut self, size: usize) -> Self {
+    pub const fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
         self
     }
@@ -96,10 +102,14 @@ impl Downloader for DashDownloader {
     }
 
     fn supports(&self, url: &str) -> bool {
-        let lower = url.to_ascii_lowercase();
-        // Path ends with .mpd, or query string suggests MPD.
-        lower.split('?').next().is_some_and(|p| p.ends_with(".mpd"))
-            || lower.contains(".mpd?")
+        // Path ends with .mpd, or query string suggests MPD. Both checks
+        // are case-insensitive — the URL is lowercased first.
+        #[allow(clippy::case_sensitive_file_extension_comparisons)]
+        {
+            let lower = url.to_ascii_lowercase();
+            let path = lower.split('?').next().unwrap_or("");
+            path.ends_with(".mpd") || lower.contains(".mpd?")
+        }
     }
 
     async fn download_to_file(

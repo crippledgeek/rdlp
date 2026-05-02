@@ -11,7 +11,7 @@ pub enum DashError {
     /// MPD declares dynamic / live presentation; not yet supported.
     #[error("Dynamic/live MPD is not yet supported")]
     DynamicMpd,
-    /// MPD contains DRM protection (ContentProtection elements).
+    /// MPD contains DRM protection (`ContentProtection` elements).
     #[error("DRM-protected MPD is not supported")]
     DrmProtected,
     /// No video representation usable by this downloader was found.
@@ -23,7 +23,7 @@ pub enum DashError {
     /// A segment HTTP fetch failed past the retry budget.
     #[error("Segment fetch failed: {0}")]
     SegmentFetch(String),
-    /// FFmpeg mux of the resolved video + audio streams failed.
+    /// `FFmpeg` mux of the resolved video + audio streams failed.
     #[error("Mux failed: {0}")]
     Mux(String),
 }
@@ -34,12 +34,12 @@ impl From<DashError> for RdlpError {
             DashError::DynamicMpd
             | DashError::DrmProtected
             | DashError::NoVideoRepresentation
-            | DashError::NoAudioRepresentation => RdlpError::Extraction {
+            | DashError::NoAudioRepresentation => Self::Extraction {
                 message: e.to_string(),
                 url: None,
             },
             DashError::Parse(_) | DashError::SegmentFetch(_) | DashError::Mux(_) => {
-                RdlpError::Download {
+                Self::Download {
                     message: e.to_string(),
                     url: None,
                 }
