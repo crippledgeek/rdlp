@@ -171,6 +171,118 @@ pub fn resolve_segment_template(
     fragments
 }
 
+/// One `<S>` entry from a SegmentTimeline.
+#[derive(Debug, Clone)]
+pub struct TimelineEntry {
+    pub t: Option<u64>,
+    pub d: u64,
+    pub r: i64,
+}
+
+/// Plan describing a SegmentTimeline-style fragment list.
+#[derive(Debug, Clone)]
+pub struct SegmentTimelinePlan {
+    pub initialization: Option<String>,
+    pub media: String,
+    pub timescale: u64,
+    pub entries: Vec<TimelineEntry>,
+}
+
+/// Resolve a SegmentTimeline plan to fragments. `$Time$` substitution.
+pub fn resolve_segment_timeline(
+    plan: &SegmentTimelinePlan,
+    repr_id: &str,
+    bandwidth: u64,
+) -> Vec<Fragment> {
+    if plan.timescale == 0 {
+        log::warn!("DASH SegmentTimeline has timescale=0; skipping rep {}", repr_id);
+        return Vec::new();
+    }
+
+    let mut fragments = Vec::new();
+    if let Some(init_template) = &plan.initialization {
+        let url = substitute_template(init_template, repr_id, bandwidth, None, None);
+        fragments.push(Fragment { url, duration: None, filesize: None });
+    }
+    let mut current_time: u64 = 0;
+    for entry in &plan.entries {
+        if let Some(t) = entry.t {
+            current_time = t;
+        }
+        // Negative-r ("repeat to period end") is deferred — see plan non-goals.
+        // TODO(dash): negative-r repeat to period end
+        let repeat = if entry.r < 0 { 0 } else { entry.r as u64 };
+        for _ in 0..=repeat {
+            // Cap protects against adversarial / malformed timelines emitting >MAX segments.
+            if fragments.len() >= MAX_SEGMENTS_PER_REP {
+                log::warn!(
+                    "DASH SegmentTimeline for rep {} exceeds {} segments; capping",
+                    repr_id,
+                    MAX_SEGMENTS_PER_REP,
+                );
+                return fragments;
+            }
+            let url = substitute_template(
+                &plan.media,
+                repr_id,
+                bandwidth,
+                None,
+                Some(current_time),
+            );
+            let duration_seconds = entry.d as f64 / plan.timescale as f64;
+            fragments.push(Fragment {
+                url,
+                duration: Some(duration_seconds),
+                filesize: None,
+            });
+            // Saturating-add protects against overflow on adversarial input.
+            current_time = current_time.saturating_add(entry.d);
+        }
+    }
+    fragments
+}
+
+#[cfg(test)]
+mod timeline_tests {
+    use super::*;
+
+    #[test]
+    fn t_d_r_expansion() {
+        let plan = SegmentTimelinePlan {
+            initialization: None,
+            media: "$Time$.m4s".into(),
+            timescale: 1_000,
+            entries: vec![
+                TimelineEntry { t: Some(0), d: 4_000, r: 2 },
+                TimelineEntry { t: None, d: 2_000, r: 0 },
+            ],
+        };
+        let frags = resolve_segment_timeline(&plan, "v", 1);
+        // r=2 means 1 + 2 = 3 segments at t=0,4000,8000
+        // followed by one at t=12000
+        let urls: Vec<&str> = frags.iter().map(|f| f.url.as_str()).collect();
+        assert_eq!(urls, vec!["0.m4s", "4000.m4s", "8000.m4s", "12000.m4s"]);
+    }
+
+    #[test]
+    fn t_default_picks_up_from_prev_end() {
+        let plan = SegmentTimelinePlan {
+            initialization: None,
+            media: "$Time$.m4s".into(),
+            timescale: 1_000,
+            entries: vec![
+                TimelineEntry { t: Some(100), d: 50, r: 0 },
+                TimelineEntry { t: None, d: 30, r: 1 },
+            ],
+        };
+        let frags = resolve_segment_timeline(&plan, "v", 1);
+        let urls: Vec<&str> = frags.iter().map(|f| f.url.as_str()).collect();
+        // entry 1: t=100, ends at 150
+        // entry 2: t=150 (default), 30, r=1 → 150, 180
+        assert_eq!(urls, vec!["100.m4s", "150.m4s", "180.m4s"]);
+    }
+}
+
 #[cfg(test)]
 mod template_tests {
     use super::*;
