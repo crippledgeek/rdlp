@@ -216,6 +216,18 @@ def extract_m3u8(url, video_id, *, ext=None, protocol=None, m3u8_id=None, fatal=
     return _hxh.extract_m3u8(url, video_id, opts)
 
 
+def extract_mpd(url, video_id, *, mpd_id=None, fatal=True):
+    """Parse a DASH MPD via the host helper. Returns MpdExtraction.
+
+    Stub during Task 1 of the DASH-host-helper plan; replaced with the real
+    passthrough in Task 7. Raises so accidental real calls fail loudly.
+    """
+    raise NotImplementedError(
+        "_host.extract_mpd: implementation pending; see "
+        "docs/superpowers/plans/2026-05-03-dash-host-helper.md task 7"
+    )
+
+
 def extract_json_ld(html):
     """Extract structured data from JSON-LD ``<script>`` blocks in `html`."""
     if not _HXH_AVAILABLE:
