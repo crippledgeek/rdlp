@@ -5,5 +5,5 @@
 mod errors;
 mod expand;
 
-pub use errors::DashExpandError;
-pub use expand::expand_dash_representations;
+pub(crate) use errors::DashExpandError;
+pub(crate) use expand::expand_dash_representations;
