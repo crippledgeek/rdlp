@@ -900,6 +900,7 @@ hi.m3u8\n";
     #[tokio::test]
     async fn extract_mpd_drm_protected_returns_fetch_error() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
         use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
         use std::sync::Arc;
 
@@ -917,8 +918,10 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("DRM-only MPD must error after representations dropped");
-        let msg = format!("{err:?}");
-        assert!(!msg.is_empty(), "error must not be empty");
+        assert!(
+            matches!(err, FetchError::Network(_)),
+            "expected FetchError::Network, got {err:?}"
+        );
     }
 
     /// Non-UTF-8 bytes in the response body must cause an error (MPD is XML, must be
@@ -930,6 +933,7 @@ hi.m3u8\n";
     #[tokio::test]
     async fn extract_mpd_invalid_utf8_returns_fetch_error() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
         use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
         use std::sync::Arc;
 
@@ -947,8 +951,10 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("invalid utf-8 must error");
-        let msg = format!("{err:?}");
-        assert!(!msg.is_empty(), "error must not be empty");
+        assert!(
+            matches!(err, FetchError::Network(_)),
+            "expected FetchError::Network, got {err:?}"
+        );
     }
 
     /// Well-formed XML that is not an MPD document must cause an error.
@@ -957,6 +963,7 @@ hi.m3u8\n";
     #[tokio::test]
     async fn extract_mpd_unparseable_xml_returns_fetch_error() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
         use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
         use std::sync::Arc;
 
@@ -975,7 +982,9 @@ hi.m3u8\n";
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
             .expect_err("non-MPD XML must error");
-        let msg = format!("{err:?}");
-        assert!(!msg.is_empty(), "error must not be empty");
+        assert!(
+            matches!(err, FetchError::Network(_)),
+            "expected FetchError::Network, got {err:?}"
+        );
     }
 }
