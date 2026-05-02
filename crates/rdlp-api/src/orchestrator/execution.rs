@@ -8,6 +8,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use log::{debug, info};
 use rdlp_core::{DownloadProgress, DownloadStats, Downloader, ProgressCallback};
+use rdlp_types::Format;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -64,19 +65,19 @@ impl Orchestrator {
     ///
     /// # Arguments
     /// * `downloader` - The downloader to use
-    /// * `url` - URL to download
+    /// * `format` - Format descriptor (provides URL and optional pre-resolved fragments)
     /// * `output_path` - Path to save the file
     /// * `resume_from` - Byte offset to resume from (0 for fresh download)
     /// * `expected_size` - Expected file size (for progress percentage)
     ///
     /// # Errors
     /// Returns an error if download fails
-    #[instrument(skip(self, downloader), fields(url = %url, output = %output_path.display()))]
+    #[instrument(skip(self, downloader, format), fields(url = %format.url, output = %output_path.display()))]
     #[allow(clippy::used_underscore_binding)] // _expected_size is a reserved parameter slot
     pub(super) async fn execute_download(
         &self,
         downloader: &Arc<dyn Downloader>,
-        url: &str,
+        format: &Format,
         output_path: &Path,
         resume_from: u64,
         _expected_size: Option<u64>,
@@ -88,9 +89,16 @@ impl Orchestrator {
         debug!("Starting download (cancel via CancellationToken)");
 
         let download_future = if resume_from > 0 {
-            downloader.download_with_resume(url, output_path, resume_from, progress_callback)
+            // Resume path uses the raw URL + byte offset; Format fields beyond
+            // `url` (e.g. pre-resolved fragments) are not meaningful for resume.
+            downloader.download_with_resume(
+                &format.url,
+                output_path,
+                resume_from,
+                progress_callback,
+            )
         } else {
-            downloader.download_to_file(url, output_path, progress_callback)
+            downloader.download_format(format, output_path, progress_callback)
         };
 
         // Race between download and cancellation token

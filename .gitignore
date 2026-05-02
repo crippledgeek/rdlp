@@ -86,3 +86,7 @@ crates/rdlp-desktop/dist/
 
 # superpowers brainstorm + plan scratch
 .superpowers/
+
+# graphify knowledge graph output (per-machine artifact)
+graphify-out/
+.graphifyignore

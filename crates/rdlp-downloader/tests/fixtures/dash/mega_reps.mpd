@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT4S">
+  <Period duration="PT4S">
+    <AdaptationSet mimeType="video/mp4" codecs="avc1.4d401e">
+      <Representation id="v1" bandwidth="110000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v2" bandwidth="120000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v3" bandwidth="130000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v4" bandwidth="140000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v5" bandwidth="150000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v6" bandwidth="160000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v7" bandwidth="170000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v8" bandwidth="180000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v9" bandwidth="190000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v10" bandwidth="200000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v11" bandwidth="210000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v12" bandwidth="220000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v13" bandwidth="230000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v14" bandwidth="240000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v15" bandwidth="250000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v16" bandwidth="260000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v17" bandwidth="270000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v18" bandwidth="280000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v19" bandwidth="290000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v20" bandwidth="300000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v21" bandwidth="310000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v22" bandwidth="320000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v23" bandwidth="330000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v24" bandwidth="340000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v25" bandwidth="350000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v26" bandwidth="360000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v27" bandwidth="370000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v28" bandwidth="380000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v29" bandwidth="390000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v30" bandwidth="400000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v31" bandwidth="410000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v32" bandwidth="420000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v33" bandwidth="430000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v34" bandwidth="440000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v35" bandwidth="450000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v36" bandwidth="460000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v37" bandwidth="470000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v38" bandwidth="480000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v39" bandwidth="490000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v40" bandwidth="500000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v41" bandwidth="510000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v42" bandwidth="520000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v43" bandwidth="530000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v44" bandwidth="540000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v45" bandwidth="550000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v46" bandwidth="560000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v47" bandwidth="570000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v48" bandwidth="580000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v49" bandwidth="590000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v50" bandwidth="600000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v51" bandwidth="610000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v52" bandwidth="620000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v53" bandwidth="630000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v54" bandwidth="640000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v55" bandwidth="650000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v56" bandwidth="660000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v57" bandwidth="670000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v58" bandwidth="680000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v59" bandwidth="690000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+      <Representation id="v60" bandwidth="700000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

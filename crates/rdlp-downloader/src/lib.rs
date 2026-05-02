@@ -5,7 +5,14 @@
 //! This crate provides downloaders for various streaming protocols:
 //! - **HTTP/HTTPS**: Power-of-two chunking with fine-grained parallelism
 //! - **HLS (m3u8)**: Parallel segment downloads with automatic playlist parsing
-//! - **DASH**: Supported (static `VoD` only)
+//! - **DASH** (static VoD): two paths — **pre-resolved fragments** (when
+//!   `Format.fragments` is `Some(...)`, the extractor already expanded the MPD
+//!   into per-Representation segment lists via `expand_dash_representations`;
+//!   `download_format` fetches those directly, no re-parsing; `MergeStage`
+//!   handles muxing when `bv+ba` selection picks two Formats) and
+//!   **legacy MPD-URL** (when `Format.fragments` is `None`, `DashDownloader`
+//!   parses the MPD itself, picks max-bandwidth video+audio, fetches segments,
+//!   and muxes in-process via `FFmpeg` stream-copy)
 //!
 //! ## Overview
 //!

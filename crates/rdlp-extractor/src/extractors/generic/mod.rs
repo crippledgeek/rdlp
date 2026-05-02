@@ -198,10 +198,41 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
     if pf.is_dash_content_type() || pf.is_mpd_manifest() {
         let title = title_from_url(url);
         let video_id = generate_video_id(url);
-        let mut info = InfoDict::new(&video_id, &title, "Generic", url);
-        let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
-        info.formats = vec![format];
-        return Ok(Some(info));
+
+        let body_str = std::str::from_utf8(&pf.bytes).unwrap_or("");
+        let mpd_url = match Url::parse(url) {
+            Ok(u) => u,
+            Err(_) => {
+                // Malformed input URL — fall back to legacy placeholder so the
+                // download path can still try with the raw URL string.
+                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
+                info.formats = vec![format];
+                return Ok(Some(info));
+            }
+        };
+
+        match crate::base::common::dash::expand_dash_representations(body_str, &mpd_url) {
+            Ok(formats) => {
+                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                info.formats = formats;
+                return Ok(Some(info));
+            }
+            Err(crate::base::common::dash::DashExpandError::DynamicMpd) => {
+                // Live/dynamic manifest — not supported; let other strategies try.
+                log::warn!("DASH dynamic/live manifest at {url}; not yet supported");
+                return Ok(None);
+            }
+            Err(e) => {
+                log::warn!(
+                    "DASH expansion failed for {url}: {e}; falling back to legacy single-Format path"
+                );
+                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
+                info.formats = vec![format];
+                return Ok(Some(info));
+            }
+        }
     }
 
     if pf.is_media_content_type() && !pf.is_html_content_type() {
@@ -442,10 +473,21 @@ mod tests {
 
     #[test]
     fn direct_mpd_emits_dash_format() {
-        // Content-Type: application/dash+xml — should emit HttpDashSegments, not generic direct
+        let mpd_xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT4S">
+  <Period duration="PT4S">
+    <AdaptationSet mimeType="video/mp4" codecs="avc1.4d401e">
+      <Representation id="v1" bandwidth="1000000" width="640" height="360">
+        <SegmentTemplate media="$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+        // Content-Type: application/dash+xml — should emit per-Repr HttpDashSegments formats
         let pf_ct = PrefetchResponse {
             content_type: Some("application/dash+xml".to_string()),
-            bytes: b"<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema\">".to_vec(),
+            bytes: mpd_xml.as_bytes().to_vec(),
             content_length: None,
         };
         let result = try_direct_media("https://cdn.example.com/manifest.mpd", &pf_ct).unwrap();
@@ -454,19 +496,23 @@ mod tests {
             "expected Some(InfoDict) for MPD via Content-Type"
         );
         let info = result.unwrap();
-        assert_eq!(info.formats.len(), 1);
-        assert_eq!(
-            info.formats[0].protocol,
-            DownloadProtocol::HttpDashSegments,
-            "format must use HttpDashSegments protocol"
+        assert!(
+            !info.formats.is_empty(),
+            "expansion produces at least 1 Format"
         );
-        assert_eq!(info.formats[0].format_id, "dash");
-        assert_eq!(info.formats[0].ext, "mpd");
+        for f in &info.formats {
+            assert_eq!(
+                f.protocol,
+                DownloadProtocol::HttpDashSegments,
+                "format must use HttpDashSegments protocol"
+            );
+            assert!(f.fragments.is_some(), "fragments must be pre-resolved");
+        }
 
         // Body sniff: <MPD start with no application/dash+xml Content-Type
         let pf_sniff = PrefetchResponse {
             content_type: Some("application/octet-stream".to_string()),
-            bytes: b"<MPD xmlns=\"urn:mpeg:dash:schema\" type=\"static\">".to_vec(),
+            bytes: mpd_xml.as_bytes().to_vec(),
             content_length: None,
         };
         let result2 = try_direct_media("https://cdn.example.com/stream.mpd", &pf_sniff).unwrap();
@@ -475,13 +521,20 @@ mod tests {
             "expected Some(InfoDict) for MPD via body sniff"
         );
         let info2 = result2.unwrap();
-        assert_eq!(info2.formats.len(), 1);
-        assert_eq!(
-            info2.formats[0].protocol,
-            DownloadProtocol::HttpDashSegments,
-            "body-sniffed MPD must also use HttpDashSegments protocol"
+        assert!(
+            !info2.formats.is_empty(),
+            "body-sniff expansion produces at least 1 Format"
         );
-        assert_eq!(info2.formats[0].format_id, "dash");
-        assert_eq!(info2.formats[0].ext, "mpd");
+        for f in &info2.formats {
+            assert_eq!(
+                f.protocol,
+                DownloadProtocol::HttpDashSegments,
+                "body-sniffed MPD must also use HttpDashSegments protocol"
+            );
+            assert!(
+                f.fragments.is_some(),
+                "body-sniffed fragments must be pre-resolved"
+            );
+        }
     }
 }
