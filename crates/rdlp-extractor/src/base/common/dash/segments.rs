@@ -376,6 +376,87 @@ mod template_tests {
     }
 }
 
+/// One literal segment URL from a SegmentList.
+#[derive(Debug, Clone)]
+pub struct SegmentListEntry {
+    pub media: String,
+    pub duration_seconds: Option<f64>,
+}
+
+/// Plan describing a SegmentList-style fragment list.
+#[derive(Debug, Clone)]
+pub struct SegmentListPlan {
+    pub initialization: Option<String>,
+    pub entries: Vec<SegmentListEntry>,
+}
+
+/// Resolve a SegmentList plan. URLs are literal — no `$…$` substitution.
+pub fn resolve_segment_list(plan: &SegmentListPlan) -> Vec<Fragment> {
+    // Cap protects against adversarial / malformed lists.
+    let total = plan.entries.len() + if plan.initialization.is_some() { 1 } else { 0 };
+    if total > MAX_SEGMENTS_PER_REP {
+        log::warn!(
+            "DASH SegmentList has {} entries; capping at {}",
+            total,
+            MAX_SEGMENTS_PER_REP,
+        );
+    }
+    let cap = std::cmp::min(total, MAX_SEGMENTS_PER_REP);
+    let mut fragments = Vec::with_capacity(cap);
+    if let Some(init) = &plan.initialization {
+        if fragments.len() < MAX_SEGMENTS_PER_REP {
+            fragments.push(Fragment {
+                url: init.clone(),
+                duration: None,
+                filesize: None,
+            });
+        }
+    }
+    for entry in &plan.entries {
+        if fragments.len() >= MAX_SEGMENTS_PER_REP {
+            break;
+        }
+        fragments.push(Fragment {
+            url: entry.media.clone(),
+            duration: entry.duration_seconds,
+            filesize: None,
+        });
+    }
+    fragments
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    #[test]
+    fn enumerates_literals_with_init() {
+        let plan = SegmentListPlan {
+            initialization: Some("init.m4s".into()),
+            entries: vec![
+                SegmentListEntry { media: "seg1.m4s".into(), duration_seconds: Some(4.0) },
+                SegmentListEntry { media: "seg2.m4s".into(), duration_seconds: Some(4.0) },
+            ],
+        };
+        let frags = resolve_segment_list(&plan);
+        let urls: Vec<&str> = frags.iter().map(|f| f.url.as_str()).collect();
+        assert_eq!(urls, vec!["init.m4s", "seg1.m4s", "seg2.m4s"]);
+        assert_eq!(frags[0].duration, None);
+        assert_eq!(frags[1].duration, Some(4.0));
+    }
+
+    #[test]
+    fn enumerates_literals_without_init() {
+        let plan = SegmentListPlan {
+            initialization: None,
+            entries: vec![SegmentListEntry { media: "only.m4s".into(), duration_seconds: None }],
+        };
+        let frags = resolve_segment_list(&plan);
+        assert_eq!(frags.len(), 1);
+        assert_eq!(frags[0].url, "only.m4s");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
