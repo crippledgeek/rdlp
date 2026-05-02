@@ -153,6 +153,7 @@ fn entry_to_preview(entry: &Value) -> Option<SearchResultPreview> {
         thumbnail_url,
         duration,
         uploader,
+        uploader_url: None,
         actors,
         view_count,
         upload_date,
