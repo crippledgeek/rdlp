@@ -25,9 +25,9 @@ mod playlist;
 mod search;
 mod search_html;
 mod search_patterns;
-mod utils;
 #[cfg(test)]
 mod tests;
+mod utils;
 
 use std::time::Duration;
 
@@ -184,8 +184,11 @@ impl PornHubExtractor {
                             Ok(_) => "HTML returned 0 results".to_string(),
                             Err(e) => format!("{e}"),
                         };
-                        debug!("[PornHub] HTML search failed/empty on page 1, falling back to API: {reason}");
-                        let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+                        debug!(
+                            "[PornHub] HTML search failed/empty on page 1, falling back to API: {reason}"
+                        );
+                        let base_url =
+                            search_patterns::build_api_search_url(&query.query, &query.filters);
                         match self.fetch_api_search_page(&base_url, ctx).await {
                             Ok(api_results) => api_results,
                             Err(api_err) => {
@@ -255,7 +258,9 @@ impl SearchExtractor for PornHubExtractor {
                     Ok(_) => "HTML returned 0 results".to_string(),
                     Err(e) => format!("{e}"),
                 };
-                debug!("[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}");
+                debug!(
+                    "[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}"
+                );
                 let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
                 let page_url = if page == 1 {
                     base_url
@@ -392,4 +397,3 @@ impl InfoExtractor for PornHubExtractor {
         0
     }
 }
-

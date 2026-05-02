@@ -5,7 +5,11 @@ const FIXTURE: &str = include_str!("fixtures/search_html_page1.html");
 #[test]
 fn parses_results_with_uploader_populated() {
     let results = parse_html_search_results(FIXTURE).expect("parser must succeed on real fixture");
-    assert!(results.len() >= 30, "expected ≥30 results, got {}", results.len());
+    assert!(
+        results.len() >= 30,
+        "expected ≥30 results, got {}",
+        results.len()
+    );
     let with_uploader = results.iter().filter(|r| r.uploader.is_some()).count();
     assert!(
         with_uploader >= results.len() * 95 / 100,

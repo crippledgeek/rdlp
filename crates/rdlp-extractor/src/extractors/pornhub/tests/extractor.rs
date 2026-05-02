@@ -28,7 +28,10 @@ fn test_pornhub_implements_search_extractor() {
     let extractor = PornHubExtractor::new();
     let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor);
     assert!(!filters.is_empty());
-    assert_eq!(<PornHubExtractor as SearchExtractor>::name(&extractor), "PornHub");
+    assert_eq!(
+        <PornHubExtractor as SearchExtractor>::name(&extractor),
+        "PornHub"
+    );
 }
 
 #[test]
