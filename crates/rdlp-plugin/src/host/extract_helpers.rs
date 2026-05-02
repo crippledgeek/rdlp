@@ -864,10 +864,13 @@ hi.m3u8\n";
                 "manifest_url must match fetch URL for {}",
                 f.format_id
             );
+            // expand_dash_representations sets container = "{ext}_dash"
+            let expected_container = format!("{}_dash", f.ext);
             assert_eq!(
                 f.container.as_deref(),
-                Some("mp4_dash"),
-                "container must be mp4_dash for {}",
+                Some(expected_container.as_str()),
+                "container must be {}_dash for {}",
+                f.ext,
                 f.format_id
             );
         }
@@ -951,14 +954,14 @@ hi.m3u8\n";
         assert!(msg.contains("dynamic"), "expected 'dynamic' in error: {msg}");
     }
 
-    /// A DRM-only MPD must be refused (all representations drop out, leaving nothing
-    /// to download).
+    /// A DRM-protected representation must be filtered out; non-DRM sibling representations
+    /// must survive.
     ///
-    /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
+    /// with_drm.mpd has DRM only on the video representation; the audio representation
+    /// has no ContentProtection. The extraction must drop the video and return only the audio.
     #[tokio::test]
-    async fn extract_mpd_drm_protected_returns_fetch_error() {
+    async fn extract_mpd_drm_protected_reps_are_dropped() {
         use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
-        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
         use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
         use std::sync::Arc;
 
@@ -972,14 +975,14 @@ hi.m3u8\n";
                 FetchFixtures::new().with(url, FixtureResponse::ok(WITH_DRM_MPD.as_bytes().to_vec())),
             )),
         });
-        let err = c
+        let r = c
             .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
             .await
-            .expect_err("DRM-only MPD must error after representations dropped");
-        assert!(
-            matches!(err, FetchError::Network(_)),
-            "expected FetchError::Network, got {err:?}"
-        );
+            .expect("audio rep survives DRM filtering");
+        assert_eq!(r.formats.len(), 1, "only the audio rep should survive");
+        let f = &r.formats[0];
+        assert!(f.acodec.is_some(), "expected audio codec");
+        assert!(f.vcodec.is_none(), "DRM video rep must be dropped");
     }
 
     /// Non-UTF-8 bytes in the response body must cause an error (MPD is XML, must be
