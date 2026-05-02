@@ -428,7 +428,7 @@ async fn download_representation(
             Ok::<(usize, u64), RdlpError>((i, len))
         }
     }))
-    .buffer_unordered(concurrent);
+    .buffer_unordered(concurrent * 2);
 
     let mut completed_since_save: usize = 0;
     let mut stream_err: Option<RdlpError> = None;
