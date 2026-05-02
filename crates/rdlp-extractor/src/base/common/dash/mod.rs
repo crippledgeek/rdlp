@@ -4,10 +4,10 @@
 //!
 mod audio_sampling_rate;
 mod baseurl;
-mod errors;
+pub mod errors;
 mod expand;
 mod frame_rate;
 mod segments;
 
-pub(crate) use errors::DashExpandError;
-pub(crate) use expand::expand_dash_representations;
+pub use errors::DashExpandError;
+pub use expand::expand_dash_representations;

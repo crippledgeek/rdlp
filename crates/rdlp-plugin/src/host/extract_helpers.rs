@@ -296,16 +296,74 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
 
     async fn extract_mpd(
         &mut self,
-        _url: String,
+        url: String,
         _video_id: String,
-        _opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
+        opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
     ) -> Result<
         crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
     > {
-        use crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction;
-        // Stub — real impl in Task 6.
-        Ok(MpdExtraction { formats: vec![], subtitles: vec![] })
+        use crate::bindings::rdlp::plugin::host_extract_helpers::{
+            MpdExtraction, MpdFormat, MpdFragment,
+        };
+        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
+        use rdlp_extractor::base::common::dash::expand_dash_representations;
+        use url::Url;
+
+        let result: Result<MpdExtraction, FetchError> = async {
+            let req = Request {
+                url: url.clone(),
+                method: "GET".to_string(),
+                headers: vec![],
+                body: None,
+                timeout_ms: Some(30_000),
+            };
+            let resp = self.fetch(req).await?;
+            let body =
+                String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
+            let base =
+                Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
+            let formats = expand_dash_representations(&body, &base)
+                .map_err(|e| FetchError::Network(format!("{e:#}")))?;
+
+            let mpd_formats: Vec<MpdFormat> = formats
+                .into_iter()
+                .map(|f| MpdFormat {
+                    format_id: f.format_id,
+                    url: f.url,
+                    ext: f.ext.clone(),
+                    vcodec: f.vcodec.as_str().map(str::to_owned),
+                    acodec: f.acodec.as_str().map(str::to_owned),
+                    tbr: f.tbr.map(|v| v as f32),
+                    width: f.width,
+                    height: f.height,
+                    fps: f.fps.map(|v| v as f32),
+                    asr: f.asr,
+                    language: f.language,
+                    container: f.container,
+                    manifest_url: Some(url.clone()),
+                    fragment_base_url: f.fragment_base_url,
+                    fragments: f
+                        .fragments
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|fr| MpdFragment { url: fr.url, duration: fr.duration })
+                        .collect(),
+                })
+                .collect();
+
+            Ok(MpdExtraction { formats: mpd_formats, subtitles: vec![] })
+        }
+        .await;
+
+        match (result, opts.fatal) {
+            (Ok(x), _) => Ok(x),
+            (Err(e), true) => Err(e),
+            (Err(_), false) => Ok(MpdExtraction {
+                formats: vec![],
+                subtitles: vec![],
+            }),
+        }
     }
 
     async fn extract_json_ld(
