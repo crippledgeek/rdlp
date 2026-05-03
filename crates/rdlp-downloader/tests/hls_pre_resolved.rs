@@ -1,47 +1,50 @@
-//! Tests for HlsDownloader::download_format pre-resolved + legacy paths.
+//! Tests for HlsDownloader::download_format pre-resolved path + programmer-error guard.
 
-use rdlp_core::Downloader as _;
+use rdlp_core::{Downloader as _, RdlpError};
 use rdlp_downloader::HlsDownloader;
 use rdlp_types::{DownloadProtocol, Format, Fragment};
 use tempfile::TempDir;
 
+/// After #267, every HLS Format reaching HlsDownloader MUST carry pre-resolved
+/// fragments. A Format with fragments=None is a programmer error (extractor did
+/// not call expand_hls_in_place) and MUST return a typed RdlpError::Download —
+/// it MUST NOT silently fetch the playlist or succeed.
 #[tokio::test]
-async fn fragments_none_falls_through_to_legacy_download_to_file() {
-    let mut server = mockito::Server::new_async().await;
-
-    // Legacy path: media playlist IS fetched at download time.
-    let _media = server
-        .mock("GET", "/v.m3u8")
-        .with_body(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
-             #EXTINF:6.0,\nseg-1.ts\n#EXT-X-ENDLIST\n",
-        )
-        .expect_at_least(1)
-        .create_async()
-        .await;
-
-    let _seg1 = server
-        .mock("GET", "/seg-1.ts")
-        .with_status(200)
-        .with_body(b"SEG1")
-        .expect_at_least(1)
-        .create_async()
-        .await;
-
-    let url = format!("{}/v.m3u8", server.url());
-    let format = Format::new("hls", &url, "m3u8", DownloadProtocol::M3u8);
-    // fragments stays None.
+async fn fragments_none_returns_typed_download_error() {
+    let format = Format::new(
+        "hls",
+        "https://example.com/v.m3u8",
+        "m3u8",
+        DownloadProtocol::M3u8,
+    );
+    // fragments stays None — this is the programmer-error case.
 
     let tmp = TempDir::new().unwrap();
     let output = tmp.path().join("video.ts");
 
-    let dl = HlsDownloader::new();
-    let _ = dl
+    let result = HlsDownloader::new()
         .download_format(&format, &output, None)
-        .await
-        .expect("legacy path must work");
+        .await;
 
-    assert!(output.exists());
+    assert!(
+        result.is_err(),
+        "fragments=None must return an error, not succeed"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, RdlpError::Download { .. }),
+        "error must be RdlpError::Download, got: {err:?}"
+    );
+    let RdlpError::Download { message, url } = err else {
+        unreachable!()
+    };
+    assert!(
+        message.contains("expand_hls_in_place"),
+        "error message must mention expand_hls_in_place; got: {message}"
+    );
+    assert_eq!(url.as_deref(), Some("https://example.com/v.m3u8"));
+    // Output file must NOT have been created — no playlist was fetched.
+    assert!(!output.exists());
 }
 
 #[tokio::test]
@@ -101,21 +104,33 @@ async fn pre_resolved_fragments_skip_playlist_fetch() {
     format.fragments = Some(vec![
         Fragment {
             url: format!("{base}/init.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-1.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-2.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-3.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
@@ -164,11 +179,17 @@ async fn fragment_404_propagates_as_error() {
     format.fragments = Some(vec![
         Fragment {
             url: format!("{base}/seg-1.ts"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-2.ts"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
