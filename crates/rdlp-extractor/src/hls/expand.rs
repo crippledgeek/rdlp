@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use rdlp_types::Format;
+use rdlp_types::{Format, Fragment};
 
 /// Refusal/failure modes for [`expand_hls_url`].
 ///
@@ -75,7 +75,7 @@ pub async fn expand_hls_url(
 ///
 /// Internal helper — used by `expand_hls_url` after fetching. Separated out
 /// so refusal logic can be unit-tested without HTTP mocking.
-#[allow(dead_code)] // wired into expand_hls_url in Task 7
+#[allow(dead_code)] // wired into expand_hls_url in Task 8
 fn expand_media_playlist(
     seed: &Format,
     media_playlist_url: &str,
@@ -137,12 +137,36 @@ fn expand_media_playlist(
         });
     }
 
-    // Subsequent tasks fill in the rest. For now, error so we don't return
-    // a half-built Format.
-    let _ = (seed, media_playlist_url);
-    Err(HlsExpandError::Parse(
-        "expand_media_playlist not yet complete".into(),
-    ))
+    let base = url::Url::parse(media_playlist_url)
+        .map_err(|e| HlsExpandError::Parse(format!("invalid media playlist url: {e}")))?;
+
+    let resolve = |raw: &str| -> String {
+        base.join(raw).map_or_else(|_| raw.to_string(), |u| u.to_string())
+    };
+
+    let mut fragments: Vec<Fragment> = Vec::with_capacity(playlist.segments.len() + 1);
+
+    // Init segment (folded as first Fragment if any segment has EXT-X-MAP).
+    if let Some(first_init) = playlist.segments.iter().find_map(|s| s.map.as_ref()) {
+        fragments.push(Fragment {
+            url: resolve(&first_init.uri),
+            duration: None,
+            filesize: None,
+        });
+    }
+
+    for seg in &playlist.segments {
+        fragments.push(Fragment {
+            url: resolve(&seg.uri),
+            duration: Some(f64::from(seg.duration)),
+            filesize: None,
+        });
+    }
+
+    let mut out = seed.clone();
+    out.fragments = Some(fragments);
+    out.fragment_base_url = None; // URLs already absolutized.
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -214,12 +238,10 @@ seg-1.ts
 
     #[test]
     fn key_method_none_is_not_encrypted() {
-        // Not actually encrypted — the stub still errors with Parse for now,
-        // but the encryption check is bypassed. Task 7 makes this assert
-        // success once the full body is in place.
-        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_KEY_NONE)
-            .expect_err("stub still errors");
-        assert!(!matches!(err, HlsExpandError::Encrypted(_)));
+        // METHOD=NONE means "no encryption" — must succeed.
+        let f = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_KEY_NONE)
+            .expect("METHOD=NONE must succeed");
+        assert!(f.fragments.is_some());
     }
 
     const MEDIA_LIVE_NO_ENDLIST: &[u8] = b"\
@@ -321,5 +343,71 @@ seg-1.m4s
                 max: 10_000
             }
         ));
+    }
+
+    const MEDIA_SIMPLE: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+seg-1.ts
+#EXTINF:6.0,
+seg-2.ts
+#EXT-X-ENDLIST
+";
+
+    const MEDIA_WITH_INIT: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI=\"init.m4s\"
+#EXTINF:6.0,
+seg-1.m4s
+#EXTINF:6.0,
+seg-2.m4s
+#EXT-X-ENDLIST
+";
+
+    const MEDIA_ABS_URIS: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+https://cdn.h.com/abs-1.ts
+#EXTINF:6.0,
+https://cdn.h.com/abs-2.ts
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn relative_uris_resolve_against_media_playlist_url() {
+        let f = expand_media_playlist(&seed(), "https://h.com/v/720/a.m3u8", MEDIA_SIMPLE)
+            .expect("simple playlist must succeed");
+        let frags = f.fragments.expect("fragments populated");
+        assert_eq!(frags.len(), 2);
+        assert_eq!(frags[0].url, "https://h.com/v/720/seg-1.ts");
+        assert_eq!(frags[1].url, "https://h.com/v/720/seg-2.ts");
+        assert_eq!(frags[0].duration, Some(6.0));
+    }
+
+    #[test]
+    fn absolute_uris_preserved_unchanged() {
+        let f = expand_media_playlist(&seed(), "https://h.com/v/720/a.m3u8", MEDIA_ABS_URIS)
+            .expect("absolute uris");
+        let frags = f.fragments.expect("fragments populated");
+        assert_eq!(frags[0].url, "https://cdn.h.com/abs-1.ts");
+        assert_eq!(frags[1].url, "https://cdn.h.com/abs-2.ts");
+    }
+
+    #[test]
+    fn init_segment_folded_as_first_fragment() {
+        let f = expand_media_playlist(&seed(), "https://h.com/v/720/a.m3u8", MEDIA_WITH_INIT)
+            .expect("init+segments");
+        let frags = f.fragments.expect("fragments populated");
+        assert_eq!(frags.len(), 3, "init + 2 segments");
+        assert_eq!(frags[0].url, "https://h.com/v/720/init.m4s");
+        assert_eq!(frags[0].duration, None, "init has no duration");
+        assert_eq!(frags[1].url, "https://h.com/v/720/seg-1.m4s");
+        assert_eq!(frags[2].url, "https://h.com/v/720/seg-2.m4s");
     }
 }
