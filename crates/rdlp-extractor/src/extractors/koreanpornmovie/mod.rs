@@ -707,12 +707,15 @@ fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
 /// link to opaque embed pages on that host that resolve to media at
 /// load time.
 fn looks_like_media(url: &str) -> bool {
-    if url.contains("koreanporn.stream") {
-        return true;
-    }
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
     };
+    if parsed
+        .host_str()
+        .is_some_and(|h| h == "koreanporn.stream" || h.ends_with(".koreanporn.stream"))
+    {
+        return true;
+    }
     let ext = parsed
         .path()
         .rsplit('/')
@@ -842,6 +845,26 @@ mod tests {
         let html = r#"<source src="https://koreanporn.stream/embed/abc123">"#;
         let urls = extract_urls_from_decoded_tag(html);
         assert_eq!(urls.len(), 1);
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_rejects_subdomain_squatting() {
+        // Security: a hostile domain that contains "koreanporn.stream" as a
+        // substring (e.g. `koreanporn.stream.evil.com`, or any URL whose
+        // query references it) MUST NOT bypass the path-extension
+        // allow-list via the host carve-out.
+        let html = r#"<source src="https://koreanporn.stream.evil.com/page">"#;
+        assert!(extract_urls_from_decoded_tag(html).is_empty());
+
+        let html = r#"<source src="https://attacker.com/page?ref=koreanporn.stream">"#;
+        assert!(extract_urls_from_decoded_tag(html).is_empty());
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_koreanporn_stream_subdomain() {
+        // Legitimate subdomains (e.g. cdn.koreanporn.stream) remain allowed.
+        let html = r#"<source src="https://cdn.koreanporn.stream/embed/abc">"#;
+        assert_eq!(extract_urls_from_decoded_tag(html).len(), 1);
     }
 
     #[test]
