@@ -1,58 +1,30 @@
 //! HLS (HTTP Live Streaming) downloader module.
 //!
-//! Downloads HLS streams by parsing m3u8 playlists and downloading segments
-//! in parallel using the HTTP downloader infrastructure.
-//!
-//! # Architecture
-//!
-//! 1. Parse m3u8 playlist to extract segment URLs
-//! 2. Download segments in parallel using `buffer_unordered`
-//! 3. Merge segments into final video file
-//! 4. Clean up temporary segment files
-//!
-//! # Performance
-//!
-//! - Default: 8 concurrent segment downloads
-//! - Typical: 500 MB video in 60-90 seconds
-//! - Bottleneck: Server throttling (not client)
+//! Downloads HLS streams by fetching pre-resolved fragments produced by
+//! `expand_hls_in_place` in the extractor layer. Every `Format` with
+//! `protocol: M3u8 | M3u8Native` that reaches this downloader MUST have
+//! `Format.fragments` populated; absent fragments indicate a programmer error
+//! (the extractor did not call the expander) and are surfaced as a typed
+//! `RdlpError::Download`.
 
 // `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
 // workspace MSRV is 1.85.
 #![allow(clippy::duration_suboptimal_units)]
 
-mod merge;
-mod playlist;
-mod segment;
-mod types;
-
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
-// std::sync::Mutex is intentional for `Arc<Mutex<HlsDownloadState>>`: guards
-// never cross an .await point. Snapshots are cloned out of the lock before
-// any `.save().await` call.
-// See docs/implementation/tls-impersonation/phase-1-report.md Finding 2.2.
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use log::{debug, info, warn};
-use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result, RetryConfig};
-use tracing::instrument;
+use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result};
 
-use crate::hls_state::HlsDownloadState;
 use crate::http::HttpDownloader;
-use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
-
-use self::merge::{cleanup_segments, download_segments_with_resume, merge_segments};
-use self::playlist::parse_playlist;
-use self::segment::download_init_segment;
-use self::types::InitSegmentInfo;
 
 /// HLS (HTTP Live Streaming) downloader
 ///
-/// Downloads HLS streams by parsing m3u8 playlists and downloading segments
-/// in parallel using the HTTP downloader infrastructure.
+/// Downloads HLS streams from pre-resolved fragment lists produced by
+/// `expand_hls_in_place`. Direct playlist parsing (the legacy path) has
+/// been removed; all HLS formats MUST carry `Format.fragments` before
+/// reaching this downloader.
 ///
 /// # Example
 ///
@@ -74,16 +46,15 @@ use self::types::InitSegmentInfo;
 #[derive(Clone)]
 pub struct HlsDownloader {
     http_downloader: HttpDownloader,
+    /// Kept for builder API compatibility; unused after legacy removal.
     concurrent_segments: usize,
+    /// Kept for builder API compatibility; unused after legacy removal.
     buffer_size: usize,
-    retry_config: Arc<RetryConfig>,
-    /// Expected total size for progress reporting (set externally)
-    expected_size: Option<u64>,
     /// Total download timeout (entire operation must complete within this)
     download_timeout: Duration,
-    /// Merge operation timeout (segment merge must complete within this)
+    /// Merge operation timeout; kept for API compatibility.
     merge_timeout: Duration,
-    /// Maximum number of segment failures before aborting the download
+    /// Kept for builder API compatibility; unused after legacy removal.
     max_segment_failures: usize,
 }
 
@@ -93,12 +64,10 @@ impl HlsDownloader {
     pub fn new() -> Self {
         Self {
             http_downloader: HttpDownloader::new(),
-            concurrent_segments: 8,       // Default: 8 parallel segments
-            buffer_size: 2 * 1024 * 1024, // 2 MB buffer for merging
-            retry_config: Arc::new(RetryConfig::default_config()),
-            expected_size: None,
-            download_timeout: Duration::from_secs(3600), // 1 hour
-            merge_timeout: Duration::from_secs(1800),    // 30 min
+            concurrent_segments: 8,
+            buffer_size: 2 * 1024 * 1024,
+            download_timeout: Duration::from_secs(3600),
+            merge_timeout: Duration::from_secs(1800),
             max_segment_failures: 3,
         }
     }
@@ -121,23 +90,6 @@ impl HlsDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub const fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
-        self
-    }
-
-    /// Set retry configuration
-    #[must_use = "builder methods consume self and return a new instance"]
-    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
-        self.retry_config = Arc::new(config);
-        self
-    }
-
-    /// Set expected total size for progress reporting
-    ///
-    /// This allows the progress bar to show accurate percentage and ETA
-    /// even though HLS streams don't have a known total size upfront.
-    #[must_use = "builder methods consume self and return a new instance"]
-    pub const fn with_expected_size(mut self, size: u64) -> Self {
-        self.expected_size = Some(size);
         self
     }
 
@@ -194,7 +146,6 @@ impl Downloader for HlsDownloader {
     }
 
     async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
-        // Size detection is handled by HlsSizeDetector in extractor layer
         Ok(None)
     }
 
@@ -202,206 +153,49 @@ impl Downloader for HlsDownloader {
         &self,
         format: &rdlp_types::Format,
         output: &Path,
-        progress: Option<Box<dyn ProgressCallback>>,
+        _progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
-        if let Some(fragments) = format.fragments.as_deref() {
-            let base = format.fragment_base_url.as_deref();
-            crate::fragments::download_pre_resolved_fragments(
-                &self.http_downloader,
-                fragments,
-                base,
-                output,
-            )
-            .await
-        } else {
-            self.download_to_file(&format.url, output, progress).await
-        }
+        // After #267, every M3u8 / M3u8Native row reaching the downloader has
+        // Format.fragments populated by expand_hls_in_place. A row without
+        // fragments indicates an extractor that did NOT call the expander —
+        // programmer error, not a runtime case to handle gracefully.
+        let Some(fragments) = format.fragments.as_deref() else {
+            return Err(RdlpError::Download {
+                message: format!(
+                    "internal error: HLS Format reached HlsDownloader without \
+                     pre-resolved fragments — extractor must call \
+                     expand_hls_in_place. Format: {}",
+                    format.format_id
+                ),
+                url: Some(format.url.clone()),
+            });
+        };
+
+        crate::fragments::download_pre_resolved_fragments(
+            &self.http_downloader,
+            fragments,
+            format.fragment_base_url.as_deref(),
+            output,
+        )
+        .await
     }
 
-    #[instrument(skip(self, progress), fields(url = %url, path = %path.display()))]
     async fn download_to_file(
         &self,
         url: &str,
-        path: &Path,
-        progress: Option<Box<dyn ProgressCallback>>,
+        _path: &Path,
+        _progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
-        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
-        let timeout = self.download_timeout;
-        tokio::time::timeout(timeout, async {
-            let start_time = Instant::now();
-
-            // Step 1: Parse playlist
-            let playlist = parse_playlist(&self.http_downloader, url).await?;
-            let segments = playlist.segments;
-            let has_init = segments.iter().any(|s| s.init_segment.is_some());
-            let total_segments = segments.len();
-            let total_duration: f64 = segments.iter().map(|s| s.duration).sum();
-            debug!(
-                segments = total_segments,
-                duration_secs = total_duration,
-                fmp4 = has_init;
-                "Parsed HLS playlist"
-            );
-
-            // Step 2: Load or create state for resume support
-            let state = if let Some(existing_state) =
-                HlsDownloadState::load(path, url, total_segments).await
-            {
-                let completed = existing_state.completed_segments.len();
-                let remaining = total_segments - completed;
-                info!(
-                    completed,
-                    total = total_segments,
-                    remaining;
-                    "Resuming HLS download"
-                );
-                Arc::new(Mutex::new(existing_state))
-            } else {
-                debug!("Starting fresh HLS download");
-                Arc::new(Mutex::new(HlsDownloadState::new(url, total_segments)))
-            };
-
-            // Step 3: Setup progress tracking
-            let downloaded = Arc::new(AtomicU64::new(
-                state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .total_bytes_downloaded,
-            ));
-            let segments_completed = Arc::new(AtomicU64::new(
-                state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .completed_segments
-                    .len() as u64,
-            ));
-            // Duration in centiseconds for atomic precision (f64 -> u64)
-            let duration_completed = Arc::new(AtomicU64::new(0));
-            let total_segments_u64 = total_segments as u64;
-
-            // Clone before reporter consumes it — merge needs it for adaptive log callback
-            let log_callback = progress.clone();
-
-            // Spawn progress reporter task with duration-based progress
-            let mut progress_guard = spawn_progress_reporter(
-                progress,
-                ProgressMetrics::with_duration(
-                    downloaded.clone(),
-                    segments_completed.clone(),
-                    duration_completed.clone(),
-                ),
-                ProgressReporterConfig::hls(start_time, total_segments_u64, total_duration),
-            );
-
-            // Step 4: Download segments (with resume support)
-            let temp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-            let base_filename = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("download");
-
-            let segment_paths = match download_segments_with_resume(
-                &self.http_downloader,
-                self.retry_config.clone(),
-                self.buffer_size,
-                self.concurrent_segments,
-                self.max_segment_failures,
-                &segments,
-                temp_dir,
-                base_filename,
-                downloaded.clone(),
-                segments_completed.clone(),
-                duration_completed.clone(),
-                state.clone(),
-                path,
-                log_callback,
-            )
-            .await
-            {
-                Ok(paths) => paths,
-                Err(e) => {
-                    // Save state on error (so we can resume later)
-                    let snapshot = state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clone();
-                    if let Err(save_err) = snapshot.save(path).await {
-                        warn!("Failed to save HLS state: {save_err}");
-                    }
-                    progress_guard.abort();
-                    return Err(e);
-                }
-            };
-
-            // Progress guard will be dropped and abort the task automatically
-            drop(progress_guard);
-
-            // Step 5: Download unique init segments (fMP4 EXT-X-MAP)
-            // Collect unique init segments and download each once.
-            let unique_inits: HashSet<InitSegmentInfo> = segments
-                .iter()
-                .filter_map(|s| s.init_segment.clone())
-                .collect();
-
-            let mut init_file_map: HashMap<InitSegmentInfo, std::path::PathBuf> =
-                HashMap::with_capacity(unique_inits.len());
-            for (i, init) in unique_inits.into_iter().enumerate() {
-                let init_path = temp_dir.join(format!("{base_filename}.init{i}"));
-                debug!(index = i; "Downloading fMP4 init segment (EXT-X-MAP): {}", init.url);
-                download_init_segment(&self.http_downloader, &self.retry_config, &init, &init_path)
-                    .await?;
-                init_file_map.insert(init, init_path);
-            }
-
-            // Build per-segment init path mapping for merge
-            let segment_init_paths: Vec<Option<std::path::PathBuf>> = segments
-                .iter()
-                .map(|s| {
-                    s.init_segment
-                        .as_ref()
-                        .and_then(|init| init_file_map.get(init).cloned())
-                })
-                .collect();
-
-            // Step 6: Merge segments (re-inserting init segment on change)
-            let total_bytes = merge_segments(
-                self.buffer_size,
-                self.merge_timeout,
-                &segment_paths,
-                path,
-                &segment_init_paths,
-            )
-            .await?;
-
-            // Step 7: Cleanup segments, init segments, and state file
-            cleanup_segments(&segment_paths).await;
-            for init_path in init_file_map.values() {
-                let _ = tokio::fs::remove_file(init_path).await;
-            }
-            if let Err(e) = HlsDownloadState::delete(path).await {
-                warn!("Failed to delete HLS state file: {e}");
-            }
-
-            // Step 8: Return statistics
-            let duration = start_time.elapsed();
-            let stats = DownloadStats::new(total_bytes, duration, 0).with_fragments(total_segments);
-
-            let duration_secs = duration.as_secs_f64();
-            let speed_mbps = (total_bytes as f64 / duration_secs) / (1024.0 * 1024.0);
-            info!(
-                mb = total_bytes / (1024 * 1024),
-                duration_secs:? = duration_secs,
-                speed_mbps:? = speed_mbps;
-                "HLS download complete"
-            );
-
-            Ok(stats)
-        })
-        .await
-        .map_err(|_| RdlpError::Download {
-            message: format!("Download timed out after {}s", timeout.as_secs()),
+        // The legacy playlist-parsing path has been removed in #267. All HLS
+        // downloads must go through download_format with pre-resolved fragments.
+        // This entry point is retained only to satisfy the Downloader trait; it
+        // should never be reached in production.
+        Err(RdlpError::Download {
+            message: "internal error: HlsDownloader::download_to_file called directly — \
+                      use download_format with pre-resolved fragments (expand_hls_in_place)"
+                .to_string(),
             url: Some(url.to_string()),
-        })?
+        })
     }
 }
 

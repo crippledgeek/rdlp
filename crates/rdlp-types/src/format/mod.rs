@@ -362,10 +362,10 @@ impl fmt::Display for Format {
 /// Pre-resolved fragment (HLS segment / DASH segment) with optional
 /// byte-range subrange and per-fragment init reference.
 ///
-/// Tuple convention for ranges is `(start, end_exclusive)` matching
-/// yt-dlp's `byte_range: {start, end}`. Conversion to FFmpeg's
-/// `(url_offset, size)`: `start = url_offset`, `end_exclusive = url_offset
-/// + size`. HTTP `Range:` emission must subtract 1 for the inclusive end.
+/// Byte-range tuple convention: `(start, end_exclusive)`, matching yt-dlp's
+/// `byte_range` object `{start, end}`. To convert to an `FFmpeg` `url_offset`/`size`
+/// pair: `url_offset = start`, `size = end_exclusive - start`. The HTTP `Range`
+/// header uses an inclusive end, so subtract 1 when emitting it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fragment {
     /// Absolute fragment URL (HLS segment URI or DASH segment URI).

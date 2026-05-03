@@ -286,8 +286,6 @@ pub mod dash;
 pub mod fragments;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
-/// HLS download state persistence for resume support
-pub mod hls_state;
 /// HTTP/HTTPS downloader with parallel chunk support
 pub mod http;
 /// Shared progress reporting infrastructure

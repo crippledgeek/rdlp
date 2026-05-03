@@ -256,7 +256,7 @@ mod tests {
         // Init A is needed for fragments 1 + 2 → 1 fetch (deduped on consecutive).
         let _init_a = server
             .mock("GET", "/init-a.mp4")
-            .with_body(b"INITA".to_vec())
+            .with_body(b"INITA")
             .expect(1)
             .create_async()
             .await;
@@ -264,7 +264,7 @@ mod tests {
         // Init B is needed for fragment 3 → 1 fetch.
         let _init_b = server
             .mock("GET", "/init-b.mp4")
-            .with_body(b"INITB".to_vec())
+            .with_body(b"INITB")
             .expect(1)
             .create_async()
             .await;
@@ -273,7 +273,7 @@ mod tests {
         for i in 1..=3_u32 {
             server
                 .mock("GET", format!("/seg-{i}.m4s").as_str())
-                .with_body(b"DATA".to_vec())
+                .with_body(b"DATA")
                 .expect(1)
                 .create_async()
                 .await;
@@ -299,7 +299,7 @@ mod tests {
             .await
             .expect("multi-init download must succeed");
 
-        let written = std::fs::read(tmp.path()).unwrap();
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
         // Expected: INITA + DATA + DATA + INITB + DATA = 5 + 4 + 4 + 5 + 4 = 22 bytes.
         assert_eq!(written.len(), 22);
         assert_eq!(&written[0..5], b"INITA");
@@ -316,7 +316,7 @@ mod tests {
         // Init must be fetched EXACTLY ONCE for 10 fragments.
         let _init = server
             .mock("GET", "/init.mp4")
-            .with_body(b"INIT".to_vec())
+            .with_body(b"INIT")
             .expect(1)
             .create_async()
             .await;
@@ -324,7 +324,7 @@ mod tests {
         for i in 1..=10_u32 {
             server
                 .mock("GET", format!("/seg-{i}.m4s").as_str())
-                .with_body(b"D".to_vec())
+                .with_body(b"D")
                 .expect(1)
                 .create_async()
                 .await;
@@ -348,7 +348,7 @@ mod tests {
             .await
             .expect("single-init download must succeed");
 
-        let written = std::fs::read(tmp.path()).unwrap();
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
         // 4 (INIT) + 10 × 1 (D) = 14 bytes.
         assert_eq!(written.len(), 14);
     }
