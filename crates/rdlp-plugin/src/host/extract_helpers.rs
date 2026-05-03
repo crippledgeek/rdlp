@@ -227,6 +227,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options,
+        _fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
     ) -> Result<
         crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction,
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
@@ -299,6 +300,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
+        _fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
     ) -> Result<
         crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
@@ -767,6 +769,7 @@ hi.m3u8\n";
                 "https://x.com/master.m3u8".to_string(),
                 "vid".to_string(),
                 opts,
+                empty_fetch(),
             )
             .await
             .unwrap();
@@ -802,6 +805,7 @@ hi.m3u8\n";
                 "https://x.com/never-resolved.m3u8".to_string(),
                 "vid".to_string(),
                 opts,
+                empty_fetch(),
             )
             .await
             .unwrap();
@@ -822,6 +826,14 @@ hi.m3u8\n";
         crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions {
             mpd_id: None,
             fatal,
+        }
+    }
+
+    fn empty_fetch() -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+        crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+            headers: vec![],
+            query: vec![],
+            body: None,
         }
     }
 
@@ -849,7 +861,7 @@ hi.m3u8\n";
         });
 
         let r = c
-            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect("extract_mpd");
 
@@ -919,6 +931,7 @@ hi.m3u8\n";
                 "https://x/m.mpd".to_string(),
                 "v".to_string(),
                 mpd_opts(false),
+                empty_fetch(),
             )
             .await
             .expect("non-fatal returns Ok");
@@ -940,6 +953,7 @@ hi.m3u8\n";
                 "https://x/m.mpd".to_string(),
                 "v".to_string(),
                 mpd_opts(true),
+                empty_fetch(),
             )
             .await
             .expect_err("fatal must propagate");
@@ -971,7 +985,7 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect_err("dynamic MPD must error");
         let msg = format!("{err:?}").to_lowercase();
@@ -1004,7 +1018,7 @@ hi.m3u8\n";
             )),
         });
         let r = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect("audio rep survives DRM filtering");
         assert_eq!(r.formats.len(), 1, "only the audio rep should survive");
@@ -1037,7 +1051,7 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect_err("invalid utf-8 must error");
         assert!(
@@ -1068,7 +1082,7 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect_err("non-MPD XML must error");
         assert!(
@@ -1101,7 +1115,7 @@ hi.m3u8\n";
         });
 
         let r = c
-            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true))
+            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true), empty_fetch())
             .await
             .expect("extract_mpd");
 
