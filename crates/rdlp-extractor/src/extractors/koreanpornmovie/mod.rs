@@ -172,6 +172,12 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             }
         }
 
+        // Pre-resolve HLS variant playlists into per-variant Format rows so
+        // the downloader can take the Format.fragments fast path. Non-HLS
+        // rows pass through unchanged; expand failures keep the original row
+        // (graceful fallback to the legacy variant-URL path).
+        let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+
         info.formats = formats;
         Ok(info)
     }
@@ -845,5 +851,49 @@ mod tests {
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].url, "https://koreanporn.stream/Movie.mp4");
         assert_eq!(formats[0].ext, "mp4");
+    }
+
+    /// Regression guard for #258 — confirm an `M3u8` HLS row produced by
+    /// `build_format` (protocol inferred from `.m3u8` in URL) is expanded
+    /// into per-variant fragments by `expand_hls_in_place`, and that
+    /// non-HLS rows pass through unchanged. Catches a wiring break where
+    /// the helper call is removed from `extract` (the M3u8 row would
+    /// arrive at the downloader without pre-resolved fragments).
+    #[tokio::test]
+    async fn hls_row_expanded_and_mp4_pass_through() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/kpm-master.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let hls_url = format!("{}/kpm-master.m3u8", server.url());
+        let hls = Format::new("hls", &hls_url, "m3u8", DownloadProtocol::M3u8);
+        let mp4 = Format::new(
+            "mp4",
+            "https://koreanporn.stream/Movie.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+
+        let formats = vec![hls, mp4];
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 2);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "M3u8 row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        assert!(
+            expanded[1].fragments.is_none(),
+            "Https MP4 row must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://koreanporn.stream/Movie.mp4");
     }
 }
