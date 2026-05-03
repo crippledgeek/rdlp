@@ -321,6 +321,13 @@ fn build_fragments(
 }
 
 #[cfg(test)]
+fn mime_to_sub_ext(_mime: &str, _codecs: &str) -> String {
+    // Stub: real implementation lands in Task 4 of the DASH-text-subtitle plan.
+    // Returning "ttml" lets Task 3's failing tests compile.
+    "ttml".to_owned()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rdlp_types::DownloadProtocol;
@@ -448,5 +455,128 @@ mod tests {
         let DashExpansion { formats, subtitles: _ } = expand_dash_representations(xml, &base).unwrap();
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].format_id, "dash_v_0_0");
+    }
+
+    // ---- DASH text-AdaptationSet expansion tests ------------------------------
+
+    const WITH_TEXT_TRACKS_MPD: &str = include_str!(
+        "../../../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd"
+    );
+
+    /// Inline MPD: one fragmented text track (SegmentTemplate-driven). Used
+    /// to verify the expansion logs a warning and skips it instead of emitting
+    /// a partial entry.
+    const FRAGMENTED_TEXT_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet id="0" mimeType="video/mp4" contentType="video">
+      <Representation id="v1" bandwidth="1000000" codecs="avc1.640028" width="1920" height="1080">
+        <SegmentTemplate timescale="1000" duration="4000" media="v1/$Number$.m4s" initialization="v1/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="1" mimeType="application/mp4" contentType="text" lang="en">
+      <Representation id="t1" bandwidth="1500" codecs="wvtt">
+        <SegmentTemplate timescale="1000" duration="4000" media="subs/en/$Number$.m4s" initialization="subs/en/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+    /// Inline MPD: text-only manifest (no video / audio AdaptationSets).
+    const TEXT_ONLY_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet id="0" mimeType="text/ttml" contentType="text" lang="en">
+      <Representation id="t1" bandwidth="1000">
+        <BaseURL>subs/en.ttml</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+    fn text_test_base_url() -> Url {
+        Url::parse("https://example.com/manifest.mpd").expect("base url")
+    }
+
+    #[test]
+    fn expand_yields_text_subtitles_from_sidecar_mpd() {
+        let r = expand_dash_representations(WITH_TEXT_TRACKS_MPD, &text_test_base_url())
+            .expect("expansion succeeds");
+        assert_eq!(r.formats.len(), 2, "video + audio");
+        assert_eq!(r.subtitles.len(), 3, "three text reps in fixture");
+
+        let langs: Vec<Option<&str>> = r.subtitles.iter().map(|s| s.language.as_deref()).collect();
+        assert!(langs.contains(&Some("en")), "en sub present: {langs:?}");
+        assert!(langs.contains(&Some("sv")), "sv sub present: {langs:?}");
+        assert!(langs.contains(&None), "lang-less sub present (None): {langs:?}");
+
+        let exts: Vec<&str> = r.subtitles.iter().map(|s| s.ext.as_str()).collect();
+        assert!(exts.contains(&"ttml"), "ttml ext present: {exts:?}");
+        assert!(exts.contains(&"vtt"), "vtt ext present (twice): {exts:?}");
+    }
+
+    #[test]
+    fn expand_assigns_none_when_lang_attr_missing() {
+        let r = expand_dash_representations(WITH_TEXT_TRACKS_MPD, &text_test_base_url()).unwrap();
+        let lang_less = r.subtitles.iter().find(|s| s.language.is_none())
+            .expect("lang-less sub");
+        assert!(lang_less.url.ends_with("subs/und.vtt"), "url: {}", lang_less.url);
+        assert_eq!(lang_less.ext, "vtt");
+    }
+
+    #[test]
+    fn expand_skips_fragmented_text_template() {
+        let r = expand_dash_representations(FRAGMENTED_TEXT_MPD, &text_test_base_url()).unwrap();
+        assert_eq!(r.formats.len(), 1, "video survives");
+        assert_eq!(r.subtitles.len(), 0, "fragmented text track must be skipped");
+    }
+
+    #[test]
+    fn expand_returns_no_usable_reps_when_video_audio_and_text_all_empty() {
+        let empty = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S"></Period>
+</MPD>"#;
+        let err = expand_dash_representations(empty, &text_test_base_url())
+            .expect_err("empty MPD must error");
+        assert!(matches!(err, DashExpandError::NoUsableReps), "got {err:?}");
+    }
+
+    #[test]
+    fn expand_returns_ok_with_text_only_mpd() {
+        let r = expand_dash_representations(TEXT_ONLY_MPD, &text_test_base_url()).unwrap();
+        assert!(r.formats.is_empty(), "no AV formats");
+        assert_eq!(r.subtitles.len(), 1, "one text sub");
+        assert_eq!(r.subtitles[0].language.as_deref(), Some("en"));
+        assert_eq!(r.subtitles[0].ext, "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_text_ttml() {
+        assert_eq!(mime_to_sub_ext("text/ttml", ""), "ttml");
+        assert_eq!(mime_to_sub_ext("application/ttml+xml", ""), "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_text_vtt() {
+        assert_eq!(mime_to_sub_ext("text/vtt", ""), "vtt");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_mp4_stpp() {
+        assert_eq!(mime_to_sub_ext("application/mp4", "stpp"), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", "ttml"), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", "dfxp"), "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_mp4_wvtt() {
+        assert_eq!(mime_to_sub_ext("application/mp4", "wvtt"), "vtt");
     }
 }
