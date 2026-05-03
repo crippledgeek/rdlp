@@ -10,4 +10,4 @@ mod frame_rate;
 mod segments;
 
 pub use errors::DashExpandError;
-pub use expand::expand_dash_representations;
+pub use expand::{DashExpansion, DashSubtitle, expand_dash_representations};

@@ -19,6 +19,33 @@ use super::segments::{
 /// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
 pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 
+/// One DASH text AdaptationSet representation, projected to a sidecar subtitle.
+///
+/// `language` is `None` when the source AdaptationSet has no `@lang` attribute.
+/// Downstream consumers map `None` → `"und"` per yt-dlp convention.
+#[derive(Debug, Clone)]
+pub struct DashSubtitle {
+    /// BCP-47 language tag, or `None` when the source AdaptationSet has no `@lang`.
+    pub language: Option<String>,
+    /// Direct URL to the subtitle sidecar file.
+    pub url: String,
+    /// File extension derived from the MIME type (e.g. `"vtt"`, `"ttml"`).
+    pub ext: String,
+}
+
+/// Combined output of [`expand_dash_representations`].
+///
+/// `formats` contains video + audio Representations (one per Repr). `subtitles`
+/// contains text AdaptationSet sidecar tracks (single-URL per Repr; fragmented
+/// text tracks are skipped with a warn log — see plan task 4).
+#[derive(Debug, Clone)]
+pub struct DashExpansion {
+    /// Video and audio Representations, one [`Format`] per usable Representation.
+    pub formats: Vec<Format>,
+    /// Text AdaptationSet sidecar tracks. Empty until Task 4 adds detection.
+    pub subtitles: Vec<DashSubtitle>,
+}
+
 /// Parse the MPD body and project each Representation to a [`Format`].
 ///
 /// `mpd_xml` is the response body. `base_url` is the URL the MPD was fetched
@@ -35,7 +62,7 @@ pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 pub fn expand_dash_representations(
     mpd_xml: &str,
     base_url: &Url,
-) -> Result<Vec<Format>, DashExpandError> {
+) -> Result<DashExpansion, DashExpandError> {
     let mpd = dash_mpd::parse(mpd_xml).map_err(|e| DashExpandError::Parse(e.to_string()))?;
 
     if mpd.mpdtype.as_deref() == Some("dynamic") {
@@ -62,6 +89,7 @@ pub fn expand_dash_representations(
 
     let mut drm_dropped = 0usize;
     let mut formats: Vec<Format> = Vec::new();
+    let mut subtitles: Vec<DashSubtitle> = Vec::new();
 
     for (adapt_idx, adapt) in period.adaptations.iter().enumerate() {
         if !adapt.ContentProtection.is_empty() {
@@ -94,9 +122,39 @@ pub fn expand_dash_representations(
                 .as_deref()
                 .or(adapt.mimeType.as_deref())
                 .unwrap_or("");
+            let codecs_str = repr
+                .codecs
+                .as_deref()
+                .or(adapt.codecs.as_deref())
+                .unwrap_or("");
             let is_video = mime.starts_with("video/");
             let is_audio = mime.starts_with("audio/");
-            if !is_video && !is_audio {
+            let is_text = mime.starts_with("text/")
+                || (mime == "application/mp4"
+                    && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
+            if !is_video && !is_audio && !is_text {
+                continue;
+            }
+
+            if is_text {
+                // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
+                // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
+                let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
+                let plan = build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
+                if plan.is_empty() {
+                    let ext = mime_to_sub_ext(mime, codecs_str);
+                    subtitles.push(DashSubtitle {
+                        language: adapt_lang.clone(),
+                        url: final_base.to_string(),
+                        ext,
+                    });
+                } else {
+                    log::warn!(
+                        "DASH: skipping fragmented text track at adapt={} repr={} (SegmentTemplate subs not yet supported)",
+                        adapt_idx,
+                        repr_idx,
+                    );
+                }
                 continue;
             }
 
@@ -177,10 +235,10 @@ pub fn expand_dash_representations(
         log::warn!("DASH: capped representations at {MAX_REPS_PER_MPD} (dropped {dropped})");
     }
 
-    if formats.is_empty() {
+    if formats.is_empty() && subtitles.is_empty() {
         return Err(DashExpandError::NoUsableReps);
     }
-    Ok(formats)
+    Ok(DashExpansion { formats, subtitles })
 }
 
 /// Map a MIME type to a container file extension.
@@ -292,6 +350,25 @@ fn build_fragments(
     Vec::new()
 }
 
+/// Derive a yt-dlp-style subtitle ext from an MPD text Representation's
+/// `mimeType` and (for `application/mp4` containers) `codecs`.
+///
+/// Defaults to `"ttml"` for unknown text mime types — defensive, matching
+/// yt-dlp's convention.
+fn mime_to_sub_ext(mime: &str, codecs: &str) -> String {
+    match mime {
+        "text/ttml" | "application/ttml+xml" => "ttml",
+        "text/vtt" => "vtt",
+        "application/mp4" => match codecs {
+            "stpp" | "ttml" | "dfxp" => "ttml",
+            "wvtt" => "vtt",
+            _ => "ttml",
+        },
+        _ => "ttml",
+    }
+    .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,7 +394,10 @@ mod tests {
     fn segment_template_three_video_two_audio() {
         let xml = load_fixture("segment_template.mpd");
         let base = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
 
         // Fixture defines at least one video Repr + one audio Repr.
         assert!(
@@ -360,7 +440,10 @@ mod tests {
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
         let result = expand_dash_representations(&xml, &base);
         match result {
-            Ok(formats) => {
+            Ok(DashExpansion {
+                formats,
+                subtitles: _,
+            }) => {
                 // None of the returned Formats should be DRM-encumbered.
                 // We can't introspect ContentProtection from a Format, but we
                 // can assert that every returned Format passed the filter.
@@ -377,7 +460,10 @@ mod tests {
     fn multi_period_first_only() {
         let xml = load_fixture("multi_period.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
         // Multi-period fixture has Reps in each period; we only emit period-1's.
         // Asserting non-empty is sufficient — a non-failing parse with at least
         // one Format proves the multi-period warn-and-skip path succeeded.
@@ -388,7 +474,10 @@ mod tests {
     fn mega_rep_cap_at_50() {
         let xml = load_fixture("mega_reps.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
         assert_eq!(formats.len(), 50, "60-Rep MPD should cap at 50");
         // The 50 retained should be the highest-bandwidth Reps (v11..v60).
         // Bandwidth formula: 100000 + i * 10000 → v11 = 210000, v60 = 700000.
@@ -417,8 +506,147 @@ mod tests {
   </Period>
 </MPD>"#;
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(xml, &base).unwrap();
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].format_id, "dash_v_0_0");
+    }
+
+    // ---- DASH text-AdaptationSet expansion tests ------------------------------
+
+    const WITH_TEXT_TRACKS_MPD: &str =
+        include_str!("../../../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd");
+
+    /// Inline MPD: one fragmented text track (SegmentTemplate-driven). Used
+    /// to verify the expansion logs a warning and skips it instead of emitting
+    /// a partial entry.
+    const FRAGMENTED_TEXT_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet id="0" mimeType="video/mp4" contentType="video">
+      <Representation id="v1" bandwidth="1000000" codecs="avc1.640028" width="1920" height="1080">
+        <SegmentTemplate timescale="1000" duration="4000" media="v1/$Number$.m4s" initialization="v1/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="1" mimeType="application/mp4" contentType="text" lang="en">
+      <Representation id="t1" bandwidth="1500" codecs="wvtt">
+        <SegmentTemplate timescale="1000" duration="4000" media="subs/en/$Number$.m4s" initialization="subs/en/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+    /// Inline MPD: text-only manifest (no video / audio AdaptationSets).
+    const TEXT_ONLY_MPD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet id="0" mimeType="text/ttml" contentType="text" lang="en">
+      <Representation id="t1" bandwidth="1000">
+        <BaseURL>subs/en.ttml</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+    fn text_test_base_url() -> Url {
+        Url::parse("https://example.com/manifest.mpd").expect("base url")
+    }
+
+    #[test]
+    fn expand_yields_text_subtitles_from_sidecar_mpd() {
+        let r = expand_dash_representations(WITH_TEXT_TRACKS_MPD, &text_test_base_url())
+            .expect("expansion succeeds");
+        assert_eq!(r.formats.len(), 2, "video + audio");
+        assert_eq!(r.subtitles.len(), 3, "three text reps in fixture");
+
+        let langs: Vec<Option<&str>> = r.subtitles.iter().map(|s| s.language.as_deref()).collect();
+        assert!(langs.contains(&Some("en")), "en sub present: {langs:?}");
+        assert!(langs.contains(&Some("sv")), "sv sub present: {langs:?}");
+        assert!(
+            langs.contains(&None),
+            "lang-less sub present (None): {langs:?}"
+        );
+
+        let exts: Vec<&str> = r.subtitles.iter().map(|s| s.ext.as_str()).collect();
+        assert!(exts.contains(&"ttml"), "ttml ext present: {exts:?}");
+        assert!(exts.contains(&"vtt"), "vtt ext present (twice): {exts:?}");
+    }
+
+    #[test]
+    fn expand_assigns_none_when_lang_attr_missing() {
+        let r = expand_dash_representations(WITH_TEXT_TRACKS_MPD, &text_test_base_url()).unwrap();
+        let lang_less = r
+            .subtitles
+            .iter()
+            .find(|s| s.language.is_none())
+            .expect("lang-less sub");
+        assert!(
+            lang_less.url.ends_with("subs/und.vtt"),
+            "url: {}",
+            lang_less.url
+        );
+        assert_eq!(lang_less.ext, "vtt");
+    }
+
+    #[test]
+    fn expand_skips_fragmented_text_template() {
+        let r = expand_dash_representations(FRAGMENTED_TEXT_MPD, &text_test_base_url()).unwrap();
+        assert_eq!(r.formats.len(), 1, "video survives");
+        assert_eq!(
+            r.subtitles.len(),
+            0,
+            "fragmented text track must be skipped"
+        );
+    }
+
+    #[test]
+    fn expand_returns_no_usable_reps_when_video_audio_and_text_all_empty() {
+        let empty = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+     mediaPresentationDuration="PT60S" minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S"></Period>
+</MPD>"#;
+        let err = expand_dash_representations(empty, &text_test_base_url())
+            .expect_err("empty MPD must error");
+        assert!(matches!(err, DashExpandError::NoUsableReps), "got {err:?}");
+    }
+
+    #[test]
+    fn expand_returns_ok_with_text_only_mpd() {
+        let r = expand_dash_representations(TEXT_ONLY_MPD, &text_test_base_url()).unwrap();
+        assert!(r.formats.is_empty(), "no AV formats");
+        assert_eq!(r.subtitles.len(), 1, "one text sub");
+        assert_eq!(r.subtitles[0].language.as_deref(), Some("en"));
+        assert_eq!(r.subtitles[0].ext, "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_text_ttml() {
+        assert_eq!(mime_to_sub_ext("text/ttml", ""), "ttml");
+        assert_eq!(mime_to_sub_ext("application/ttml+xml", ""), "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_text_vtt() {
+        assert_eq!(mime_to_sub_ext("text/vtt", ""), "vtt");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_mp4_stpp() {
+        assert_eq!(mime_to_sub_ext("application/mp4", "stpp"), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", "ttml"), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", "dfxp"), "ttml");
+    }
+
+    #[test]
+    fn mime_to_sub_ext_mp4_wvtt() {
+        assert_eq!(mime_to_sub_ext("application/mp4", "wvtt"), "vtt");
     }
 }

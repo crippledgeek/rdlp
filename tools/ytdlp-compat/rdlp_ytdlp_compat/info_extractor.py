@@ -1293,7 +1293,14 @@ class InfoExtractor:
             if fatal:
                 raise
             return [], {}
-        return [_mpd_format_to_dict(f, mpd_url) for f in result.formats], {}
+        subtitles = {}
+        for s in result.subtitles:
+            entry = {'url': s.url}
+            if s.ext is not None:
+                entry['ext'] = s.ext
+            lang = s.language or 'und'
+            subtitles.setdefault(lang, []).append(entry)
+        return [_mpd_format_to_dict(f, mpd_url) for f in result.formats], subtitles
 
     def _search_json_ld(self, html, video_id, expected_type=None, *, fatal=True, default=NO_DEFAULT):
         """Slice-2.5 passthrough to host-extract-helpers.extract-json-ld.

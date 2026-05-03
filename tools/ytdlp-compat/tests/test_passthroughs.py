@@ -359,6 +359,74 @@ def test_extract_mpd_fragment_duration_optional_passthrough(monkeypatch):
     assert "duration" not in fmts[0]["fragments"][1]
 
 
+def test_extract_mpd_subtitles_grouped_by_language(monkeypatch):
+    """#11 (positive) — subtitles dict groups entries by language."""
+    from rdlp_ytdlp_compat import _host
+
+    @dataclass
+    class FakeSub:
+        language: str
+        url: str
+        ext: Optional[str]
+
+    fake = FakeMpdExtraction(
+        formats=[FakeMpdFormat(fragments=[FakeMpdFragment(url="seg-0.m4s")])],
+        subtitles=[
+            FakeSub(language="en", url="https://x/en.ttml", ext="ttml"),
+            FakeSub(language="sv", url="https://x/sv.vtt", ext="vtt"),
+        ],
+    )
+    monkeypatch.setattr(_host, "extract_mpd", lambda *a, **k: fake)
+    _, subs = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
+    assert subs == {
+        "en": [{"url": "https://x/en.ttml", "ext": "ttml"}],
+        "sv": [{"url": "https://x/sv.vtt", "ext": "vtt"}],
+    }
+
+
+def test_extract_mpd_subtitles_use_und_fallback_when_lang_missing(monkeypatch):
+    """#12 — empty-string language at WIT layer maps to 'und' in Python dict."""
+    from rdlp_ytdlp_compat import _host
+
+    @dataclass
+    class FakeSub:
+        language: str
+        url: str
+        ext: Optional[str]
+
+    fake = FakeMpdExtraction(
+        formats=[FakeMpdFormat(fragments=[FakeMpdFragment(url="seg-0.m4s")])],
+        subtitles=[
+            FakeSub(language="", url="https://x/und.vtt", ext="vtt"),
+        ],
+    )
+    monkeypatch.setattr(_host, "extract_mpd", lambda *a, **k: fake)
+    _, subs = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
+    assert "und" in subs
+    assert subs["und"] == [{"url": "https://x/und.vtt", "ext": "vtt"}]
+
+
+def test_extract_mpd_subtitles_omit_ext_when_none(monkeypatch):
+    """#13 — sub with ext=None must not put 'ext' key in the entry."""
+    from rdlp_ytdlp_compat import _host
+
+    @dataclass
+    class FakeSub:
+        language: str
+        url: str
+        ext: Optional[str]
+
+    fake = FakeMpdExtraction(
+        formats=[FakeMpdFormat(fragments=[FakeMpdFragment(url="seg-0.m4s")])],
+        subtitles=[
+            FakeSub(language="en", url="https://x/en.unknown", ext=None),
+        ],
+    )
+    monkeypatch.setattr(_host, "extract_mpd", lambda *a, **k: fake)
+    _, subs = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
+    assert subs == {"en": [{"url": "https://x/en.unknown"}]}
+
+
 def test_extract_mpd_subtitles_returned_as_empty_dict_in_v1(monkeypatch):
     """#19 — subtitles return slot is a dict (empty in v1).
 

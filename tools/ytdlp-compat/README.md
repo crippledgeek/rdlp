@@ -89,7 +89,7 @@ build time resolves all upstream relative imports.
 - `search-regex`, `html-search-regex`, `html-search-meta` — regex / OG / meta primitives
 - `og-search-property` — OG property + entity unescape
 - `extract-m3u8` — HLS master playlist parsing (lossless dict round-trip)
-- `extract-mpd` — DASH MPD manifest parsing with segment extraction
+- `extract-mpd` — DASH MPD manifest parsing with segment extraction; subtitles slot now populated from text AdaptationSet sidecar tracks (fragmented text tracks deferred — log-warn + skip)
 - `extract-json-ld` — typed JSON-LD video extraction backed by rdlp's existing parser
 - `rta-search` — adult-content age-marker scan
 - `search-json` — brace-balanced JSON extraction (Next.js / urqlState)

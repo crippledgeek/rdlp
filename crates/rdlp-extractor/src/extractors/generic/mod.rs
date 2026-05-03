@@ -213,7 +213,12 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
         };
 
         match crate::base::common::dash::expand_dash_representations(body_str, &mpd_url) {
-            Ok(formats) => {
+            Ok(crate::base::common::dash::DashExpansion {
+                formats,
+                subtitles: _,
+            }) => {
+                // Subtitles deliberately dropped here — InfoDict has no subtitles field today.
+                // Tracking issue (to be filed) for orchestrator-level propagation.
                 let mut info = InfoDict::new(&video_id, &title, "Generic", url);
                 info.formats = formats;
                 return Ok(Some(info));

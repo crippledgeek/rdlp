@@ -304,10 +304,10 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
     > {
         use crate::bindings::rdlp::plugin::host_extract_helpers::{
-            MpdExtraction, MpdFormat, MpdFragment,
+            ExtractHelpersSubtitle, MpdExtraction, MpdFormat, MpdFragment,
         };
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
-        use rdlp_extractor::base::common::dash::expand_dash_representations;
+        use rdlp_extractor::base::common::dash::{DashExpansion, expand_dash_representations};
         use url::Url;
 
         let result: Result<MpdExtraction, FetchError> = async {
@@ -322,7 +322,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             let body =
                 String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
             let base = Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
-            let formats = expand_dash_representations(&body, &base)
+            let DashExpansion { formats, subtitles } = expand_dash_representations(&body, &base)
                 .map_err(|e| FetchError::Network(format!("{e:#}")))?;
 
             let mpd_formats: Vec<MpdFormat> = formats
@@ -354,9 +354,18 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                 })
                 .collect();
 
+            let mpd_subtitles: Vec<ExtractHelpersSubtitle> = subtitles
+                .into_iter()
+                .map(|s| ExtractHelpersSubtitle {
+                    language: s.language.unwrap_or_default(),
+                    url: s.url,
+                    ext: Some(s.ext),
+                })
+                .collect();
+
             Ok(MpdExtraction {
                 formats: mpd_formats,
-                subtitles: vec![],
+                subtitles: mpd_subtitles,
             })
         }
         .await;
@@ -1065,6 +1074,78 @@ hi.m3u8\n";
         assert!(
             matches!(err, FetchError::Network(_)),
             "expected FetchError::Network, got {err:?}"
+        );
+    }
+
+    const WITH_TEXT_TRACKS_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd");
+
+    #[tokio::test]
+    async fn extract_mpd_returns_subtitles_via_fixture() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::{
+            ExtractHelpersSubtitle, Host as _,
+        };
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(FetchFixtures::new().with(
+                url,
+                FixtureResponse::ok(WITH_TEXT_TRACKS_MPD.as_bytes().to_vec()),
+            ))),
+        });
+
+        let r = c
+            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true))
+            .await
+            .expect("extract_mpd");
+
+        assert_eq!(r.formats.len(), 2, "video + audio formats");
+        assert_eq!(r.subtitles.len(), 3, "three subtitle reps");
+
+        // Build a lookup by language. Lang-less sub maps to empty string at the WIT layer
+        // (Python shim handles the und fallback).
+        let by_lang: std::collections::HashMap<&str, &ExtractHelpersSubtitle> = r
+            .subtitles
+            .iter()
+            .map(|s| (s.language.as_str(), s))
+            .collect();
+        assert!(
+            by_lang.contains_key("en"),
+            "en sub present: {:?}",
+            by_lang.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            by_lang.contains_key("sv"),
+            "sv sub present: {:?}",
+            by_lang.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            by_lang.contains_key(""),
+            "lang-less sub present as empty string: {:?}",
+            by_lang.keys().collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            by_lang.get("en").expect("en sub present").ext.as_deref(),
+            Some("ttml")
+        );
+        assert_eq!(
+            by_lang.get("sv").expect("sv sub present").ext.as_deref(),
+            Some("vtt")
+        );
+        assert_eq!(
+            by_lang
+                .get("")
+                .expect("lang-less sub present")
+                .ext
+                .as_deref(),
+            Some("vtt")
         );
     }
 }
