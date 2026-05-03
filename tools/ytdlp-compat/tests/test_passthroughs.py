@@ -271,28 +271,55 @@ def test_extract_mpd_protocol_is_http_dash_segments(monkeypatch):
     assert all(f["protocol"] == "http_dash_segments" for f in fmts)
 
 
-def test_extract_mpd_drops_unsupported_kwargs_data():
-    """#12 — data= kwarg raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="data/headers/query"):
-        _ie()._extract_mpd_formats_and_subtitles(
-            "https://x/m.mpd", "v", data=b"x",
-        )
+def test_extract_mpd_forwards_kwargs_data(monkeypatch):
+    """#12 (WIT @0.3.0) — data= is forwarded to _host.extract_mpd via fetch-options."""
+    from rdlp_ytdlp_compat import _host
+
+    captured = {}
+
+    def fake(*a, **k):
+        captured.update(k)
+        raise RuntimeError("no runtime")
+
+    monkeypatch.setattr(_host, "extract_mpd", fake)
+    _ie()._extract_mpd_formats_and_subtitles(
+        "https://x/m.mpd", "v", data=b"x", fatal=False,
+    )
+    assert captured.get("data") == b"x", "data must be forwarded to _host.extract_mpd"
 
 
-def test_extract_mpd_drops_unsupported_kwargs_headers():
-    """#13 — headers= kwarg raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="data/headers/query"):
-        _ie()._extract_mpd_formats_and_subtitles(
-            "https://x/m.mpd", "v", headers={"X": "y"},
-        )
+def test_extract_mpd_forwards_kwargs_headers(monkeypatch):
+    """#13 (WIT @0.3.0) — headers= is forwarded to _host.extract_mpd via fetch-options."""
+    from rdlp_ytdlp_compat import _host
+
+    captured = {}
+
+    def fake(*a, **k):
+        captured.update(k)
+        raise RuntimeError("no runtime")
+
+    monkeypatch.setattr(_host, "extract_mpd", fake)
+    _ie()._extract_mpd_formats_and_subtitles(
+        "https://x/m.mpd", "v", headers={"X": "y"}, fatal=False,
+    )
+    assert captured.get("headers") == {"X": "y"}, "headers must be forwarded to _host.extract_mpd"
 
 
-def test_extract_mpd_drops_unsupported_kwargs_query():
-    """#14 — query= kwarg raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="data/headers/query"):
-        _ie()._extract_mpd_formats_and_subtitles(
-            "https://x/m.mpd", "v", query={"k": "v"},
-        )
+def test_extract_mpd_forwards_kwargs_query(monkeypatch):
+    """#14 (WIT @0.3.0) — query= is forwarded to _host.extract_mpd via fetch-options."""
+    from rdlp_ytdlp_compat import _host
+
+    captured = {}
+
+    def fake(*a, **k):
+        captured.update(k)
+        raise RuntimeError("no runtime")
+
+    monkeypatch.setattr(_host, "extract_mpd", fake)
+    _ie()._extract_mpd_formats_and_subtitles(
+        "https://x/m.mpd", "v", query={"k": "v"}, fatal=False,
+    )
+    assert captured.get("query") == {"k": "v"}, "query must be forwarded to _host.extract_mpd"
 
 
 def test_extract_mpd_fatal_false_returns_empty_on_runtime_error(monkeypatch):

@@ -900,19 +900,13 @@ class InfoExtractor:
         headers=None,
         query=None,
     ):
-        """Slice-2.5 passthrough to host-extract-helpers.extract-m3u8.
+        """WIT @0.3.0 passthrough to host-extract-helpers.extract-m3u8.
 
-        WIT v0.1.0 limitation: the host signature does not yet accept
-        `data` / `headers` / `query`, so passing any of these would silently
-        fetch the manifest unauthenticated. Until WIT v0.2 lifts this, we
-        fail loud rather than silently dropping per-request credentials.
-        `live=True` is accepted but processed identically to on-demand.
+        `data` / `headers` / `query` are now plumbed through WIT @0.3.0 via
+        the `fetch-options` record. `live=True` is accepted but processed
+        identically to on-demand (live segment-window handling is not yet
+        implemented).
         """
-        if data is not None or headers is not None or query is not None:
-            raise NotImplementedError(
-                '_extract_m3u8_formats_and_subtitles: data/headers/query are not '
-                'yet plumbed through WIT v0.1.0; track in Slice 2.5'
-            )
         if live:
             _host.log(
                 'warn',
@@ -930,6 +924,9 @@ class InfoExtractor:
                 protocol=entry_protocol,
                 m3u8_id=m3u8_id,
                 fatal=fatal,
+                headers=headers,
+                query=query,
+                data=data,
             )
         except RuntimeError as e:
             # Outside componentize-py runtime or fetch failure.
@@ -1275,17 +1272,17 @@ class InfoExtractor:
         data=None, headers=None, query=None,
         note=None, errnote=None,
     ):
-        """Slice-2.5+ passthrough to host-extract-helpers.extract-mpd."""
-        if data is not None or headers is not None or query is not None:
-            raise NotImplementedError(
-                '_extract_mpd_formats_and_subtitles: data/headers/query are not '
-                'yet plumbed through WIT; track in Slice 2.5+'
-            )
+        """WIT @0.3.0 passthrough to host-extract-helpers.extract-mpd.
+
+        `data` / `headers` / `query` are now plumbed through WIT @0.3.0 via
+        the `fetch-options` record.
+        """
         if note is not None:
             _host.log('info', f'{note}: {mpd_url}')
         try:
             result = _host.extract_mpd(
                 mpd_url, video_id, mpd_id=mpd_id, fatal=fatal,
+                headers=headers, query=query, data=data,
             )
         except RuntimeError as e:
             label = errnote or f'failed to extract DASH manifest {mpd_url}'

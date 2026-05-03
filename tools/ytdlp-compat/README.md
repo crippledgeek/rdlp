@@ -39,7 +39,7 @@ Helper additions verified against yt-dlp tag `2026.03.17`:
 
 ## Limitations (deferred to Slice 2.5)
 
-- Pure-data helpers (`traverse_obj`, `dict_get`, `int_or_none`, …) MUST stay Python — they take Python callables / type objects which can't cross the WIT boundary. Slice 2.5 will move I/O helpers (`_extract_m3u8_formats_and_subtitles`, `_search_regex`, etc.) host-side via a v0.2 WIT bump. See memory `project_ytdlp-shim-slice2_5-host-helpers`.
+- Pure-data helpers (`traverse_obj`, `dict_get`, `int_or_none`, …) MUST stay Python — they take Python callables / type objects which can't cross the WIT boundary.
 - `_parse_json` filters yt-dlp's `LenientJSONDecoder`-only kwargs (`ignore_extra` / `strict` / `lenient`) before forwarding to stdlib `json.loads`. Lenient parsing semantics (trailing data, control chars) are NOT supported. SVT's payloads are well-formed.
 - The Next.js / `urqlState` extraction path needs a hydrated HTML fixture to test (the SSR snapshot lacks `urqlState`). The svt:short-form test URL exercises everything else end-to-end.
 
@@ -66,11 +66,12 @@ After regeneration:
 
 ## Slice-2.5 surface (host-side I/O helpers — 2026-04-30)
 
-Helpers moved host-side in v0.2 of the WIT contract. Plugin authors see
-no change in method signatures — `InfoExtractor` method bodies became
-2-line passthroughs over the new `host:extract-helpers` capability.
-The wasm artefact shrinks because the regex/HTML/m3u8 parsing libraries
-no longer ship per plugin.
+Helpers moved host-side in v0.2 of the WIT contract (bumped to v0.3 in
+#252 to add fetch-options plumbing). Plugin authors see no change in
+method signatures — `InfoExtractor` method bodies became 2-line
+passthroughs over the `host:extract-helpers` capability. The wasm
+artefact shrinks because the regex/HTML/m3u8 parsing libraries no longer
+ship per plugin.
 
 **Drop-in workflow (post Slice 2.5):**
 
@@ -84,12 +85,13 @@ cp foo/plugin.wasm plugin.toml ~/.config/rdlp/plugins/foo/
 No source edits to `foo.py`. The fake `yt_dlp/` package staged at
 build time resolves all upstream relative imports.
 
-**WIT v0.2 host helpers:**
+**WIT v0.3 host helpers:**
 
 - `search-regex`, `html-search-regex`, `html-search-meta` — regex / OG / meta primitives
 - `og-search-property` — OG property + entity unescape
 - `extract-m3u8` — HLS master playlist parsing (lossless dict round-trip)
 - `extract-mpd` — DASH MPD manifest parsing with segment extraction; subtitles slot now populated from text AdaptationSet sidecar tracks (fragmented text tracks deferred — log-warn + skip)
+- `fetch-options { headers, query, body }` record shared by `extract-m3u8` and `extract-mpd`; Python kwargs (`headers`, `query`, `data`) are mapped via `_make_fetch_options()` in `_host.py`
 - `extract-json-ld` — typed JSON-LD video extraction backed by rdlp's existing parser
 - `rta-search` — adult-content age-marker scan
 - `search-json` — brace-balanced JSON extraction (Next.js / urqlState)

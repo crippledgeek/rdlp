@@ -82,15 +82,23 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
         // check on the hot path. We deliberately bypass
         // `validate_url_security` for fixture matches because tests
         // routinely use private-network or loopback URLs.
-        if let Some(fixtures) = ctx.fixtures.as_ref()
-            && let Some(canned) = fixtures.get(&req.url)
-        {
-            return Ok(Response {
-                status: canned.status,
-                headers: canned.headers.clone(),
-                body: canned.body.clone(),
-                final_url: req.url.clone(),
+        if let Some(fixtures) = ctx.fixtures.as_ref() {
+            // Record every inbound request regardless of fixture hit/miss,
+            // so tests can assert on url, method, headers, body after the call.
+            fixtures.record(crate::host::fetch_fixtures::RecordedRequest {
+                url: req.url.clone(),
+                method: req.method.clone(),
+                headers: req.headers.clone(),
+                body: req.body.clone(),
             });
+            if let Some(canned) = fixtures.get(&req.url) {
+                return Ok(Response {
+                    status: canned.status,
+                    headers: canned.headers.clone(),
+                    body: canned.body.clone(),
+                    final_url: req.url.clone(),
+                });
+            }
         }
 
         if let Err(e) = validate_url_security(&req.url) {

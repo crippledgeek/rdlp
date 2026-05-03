@@ -20,7 +20,7 @@
 #![allow(clippy::doc_markdown)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// A canned HTTP response served when an inbound URL matches a fixture.
 #[derive(Clone, Debug)]
@@ -59,10 +59,42 @@ impl FixtureResponse {
     }
 }
 
+/// A minimal recording of the `Request` the host fetch dispatch received.
+///
+/// Avoids a dependency on the WIT-generated `Request` type from the
+/// `host_fetch` binding (which may not implement `Clone` in all
+/// configurations). Used exclusively by the test harness to assert on
+/// what headers / method / URL the implementation passed to `host:fetch`.
+#[derive(Clone, Debug, Default)]
+pub struct RecordedRequest {
+    /// The URL that was dispatched (after any query-param appending).
+    pub url: String,
+    /// HTTP method string (`"GET"`, `"POST"`, …).
+    pub method: String,
+    /// Request headers as `(name, value)` pairs.
+    pub headers: Vec<(String, String)>,
+    /// Request body bytes, if any.
+    pub body: Option<Vec<u8>>,
+}
+
 /// URL → canned-response map. Lookup is exact-string match.
-#[derive(Clone, Default, Debug)]
+///
+/// Also records every inbound `Request` so tests can assert on headers,
+/// method, query params, etc. (see [`FetchFixtures::last_request`]).
+#[derive(Clone, Debug)]
 pub struct FetchFixtures {
     map: HashMap<String, FixtureResponse>,
+    /// All requests dispatched through this fixture set, in arrival order.
+    recorded: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
+impl Default for FetchFixtures {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl FetchFixtures {
@@ -97,6 +129,28 @@ impl FetchFixtures {
     #[must_use]
     pub fn get(&self, url: &str) -> Option<&FixtureResponse> {
         self.map.get(url)
+    }
+
+    /// Record an inbound request. Called by `host:fetch` dispatch before
+    /// serving a canned response or forwarding to the live client.
+    /// Test-only — production callers never set `fixtures`, so this path
+    /// is unreachable outside the test harness.
+    pub fn record(&self, req: RecordedRequest) {
+        self.recorded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(req);
+    }
+
+    /// Return the most recently recorded request, or `None` if no request
+    /// has been dispatched through this fixture set yet.
+    #[must_use]
+    pub fn last_request(&self) -> Option<RecordedRequest> {
+        self.recorded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last()
+            .cloned()
     }
 
     /// Number of fixtures registered. Tests that want to confirm "every

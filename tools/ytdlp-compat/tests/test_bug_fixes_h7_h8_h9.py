@@ -187,41 +187,97 @@ class TestUnifiedTimestampH8DateFormats:
 
 
 # =============================================================================
-# H7 — _extract_m3u8_formats_and_subtitles fails loud on unsupported params
+# H7 — _extract_m3u8_formats_and_subtitles forwards data/headers/query via WIT @0.3.0
 # =============================================================================
 
 
-class TestExtractM3u8H7UnsupportedParams:
-    """H7: passing data/headers/query must raise NotImplementedError (loud
-    failure) rather than silently fetching unauthenticated."""
+class TestExtractM3u8H7FetchOptionsPlumbing:
+    """H7 (updated for WIT @0.3.0): data/headers/query are now forwarded to
+    the host via fetch-options rather than raising NotImplementedError.
 
-    def test_headers_raises_not_implemented(self):
-        # NEGATIVE: before fix, headers= was silently ignored and the host
-        # was called without authentication.
+    The original H7 bug was "silent drop" — headers were ignored and the
+    manifest was fetched unauthenticated. The WIT @0.2.0 fix raised loud
+    NotImplementedError. WIT @0.3.0 completes the fix by actually forwarding
+    them through the fetch-options record.
+    """
+
+    def test_headers_forwarded_to_host(self, monkeypatch):
+        """POSITIVE: headers= is now forwarded to _host.extract_m3u8, NOT raised."""
+        from rdlp_ytdlp_compat import _host
+
+        captured = {}
+        def fake_extract_m3u8(url, video_id, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('no runtime')  # outside componentize-py
+
+        monkeypatch.setattr(_host, 'extract_m3u8', fake_extract_m3u8)
+
         ie = InfoExtractor()
-        with pytest.raises(NotImplementedError, match='headers'):
+        formats, subs = ie._extract_m3u8_formats_and_subtitles(
+            'https://example.com/master.m3u8',
+            'vid',
+            headers={'Authorization': 'Bearer token123'},
+            fatal=False,
+        )
+        assert formats == []
+        assert subs == {}
+        assert captured.get('headers') == {'Authorization': 'Bearer token123'}, (
+            'headers must be forwarded to _host.extract_m3u8'
+        )
+
+    def test_query_forwarded_to_host(self, monkeypatch):
+        """query= is forwarded to _host.extract_m3u8."""
+        from rdlp_ytdlp_compat import _host
+
+        captured = {}
+        def fake_extract_m3u8(url, video_id, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('no runtime')
+
+        monkeypatch.setattr(_host, 'extract_m3u8', fake_extract_m3u8)
+
+        ie = InfoExtractor()
+        ie._extract_m3u8_formats_and_subtitles(
+            'https://example.com/master.m3u8',
+            'vid',
+            query={'token': 'abc'},
+            fatal=False,
+        )
+        assert captured.get('query') == {'token': 'abc'}, (
+            'query must be forwarded to _host.extract_m3u8'
+        )
+
+    def test_data_forwarded_to_host(self, monkeypatch):
+        """data= is forwarded to _host.extract_m3u8."""
+        from rdlp_ytdlp_compat import _host
+
+        captured = {}
+        def fake_extract_m3u8(url, video_id, **kwargs):
+            captured.update(kwargs)
+            raise RuntimeError('no runtime')
+
+        monkeypatch.setattr(_host, 'extract_m3u8', fake_extract_m3u8)
+
+        ie = InfoExtractor()
+        ie._extract_m3u8_formats_and_subtitles(
+            'https://example.com/master.m3u8',
+            'vid',
+            data=b'body=payload',
+            fatal=False,
+        )
+        assert captured.get('data') == b'body=payload', (
+            'data must be forwarded to _host.extract_m3u8'
+        )
+
+    def test_no_extra_params_still_calls_host(self):
+        """Baseline: calling without data/headers/query still reaches the host
+        call (which raises RuntimeError outside the componentize-py runtime)."""
+        ie = InfoExtractor()
+        with pytest.raises(RuntimeError):
+            # fatal=True (default) so RuntimeError from no-runtime propagates.
             ie._extract_m3u8_formats_and_subtitles(
                 'https://example.com/master.m3u8',
                 'vid',
-                headers={'Authorization': 'Bearer token123'},
-            )
-
-    def test_data_raises_not_implemented(self):
-        ie = InfoExtractor()
-        with pytest.raises(NotImplementedError, match='data'):
-            ie._extract_m3u8_formats_and_subtitles(
-                'https://example.com/master.m3u8',
-                'vid',
-                data=b'body=payload',
-            )
-
-    def test_query_raises_not_implemented(self):
-        ie = InfoExtractor()
-        with pytest.raises(NotImplementedError, match='query'):
-            ie._extract_m3u8_formats_and_subtitles(
-                'https://example.com/master.m3u8',
-                'vid',
-                query={'token': 'abc'},
             )
 
     def test_live_logs_warning_proceeds_not_raises(self, caplog):
@@ -245,45 +301,3 @@ class TestExtractM3u8H7UnsupportedParams:
         assert any('live' in r.message.lower() for r in caplog.records), (
             'Expected a warning about live=True, got: ' + str([r.message for r in caplog.records])
         )
-
-    def test_no_extra_params_still_calls_host(self):
-        """Baseline: calling without data/headers/query must NOT raise
-        NotImplementedError — it proceeds to the host call (which raises
-        RuntimeError outside the runtime)."""
-        ie = InfoExtractor()
-        with pytest.raises(RuntimeError):
-            # fatal=True (default) so RuntimeError from no-runtime propagates.
-            ie._extract_m3u8_formats_and_subtitles(
-                'https://example.com/master.m3u8',
-                'vid',
-            )
-
-    def test_headers_error_message_mentions_wit(self):
-        """Error message must reference WIT/Slice 2.5 so plugin authors know
-        what to do."""
-        ie = InfoExtractor()
-        with pytest.raises(NotImplementedError) as exc_info:
-            ie._extract_m3u8_formats_and_subtitles(
-                'https://example.com/master.m3u8',
-                'vid',
-                headers={'X-Token': 'y'},
-            )
-        msg = str(exc_info.value)
-        assert 'WIT' in msg or 'Slice 2.5' in msg or 'v0.1.0' in msg
-
-    def test_headers_raised_before_host_call(self, monkeypatch):
-        """The NotImplementedError must be raised before ANY host call —
-        not after a potentially-unauthenticated fetch attempt."""
-        from rdlp_ytdlp_compat import _host
-
-        called = []
-        monkeypatch.setattr(_host, 'extract_m3u8', lambda *a, **kw: called.append(1))
-
-        ie = InfoExtractor()
-        with pytest.raises(NotImplementedError):
-            ie._extract_m3u8_formats_and_subtitles(
-                'https://example.com/master.m3u8',
-                'vid',
-                headers={'Authorization': 'Bearer token123'},
-            )
-        assert called == [], 'Host must NOT be called when headers are passed'

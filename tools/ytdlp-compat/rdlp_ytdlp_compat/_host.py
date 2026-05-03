@@ -208,22 +208,67 @@ def search_json(start_pattern, end_pattern, string):
     return _hxh.search_json(start_pattern, end_pattern, string)
 
 
-def extract_m3u8(url, video_id, *, ext=None, protocol=None, m3u8_id=None, fatal=True):
-    """Parse an M3U8 playlist and return a list of Format dicts."""
+def _make_fetch_options(*, headers=None, query=None, data=None):
+    """Build a WIT ``FetchOptions`` value from yt-dlp-style kwargs.
+
+    `headers` — dict[str, str] or None
+    `query`   — dict[str, str] or None
+    `data`    — bytes or None (triggers POST when set)
+    """
+    header_list = list((headers or {}).items())
+    query_list = list((query or {}).items())
+    body = list(data) if data is not None else None
+    return _hxh.FetchOptions(headers=header_list, query=query_list, body=body)
+
+
+def extract_m3u8(
+    url,
+    video_id,
+    *,
+    ext=None,
+    protocol=None,
+    m3u8_id=None,
+    fatal=True,
+    headers=None,
+    query=None,
+    data=None,
+):
+    """Parse an M3U8 playlist and return a list of Format dicts.
+
+    `headers` — dict of extra HTTP request headers forwarded to the manifest fetch.
+    `query`   — dict of extra URL query parameters forwarded to the manifest fetch.
+    `data`    — bytes body; when set switches the manifest fetch to POST.
+    """
     if not _HXH_AVAILABLE:
         raise RuntimeError('_host.extract_m3u8 called outside componentize-py runtime')
     opts = _hxh.M3u8Options(ext=ext, protocol=protocol, m3u8_id=m3u8_id, fatal=fatal)
-    return _hxh.extract_m3u8(url, video_id, opts)
+    fetch = _make_fetch_options(headers=headers, query=query, data=data)
+    return _hxh.extract_m3u8(url, video_id, opts, fetch)
 
 
-def extract_mpd(url, video_id, *, mpd_id=None, fatal=True):
-    """Parse a DASH MPD via the host helper. Returns MpdExtraction."""
+def extract_mpd(
+    url,
+    video_id,
+    *,
+    mpd_id=None,
+    fatal=True,
+    headers=None,
+    query=None,
+    data=None,
+):
+    """Parse a DASH MPD via the host helper. Returns MpdExtraction.
+
+    `headers` — dict of extra HTTP request headers forwarded to the manifest fetch.
+    `query`   — dict of extra URL query parameters forwarded to the manifest fetch.
+    `data`    — bytes body; when set switches the manifest fetch to POST.
+    """
     if not _HXH_AVAILABLE:
         raise RuntimeError(
             "_host.extract_mpd called outside componentize-py runtime"
         )
     opts = _hxh.MpdOptions(mpd_id=mpd_id, fatal=fatal)
-    return _hxh.extract_mpd(url, video_id, opts)
+    fetch = _make_fetch_options(headers=headers, query=query, data=data)
+    return _hxh.extract_mpd(url, video_id, opts, fetch)
 
 
 def extract_json_ld(html):

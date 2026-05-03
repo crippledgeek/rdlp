@@ -1,4 +1,4 @@
-package rdlp:plugin@0.2.0;
+package rdlp:plugin@0.3.0;
 
 world extractor-plugin {
     import host-fetch;
