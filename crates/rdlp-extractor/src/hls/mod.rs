@@ -36,6 +36,7 @@
 //! ```
 
 mod detector;
+mod expand;
 mod format_detection;
 mod segments;
 mod types;
@@ -43,6 +44,7 @@ mod variants;
 
 // Re-export public API unchanged
 pub use detector::HlsSizeDetector;
+pub use expand::{HlsExpandError, expand_hls_url};
 pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 

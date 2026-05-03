@@ -198,6 +198,26 @@ impl Downloader for HlsDownloader {
         Ok(None)
     }
 
+    async fn download_format(
+        &self,
+        format: &rdlp_types::Format,
+        output: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        if let Some(fragments) = format.fragments.as_deref() {
+            let base = format.fragment_base_url.as_deref();
+            crate::fragments::download_pre_resolved_fragments(
+                &self.http_downloader,
+                fragments,
+                base,
+                output,
+            )
+            .await
+        } else {
+            self.download_to_file(&format.url, output, progress).await
+        }
+    }
+
     #[instrument(skip(self, progress), fields(url = %url, path = %path.display()))]
     async fn download_to_file(
         &self,
