@@ -32,8 +32,9 @@ pub struct HttpClientConfig {
     /// Maximum idle connections per host
     pub pool_max_idle_per_host: usize,
 
-    /// Idle connection timeout in seconds
-    pub pool_idle_timeout_secs: u64,
+    /// Idle connection timeout in seconds. `None` disables idle eviction
+    /// entirely (wired to `wreq::ClientBuilder::pool_idle_timeout(None)`).
+    pub pool_idle_timeout_secs: Option<u64>,
 
     /// TCP keepalive interval in seconds
     pub tcp_keepalive_secs: u64,
@@ -53,7 +54,7 @@ impl Default for HttpClientConfig {
             connect_timeout_secs: 30,
             read_timeout_secs: 60,
             pool_max_idle_per_host: 10,
-            pool_idle_timeout_secs: 90,
+            pool_idle_timeout_secs: Some(90),
             tcp_keepalive_secs: 60,
             tcp_nodelay: true,
             proxy: None,
@@ -125,10 +126,17 @@ impl HttpClientConfig {
         self
     }
 
-    /// Set the idle connection timeout in seconds
+    /// Set the idle connection timeout in seconds.
     #[must_use]
     pub const fn with_pool_idle_timeout_secs(mut self, secs: u64) -> Self {
-        self.pool_idle_timeout_secs = secs;
+        self.pool_idle_timeout_secs = Some(secs);
+        self
+    }
+
+    /// Disable idle connection eviction entirely.
+    #[must_use]
+    pub const fn with_pool_idle_disabled(mut self) -> Self {
+        self.pool_idle_timeout_secs = None;
         self
     }
 
@@ -188,5 +196,17 @@ mod tests {
     fn test_with_emulation() {
         let config = HttpClientConfig::new().with_emulation(BrowserEmulation::FirefoxLatest);
         assert!(matches!(config.emulation, BrowserEmulation::FirefoxLatest));
+    }
+
+    #[test]
+    fn pool_idle_timeout_secs_can_be_disabled() {
+        let config = HttpClientConfig::new().with_pool_idle_disabled();
+        assert!(config.pool_idle_timeout_secs.is_none());
+    }
+
+    #[test]
+    fn default_pool_idle_timeout_is_some_90() {
+        let config = HttpClientConfig::default();
+        assert_eq!(config.pool_idle_timeout_secs, Some(90));
     }
 }
