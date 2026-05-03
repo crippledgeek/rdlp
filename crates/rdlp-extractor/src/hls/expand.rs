@@ -1,6 +1,7 @@
 //! HLS master/media playlist expansion into pre-resolved `Format` entries
 //! with `Format.fragments` populated.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use rdlp_types::Format;
@@ -106,6 +107,23 @@ fn expand_media_playlist(
     }
     if playlist.playlist_type == Some(m3u8_rs::MediaPlaylistType::Event) {
         return Err(HlsExpandError::LiveStream);
+    }
+
+    let init_uris: HashSet<&str> = playlist
+        .segments
+        .iter()
+        .filter_map(|s| s.map.as_ref().map(|m| m.uri.as_str()))
+        .collect();
+    if init_uris.len() > 1 {
+        return Err(HlsExpandError::MultipleInitSegments);
+    }
+
+    let any_byte_ranged_init = playlist
+        .segments
+        .iter()
+        .any(|s| s.map.as_ref().is_some_and(|m| m.byte_range.is_some()));
+    if any_byte_ranged_init {
+        return Err(HlsExpandError::ByteRangedInit);
     }
 
     // Subsequent tasks fill in the rest. For now, error so we don't return
@@ -223,5 +241,42 @@ seg-1.ts
         let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_PLAYLIST_TYPE_EVENT)
             .expect_err("must refuse EVENT");
         assert!(matches!(err, HlsExpandError::LiveStream));
+    }
+
+    const MEDIA_MULTI_INIT: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI=\"init-a.m4s\"
+#EXTINF:6.0,
+seg-1.m4s
+#EXT-X-MAP:URI=\"init-b.m4s\"
+#EXTINF:6.0,
+seg-2.m4s
+#EXT-X-ENDLIST
+";
+
+    const MEDIA_BYTE_RANGED_INIT: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI=\"init.m4s\",BYTERANGE=\"100@200\"
+#EXTINF:6.0,
+seg-1.m4s
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn refuses_multiple_distinct_init_segments() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_MULTI_INIT)
+            .expect_err("must refuse multi-init");
+        assert!(matches!(err, HlsExpandError::MultipleInitSegments));
+    }
+
+    #[test]
+    fn refuses_byte_ranged_init() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_BYTE_RANGED_INIT)
+            .expect_err("must refuse byte-range");
+        assert!(matches!(err, HlsExpandError::ByteRangedInit));
     }
 }
