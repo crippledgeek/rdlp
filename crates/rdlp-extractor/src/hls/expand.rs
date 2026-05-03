@@ -1091,6 +1091,27 @@ seg-1.m4s
         assert_eq!(frag[0].url, "https://h.com/seg-1.m4s");
     }
 
+    /// Security regression guard: an EXT-X-MAP URI pointing at a private
+    /// host (e.g. metadata service) MUST be refused at expand time, not
+    /// silently included in Fragment.init_url and exfiltrated at fetch.
+    const MEDIA_PRIVATE_INIT: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI=\"http://169.254.169.254/latest/meta-data/\"
+#EXTINF:6.0,
+seg-1.m4s
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn private_host_init_url_rejected_by_validate_resolved_url() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_PRIVATE_INIT)
+            .expect_err("private-host init URI must be refused");
+        // validate_resolved_url returns HlsExpandError::Network with a sanitized message.
+        assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
     /// Negative companion to the test above — proves the test infrastructure
     /// is real: when the seed has NO `http_headers`, the master fetch hits
     /// the unmatched-mock 501 path and `expand_hls_url` returns Network err.
