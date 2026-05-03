@@ -51,8 +51,8 @@ use rdlp_types::Format;
 use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
-pub(crate) use selectors::*;
 pub(crate) use protocol::protocol_for_url;
+pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks
 /// Re-exported from rdlp-security for backward compatibility

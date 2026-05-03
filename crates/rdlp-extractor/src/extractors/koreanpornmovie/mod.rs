@@ -695,18 +695,31 @@ fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
         .captures_iter(tag_html)
         .filter_map(|caps| {
             let url = caps.get(1)?.as_str();
-            // Only return actual media URLs, not embed pages
-            if url.contains(".mp4")
-                || url.contains(".m3u8")
-                || url.contains(".webm")
-                || url.contains("koreanporn.stream")
-            {
-                Some(url.to_string())
-            } else {
-                None
-            }
+            looks_like_media(url).then(|| url.to_string())
         })
         .collect()
+}
+
+/// Allow-list filter for media URLs found in decoded player iframes.
+///
+/// Matches by parsed path-segment extension (NOT substring). The
+/// `koreanporn.stream` host carve-out is preserved because some embeds
+/// link to opaque embed pages on that host that resolve to media at
+/// load time.
+fn looks_like_media(url: &str) -> bool {
+    if url.contains("koreanporn.stream") {
+        return true;
+    }
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let ext = parsed
+        .path()
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.rsplit_once('.').map(|(_, e)| e))
+        .map(str::to_ascii_lowercase);
+    matches!(ext.as_deref(), Some("mp4" | "m3u8" | "m3u" | "webm"))
 }
 
 /// Probe a video URL via HEAD request to get Content-Length (filesize).
@@ -800,6 +813,35 @@ mod tests {
         let tag = r#"<iframe src="https://www.pornhub.com/embed/ph123"></iframe>"#;
         let urls = extract_urls_from_decoded_tag(tag);
         assert!(urls.is_empty()); // PornHub embed is not a direct media URL
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_rejects_substring_in_query() {
+        // Regression: substring matching admitted non-media URLs whose
+        // query/fragment contained a media extension.
+        let html = r#"<iframe src="https://host/page?embed=video.mp4"></iframe>"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert!(
+            urls.is_empty(),
+            "expected empty (non-media URL), got {urls:?}"
+        );
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_media_extensions() {
+        let html =
+            r#"<source src="https://host/video.mp4"><source src="https://host/master.m3u8">"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert_eq!(urls.len(), 2);
+        assert!(urls.iter().any(|u| u.ends_with(".mp4")));
+        assert!(urls.iter().any(|u| u.ends_with(".m3u8")));
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_koreanporn_stream_host() {
+        let html = r#"<source src="https://koreanporn.stream/embed/abc123">"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert_eq!(urls.len(), 1);
     }
 
     #[test]
