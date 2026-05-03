@@ -76,13 +76,12 @@ pub async fn download_pre_resolved_fragments(
                 let init_bytes =
                     fetch_with_optional_range(http, &resolved_init, frag.init_byte_range).await?;
                 total_bytes += init_bytes.len() as u64;
-                out_file
-                    .write_all(&init_bytes)
-                    .await
-                    .map_err(|e| rdlp_core::RdlpError::Download {
+                out_file.write_all(&init_bytes).await.map_err(|e| {
+                    rdlp_core::RdlpError::Download {
                         message: format!("write init fragment: {e}"),
                         url: Some(output.display().to_string()),
-                    })?;
+                    }
+                })?;
                 current_init = Some(init_url.clone());
             } else {
                 current_init = None;
@@ -204,7 +203,6 @@ async fn fetch_with_optional_range(
         })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,10 +214,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let _seg = server
             .mock("GET", "/seg.m4s")
-            .match_header(
-                "Range",
-                Matcher::Regex(r"^bytes=1024-2047$".to_string()),
-            )
+            .match_header("Range", Matcher::Regex(r"^bytes=1024-2047$".to_string()))
             .with_body(b"X".repeat(1024))
             .expect(1)
             .create_async()
@@ -286,7 +281,11 @@ mod tests {
             .map(|i| Fragment {
                 url: format!("{}/seg-{i}.m4s", server.url()),
                 byte_range: None,
-                init_url: Some(if i < 3 { init_a.clone() } else { init_b.clone() }),
+                init_url: Some(if i < 3 {
+                    init_a.clone()
+                } else {
+                    init_b.clone()
+                }),
                 init_byte_range: None,
                 duration: Some(6.0),
                 filesize: None,

@@ -294,16 +294,18 @@ fn expand_media_playlist(
     // Helper: m3u8_rs ByteRange { length, offset: Option } → (start, end_exclusive).
     // Per RFC 8216 §4.3.2.2, a missing offset means "contiguous from previous
     // segment's end in the same resource." We track that via prev_end.
-    let convert_br = |br: &m3u8_rs::ByteRange,
-                      prev_end: u64|
-     -> Result<(u64, u64), HlsExpandError> {
-        let start = br.offset.unwrap_or(prev_end);
-        let end_exclusive = start.saturating_add(br.length);
-        if end_exclusive == 0 || end_exclusive <= start {
-            return Err(HlsExpandError::InvalidByteRange { start, end_exclusive });
-        }
-        Ok((start, end_exclusive))
-    };
+    let convert_br =
+        |br: &m3u8_rs::ByteRange, prev_end: u64| -> Result<(u64, u64), HlsExpandError> {
+            let start = br.offset.unwrap_or(prev_end);
+            let end_exclusive = start.saturating_add(br.length);
+            if end_exclusive == 0 || end_exclusive <= start {
+                return Err(HlsExpandError::InvalidByteRange {
+                    start,
+                    end_exclusive,
+                });
+            }
+            Ok((start, end_exclusive))
+        };
 
     // Track distinct init URIs across the playlist (security: cap at
     // MAX_INIT_SEGMENTS to defeat interleaved-init-URI amplification).
@@ -322,9 +324,7 @@ fn expand_media_playlist(
             let map_url = resolve(&map.uri)?;
             // Track distinct init URIs and apply the cap. insert returns
             // true if the value was newly inserted (i.e., a new distinct URI).
-            if distinct_inits.insert(map_url.clone())
-                && distinct_inits.len() > MAX_INIT_SEGMENTS
-            {
+            if distinct_inits.insert(map_url.clone()) && distinct_inits.len() > MAX_INIT_SEGMENTS {
                 return Err(HlsExpandError::TooManyInitSegments {
                     count: distinct_inits.len(),
                     max: MAX_INIT_SEGMENTS,
@@ -520,7 +520,10 @@ seg-1.m4s
         let f = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_MULTI_INIT)
             .expect("multi-init must be accepted post-#267");
         let frag = f.fragments.as_ref().unwrap();
-        assert_ne!(frag[0].init_url, frag[1].init_url, "different inits across stream");
+        assert_ne!(
+            frag[0].init_url, frag[1].init_url,
+            "different inits across stream"
+        );
     }
 
     /// Multi-init: two distinct EXT-X-MAP URIs in one playlist.
@@ -548,9 +551,18 @@ seg-3.m4s
             .expect("must accept multi-init");
         let frag = f.fragments.as_ref().unwrap();
         assert_eq!(frag.len(), 3);
-        assert_eq!(frag[0].init_url.as_deref(), Some("https://h.com/init-a.mp4"));
-        assert_eq!(frag[1].init_url.as_deref(), Some("https://h.com/init-a.mp4"));
-        assert_eq!(frag[2].init_url.as_deref(), Some("https://h.com/init-b.mp4"));
+        assert_eq!(
+            frag[0].init_url.as_deref(),
+            Some("https://h.com/init-a.mp4")
+        );
+        assert_eq!(
+            frag[1].init_url.as_deref(),
+            Some("https://h.com/init-a.mp4")
+        );
+        assert_eq!(
+            frag[2].init_url.as_deref(),
+            Some("https://h.com/init-b.mp4")
+        );
     }
 
     #[test]
@@ -655,13 +667,23 @@ https://cdn.h.com/abs-2.ts
         let f = expand_media_playlist(&seed(), "https://h.com/v/720/a.m3u8", MEDIA_WITH_INIT)
             .expect("init+segments");
         let frags = f.fragments.expect("fragments populated");
-        assert_eq!(frags.len(), 2, "2 data segments only (no sentinel init Fragment)");
+        assert_eq!(
+            frags.len(),
+            2,
+            "2 data segments only (no sentinel init Fragment)"
+        );
         assert_eq!(frags[0].url, "https://h.com/v/720/seg-1.m4s");
         assert_eq!(frags[0].duration, Some(6.0));
-        assert_eq!(frags[0].init_url.as_deref(), Some("https://h.com/v/720/init.m4s"));
+        assert_eq!(
+            frags[0].init_url.as_deref(),
+            Some("https://h.com/v/720/init.m4s")
+        );
         assert_eq!(frags[0].init_byte_range, None);
         assert_eq!(frags[1].url, "https://h.com/v/720/seg-2.m4s");
-        assert_eq!(frags[1].init_url.as_deref(), Some("https://h.com/v/720/init.m4s"));
+        assert_eq!(
+            frags[1].init_url.as_deref(),
+            Some("https://h.com/v/720/init.m4s")
+        );
     }
 
     fn seed_with_metadata() -> Format {
@@ -1058,7 +1080,10 @@ http://10.0.0.1/admin
 
     #[test]
     fn invalid_byte_range_displays() {
-        let e = HlsExpandError::InvalidByteRange { start: 10, end_exclusive: 5 };
+        let e = HlsExpandError::InvalidByteRange {
+            start: 10,
+            end_exclusive: 5,
+        };
         assert_eq!(
             e.to_string(),
             "invalid byte range: start=10, end_exclusive=5"
@@ -1083,7 +1108,11 @@ seg-1.m4s
         let f = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_BYTE_RANGE_INIT)
             .expect("must accept byte-range init");
         let frag = f.fragments.as_ref().expect("fragments populated");
-        assert_eq!(frag.len(), 1, "one data segment, init folded into Fragment.init_*");
+        assert_eq!(
+            frag.len(),
+            1,
+            "one data segment, init folded into Fragment.init_*"
+        );
         assert_eq!(frag[0].init_url.as_deref(), Some("https://h.com/init.mp4"));
         // m3u8_rs ByteRange { length: 1024, offset: Some(2048) }
         // → start = 2048, end_exclusive = 2048 + 1024 = 3072

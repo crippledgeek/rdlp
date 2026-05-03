@@ -125,7 +125,10 @@ mod tests {
 
         let http = Arc::new(wreq::Client::new());
         let out = expand_hls_in_place(vec![f.clone()], http).await;
-        assert!(out.is_empty(), "encrypted format must be dropped (no legacy fallback)");
+        assert!(
+            out.is_empty(),
+            "encrypted format must be dropped (no legacy fallback)"
+        );
     }
 
     #[tokio::test]
@@ -145,6 +148,9 @@ mod tests {
 
         let http = Arc::new(wreq::Client::new());
         let out = expand_hls_in_place(vec![f.clone()], http).await;
-        assert!(out.is_empty(), "live format must be dropped (no legacy fallback)");
+        assert!(
+            out.is_empty(),
+            "live format must be dropped (no legacy fallback)"
+        );
     }
 }
