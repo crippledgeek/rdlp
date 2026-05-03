@@ -249,6 +249,14 @@ pub(crate) async fn resolve_episode_formats(
         dub_subtitle_tracks
     };
 
+    // Pre-resolve HLS variant playlists into per-variant Format rows so the
+    // downloader can take the Format.fragments fast path. Non-HLS rows pass
+    // through unchanged; expand failures keep the original row (graceful
+    // fallback to the legacy variant-URL path). The seed Format's
+    // `http_headers` (Referer) is preserved on every expanded row via
+    // `seed.clone()` inside `expand_media_playlist`.
+    let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
+
     Ok((all_formats, hls_flags, subtitle_tracks))
 }
 
@@ -459,5 +467,76 @@ mod tests {
     fn test_build_subtitle_map_empty() {
         let map = build_subtitle_map(&[]);
         assert!(map.is_empty());
+    }
+
+    /// Regression guard for #258 — confirm an `M3u8` HLS row produced by
+    /// `resolve_episode_formats` is expanded into per-variant fragments by
+    /// `expand_hls_in_place`, that the per-format `Referer` header is
+    /// preserved on every expanded row, and that non-HLS rows pass through
+    /// unchanged. Catches a wiring break where the helper call is removed
+    /// from `resolve_episode_formats` (the M3u8 row would arrive at the
+    /// downloader without pre-resolved fragments) AND a regression in
+    /// `expand_media_playlist`'s seed-clone behaviour that would drop the
+    /// Referer (Megacloud rejects HLS segment fetches without it).
+    #[tokio::test]
+    async fn hls_row_expanded_with_referer_preserved_and_https_pass_through() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/9a-master.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let hls_url = format!("{}/9a-master.m3u8", server.url());
+        let mut hls = Format::new("vidcloud-sub-0", &hls_url, "mp4", DownloadProtocol::M3u8);
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Referer".to_string(),
+            "https://megacloud.tv/embed-2/e-1/abc?k=1".to_string(),
+        );
+        hls.http_headers = Some(headers);
+        hls.format_note = Some("SUB (Vidcloud)".to_string());
+        hls.language = Some("SUB".to_string());
+
+        let mut mp4 = Format::new(
+            "douvideo-dub-0",
+            "https://cdn.example.com/v.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        mp4.format_note = Some("DUB (DouVideo)".to_string());
+        mp4.language = Some("DUB".to_string());
+
+        let formats = vec![hls, mp4];
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 2);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "M3u8 row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        let preserved = expanded[0]
+            .http_headers
+            .as_ref()
+            .and_then(|h| h.get("Referer"))
+            .map(String::as_str);
+        assert_eq!(
+            preserved,
+            Some("https://megacloud.tv/embed-2/e-1/abc?k=1"),
+            "Referer header must survive expand (Megacloud rejects without it)"
+        );
+        assert_eq!(expanded[0].language.as_deref(), Some("SUB"));
+
+        assert!(
+            expanded[1].fragments.is_none(),
+            "Https MP4 row must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://cdn.example.com/v.mp4");
+        assert_eq!(expanded[1].language.as_deref(), Some("DUB"));
     }
 }
