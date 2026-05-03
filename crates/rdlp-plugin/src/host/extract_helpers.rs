@@ -261,7 +261,11 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             let url = build_url_with_query(url, &fetch.query);
             let req = Request {
                 url: url.clone(),
-                method: if fetch.body.is_some() { "POST".into() } else { "GET".into() },
+                method: if fetch.body.is_some() {
+                    "POST".into()
+                } else {
+                    "GET".into()
+                },
                 headers: fetch.headers.clone(),
                 body: fetch.body.clone(),
                 timeout_ms: Some(30_000),
@@ -337,7 +341,11 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             let url = build_url_with_query(url, &fetch.query);
             let req = Request {
                 url: url.clone(),
-                method: if fetch.body.is_some() { "POST".into() } else { "GET".into() },
+                method: if fetch.body.is_some() {
+                    "POST".into()
+                } else {
+                    "GET".into()
+                },
                 headers: fetch.headers.clone(),
                 body: fetch.body.clone(),
                 timeout_ms: Some(30_000),
@@ -883,7 +891,12 @@ hi.m3u8\n";
         });
 
         let r = c
-            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "vid".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect("extract_mpd");
 
@@ -1007,7 +1020,12 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect_err("dynamic MPD must error");
         let msg = format!("{err:?}").to_lowercase();
@@ -1040,7 +1058,12 @@ hi.m3u8\n";
             )),
         });
         let r = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect("audio rep survives DRM filtering");
         assert_eq!(r.formats.len(), 1, "only the audio rep should survive");
@@ -1073,7 +1096,12 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect_err("invalid utf-8 must error");
         assert!(
@@ -1104,7 +1132,12 @@ hi.m3u8\n";
             )),
         });
         let err = c
-            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect_err("non-MPD XML must error");
         assert!(
@@ -1156,16 +1189,14 @@ hi.m3u8\n";
 
     #[tokio::test]
     async fn extract_m3u8_threads_headers_into_request() {
-        use crate::host::fetch::{FetchCtx};
+        use crate::host::fetch::FetchCtx;
         use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
         use std::sync::Arc;
 
         let url = "https://example.com/playlist.m3u8";
         let mut c = ctx();
-        let fixtures = Arc::new(
-            FetchFixtures::new()
-                .with(url, FixtureResponse::ok(b"#EXTM3U\n".to_vec())),
-        );
+        let fixtures =
+            Arc::new(FetchFixtures::new().with(url, FixtureResponse::ok(b"#EXTM3U\n".to_vec())));
         c.fetch = Some(FetchCtx {
             client: rdlp_http::wreq::Client::builder()
                 .build()
@@ -1184,7 +1215,10 @@ hi.m3u8\n";
 
         let recorded = fixtures.last_request().expect("request recorded");
         assert!(
-            recorded.headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer abc"),
+            recorded
+                .headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer abc"),
             "headers missing Authorization: {:?}",
             recorded.headers
         );
@@ -1193,7 +1227,7 @@ hi.m3u8\n";
     #[tokio::test]
     async fn extract_m3u8_appends_query_params_to_url() {
         use crate::host::fetch::FetchCtx;
-        use crate::host::fetch_fixtures::{FetchFixtures};
+        use crate::host::fetch_fixtures::FetchFixtures;
         use std::sync::Arc;
 
         let url = "https://example.com/playlist.m3u8";
@@ -1290,10 +1324,10 @@ hi.m3u8\n";
 
         let url = "https://example.com/manifest.mpd";
         let mut c = ctx();
-        let fixtures = Arc::new(
-            FetchFixtures::new()
-                .with(url, FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec())),
-        );
+        let fixtures = Arc::new(FetchFixtures::new().with(
+            url,
+            FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec()),
+        ));
         c.fetch = Some(FetchCtx {
             client: rdlp_http::wreq::Client::builder()
                 .build()
@@ -1310,7 +1344,10 @@ hi.m3u8\n";
             .await;
         let recorded = fixtures.last_request().expect("recorded");
         assert!(
-            recorded.headers.iter().any(|(k, v)| k == "X-CDN-Token" && v == "xyz"),
+            recorded
+                .headers
+                .iter()
+                .any(|(k, v)| k == "X-CDN-Token" && v == "xyz"),
             "headers: {:?}",
             recorded.headers
         );
@@ -1340,11 +1377,7 @@ hi.m3u8\n";
             )
             .await;
         let recorded = fixtures.last_request().expect("recorded");
-        assert!(
-            recorded.url.contains("?k=v"),
-            "url: {}",
-            recorded.url
-        );
+        assert!(recorded.url.contains("?k=v"), "url: {}", recorded.url);
     }
 
     #[tokio::test]
@@ -1386,10 +1419,10 @@ hi.m3u8\n";
             client: rdlp_http::wreq::Client::builder()
                 .build()
                 .expect("test client"),
-            fixtures: Some(Arc::new(
-                FetchFixtures::new()
-                    .with(url, FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec())),
-            )),
+            fixtures: Some(Arc::new(FetchFixtures::new().with(
+                url,
+                FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec()),
+            ))),
         });
         let _ = c
             .extract_mpd(
@@ -1489,7 +1522,12 @@ hi.m3u8\n";
         });
 
         let r = c
-            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true), empty_fetch())
+            .extract_mpd(
+                url.to_string(),
+                "vid".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
             .await
             .expect("extract_mpd");
 

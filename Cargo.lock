@@ -6234,6 +6234,7 @@ dependencies = [
  "hex",
  "html-escape",
  "log",
+ "percent-encoding",
  "psl",
  "rand 0.8.5",
  "rdlp-cookies",
