@@ -46,7 +46,7 @@ async fn expand_hls_in_place(
                 Err(e) => {
                     log::warn!(
                         "HLS expand failed for {} ({e}) — falling back to legacy variant-URL path",
-                        f.url
+                        rdlp_security::sanitize_for_logging(&f.url)
                     );
                     expanded.push(f);
                 }

@@ -45,6 +45,47 @@ pub enum HlsExpandError {
     /// `m3u8_rs` could not parse the playlist body.
     #[error("parse: {0}")]
     Parse(String),
+    /// Master playlist has more variants than `MAX_VARIANTS`.
+    #[error("master playlist has too many variants: {count} (max {max})")]
+    TooManyVariants {
+        /// Actual variant count in the master playlist.
+        count: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+}
+
+/// Cap on master playlist variant count.
+const MAX_VARIANTS: usize = 50;
+/// Cap on raw playlist body size (master or media).
+const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
+
+/// Validate a resolved URL (variant URI or segment URI from a playlist body).
+///
+/// Production behavior: delegate to `rdlp_security::validate_url_security`,
+/// which rejects file://, javascript:, private hosts, and other SSRF-prone
+/// targets.
+///
+/// Test behavior: allow http/https on `127.0.0.1` / `localhost` so mockito
+/// servers (which bind to loopback by default) can drive integration tests.
+/// All other URLs (other private hosts, non-http(s) schemes) still go
+/// through the real validator. The bypass is `cfg(test)`-gated so production
+/// builds compile without any loopback exemption.
+fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
+    #[cfg(test)]
+    {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
+            let host_loopback = parsed.host_str().is_some_and(|h| {
+                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
+            });
+            if scheme_ok && host_loopback {
+                return Ok(());
+            }
+        }
+    }
+    rdlp_security::validate_url_security(url)
+        .map_err(|e| HlsExpandError::Network(format!("URI rejected: {e}")))
 }
 
 /// Expand an HLS URL (master or media playlist) into pre-resolved `Format`
@@ -81,6 +122,12 @@ pub async fn expand_hls_url(
             if master.variants.is_empty() {
                 return Err(HlsExpandError::NoVariants);
             }
+            if master.variants.len() > MAX_VARIANTS {
+                return Err(HlsExpandError::TooManyVariants {
+                    count: master.variants.len(),
+                    max: MAX_VARIANTS,
+                });
+            }
             let base = url::Url::parse(&seed.url)
                 .map_err(|e| HlsExpandError::Parse(format!("invalid master url: {e}")))?;
             let mut out = Vec::with_capacity(master.variants.len());
@@ -89,6 +136,7 @@ pub async fn expand_hls_url(
                     .join(&variant.uri)
                     .map_err(|e| HlsExpandError::Parse(format!("variant uri: {e}")))?
                     .to_string();
+                validate_resolved_url(&media_url)?;
                 let media_bytes = fetch_playlist_bytes(&http, &media_url).await?;
                 let f = expand_media_playlist(seed, &media_url, &media_bytes)?;
                 out.push(f);
@@ -99,21 +147,36 @@ pub async fn expand_hls_url(
 }
 
 async fn fetch_playlist_bytes(http: &wreq::Client, url: &str) -> Result<Vec<u8>, HlsExpandError> {
+    let safe_url = rdlp_security::sanitize_for_logging(url);
     let resp = http
         .get(url)
         .send()
         .await
-        .map_err(|e| HlsExpandError::Network(format!("fetch {url}: {e}")))?;
+        .map_err(|e| HlsExpandError::Network(format!("fetch {safe_url}: {e}")))?;
     if !resp.status().is_success() {
         return Err(HlsExpandError::Network(format!(
-            "fetch {url}: status {}",
+            "fetch {safe_url}: status {}",
             resp.status()
         )));
     }
-    resp.bytes()
+    if let Some(len) = resp.content_length()
+        && len > MAX_PLAYLIST_BYTES as u64
+    {
+        return Err(HlsExpandError::Network(format!(
+            "playlist body too large: {len} bytes (max {MAX_PLAYLIST_BYTES})"
+        )));
+    }
+    let bytes = resp
+        .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| HlsExpandError::Network(format!("read {url}: {e}")))
+        .map_err(|e| HlsExpandError::Network(format!("read {safe_url}: {e}")))?;
+    if bytes.len() > MAX_PLAYLIST_BYTES {
+        return Err(HlsExpandError::Network(format!(
+            "playlist body too large: {} bytes (max {MAX_PLAYLIST_BYTES})",
+            bytes.len()
+        )));
+    }
+    Ok(bytes.to_vec())
 }
 
 /// Build per-media-playlist `Format` from parsed bytes + media-playlist URL.
@@ -184,9 +247,12 @@ fn expand_media_playlist(
     let base = url::Url::parse(media_playlist_url)
         .map_err(|e| HlsExpandError::Parse(format!("invalid media playlist url: {e}")))?;
 
-    let resolve = |raw: &str| -> String {
-        base.join(raw)
-            .map_or_else(|_| raw.to_string(), |u| u.to_string())
+    let resolve = |raw: &str| -> Result<String, HlsExpandError> {
+        let resolved = base
+            .join(raw)
+            .map_or_else(|_| raw.to_string(), |u| u.to_string());
+        validate_resolved_url(&resolved)?;
+        Ok(resolved)
     };
 
     let mut fragments: Vec<Fragment> = Vec::with_capacity(playlist.segments.len() + 1);
@@ -194,7 +260,7 @@ fn expand_media_playlist(
     // Init segment (folded as first Fragment if any segment has EXT-X-MAP).
     if let Some(first_init) = playlist.segments.iter().find_map(|s| s.map.as_ref()) {
         fragments.push(Fragment {
-            url: resolve(&first_init.uri),
+            url: resolve(&first_init.uri)?,
             duration: None,
             filesize: None,
         });
@@ -202,7 +268,7 @@ fn expand_media_playlist(
 
     for seg in &playlist.segments {
         fragments.push(Fragment {
-            url: resolve(&seg.uri),
+            url: resolve(&seg.uri)?,
             duration: Some(f64::from(seg.duration)),
             filesize: None,
         });
@@ -589,6 +655,100 @@ seg-2.ts
         assert_eq!(out[0].height, Some(720));
         assert_eq!(out[0].format_id, "hls");
         assert_eq!(out[0].format_note.as_deref(), Some("HLS"));
+    }
+
+    const MEDIA_FILE_SCHEME_INJECTION: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+file:///etc/passwd
+#EXT-X-ENDLIST
+";
+
+    const MEDIA_PRIVATE_HOST_INJECTION: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+http://169.254.169.254/latest/meta-data/
+#EXT-X-ENDLIST
+";
+
+    const MEDIA_RFC1918_INJECTION: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+http://10.0.0.1/admin
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn refuses_file_scheme_segment_uri() {
+        let err =
+            expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_FILE_SCHEME_INJECTION)
+                .expect_err("must refuse file:// segment");
+        assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    #[test]
+    fn refuses_link_local_segment_uri() {
+        let err = expand_media_playlist(
+            &seed(),
+            "https://h.com/v.m3u8",
+            MEDIA_PRIVATE_HOST_INJECTION,
+        )
+        .expect_err("must refuse link-local segment");
+        assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    #[test]
+    fn refuses_rfc1918_segment_uri() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_RFC1918_INJECTION)
+            .expect_err("must refuse RFC1918 segment");
+        assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn refuses_master_with_file_scheme_variant() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1280000\nfile:///etc/passwd\n")
+            .create_async()
+            .await;
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let err = expand_hls_url(&s, http)
+            .await
+            .expect_err("must refuse file:// variant");
+        assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    #[tokio::test]
+    async fn refuses_master_with_too_many_variants() {
+        let mut body = String::from("#EXTM3U\n");
+        for i in 1..=51 {
+            body.push_str(&format!("#EXT-X-STREAM-INF:BANDWIDTH={i}000\nv{i}.m3u8\n"));
+        }
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(body)
+            .create_async()
+            .await;
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let err = expand_hls_url(&s, http)
+            .await
+            .expect_err("must refuse 51 variants");
+        assert!(matches!(
+            err,
+            HlsExpandError::TooManyVariants { count: 51, max: 50 }
+        ));
     }
 
     #[tokio::test]
