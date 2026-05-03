@@ -321,8 +321,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             let resp = self.fetch(req).await?;
             let body =
                 String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
-            let base =
-                Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
+            let base = Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
             let formats = expand_dash_representations(&body, &base)
                 .map_err(|e| FetchError::Network(format!("{e:#}")))?;
 
@@ -347,12 +346,18 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                         .fragments
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|fr| MpdFragment { url: fr.url, duration: fr.duration })
+                        .map(|fr| MpdFragment {
+                            url: fr.url,
+                            duration: fr.duration,
+                        })
                         .collect(),
                 })
                 .collect();
 
-            Ok(MpdExtraction { formats: mpd_formats, subtitles: vec![] })
+            Ok(MpdExtraction {
+                formats: mpd_formats,
+                subtitles: vec![],
+            })
         }
         .await;
 
@@ -797,15 +802,12 @@ hi.m3u8\n";
 
     // ---- DASH (extract_mpd) tests ----------------------------------------
 
-    const SEGMENT_TEMPLATE_MPD: &str = include_str!(
-        "../../../rdlp-downloader/tests/fixtures/dash/segment_template.mpd"
-    );
-    const DYNAMIC_MPD: &str = include_str!(
-        "../../../rdlp-downloader/tests/fixtures/dash/dynamic.mpd"
-    );
-    const WITH_DRM_MPD: &str = include_str!(
-        "../../../rdlp-downloader/tests/fixtures/dash/with_drm.mpd"
-    );
+    const SEGMENT_TEMPLATE_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/segment_template.mpd");
+    const DYNAMIC_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/dynamic.mpd");
+    const WITH_DRM_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/with_drm.mpd");
 
     fn mpd_opts(fatal: bool) -> crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions {
         crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions {
@@ -831,10 +833,10 @@ hi.m3u8\n";
             client: rdlp_http::wreq::Client::builder()
                 .build()
                 .expect("test client"),
-            fixtures: Some(Arc::new(
-                FetchFixtures::new()
-                    .with(url, FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec())),
-            )),
+            fixtures: Some(Arc::new(FetchFixtures::new().with(
+                url,
+                FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec()),
+            ))),
         });
 
         let r = c
@@ -848,16 +850,28 @@ hi.m3u8\n";
             r.formats.len()
         );
         assert!(
-            r.formats.iter().any(|f| f.vcodec.is_some() && f.acodec.is_none()),
+            r.formats
+                .iter()
+                .any(|f| f.vcodec.is_some() && f.acodec.is_none()),
             "expected at least one video-only format"
         );
         assert!(
-            r.formats.iter().any(|f| f.acodec.is_some() && f.vcodec.is_none()),
+            r.formats
+                .iter()
+                .any(|f| f.acodec.is_some() && f.vcodec.is_none()),
             "expected at least one audio-only format"
         );
         for f in &r.formats {
-            assert!(!f.fragments.is_empty(), "fragments must be non-empty for {}", f.format_id);
-            assert!(f.fragment_base_url.is_some(), "fragment_base_url must be set for {}", f.format_id);
+            assert!(
+                !f.fragments.is_empty(),
+                "fragments must be non-empty for {}",
+                f.format_id
+            );
+            assert!(
+                f.fragment_base_url.is_some(),
+                "fragment_base_url must be set for {}",
+                f.format_id
+            );
             assert_eq!(
                 f.manifest_url.as_deref(),
                 Some(url),
@@ -943,7 +957,8 @@ hi.m3u8\n";
                 .build()
                 .expect("test client"),
             fixtures: Some(Arc::new(
-                FetchFixtures::new().with(url, FixtureResponse::ok(DYNAMIC_MPD.as_bytes().to_vec())),
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(DYNAMIC_MPD.as_bytes().to_vec())),
             )),
         });
         let err = c
@@ -951,7 +966,10 @@ hi.m3u8\n";
             .await
             .expect_err("dynamic MPD must error");
         let msg = format!("{err:?}").to_lowercase();
-        assert!(msg.contains("dynamic"), "expected 'dynamic' in error: {msg}");
+        assert!(
+            msg.contains("dynamic"),
+            "expected 'dynamic' in error: {msg}"
+        );
     }
 
     /// A DRM-protected representation must be filtered out; non-DRM sibling representations
@@ -972,7 +990,8 @@ hi.m3u8\n";
                 .build()
                 .expect("test client"),
             fixtures: Some(Arc::new(
-                FetchFixtures::new().with(url, FixtureResponse::ok(WITH_DRM_MPD.as_bytes().to_vec())),
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(WITH_DRM_MPD.as_bytes().to_vec())),
             )),
         });
         let r = c
