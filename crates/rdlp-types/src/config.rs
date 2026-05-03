@@ -430,6 +430,7 @@ impl Config {
     /// Returns [`ConfigValidationError`] if any field is out of range or
     /// inconsistent (e.g. `concurrent_fragments == 0`, `buffer_size == 0`,
     /// invalid `playlist_start`).
+    #[allow(clippy::too_many_lines)] // Linear sequence of independent range checks; splitting harms readability.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.concurrent_fragments == 0 {
             return Err(ConfigValidationError::InvalidConcurrentFragments);
