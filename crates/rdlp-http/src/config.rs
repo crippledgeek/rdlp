@@ -234,7 +234,10 @@ mod tests {
             ..rdlp_types::Config::default()
         };
         let http = HttpClientConfig::from_rdlp_config(&cfg);
-        assert!(http.pool_idle_timeout_secs.is_none(), "0 must map to None (disable)");
+        assert!(
+            http.pool_idle_timeout_secs.is_none(),
+            "0 must map to None (disable)"
+        );
     }
 
     #[test]

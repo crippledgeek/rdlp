@@ -719,7 +719,6 @@ fn looks_like_media(url: &str) -> bool {
     matches!(ext.as_deref(), Some("mp4" | "m3u8" | "m3u" | "webm"))
 }
 
-
 /// Extract `content` attribute from a meta[itemprop] element.
 fn meta_content(html: &Html, selector: &Selector) -> Option<String> {
     html.select(selector)

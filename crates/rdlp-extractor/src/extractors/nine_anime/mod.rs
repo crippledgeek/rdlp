@@ -232,8 +232,7 @@ pub(crate) async fn resolve_episode_formats(
     // Probe ordering convention (issue #269): expand MUST run before
     // detect_format_sizes_lazy so HEAD probes target per-variant URLs
     // rather than the master playlist URL.
-    let all_formats =
-        crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
+    let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
 
     // Enrich HLS formats with resolution, codecs, duration, segments
     let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, "9anime").await;

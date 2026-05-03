@@ -360,7 +360,10 @@ fn read_timeout_rejects_zero() {
     };
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigValidationError::OutOfRange { field: "read_timeout", .. })
+        Err(ConfigValidationError::OutOfRange {
+            field: "read_timeout",
+            ..
+        })
     ));
 }
 
@@ -372,7 +375,10 @@ fn read_timeout_rejects_above_600() {
     };
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigValidationError::OutOfRange { field: "read_timeout", .. })
+        Err(ConfigValidationError::OutOfRange {
+            field: "read_timeout",
+            ..
+        })
     ));
 }
 
@@ -383,7 +389,10 @@ fn pool_idle_timeout_accepts_zero_and_max() {
             pool_idle_timeout: Some(v),
             ..Config::default()
         };
-        assert!(cfg.validate().is_ok(), "pool_idle_timeout={v} should be valid");
+        assert!(
+            cfg.validate().is_ok(),
+            "pool_idle_timeout={v} should be valid"
+        );
     }
 }
 
@@ -395,7 +404,10 @@ fn pool_idle_timeout_rejects_above_3600() {
     };
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigValidationError::OutOfRange { field: "pool_idle_timeout", .. })
+        Err(ConfigValidationError::OutOfRange {
+            field: "pool_idle_timeout",
+            ..
+        })
     ));
 }
 
@@ -418,7 +430,10 @@ fn socket_timeout_rejects_zero() {
     };
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigValidationError::OutOfRange { field: "socket_timeout", .. })
+        Err(ConfigValidationError::OutOfRange {
+            field: "socket_timeout",
+            ..
+        })
     ));
 }
 
@@ -430,6 +445,9 @@ fn socket_timeout_rejects_above_300() {
     };
     assert!(matches!(
         cfg.validate(),
-        Err(ConfigValidationError::OutOfRange { field: "socket_timeout", .. })
+        Err(ConfigValidationError::OutOfRange {
+            field: "socket_timeout",
+            ..
+        })
     ));
 }
