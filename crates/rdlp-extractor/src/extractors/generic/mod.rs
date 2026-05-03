@@ -337,12 +337,20 @@ fn detected_to_format(df: DetectedFormat) -> Format {
 
 /// Infer the download protocol from a URL and optional extension.
 fn protocol_from_url(url: &str, ext: Option<&str>) -> DownloadProtocol {
-    match ext {
-        Some("m3u8") => DownloadProtocol::M3u8,
-        _ if url.starts_with("https://") => DownloadProtocol::Https,
-        _ if url.starts_with("http://") => DownloadProtocol::Http,
-        _ => DownloadProtocol::Https,
+    if matches!(ext, Some("m3u8" | "m3u")) {
+        return DownloadProtocol::M3u8;
     }
+    url::Url::parse(url)
+        .map(|u| crate::base::common::protocol_for_url(&u))
+        .unwrap_or_else(|_| {
+            if url.starts_with("https://") {
+                DownloadProtocol::Https
+            } else if url.starts_with("http://") {
+                DownloadProtocol::Http
+            } else {
+                DownloadProtocol::Https
+            }
+        })
 }
 
 /// Map Content-Type to a file extension.
@@ -605,5 +613,29 @@ mod tests {
             "Https MP4 row must pass through untouched"
         );
         assert_eq!(expanded[1].url, "https://cdn.example.com/v.mp4");
+    }
+
+    #[test]
+    fn protocol_from_url_rejects_m3u8_in_query() {
+        // Regression: issue #268. A URL with `.m3u8` in the query but
+        // `.mp4` path-extension must classify as Https.
+        let p = protocol_from_url("https://host/clip.mp4?ref=foo.m3u8", None);
+        assert!(
+            matches!(p, rdlp_types::DownloadProtocol::Https),
+            "got {p:?}"
+        );
+    }
+
+    #[test]
+    fn protocol_from_url_honours_explicit_ext_arg() {
+        // Caller-supplied ext takes precedence over URL parsing.
+        let p = protocol_from_url("https://host/no-ext", Some("m3u8"));
+        assert!(matches!(p, rdlp_types::DownloadProtocol::M3u8), "got {p:?}");
+    }
+
+    #[test]
+    fn protocol_from_url_classifies_m3u8_path() {
+        let p = protocol_from_url("https://host/master.m3u8", None);
+        assert!(matches!(p, rdlp_types::DownloadProtocol::M3u8), "got {p:?}");
     }
 }

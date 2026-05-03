@@ -218,7 +218,15 @@ async fn detect_format_sizes_inner(
 
             async move {
                 let url = format.url.clone();
-                let is_hls = format.ext == "hls" || url.contains(".m3u8") || url.contains("/hls/");
+                let is_hls = format.ext == "hls"
+                    || url::Url::parse(&url)
+                        .map(|u| {
+                            matches!(
+                                crate::base::common::protocol_for_url(&u),
+                                rdlp_types::DownloadProtocol::M3u8,
+                            )
+                        })
+                        .unwrap_or(false);
 
                 if is_hls {
                     // Try to expand master playlist into per-variant formats
@@ -463,4 +471,58 @@ async fn detect_format_sizes_inner(
     }
 
     (formats, flags)
+}
+
+#[cfg(test)]
+mod is_hls_tests {
+    use crate::base::common::protocol_for_url;
+    use rdlp_types::DownloadProtocol;
+    use url::Url;
+
+    /// Mirror of the post-migration `is_hls` decision used inside the
+    /// detection futures combinator at line ~221. Kept as a free function
+    /// so the test surface matches the production predicate exactly.
+    fn is_hls_decision(ext: &str, url: &str) -> bool {
+        ext == "hls"
+            || Url::parse(url)
+                .map(|u| matches!(protocol_for_url(&u), DownloadProtocol::M3u8))
+                .unwrap_or(false)
+    }
+
+    fn url_is_hls(url: &str) -> bool {
+        is_hls_decision("mp4", url)
+    }
+
+    #[test]
+    fn rejects_mp4_url_with_m3u8_in_query() {
+        // Regression: issue #268. The pre-migration check
+        // `url.contains(".m3u8")` returned true here.
+        assert!(!url_is_hls("https://host/clip.mp4?ref=foo.m3u8"));
+    }
+
+    #[test]
+    fn rejects_mp4_url_with_hls_substring_in_path() {
+        // Regression: pre-migration check `url.contains("/hls/")` returned
+        // true. The CDN-style `/hls/` substring is no longer treated as
+        // HLS — extractors that need HLS treatment must set
+        // `format.ext = "hls"` explicitly.
+        assert!(!url_is_hls("https://cdn/hls/abc123.mp4"));
+    }
+
+    #[test]
+    fn accepts_m3u8_path() {
+        assert!(url_is_hls("https://host/master.m3u8"));
+    }
+
+    #[test]
+    fn ext_hls_short_circuits_when_url_has_no_extension() {
+        // Contract: extractors that emit HLS without an `.m3u8` URL
+        // (e.g. RedTube's KVS-style API output, formats.rs:240) set
+        // `format.ext = "hls"`. The short-circuit MUST treat that as HLS
+        // regardless of URL shape.
+        assert!(is_hls_decision(
+            "hls",
+            "https://cdn.example.com/no-extension/abc123"
+        ));
+    }
 }

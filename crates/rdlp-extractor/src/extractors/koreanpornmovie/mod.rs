@@ -627,11 +627,9 @@ fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<Format> {
 
 /// Create a Format with video codec markers set so the UI shows it as video, not audio-only.
 fn make_video_format(format_id: &str, url: &str) -> Format {
-    let protocol = if url.contains(".m3u8") {
-        DownloadProtocol::M3u8
-    } else {
-        DownloadProtocol::Https
-    };
+    let protocol = url::Url::parse(url)
+        .map(|u| crate::base::common::protocol_for_url(&u))
+        .unwrap_or(DownloadProtocol::Https);
     let ext = url
         .split('.')
         .next_back()
@@ -697,18 +695,34 @@ fn extract_urls_from_decoded_tag(tag_html: &str) -> Vec<String> {
         .captures_iter(tag_html)
         .filter_map(|caps| {
             let url = caps.get(1)?.as_str();
-            // Only return actual media URLs, not embed pages
-            if url.contains(".mp4")
-                || url.contains(".m3u8")
-                || url.contains(".webm")
-                || url.contains("koreanporn.stream")
-            {
-                Some(url.to_string())
-            } else {
-                None
-            }
+            looks_like_media(url).then(|| url.to_string())
         })
         .collect()
+}
+
+/// Allow-list filter for media URLs found in decoded player iframes.
+///
+/// Matches by parsed path-segment extension (NOT substring). The
+/// `koreanporn.stream` host carve-out is preserved because some embeds
+/// link to opaque embed pages on that host that resolve to media at
+/// load time.
+fn looks_like_media(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed
+        .host_str()
+        .is_some_and(|h| h == "koreanporn.stream" || h.ends_with(".koreanporn.stream"))
+    {
+        return true;
+    }
+    let ext = parsed
+        .path()
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.rsplit_once('.').map(|(_, e)| e))
+        .map(str::to_ascii_lowercase);
+    matches!(ext.as_deref(), Some("mp4" | "m3u8" | "m3u" | "webm"))
 }
 
 /// Probe a video URL via HEAD request to get Content-Length (filesize).
@@ -805,6 +819,55 @@ mod tests {
     }
 
     #[test]
+    fn extract_urls_from_decoded_tag_rejects_substring_in_query() {
+        // Regression: substring matching admitted non-media URLs whose
+        // query/fragment contained a media extension.
+        let html = r#"<iframe src="https://host/page?embed=video.mp4"></iframe>"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert!(
+            urls.is_empty(),
+            "expected empty (non-media URL), got {urls:?}"
+        );
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_media_extensions() {
+        let html =
+            r#"<source src="https://host/video.mp4"><source src="https://host/master.m3u8">"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert_eq!(urls.len(), 2);
+        assert!(urls.iter().any(|u| u.ends_with(".mp4")));
+        assert!(urls.iter().any(|u| u.ends_with(".m3u8")));
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_koreanporn_stream_host() {
+        let html = r#"<source src="https://koreanporn.stream/embed/abc123">"#;
+        let urls = extract_urls_from_decoded_tag(html);
+        assert_eq!(urls.len(), 1);
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_rejects_subdomain_squatting() {
+        // Security: a hostile domain that contains "koreanporn.stream" as a
+        // substring (e.g. `koreanporn.stream.evil.com`, or any URL whose
+        // query references it) MUST NOT bypass the path-extension
+        // allow-list via the host carve-out.
+        let html = r#"<source src="https://koreanporn.stream.evil.com/page">"#;
+        assert!(extract_urls_from_decoded_tag(html).is_empty());
+
+        let html = r#"<source src="https://attacker.com/page?ref=koreanporn.stream">"#;
+        assert!(extract_urls_from_decoded_tag(html).is_empty());
+    }
+
+    #[test]
+    fn extract_urls_from_decoded_tag_accepts_koreanporn_stream_subdomain() {
+        // Legitimate subdomains (e.g. cdn.koreanporn.stream) remain allowed.
+        let html = r#"<source src="https://cdn.koreanporn.stream/embed/abc">"#;
+        assert_eq!(extract_urls_from_decoded_tag(html).len(), 1);
+    }
+
+    #[test]
     fn extractor_name_and_priority() {
         let ext = KoreanPornMovieExtractor::new();
         assert_eq!(InfoExtractor::name(&ext), "KoreanPornMovie");
@@ -895,5 +958,27 @@ mod tests {
             "Https MP4 row must pass through untouched"
         );
         assert_eq!(expanded[1].url, "https://koreanporn.stream/Movie.mp4");
+    }
+
+    #[test]
+    fn make_video_format_rejects_m3u8_substring_in_query() {
+        // Regression: issue #268. A crafted MP4 URL with `.m3u8` in the
+        // query parameter must NOT classify as HLS.
+        let f = make_video_format("test", "https://host/clip.mp4?ref=foo.m3u8");
+        assert!(
+            matches!(f.protocol, rdlp_types::DownloadProtocol::Https),
+            "expected Https, got {:?}",
+            f.protocol
+        );
+    }
+
+    #[test]
+    fn make_video_format_classifies_m3u8_path_as_hls() {
+        let f = make_video_format("test", "https://host/master.m3u8");
+        assert!(
+            matches!(f.protocol, rdlp_types::DownloadProtocol::M3u8),
+            "expected M3u8, got {:?}",
+            f.protocol
+        );
     }
 }
