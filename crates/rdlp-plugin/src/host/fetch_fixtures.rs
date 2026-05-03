@@ -60,6 +60,7 @@ impl FixtureResponse {
 }
 
 /// A minimal recording of the `Request` the host fetch dispatch received.
+///
 /// Avoids a dependency on the WIT-generated `Request` type from the
 /// `host_fetch` binding (which may not implement `Clone` in all
 /// configurations). Used exclusively by the test harness to assert on
@@ -137,7 +138,7 @@ impl FetchFixtures {
     pub fn record(&self, req: RecordedRequest) {
         self.recorded
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(req);
     }
 
@@ -147,7 +148,7 @@ impl FetchFixtures {
     pub fn last_request(&self) -> Option<RecordedRequest> {
         self.recorded
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .last()
             .cloned()
     }
