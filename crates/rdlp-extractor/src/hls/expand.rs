@@ -53,10 +53,34 @@ pub enum HlsExpandError {
         /// Configured maximum.
         max: usize,
     },
+
+    /// Distinct `EXT-X-MAP` URIs in the playlist exceed `MAX_INIT_SEGMENTS`.
+    /// Mitigates interleaved-init-URI fetch amplification.
+    #[error("media playlist has too many distinct init segments: {count} (max {max})")]
+    TooManyInitSegments {
+        /// Distinct init URI count observed.
+        count: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+
+    /// `EXT-X-BYTERANGE` or `EXT-X-MAP:BYTERANGE` parsed to an empty or
+    /// inverted range (e.g. `BYTERANGE="0@0"`). Caught at population time
+    /// to avoid emitting `Range: bytes=0--1` (u64 underflow).
+    #[error("invalid byte range: start={start}, end_exclusive={end_exclusive}")]
+    InvalidByteRange {
+        /// Resolved start offset.
+        start: u64,
+        /// Resolved end (exclusive).
+        end_exclusive: u64,
+    },
 }
 
 /// Cap on master playlist variant count.
 const MAX_VARIANTS: usize = 50;
+/// Cap on distinct EXT-X-MAP URIs in a single media playlist.
+/// Mitigates interleaved-init-URI fetch amplification (`A,B,A,B,...`).
+const MAX_INIT_SEGMENTS: usize = 50;
 /// Cap on raw playlist body size (master or media).
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 
@@ -944,6 +968,24 @@ http://10.0.0.1/admin
         );
         assert_eq!(out.len(), 1);
         assert!(out[0].fragments.is_some());
+    }
+
+    #[test]
+    fn too_many_init_segments_displays() {
+        let e = HlsExpandError::TooManyInitSegments { count: 51, max: 50 };
+        assert_eq!(
+            e.to_string(),
+            "media playlist has too many distinct init segments: 51 (max 50)"
+        );
+    }
+
+    #[test]
+    fn invalid_byte_range_displays() {
+        let e = HlsExpandError::InvalidByteRange { start: 10, end_exclusive: 5 };
+        assert_eq!(
+            e.to_string(),
+            "invalid byte range: start=10, end_exclusive=5"
+        );
     }
 
     /// Negative companion to the test above — proves the test infrastructure
