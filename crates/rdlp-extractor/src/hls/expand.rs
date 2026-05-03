@@ -65,17 +65,64 @@ pub enum HlsExpandError {
 /// caller should treat any error as a signal to keep the original `Format`
 /// row (legacy fallback).
 pub async fn expand_hls_url(
-    _seed: &Format,
-    _http: Arc<wreq::Client>,
+    seed: &Format,
+    http: Arc<wreq::Client>,
 ) -> Result<Vec<Format>, HlsExpandError> {
-    unimplemented!("filled in by subsequent tasks")
+    let bytes = fetch_playlist_bytes(&http, &seed.url).await?;
+    let playlist = m3u8_rs::parse_playlist_res(&bytes)
+        .map_err(|e| HlsExpandError::Parse(format!("playlist: {e:?}")))?;
+
+    match playlist {
+        m3u8_rs::Playlist::MediaPlaylist(_) => {
+            let f = expand_media_playlist(seed, &seed.url, &bytes)?;
+            Ok(vec![f])
+        }
+        m3u8_rs::Playlist::MasterPlaylist(master) => {
+            if master.variants.is_empty() {
+                return Err(HlsExpandError::NoVariants);
+            }
+            let base = url::Url::parse(&seed.url)
+                .map_err(|e| HlsExpandError::Parse(format!("invalid master url: {e}")))?;
+            let mut out = Vec::with_capacity(master.variants.len());
+            for variant in &master.variants {
+                let media_url = base
+                    .join(&variant.uri)
+                    .map_err(|e| HlsExpandError::Parse(format!("variant uri: {e}")))?
+                    .to_string();
+                let media_bytes = fetch_playlist_bytes(&http, &media_url).await?;
+                let f = expand_media_playlist(seed, &media_url, &media_bytes)?;
+                out.push(f);
+            }
+            Ok(out)
+        }
+    }
+}
+
+async fn fetch_playlist_bytes(
+    http: &wreq::Client,
+    url: &str,
+) -> Result<Vec<u8>, HlsExpandError> {
+    let resp = http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| HlsExpandError::Network(format!("fetch {url}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(HlsExpandError::Network(format!(
+            "fetch {url}: status {}",
+            resp.status()
+        )));
+    }
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| HlsExpandError::Network(format!("read {url}: {e}")))
 }
 
 /// Build per-media-playlist `Format` from parsed bytes + media-playlist URL.
 ///
 /// Internal helper — used by `expand_hls_url` after fetching. Separated out
 /// so refusal logic can be unit-tested without HTTP mocking.
-#[allow(dead_code)] // wired into expand_hls_url in Task 8
 fn expand_media_playlist(
     seed: &Format,
     media_playlist_url: &str,
@@ -409,5 +456,165 @@ https://cdn.h.com/abs-2.ts
         assert_eq!(frags[0].duration, None, "init has no duration");
         assert_eq!(frags[1].url, "https://h.com/v/720/seg-1.m4s");
         assert_eq!(frags[2].url, "https://h.com/v/720/seg-2.m4s");
+    }
+
+    fn seed_with_metadata() -> Format {
+        let mut f = Format::new(
+            "hls",
+            "https://h.com/master.m3u8",
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        f.vcodec = rdlp_types::Codec::from("h264".to_string());
+        f.acodec = rdlp_types::Codec::from("aac".to_string());
+        f.height = Some(720);
+        f.format_note = Some("HLS".to_string());
+        f
+    }
+
+    const MASTER_ONE_VARIANT: &str = "\
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=720x480
+v720.m3u8
+";
+
+    const MASTER_THREE_VARIANTS: &str = "\
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=480000,RESOLUTION=480x270
+v240.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480
+v480.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720
+v720.m3u8
+";
+
+    const MEDIA_PLAIN: &str = "\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+seg-1.ts
+#EXTINF:6.0,
+seg-2.ts
+#EXT-X-ENDLIST
+";
+
+    #[tokio::test]
+    async fn master_with_one_variant_expands_to_one_format() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_ONE_VARIANT)
+            .create_async()
+            .await;
+        let _variant = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(MEDIA_PLAIN)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http).await.expect("expand ok");
+
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fragments.is_some());
+        assert_eq!(out[0].fragments.as_ref().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn master_with_three_variants_expands_to_three_formats() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_THREE_VARIANTS)
+            .create_async()
+            .await;
+        for v in ["v240.m3u8", "v480.m3u8", "v720.m3u8"] {
+            let _ = server
+                .mock("GET", format!("/{v}").as_str())
+                .with_body(MEDIA_PLAIN)
+                .create_async()
+                .await;
+        }
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http).await.expect("expand ok");
+
+        assert_eq!(out.len(), 3);
+        for f in &out {
+            assert!(f.fragments.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_media_playlist_returns_single_format() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/media.m3u8")
+            .with_body(MEDIA_PLAIN)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/media.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http).await.expect("expand ok");
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].fragments.as_ref().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn seed_metadata_inherited() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/media.m3u8")
+            .with_body(MEDIA_PLAIN)
+            .create_async()
+            .await;
+
+        let mut s = seed_with_metadata();
+        s.url = format!("{}/media.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http).await.expect("expand ok");
+
+        assert_eq!(out[0].vcodec.as_str(), Some("h264"));
+        assert_eq!(out[0].acodec.as_str(), Some("aac"));
+        assert_eq!(out[0].height, Some(720));
+        assert_eq!(out[0].format_id, "hls");
+        assert_eq!(out[0].format_note.as_deref(), Some("HLS"));
+    }
+
+    #[tokio::test]
+    async fn empty_master_playlist_errors() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n")
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let err = expand_hls_url(&s, http).await.expect_err("must error");
+        // m3u8_rs ambiguously classifies a body with no STREAM-INF and no
+        // segments. Depending on tags present it surfaces as either a master
+        // playlist (NoVariants), a media playlist with zero segments
+        // (NoSegments), or a media playlist missing ENDLIST (LiveStream).
+        // Any of the three is an acceptable refusal here.
+        assert!(matches!(
+            err,
+            HlsExpandError::NoSegments | HlsExpandError::NoVariants | HlsExpandError::LiveStream
+        ));
     }
 }
