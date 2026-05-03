@@ -33,9 +33,6 @@ pub enum HlsExpandError {
     /// Media playlist lacks EXT-X-ENDLIST (live / event stream).
     #[error("HLS live streams not supported in pre-resolved path")]
     LiveStream,
-    /// More than one distinct EXT-X-MAP URI seen in the same media playlist.
-    #[error("multiple distinct EXT-X-MAP URIs not supported in pre-resolved path")]
-    MultipleInitSegments,
     /// HTTP fetch of master or media playlist failed.
     #[error("network: {0}")]
     Network(String),
@@ -272,15 +269,6 @@ fn expand_media_playlist(
         return Err(HlsExpandError::LiveStream);
     }
 
-    let init_uris: HashSet<&str> = playlist
-        .segments
-        .iter()
-        .filter_map(|s| s.map.as_ref().map(|m| m.uri.as_str()))
-        .collect();
-    if init_uris.len() > 1 {
-        return Err(HlsExpandError::MultipleInitSegments);
-    }
-
     const MAX_SEGMENTS: usize = 10_000;
     if playlist.segments.is_empty() {
         return Err(HlsExpandError::NoSegments);
@@ -317,19 +305,40 @@ fn expand_media_playlist(
         Ok((start, end_exclusive))
     };
 
-    // Single-init mode: capture once. (Task 4 replaces with per-segment refs.)
-    let mut single_init_url: Option<String> = None;
-    let mut single_init_br: Option<(u64, u64)> = None;
-    if let Some(first_map) = playlist.segments.iter().find_map(|s| s.map.as_ref()) {
-        single_init_url = Some(resolve(&first_map.uri)?);
-        if let Some(br) = first_map.byte_range.as_ref() {
-            single_init_br = Some(convert_br(br, 0)?);
-        }
-    }
+    // Track distinct init URIs across the playlist (security: cap at
+    // MAX_INIT_SEGMENTS to defeat interleaved-init-URI amplification).
+    let mut distinct_inits: HashSet<String> = HashSet::new();
 
     let mut fragments: Vec<Fragment> = Vec::with_capacity(playlist.segments.len());
     let mut prev_seg_end: u64 = 0;
+    let mut current_init_url: Option<String> = None;
+    let mut current_init_br: Option<(u64, u64)> = None;
+
     for seg in &playlist.segments {
+        // EXT-X-MAP transition: m3u8_rs sets seg.map on every segment the
+        // most-recent EXT-X-MAP applies to (no propagation needed on our
+        // side). We update current_init_* and apply the cap.
+        if let Some(map) = seg.map.as_ref() {
+            let map_url = resolve(&map.uri)?;
+            // Track distinct init URIs and apply the cap. insert returns
+            // true if the value was newly inserted (i.e., a new distinct URI).
+            if distinct_inits.insert(map_url.clone())
+                && distinct_inits.len() > MAX_INIT_SEGMENTS
+            {
+                return Err(HlsExpandError::TooManyInitSegments {
+                    count: distinct_inits.len(),
+                    max: MAX_INIT_SEGMENTS,
+                });
+            }
+            let map_br = if let Some(br) = map.byte_range.as_ref() {
+                Some(convert_br(br, 0)?)
+            } else {
+                None
+            };
+            current_init_url = Some(map_url);
+            current_init_br = map_br;
+        }
+
         let url = resolve(&seg.uri)?;
         let byte_range = if let Some(br) = seg.byte_range.as_ref() {
             let r = convert_br(br, prev_seg_end)?;
@@ -338,11 +347,12 @@ fn expand_media_playlist(
         } else {
             None
         };
+
         fragments.push(Fragment {
             url,
             byte_range,
-            init_url: single_init_url.clone(),
-            init_byte_range: single_init_br,
+            init_url: current_init_url.clone(),
+            init_byte_range: current_init_br,
             duration: Some(f64::from(seg.duration)),
             filesize: None,
         });
@@ -485,10 +495,62 @@ seg-1.m4s
 ";
 
     #[test]
-    fn refuses_multiple_distinct_init_segments() {
-        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_MULTI_INIT)
-            .expect_err("must refuse multi-init");
-        assert!(matches!(err, HlsExpandError::MultipleInitSegments));
+    fn too_many_init_segments_rejected() {
+        // Generate a playlist with 51 distinct EXT-X-MAP URIs.
+        let mut body = String::from("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:6\n");
+        for i in 0..51 {
+            body.push_str(&format!(
+                "#EXT-X-MAP:URI=\"init-{i}.mp4\"\n#EXTINF:6.0,\nseg-{i}.m4s\n"
+            ));
+        }
+        body.push_str("#EXT-X-ENDLIST\n");
+
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", body.as_bytes())
+            .expect_err("must refuse >MAX_INIT_SEGMENTS distinct inits");
+        assert!(matches!(
+            err,
+            HlsExpandError::TooManyInitSegments { count: 51, max: 50 }
+        ));
+    }
+
+    #[test]
+    fn multiple_distinct_init_segments_no_longer_refused() {
+        // Regression guard: prior behavior was HlsExpandError::MultipleInitSegments;
+        // now multi-init is supported per-fragment.
+        let f = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_MULTI_INIT)
+            .expect("multi-init must be accepted post-#267");
+        let frag = f.fragments.as_ref().unwrap();
+        assert_ne!(frag[0].init_url, frag[1].init_url, "different inits across stream");
+    }
+
+    /// Multi-init: two distinct EXT-X-MAP URIs in one playlist.
+    /// Per RFC 8216 §4.4.2.5 each EXT-X-MAP applies to subsequent
+    /// segments until the next one. Expansion populates the appropriate
+    /// init_url on each Fragment.
+    const MEDIA_MULTI_INIT_3SEG: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI=\"init-a.mp4\"
+#EXTINF:6.0,
+seg-1.m4s
+#EXTINF:6.0,
+seg-2.m4s
+#EXT-X-MAP:URI=\"init-b.mp4\"
+#EXTINF:6.0,
+seg-3.m4s
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn multi_init_populates_per_fragment_init_url() {
+        let f = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_MULTI_INIT_3SEG)
+            .expect("must accept multi-init");
+        let frag = f.fragments.as_ref().unwrap();
+        assert_eq!(frag.len(), 3);
+        assert_eq!(frag[0].init_url.as_deref(), Some("https://h.com/init-a.mp4"));
+        assert_eq!(frag[1].init_url.as_deref(), Some("https://h.com/init-a.mp4"));
+        assert_eq!(frag[2].init_url.as_deref(), Some("https://h.com/init-b.mp4"));
     }
 
     #[test]
