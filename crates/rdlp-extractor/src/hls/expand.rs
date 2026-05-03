@@ -101,6 +101,13 @@ fn expand_media_playlist(
         }
     }
 
+    if !playlist.end_list {
+        return Err(HlsExpandError::LiveStream);
+    }
+    if playlist.playlist_type == Some(m3u8_rs::MediaPlaylistType::Event) {
+        return Err(HlsExpandError::LiveStream);
+    }
+
     // Subsequent tasks fill in the rest. For now, error so we don't return
     // a half-built Format.
     let _ = (seed, media_playlist_url);
@@ -184,5 +191,37 @@ seg-1.ts
         let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_KEY_NONE)
             .expect_err("stub still errors");
         assert!(!matches!(err, HlsExpandError::Encrypted(_)));
+    }
+
+    const MEDIA_LIVE_NO_ENDLIST: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+seg-1.ts
+";
+
+    const MEDIA_PLAYLIST_TYPE_EVENT: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.0,
+seg-1.ts
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn refuses_missing_endlist() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_LIVE_NO_ENDLIST)
+            .expect_err("must refuse live");
+        assert!(matches!(err, HlsExpandError::LiveStream));
+    }
+
+    #[test]
+    fn refuses_playlist_type_event() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_PLAYLIST_TYPE_EVENT)
+            .expect_err("must refuse EVENT");
+        assert!(matches!(err, HlsExpandError::LiveStream));
     }
 }
