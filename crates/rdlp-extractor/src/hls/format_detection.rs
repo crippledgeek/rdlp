@@ -520,6 +520,9 @@ mod is_hls_tests {
         // (e.g. RedTube's KVS-style API output, formats.rs:240) set
         // `format.ext = "hls"`. The short-circuit MUST treat that as HLS
         // regardless of URL shape.
-        assert!(is_hls_decision("hls", "https://cdn.example.com/no-extension/abc123"));
+        assert!(is_hls_decision(
+            "hls",
+            "https://cdn.example.com/no-extension/abc123"
+        ));
     }
 }

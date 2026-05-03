@@ -620,7 +620,10 @@ mod tests {
         // Regression: issue #268. A URL with `.m3u8` in the query but
         // `.mp4` path-extension must classify as Https.
         let p = protocol_from_url("https://host/clip.mp4?ref=foo.m3u8", None);
-        assert!(matches!(p, rdlp_types::DownloadProtocol::Https), "got {p:?}");
+        assert!(
+            matches!(p, rdlp_types::DownloadProtocol::Https),
+            "got {p:?}"
+        );
     }
 
     #[test]
