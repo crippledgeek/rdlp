@@ -168,6 +168,16 @@ impl XHamsterExtractor {
             });
         }
 
+        // Pre-resolve HLS variant playlists into per-variant Format rows so the
+        // downloader can take the Format.fragments fast path. Non-HLS rows
+        // pass through unchanged; expand failures keep the original row
+        // (graceful fallback to the legacy variant-URL path). Each xhamster
+        // Format carries `http_headers = Some(referer_headers(page_url))`, so
+        // the helper's same-origin header forwarding (added in #263) lets the
+        // master + variant playlist fetches reach the CDN with the page-URL
+        // Referer that xhamster requires.
+        let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+
         // Detect file sizes and segment counts for HLS
         let (formats_with_size, hls_flags) =
             detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;
@@ -487,5 +497,81 @@ mod tests {
         assert_eq!(urls.len(), 2);
         assert!(urls.iter().any(|u| u.contains("123456")));
         assert!(urls.iter().any(|u| u.contains("789012")));
+    }
+
+    /// Regression guard for #258 — confirm an `M3u8Native` HLS row produced
+    /// by xhamster's format builder is expanded into per-variant fragments
+    /// by `expand_hls_in_place`, that the per-format Referer header is
+    /// preserved on every expanded row (xhamster requires the page-URL
+    /// Referer for CDN segment fetches), and that non-HLS rows pass through
+    /// unchanged. Catches a wiring break where the helper call is removed
+    /// from `extract_video` (the M3u8Native row would arrive at the
+    /// downloader without pre-resolved fragments) AND a regression in
+    /// `expand_media_playlist`'s seed-clone behaviour that would drop the
+    /// Referer.
+    #[tokio::test]
+    async fn xhamster_hls_row_expanded_with_referer_preserved() {
+        use rdlp_types::{DownloadProtocol, Format};
+
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/xh-master.m3u8")
+            .match_header("Referer", "https://xhamster.com/videos/some-video-123")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let hls_url = format!("{}/xh-master.m3u8", server.url());
+        let mut hls = Format::new(
+            "hls-h264-url",
+            &hls_url,
+            "mp4",
+            DownloadProtocol::M3u8Native,
+        );
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "Referer".to_string(),
+            "https://xhamster.com/videos/some-video-123".to_string(),
+        );
+        hls.http_headers = Some(headers);
+
+        let mut mp4 = Format::new(
+            "standard-720p",
+            "https://cdn.example.com/v_720p.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        mp4.height = Some(720);
+
+        let formats = vec![hls, mp4];
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 2);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "M3u8Native row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        let preserved = expanded[0]
+            .http_headers
+            .as_ref()
+            .and_then(|h| h.get("Referer"))
+            .map(String::as_str);
+        assert_eq!(
+            preserved,
+            Some("https://xhamster.com/videos/some-video-123"),
+            "Referer header must survive expand (xhamster CDN rejects without it)"
+        );
+
+        assert!(
+            expanded[1].fragments.is_none(),
+            "Https MP4 row must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://cdn.example.com/v_720p.mp4");
+        assert_eq!(expanded[1].height, Some(720));
     }
 }
