@@ -37,6 +37,7 @@ pub mod dash;
 pub mod json_ld;
 mod metadata;
 mod parsing;
+pub(crate) mod protocol;
 pub mod selector_macro;
 mod selectors;
 mod string_utils;
@@ -51,6 +52,7 @@ use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use selectors::*;
+pub(crate) use protocol::protocol_for_url;
 
 /// Maximum URL length to prevent memory exhaustion attacks
 /// Re-exported from rdlp-security for backward compatibility
