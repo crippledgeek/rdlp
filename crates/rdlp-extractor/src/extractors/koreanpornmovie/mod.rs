@@ -627,11 +627,9 @@ fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<Format> {
 
 /// Create a Format with video codec markers set so the UI shows it as video, not audio-only.
 fn make_video_format(format_id: &str, url: &str) -> Format {
-    let protocol = if url.contains(".m3u8") {
-        DownloadProtocol::M3u8
-    } else {
-        DownloadProtocol::Https
-    };
+    let protocol = url::Url::parse(url)
+        .map(|u| crate::base::common::protocol_for_url(&u))
+        .unwrap_or(DownloadProtocol::Https);
     let ext = url
         .split('.')
         .next_back()
@@ -895,5 +893,27 @@ mod tests {
             "Https MP4 row must pass through untouched"
         );
         assert_eq!(expanded[1].url, "https://koreanporn.stream/Movie.mp4");
+    }
+
+    #[test]
+    fn make_video_format_rejects_m3u8_substring_in_query() {
+        // Regression: issue #268. A crafted MP4 URL with `.m3u8` in the
+        // query parameter must NOT classify as HLS.
+        let f = make_video_format("test", "https://host/clip.mp4?ref=foo.m3u8");
+        assert!(
+            matches!(f.protocol, rdlp_types::DownloadProtocol::Https),
+            "expected Https, got {:?}",
+            f.protocol
+        );
+    }
+
+    #[test]
+    fn make_video_format_classifies_m3u8_path_as_hls() {
+        let f = make_video_format("test", "https://host/master.m3u8");
+        assert!(
+            matches!(f.protocol, rdlp_types::DownloadProtocol::M3u8),
+            "expected M3u8, got {:?}",
+            f.protocol
+        );
     }
 }
