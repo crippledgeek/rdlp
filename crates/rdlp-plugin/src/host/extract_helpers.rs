@@ -1091,6 +1091,358 @@ hi.m3u8\n";
         );
     }
 
+    // ---- fetch-options threading tests (Task 3 — expected 8 fail / 2 pass) ---
+
+    fn m3u8_opts(fatal: bool) -> crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options {
+        crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options {
+            ext: None,
+            protocol: None,
+            m3u8_id: None,
+            fatal,
+        }
+    }
+
+    fn fetch_with_headers(
+        headers: Vec<(String, String)>,
+    ) -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+        crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+            headers,
+            query: vec![],
+            body: None,
+        }
+    }
+
+    fn fetch_with_query(
+        query: Vec<(String, String)>,
+    ) -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+        crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+            headers: vec![],
+            query,
+            body: None,
+        }
+    }
+
+    fn fetch_with_body(
+        body: Vec<u8>,
+    ) -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+        crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions {
+            headers: vec![],
+            query: vec![],
+            body: Some(body),
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_m3u8_threads_headers_into_request() {
+        use crate::host::fetch::{FetchCtx};
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/playlist.m3u8";
+        let mut c = ctx();
+        let fixtures = Arc::new(
+            FetchFixtures::new()
+                .with(url, FixtureResponse::ok(b"#EXTM3U\n".to_vec())),
+        );
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+
+        let _ = c
+            .extract_m3u8(
+                url.to_string(),
+                "v".to_string(),
+                m3u8_opts(true),
+                fetch_with_headers(vec![("Authorization".into(), "Bearer abc".into())]),
+            )
+            .await;
+
+        let recorded = fixtures.last_request().expect("request recorded");
+        assert!(
+            recorded.headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer abc"),
+            "headers missing Authorization: {:?}",
+            recorded.headers
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_m3u8_appends_query_params_to_url() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::{FetchFixtures};
+        use std::sync::Arc;
+
+        let url = "https://example.com/playlist.m3u8";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+
+        let _ = c
+            .extract_m3u8(
+                url.to_string(),
+                "v".to_string(),
+                m3u8_opts(false),
+                fetch_with_query(vec![("token".into(), "abc".into())]),
+            )
+            .await;
+
+        let recorded = fixtures.last_request().expect("request recorded");
+        assert!(
+            recorded.url.contains("?token=abc"),
+            "url missing query: {}",
+            recorded.url
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_m3u8_post_with_body() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::FetchFixtures;
+        use std::sync::Arc;
+
+        let url = "https://example.com/playlist.m3u8";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+
+        let _ = c
+            .extract_m3u8(
+                url.to_string(),
+                "v".to_string(),
+                m3u8_opts(false),
+                fetch_with_body(b"x".to_vec()),
+            )
+            .await;
+
+        let recorded = fixtures.last_request().expect("request recorded");
+        assert_eq!(
+            recorded.method, "POST",
+            "method should be POST when body present"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_m3u8_empty_fetch_options_unchanged() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/playlist.m3u8";
+        let mut c = ctx();
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new().with(url, FixtureResponse::ok(b"#EXTM3U\n".to_vec())),
+            )),
+        });
+        let _ = c
+            .extract_m3u8(
+                url.to_string(),
+                "v".to_string(),
+                m3u8_opts(false),
+                empty_fetch(),
+            )
+            .await
+            .expect("extract_m3u8 with empty fetch options");
+    }
+
+    #[tokio::test]
+    async fn extract_mpd_threads_headers_into_request() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        let fixtures = Arc::new(
+            FetchFixtures::new()
+                .with(url, FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec())),
+        );
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                fetch_with_headers(vec![("X-CDN-Token".into(), "xyz".into())]),
+            )
+            .await;
+        let recorded = fixtures.last_request().expect("recorded");
+        assert!(
+            recorded.headers.iter().any(|(k, v)| k == "X-CDN-Token" && v == "xyz"),
+            "headers: {:?}",
+            recorded.headers
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_mpd_appends_query_params_to_url() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::FetchFixtures;
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(false),
+                fetch_with_query(vec![("k".into(), "v".into())]),
+            )
+            .await;
+        let recorded = fixtures.last_request().expect("recorded");
+        assert!(
+            recorded.url.contains("?k=v"),
+            "url: {}",
+            recorded.url
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_mpd_post_with_body() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::FetchFixtures;
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(false),
+                fetch_with_body(b"data".to_vec()),
+            )
+            .await;
+        let recorded = fixtures.last_request().expect("recorded");
+        assert_eq!(recorded.method, "POST");
+    }
+
+    #[tokio::test]
+    async fn extract_mpd_empty_fetch_options_unchanged() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec())),
+            )),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+                empty_fetch(),
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn query_param_with_special_chars_is_url_encoded() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::FetchFixtures;
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(false),
+                fetch_with_query(vec![("k".into(), "a b&c".into())]),
+            )
+            .await;
+        let recorded = fixtures.last_request().expect("recorded");
+        // Space → %20, ampersand → %26
+        assert!(
+            recorded.url.contains("k=a%20b%26c"),
+            "url: {}",
+            recorded.url
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_query_string_in_url_uses_ampersand_separator() {
+        use crate::host::fetch::FetchCtx;
+        use crate::host::fetch_fixtures::FetchFixtures;
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd?x=1";
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        let _ = c
+            .extract_mpd(
+                url.to_string(),
+                "v".to_string(),
+                mpd_opts(false),
+                fetch_with_query(vec![("y".into(), "2".into())]),
+            )
+            .await;
+        let recorded = fixtures.last_request().expect("recorded");
+        // The new param joins with & not ?
+        assert!(
+            recorded.url.contains("x=1&y=2") || recorded.url.contains("y=2&x=1"),
+            "url: {}",
+            recorded.url
+        );
+    }
+
     const WITH_TEXT_TRACKS_MPD: &str =
         include_str!("../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd");
 
