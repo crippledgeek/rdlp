@@ -126,6 +126,12 @@ impl InfoExtractor for XNXXExtractor {
         let format_urls = WgczNetworkBase::extract_format_urls(&webpage);
         let formats = build_formats(&format_urls);
 
+        // Pre-resolve HLS variants into per-variant Format rows so the
+        // downloader can take the Format.fragments fast path. Non-HLS rows
+        // pass through unchanged; expand failures keep the original row
+        // (graceful fallback to the legacy variant-URL path).
+        let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!(
@@ -254,5 +260,51 @@ mod tests {
         if let Some(hls) = &format_urls.hls {
             assert!(hls.contains(".m3u8"), "HLS URL should contain .m3u8: {hls}");
         }
+    }
+
+    /// Regression guard for #258 — confirm the `build_formats` HLS row
+    /// (protocol = `M3u8`) is expanded into per-variant fragments by
+    /// `expand_hls_in_place`, and that the muxed MP4 rows pass through
+    /// unchanged. Catches a wiring break where the helper call is removed
+    /// from `extract` (the M3u8 row would arrive at the downloader without
+    /// pre-resolved fragments).
+    #[tokio::test]
+    async fn build_formats_hls_row_expanded_and_mp4_pass_through() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/xnxx-master.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let format_urls = crate::base::wgcz_network::WgczFormatUrls {
+            hls: Some(format!("{}/xnxx-master.m3u8", server.url())),
+            mp4_low: Some("https://cdn.example.com/v_360p.mp4".to_string()),
+            mp4_high: Some("https://cdn.example.com/v_720p.mp4".to_string()),
+        };
+        let formats = build_formats(&format_urls);
+        assert_eq!(formats.len(), 3, "expect HLS + 2 MP4 rows");
+        assert!(matches!(formats[0].protocol, DownloadProtocol::M3u8));
+        assert!(matches!(formats[1].protocol, DownloadProtocol::Https));
+        assert!(matches!(formats[2].protocol, DownloadProtocol::Https));
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 3);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "HLS row must carry pre-resolved fragments"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        assert!(
+            expanded[1].fragments.is_none() && expanded[2].fragments.is_none(),
+            "MP4 rows must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://cdn.example.com/v_360p.mp4");
+        assert_eq!(expanded[2].url, "https://cdn.example.com/v_720p.mp4");
     }
 }
