@@ -307,7 +307,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             MpdExtraction, MpdFormat, MpdFragment,
         };
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
-        use rdlp_extractor::base::common::dash::expand_dash_representations;
+        use rdlp_extractor::base::common::dash::{expand_dash_representations, DashExpansion};
         use url::Url;
 
         let result: Result<MpdExtraction, FetchError> = async {
@@ -322,7 +322,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             let body =
                 String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
             let base = Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
-            let formats = expand_dash_representations(&body, &base)
+            let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&body, &base)
                 .map_err(|e| FetchError::Network(format!("{e:#}")))?;
 
             let mpd_formats: Vec<MpdFormat> = formats

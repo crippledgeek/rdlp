@@ -19,6 +19,33 @@ use super::segments::{
 /// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
 pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 
+/// One DASH text AdaptationSet representation, projected to a sidecar subtitle.
+///
+/// `language` is `None` when the source AdaptationSet has no `@lang` attribute.
+/// Downstream consumers map `None` → `"und"` per yt-dlp convention.
+#[derive(Debug, Clone)]
+pub struct DashSubtitle {
+    /// BCP-47 language tag, or `None` when the source AdaptationSet has no `@lang`.
+    pub language: Option<String>,
+    /// Direct URL to the subtitle sidecar file.
+    pub url: String,
+    /// File extension derived from the MIME type (e.g. `"vtt"`, `"ttml"`).
+    pub ext: String,
+}
+
+/// Combined output of [`expand_dash_representations`].
+///
+/// `formats` contains video + audio Representations (one per Repr). `subtitles`
+/// contains text AdaptationSet sidecar tracks (single-URL per Repr; fragmented
+/// text tracks are skipped with a warn log — see plan task 4).
+#[derive(Debug, Clone)]
+pub struct DashExpansion {
+    /// Video and audio Representations, one [`Format`] per usable Representation.
+    pub formats: Vec<Format>,
+    /// Text AdaptationSet sidecar tracks. Empty until Task 4 adds detection.
+    pub subtitles: Vec<DashSubtitle>,
+}
+
 /// Parse the MPD body and project each Representation to a [`Format`].
 ///
 /// `mpd_xml` is the response body. `base_url` is the URL the MPD was fetched
@@ -35,7 +62,7 @@ pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 pub fn expand_dash_representations(
     mpd_xml: &str,
     base_url: &Url,
-) -> Result<Vec<Format>, DashExpandError> {
+) -> Result<DashExpansion, DashExpandError> {
     let mpd = dash_mpd::parse(mpd_xml).map_err(|e| DashExpandError::Parse(e.to_string()))?;
 
     if mpd.mpdtype.as_deref() == Some("dynamic") {
@@ -62,6 +89,7 @@ pub fn expand_dash_representations(
 
     let mut drm_dropped = 0usize;
     let mut formats: Vec<Format> = Vec::new();
+    let subtitles: Vec<DashSubtitle> = Vec::new();
 
     for (adapt_idx, adapt) in period.adaptations.iter().enumerate() {
         if !adapt.ContentProtection.is_empty() {
@@ -180,7 +208,7 @@ pub fn expand_dash_representations(
     if formats.is_empty() {
         return Err(DashExpandError::NoUsableReps);
     }
-    Ok(formats)
+    Ok(DashExpansion { formats, subtitles })
 }
 
 /// Map a MIME type to a container file extension.
@@ -317,7 +345,7 @@ mod tests {
     fn segment_template_three_video_two_audio() {
         let xml = load_fixture("segment_template.mpd");
         let base = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
 
         // Fixture defines at least one video Repr + one audio Repr.
         assert!(
@@ -360,7 +388,7 @@ mod tests {
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
         let result = expand_dash_representations(&xml, &base);
         match result {
-            Ok(formats) => {
+            Ok(DashExpansion { formats, subtitles: _ }) => {
                 // None of the returned Formats should be DRM-encumbered.
                 // We can't introspect ContentProtection from a Format, but we
                 // can assert that every returned Format passed the filter.
@@ -377,7 +405,7 @@ mod tests {
     fn multi_period_first_only() {
         let xml = load_fixture("multi_period.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
         // Multi-period fixture has Reps in each period; we only emit period-1's.
         // Asserting non-empty is sufficient — a non-failing parse with at least
         // one Format proves the multi-period warn-and-skip path succeeded.
@@ -388,7 +416,7 @@ mod tests {
     fn mega_rep_cap_at_50() {
         let xml = load_fixture("mega_reps.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
         assert_eq!(formats.len(), 50, "60-Rep MPD should cap at 50");
         // The 50 retained should be the highest-bandwidth Reps (v11..v60).
         // Bandwidth formula: 100000 + i * 10000 → v11 = 210000, v60 = 700000.
@@ -417,7 +445,7 @@ mod tests {
   </Period>
 </MPD>"#;
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let formats = expand_dash_representations(xml, &base).unwrap();
+        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(xml, &base).unwrap();
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].format_id, "dash_v_0_0");
     }
