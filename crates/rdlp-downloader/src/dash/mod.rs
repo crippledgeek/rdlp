@@ -171,4 +171,3 @@ impl Downloader for DashDownloader {
         Ok(None)
     }
 }
-

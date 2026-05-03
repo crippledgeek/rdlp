@@ -98,10 +98,7 @@ pub async fn expand_hls_url(
     }
 }
 
-async fn fetch_playlist_bytes(
-    http: &wreq::Client,
-    url: &str,
-) -> Result<Vec<u8>, HlsExpandError> {
+async fn fetch_playlist_bytes(http: &wreq::Client, url: &str) -> Result<Vec<u8>, HlsExpandError> {
     let resp = http
         .get(url)
         .send()
@@ -188,7 +185,8 @@ fn expand_media_playlist(
         .map_err(|e| HlsExpandError::Parse(format!("invalid media playlist url: {e}")))?;
 
     let resolve = |raw: &str| -> String {
-        base.join(raw).map_or_else(|_| raw.to_string(), |u| u.to_string())
+        base.join(raw)
+            .map_or_else(|_| raw.to_string(), |u| u.to_string())
     };
 
     let mut fragments: Vec<Fragment> = Vec::with_capacity(playlist.segments.len() + 1);

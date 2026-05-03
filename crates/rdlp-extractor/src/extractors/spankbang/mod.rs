@@ -270,7 +270,12 @@ mod tests {
     async fn expand_hls_in_place_preserves_non_m3u8_rows() {
         use rdlp_types::{DownloadProtocol, Format};
 
-        let mp4 = Format::new("1080p", "https://h.com/x.mp4", "mp4", DownloadProtocol::Https);
+        let mp4 = Format::new(
+            "1080p",
+            "https://h.com/x.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
         let http = std::sync::Arc::new(wreq::Client::new());
         let out = super::expand_hls_in_place(vec![mp4.clone()], http).await;
         assert_eq!(out.len(), 1);

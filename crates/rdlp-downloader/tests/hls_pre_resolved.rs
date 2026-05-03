@@ -99,10 +99,26 @@ async fn pre_resolved_fragments_skip_playlist_fetch() {
         DownloadProtocol::M3u8,
     );
     format.fragments = Some(vec![
-        Fragment { url: format!("{base}/init.m4s"),  duration: None,      filesize: None },
-        Fragment { url: format!("{base}/seg-1.m4s"), duration: Some(2.0), filesize: None },
-        Fragment { url: format!("{base}/seg-2.m4s"), duration: Some(2.0), filesize: None },
-        Fragment { url: format!("{base}/seg-3.m4s"), duration: Some(2.0), filesize: None },
+        Fragment {
+            url: format!("{base}/init.m4s"),
+            duration: None,
+            filesize: None,
+        },
+        Fragment {
+            url: format!("{base}/seg-1.m4s"),
+            duration: Some(2.0),
+            filesize: None,
+        },
+        Fragment {
+            url: format!("{base}/seg-2.m4s"),
+            duration: Some(2.0),
+            filesize: None,
+        },
+        Fragment {
+            url: format!("{base}/seg-3.m4s"),
+            duration: Some(2.0),
+            filesize: None,
+        },
     ]);
 
     let tmp = TempDir::new().unwrap();
@@ -146,8 +162,16 @@ async fn fragment_404_propagates_as_error() {
         DownloadProtocol::M3u8,
     );
     format.fragments = Some(vec![
-        Fragment { url: format!("{base}/seg-1.ts"), duration: Some(2.0), filesize: None },
-        Fragment { url: format!("{base}/seg-2.ts"), duration: Some(2.0), filesize: None },
+        Fragment {
+            url: format!("{base}/seg-1.ts"),
+            duration: Some(2.0),
+            filesize: None,
+        },
+        Fragment {
+            url: format!("{base}/seg-2.ts"),
+            duration: Some(2.0),
+            filesize: None,
+        },
     ]);
 
     let tmp = TempDir::new().unwrap();
@@ -161,7 +185,12 @@ async fn fragment_404_propagates_as_error() {
 
 #[tokio::test]
 async fn empty_fragments_vec_writes_empty_file() {
-    let mut format = Format::new("hls", "https://h.com/v.m3u8", "m3u8", DownloadProtocol::M3u8);
+    let mut format = Format::new(
+        "hls",
+        "https://h.com/v.m3u8",
+        "m3u8",
+        DownloadProtocol::M3u8,
+    );
     format.fragments = Some(vec![]);
 
     let tmp = TempDir::new().unwrap();
