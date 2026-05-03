@@ -56,15 +56,13 @@ const EXPECTED_VIDEO_ID: &str = "abc123";
 
 /// Inline page HTML — contains the `data-mpd=` attribute the plugin
 /// extracts via `_search_regex`.
-const PAGE_HTML: &[u8] =
-    b"<html><body data-mpd=\"https://mpd.example.com/v.mpd\"></body></html>";
+const PAGE_HTML: &[u8] = b"<html><body data-mpd=\"https://mpd.example.com/v.mpd\"></body></html>";
 
 /// Real SegmentTemplate MPD fixture from the downloader test suite.
 /// Contains one video `AdaptationSet` (avc1) and one audio `AdaptationSet`
 /// (mp4a) — the assertions verify both sides are returned.
-const MPD_BODY: &[u8] = include_bytes!(
-    "../../rdlp-downloader/tests/fixtures/dash/segment_template.mpd"
-);
+const MPD_BODY: &[u8] =
+    include_bytes!("../../rdlp-downloader/tests/fixtures/dash/segment_template.mpd");
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
