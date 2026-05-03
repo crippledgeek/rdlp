@@ -282,6 +282,8 @@ pub(crate) mod adaptive;
 pub mod chunking;
 /// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
 pub mod dash;
+/// Shared fragment-list downloader for pre-resolved segment URLs (DASH + HLS)
+pub mod fragments;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
 pub mod hls;
 /// HLS download state persistence for resume support
