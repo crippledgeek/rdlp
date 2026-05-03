@@ -3,9 +3,8 @@
 //! Hoisted from the spankbang extractor in PR #258 so every HLS-emitting
 //! extractor can call the same code path. Replaces every `Format` row whose
 //! protocol is `M3u8` or `M3u8Native` with the per-variant rows produced by
-//! [`expand_hls_url`]. On any [`HlsExpandError`] the original row is kept so
-//! the legacy variant-URL download path still handles risky playlists
-//! (encrypted, live, byte-range init, multi-init, etc.).
+//! [`expand_hls_url`]. On any [`HlsExpandError`] the row is dropped entirely
+//! (no fallback to legacy variant-URL path).
 
 use std::sync::Arc;
 
@@ -14,8 +13,8 @@ use rdlp_types::{DownloadProtocol, Format};
 use super::expand::expand_hls_url;
 
 /// Replace every M3u8 / M3u8Native row in `formats` with its per-variant
-/// expansion. Non-HLS rows pass through unchanged. Expand failures keep the
-/// original row (graceful fallback to the legacy variant-URL path).
+/// expansion. Non-HLS rows pass through unchanged. Expand failures drop the
+/// row entirely (no fallback to legacy variant-URL path).
 pub async fn expand_hls_in_place(formats: Vec<Format>, http: Arc<wreq::Client>) -> Vec<Format> {
     let mut expanded = Vec::with_capacity(formats.len());
     for f in formats {
@@ -27,10 +26,12 @@ pub async fn expand_hls_in_place(formats: Vec<Format>, http: Arc<wreq::Client>) 
                 Ok(rows) => expanded.extend(rows),
                 Err(e) => {
                     log::warn!(
-                        "HLS expand failed for {} ({e}) — falling back to legacy variant-URL path",
+                        "HLS expand failed for {} ({e}) — dropping format row",
                         rdlp_security::sanitize_for_logging(&f.url)
                     );
-                    expanded.push(f);
+                    // Format row is dropped. If all formats fail, the resulting
+                    // Vec is empty and the calling extractor surfaces the
+                    // existing 'No formats found' error path.
                 }
             }
         } else {
@@ -107,7 +108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn keeps_original_on_encrypted() {
+    async fn drops_format_on_encrypted() {
         let mut server = mockito::Server::new_async().await;
         let _media = server
             .mock("GET", "/enc.m3u8")
@@ -124,13 +125,11 @@ mod tests {
 
         let http = Arc::new(wreq::Client::new());
         let out = expand_hls_in_place(vec![f.clone()], http).await;
-        assert_eq!(out.len(), 1, "graceful fallback keeps original");
-        assert_eq!(out[0].url, f.url);
-        assert!(out[0].fragments.is_none(), "no fragments on fallback");
+        assert!(out.is_empty(), "encrypted format must be dropped (no legacy fallback)");
     }
 
     #[tokio::test]
-    async fn keeps_original_on_live() {
+    async fn drops_format_on_live() {
         let mut server = mockito::Server::new_async().await;
         let _media = server
             .mock("GET", "/live.m3u8")
@@ -146,7 +145,6 @@ mod tests {
 
         let http = Arc::new(wreq::Client::new());
         let out = expand_hls_in_place(vec![f.clone()], http).await;
-        assert_eq!(out.len(), 1);
-        assert!(out[0].fragments.is_none());
+        assert!(out.is_empty(), "live format must be dropped (no legacy fallback)");
     }
 }
