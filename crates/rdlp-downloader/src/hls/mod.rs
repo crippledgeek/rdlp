@@ -81,6 +81,9 @@ impl HlsDownloader {
 
     /// Set number of concurrent segment downloads
     #[must_use = "builder methods consume self and return a new instance"]
+    #[deprecated(
+        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
+    )]
     pub fn with_concurrent_segments(mut self, count: usize) -> Self {
         self.concurrent_segments = count.max(1);
         self
@@ -88,6 +91,9 @@ impl HlsDownloader {
 
     /// Set buffer size for segment merging
     #[must_use = "builder methods consume self and return a new instance"]
+    #[deprecated(
+        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
+    )]
     pub const fn with_buffer_size(mut self, size: usize) -> Self {
         self.buffer_size = size;
         self
@@ -102,6 +108,9 @@ impl HlsDownloader {
 
     /// Set merge operation timeout
     #[must_use = "builder methods consume self and return a new instance"]
+    #[deprecated(
+        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
+    )]
     pub const fn with_merge_timeout(mut self, timeout: Duration) -> Self {
         self.merge_timeout = timeout;
         self
@@ -109,6 +118,9 @@ impl HlsDownloader {
 
     /// Set maximum number of segment failures before aborting
     #[must_use = "builder methods consume self and return a new instance"]
+    #[deprecated(
+        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
+    )]
     pub const fn with_max_segment_failures(mut self, max: usize) -> Self {
         self.max_segment_failures = max;
         self
@@ -211,6 +223,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // exercising deprecated builder methods to verify they still compile
     fn test_hls_downloader_builder() {
         let downloader = HlsDownloader::new()
             .with_concurrent_segments(16)
@@ -231,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // exercising deprecated builder method to verify clamp behavior
     fn test_concurrent_segments_minimum() {
         let downloader = HlsDownloader::new().with_concurrent_segments(0);
         // Should be clamped to minimum of 1
