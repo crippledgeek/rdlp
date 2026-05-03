@@ -216,6 +216,16 @@ def extract_m3u8(url, video_id, *, ext=None, protocol=None, m3u8_id=None, fatal=
     return _hxh.extract_m3u8(url, video_id, opts)
 
 
+def extract_mpd(url, video_id, *, mpd_id=None, fatal=True):
+    """Parse a DASH MPD via the host helper. Returns MpdExtraction."""
+    if not _HXH_AVAILABLE:
+        raise RuntimeError(
+            "_host.extract_mpd called outside componentize-py runtime"
+        )
+    opts = _hxh.MpdOptions(mpd_id=mpd_id, fatal=fatal)
+    return _hxh.extract_mpd(url, video_id, opts)
+
+
 def extract_json_ld(html):
     """Extract structured data from JSON-LD ``<script>`` blocks in `html`."""
     if not _HXH_AVAILABLE:

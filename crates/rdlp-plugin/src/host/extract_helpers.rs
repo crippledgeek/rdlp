@@ -294,6 +294,83 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
     }
 
+    async fn extract_mpd(
+        &mut self,
+        url: String,
+        _video_id: String,
+        opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
+    ) -> Result<
+        crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
+        crate::bindings::rdlp::plugin::host_fetch::FetchError,
+    > {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::{
+            MpdExtraction, MpdFormat, MpdFragment,
+        };
+        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
+        use rdlp_extractor::base::common::dash::expand_dash_representations;
+        use url::Url;
+
+        let result: Result<MpdExtraction, FetchError> = async {
+            let req = Request {
+                url: url.clone(),
+                method: "GET".to_string(),
+                headers: vec![],
+                body: None,
+                timeout_ms: Some(30_000),
+            };
+            let resp = self.fetch(req).await?;
+            let body =
+                String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
+            let base = Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
+            let formats = expand_dash_representations(&body, &base)
+                .map_err(|e| FetchError::Network(format!("{e:#}")))?;
+
+            let mpd_formats: Vec<MpdFormat> = formats
+                .into_iter()
+                .map(|f| MpdFormat {
+                    format_id: f.format_id,
+                    url: f.url,
+                    ext: f.ext.clone(),
+                    vcodec: f.vcodec.as_str().map(str::to_owned),
+                    acodec: f.acodec.as_str().map(str::to_owned),
+                    tbr: f.tbr.map(|v| v as f32),
+                    width: f.width,
+                    height: f.height,
+                    fps: f.fps.map(|v| v as f32),
+                    asr: f.asr,
+                    language: f.language,
+                    container: f.container,
+                    manifest_url: Some(url.clone()),
+                    fragment_base_url: f.fragment_base_url,
+                    fragments: f
+                        .fragments
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|fr| MpdFragment {
+                            url: fr.url,
+                            duration: fr.duration,
+                        })
+                        .collect(),
+                })
+                .collect();
+
+            Ok(MpdExtraction {
+                formats: mpd_formats,
+                subtitles: vec![],
+            })
+        }
+        .await;
+
+        match (result, opts.fatal) {
+            (Ok(x), _) => Ok(x),
+            (Err(e), true) => Err(e),
+            (Err(_), false) => Ok(MpdExtraction {
+                formats: vec![],
+                subtitles: vec![],
+            }),
+        }
+    }
+
     async fn extract_json_ld(
         &mut self,
         html: String,
@@ -721,5 +798,273 @@ hi.m3u8\n";
             .unwrap();
         assert_eq!(r.formats.len(), 0);
         assert_eq!(r.subtitles.len(), 0);
+    }
+
+    // ---- DASH (extract_mpd) tests ----------------------------------------
+
+    const SEGMENT_TEMPLATE_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/segment_template.mpd");
+    const DYNAMIC_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/dynamic.mpd");
+    const WITH_DRM_MPD: &str =
+        include_str!("../../../rdlp-downloader/tests/fixtures/dash/with_drm.mpd");
+
+    fn mpd_opts(fatal: bool) -> crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions {
+        crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions {
+            mpd_id: None,
+            fatal,
+        }
+    }
+
+    /// Happy-path: a valid static MPD with video and audio representations yields
+    /// ≥2 formats (one video-only, one audio-only), each with non-empty fragments,
+    /// a `fragment_base_url`, `manifest_url` matching the fetch URL, and container `"mp4_dash"`.
+    ///
+    /// EXPECTED TO FAIL against the Task-4 stub (returns empty formats vec).
+    #[tokio::test]
+    async fn extract_mpd_returns_formats_via_fixture() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://example.com/manifest.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(FetchFixtures::new().with(
+                url,
+                FixtureResponse::ok(SEGMENT_TEMPLATE_MPD.as_bytes().to_vec()),
+            ))),
+        });
+
+        let r = c
+            .extract_mpd(url.to_string(), "vid".to_string(), mpd_opts(true))
+            .await
+            .expect("extract_mpd");
+
+        assert!(
+            r.formats.len() >= 2,
+            "expected ≥2 formats, got {}",
+            r.formats.len()
+        );
+        assert!(
+            r.formats
+                .iter()
+                .any(|f| f.vcodec.is_some() && f.acodec.is_none()),
+            "expected at least one video-only format"
+        );
+        assert!(
+            r.formats
+                .iter()
+                .any(|f| f.acodec.is_some() && f.vcodec.is_none()),
+            "expected at least one audio-only format"
+        );
+        for f in &r.formats {
+            assert!(
+                !f.fragments.is_empty(),
+                "fragments must be non-empty for {}",
+                f.format_id
+            );
+            assert!(
+                f.fragment_base_url.is_some(),
+                "fragment_base_url must be set for {}",
+                f.format_id
+            );
+            assert_eq!(
+                f.manifest_url.as_deref(),
+                Some(url),
+                "manifest_url must match fetch URL for {}",
+                f.format_id
+            );
+            // expand_dash_representations sets container = "{ext}_dash"
+            let expected_container = format!("{}_dash", f.ext);
+            assert_eq!(
+                f.container.as_deref(),
+                Some(expected_container.as_str()),
+                "container must be {}_dash for {}",
+                f.ext,
+                f.format_id
+            );
+        }
+    }
+
+    /// Non-fatal path: when no `FetchCtx` is installed the fetch capability is absent.
+    /// With fatal=false the error must be swallowed and an empty extraction returned.
+    ///
+    /// NOTE: This test MAY PASS coincidentally against the Task-4 stub, because the
+    /// stub returns `Ok(MpdExtraction { formats: vec![], subtitles: vec![] })` regardless
+    /// of input — the same value this test asserts on. The coincidental pass does NOT
+    /// indicate correctness; it merely means the stub and the intended behavior agree on
+    /// the empty-output shape for this one case. The real non-fatal path requires the
+    /// implementation to check for a missing `FetchCtx` and swallow the error.
+    #[tokio::test]
+    async fn extract_mpd_non_fatal_swallows_fetch_failure() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+
+        let mut c = ctx();
+        c.fetch = None;
+        let r = c
+            .extract_mpd(
+                "https://x/m.mpd".to_string(),
+                "v".to_string(),
+                mpd_opts(false),
+            )
+            .await
+            .expect("non-fatal returns Ok");
+        assert!(r.formats.is_empty());
+        assert!(r.subtitles.is_empty());
+    }
+
+    /// Fatal path: when no `FetchCtx` is installed and `fatal=true` the error must propagate.
+    ///
+    /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
+    #[tokio::test]
+    async fn extract_mpd_fatal_propagates_fetch_failure() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+
+        let mut c = ctx();
+        c.fetch = None;
+        let err = c
+            .extract_mpd(
+                "https://x/m.mpd".to_string(),
+                "v".to_string(),
+                mpd_opts(true),
+            )
+            .await
+            .expect_err("fatal must propagate");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("fetch") || msg.contains("capability"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    /// A dynamic/live MPD must be refused with an error mentioning "dynamic".
+    ///
+    /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
+    #[tokio::test]
+    async fn extract_mpd_dynamic_mpd_returns_fetch_error() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://x/m.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(DYNAMIC_MPD.as_bytes().to_vec())),
+            )),
+        });
+        let err = c
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .await
+            .expect_err("dynamic MPD must error");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("dynamic"),
+            "expected 'dynamic' in error: {msg}"
+        );
+    }
+
+    /// A DRM-protected representation must be filtered out; non-DRM sibling representations
+    /// must survive.
+    ///
+    /// `with_drm.mpd` has DRM only on the video representation; the audio representation
+    /// has no `ContentProtection`. The extraction must drop the video and return only the audio.
+    #[tokio::test]
+    async fn extract_mpd_drm_protected_reps_are_dropped() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://x/m.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(WITH_DRM_MPD.as_bytes().to_vec())),
+            )),
+        });
+        let r = c
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .await
+            .expect("audio rep survives DRM filtering");
+        assert_eq!(r.formats.len(), 1, "only the audio rep should survive");
+        let f = r.formats.first().expect("len asserted above");
+        assert!(f.acodec.is_some(), "expected audio codec");
+        assert!(f.vcodec.is_none(), "DRM video rep must be dropped");
+    }
+
+    /// Non-UTF-8 bytes in the response body must cause an error (MPD is XML, must be
+    /// valid UTF-8 for parsing).
+    ///
+    /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
+    /// Note: `FixtureResponse::ok` accepts impl `Into<Vec<u8>>`, so raw bytes work directly —
+    /// no `ok_bytes` variant is needed.
+    #[tokio::test]
+    async fn extract_mpd_invalid_utf8_returns_fetch_error() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://x/m.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new().with(url, FixtureResponse::ok(vec![0xff_u8, 0xfe, 0xfd])),
+            )),
+        });
+        let err = c
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .await
+            .expect_err("invalid utf-8 must error");
+        assert!(
+            matches!(err, FetchError::Network(_)),
+            "expected FetchError::Network, got {err:?}"
+        );
+    }
+
+    /// Well-formed XML that is not an MPD document must cause an error.
+    ///
+    /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
+    #[tokio::test]
+    async fn extract_mpd_unparseable_xml_returns_fetch_error() {
+        use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+        use crate::bindings::rdlp::plugin::host_fetch::FetchError;
+        use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
+        use std::sync::Arc;
+
+        let url = "https://x/m.mpd";
+        let mut c = ctx();
+        c.fetch = Some(crate::host::fetch::FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::new(
+                FetchFixtures::new()
+                    .with(url, FixtureResponse::ok(b"<not-mpd></not-mpd>".to_vec())),
+            )),
+        });
+        let err = c
+            .extract_mpd(url.to_string(), "v".to_string(), mpd_opts(true))
+            .await
+            .expect_err("non-MPD XML must error");
+        assert!(
+            matches!(err, FetchError::Network(_)),
+            "expected FetchError::Network, got {err:?}"
+        );
     }
 }
