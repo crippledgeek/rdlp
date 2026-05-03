@@ -168,7 +168,15 @@ impl InfoExtractor for XVideosExtractor {
         })?;
 
         let html = BaseExtractor::fetch_webpage(url, ctx).await?;
-        Self::build_info(&html, &eid, url)
+        let mut info = Self::build_info(&html, &eid, url)?;
+
+        // Pre-resolve the HLS variant playlist into per-variant Format rows so
+        // the downloader can take the Format.fragments fast path. Non-HLS rows
+        // pass through unchanged; expand failures keep the original row
+        // (graceful fallback to the legacy variant-URL path).
+        info.formats = crate::hls::expand_hls_in_place(info.formats, ctx.http_client.clone()).await;
+
+        Ok(info)
     }
 }
 
@@ -299,5 +307,65 @@ mod tests {
         assert!(!info.title.is_empty());
         assert_eq!(info.id, "ooumovia9b7");
         assert!(!info.formats.is_empty());
+    }
+
+    /// Regression guard for #258 — confirm an `M3u8Native` HLS row produced
+    /// by `build_info` is expanded into per-variant fragments by
+    /// `expand_hls_in_place`, and that the muxed MP4 rows pass through
+    /// unchanged. Catches a wiring break where the helper call is removed
+    /// from `extract` (the M3u8Native row would arrive at the downloader
+    /// without pre-resolved fragments).
+    #[tokio::test]
+    async fn hls_native_row_expanded_and_mp4_pass_through() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/xvideos-master.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let hls_url = format!("{}/xvideos-master.m3u8", server.url());
+        let mut hls = Format::new("hls-0", &hls_url, "m3u8", DownloadProtocol::M3u8Native);
+        hls.vcodec = Codec::from("h264".to_string());
+        hls.acodec = Codec::from("aac".to_string());
+        hls.container = Some("m3u8".to_string());
+
+        let mut hd = Format::new(
+            "mp4-hd",
+            "https://cdn.example.com/v_720p.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        hd.height = Some(720);
+        hd.container = Some("mp4".to_string());
+
+        let mut sd = Format::new(
+            "mp4-sd",
+            "https://cdn.example.com/v_360p.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        sd.height = Some(360);
+        sd.container = Some("mp4".to_string());
+
+        let formats = vec![hls, hd, sd];
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 3);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "M3u8Native row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        assert!(
+            expanded[1].fragments.is_none() && expanded[2].fragments.is_none(),
+            "MP4 rows must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://cdn.example.com/v_720p.mp4");
+        assert_eq!(expanded[2].url, "https://cdn.example.com/v_360p.mp4");
     }
 }
