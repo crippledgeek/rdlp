@@ -1,4 +1,4 @@
-package rdlp:plugin@0.2.0;
+package rdlp:plugin@0.3.0;
 
 interface host-fetch {
     record request {
@@ -112,6 +112,15 @@ interface host-extract-helpers {
         ext: option<string>,
     }
 
+    /// Caller-supplied HTTP options threaded into the underlying fetch.
+    /// `headers` and `query` are key-value lists — duplicate keys are
+    /// preserved verbatim. `body`, when present, switches the method to POST.
+    record fetch-options {
+        headers: list<tuple<string, string>>,
+        query: list<tuple<string, string>>,
+        body: option<list<u8>>,
+    }
+
     record m3u8-extraction {
         formats: list<m3u8-format>,
         subtitles: list<extract-helpers-subtitle>,
@@ -152,8 +161,12 @@ interface host-extract-helpers {
     search-json: func(start-pattern: string, end-pattern: string,
                       haystack: string) -> option<string>;
 
-    extract-m3u8: func(url: string, video-id: string, opts: m3u8-options)
-                    -> result<m3u8-extraction, fetch-error>;
+    extract-m3u8: func(
+        url: string,
+        video-id: string,
+        opts: m3u8-options,
+        fetch: fetch-options,
+    ) -> result<m3u8-extraction, fetch-error>;
 
     extract-json-ld: func(html: string) -> option<json-ld-video>;
 
@@ -190,6 +203,10 @@ interface host-extract-helpers {
         subtitles: list<extract-helpers-subtitle>,
     }
 
-    extract-mpd: func(url: string, video-id: string, opts: mpd-options)
-                    -> result<mpd-extraction, fetch-error>;
+    extract-mpd: func(
+        url: string,
+        video-id: string,
+        opts: mpd-options,
+        fetch: fetch-options,
+    ) -> result<mpd-extraction, fetch-error>;
 }
