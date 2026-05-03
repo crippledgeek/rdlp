@@ -140,8 +140,7 @@ pub fn expand_dash_representations(
                 // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
                 // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
                 let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
-                let plan =
-                    build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
+                let plan = build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
                 if plan.is_empty() {
                     let ext = mime_to_sub_ext(mime, codecs_str);
                     subtitles.push(DashSubtitle {
@@ -152,7 +151,8 @@ pub fn expand_dash_representations(
                 } else {
                     log::warn!(
                         "DASH: skipping fragmented text track at adapt={} repr={} (SegmentTemplate subs not yet supported)",
-                        adapt_idx, repr_idx,
+                        adapt_idx,
+                        repr_idx,
                     );
                 }
                 continue;
@@ -394,7 +394,10 @@ mod tests {
     fn segment_template_three_video_two_audio() {
         let xml = load_fixture("segment_template.mpd");
         let base = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
-        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
 
         // Fixture defines at least one video Repr + one audio Repr.
         assert!(
@@ -437,7 +440,10 @@ mod tests {
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
         let result = expand_dash_representations(&xml, &base);
         match result {
-            Ok(DashExpansion { formats, subtitles: _ }) => {
+            Ok(DashExpansion {
+                formats,
+                subtitles: _,
+            }) => {
                 // None of the returned Formats should be DRM-encumbered.
                 // We can't introspect ContentProtection from a Format, but we
                 // can assert that every returned Format passed the filter.
@@ -454,7 +460,10 @@ mod tests {
     fn multi_period_first_only() {
         let xml = load_fixture("multi_period.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
         // Multi-period fixture has Reps in each period; we only emit period-1's.
         // Asserting non-empty is sufficient — a non-failing parse with at least
         // one Format proves the multi-period warn-and-skip path succeeded.
@@ -465,7 +474,10 @@ mod tests {
     fn mega_rep_cap_at_50() {
         let xml = load_fixture("mega_reps.mpd");
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(&xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(&xml, &base).unwrap();
         assert_eq!(formats.len(), 50, "60-Rep MPD should cap at 50");
         // The 50 retained should be the highest-bandwidth Reps (v11..v60).
         // Bandwidth formula: 100000 + i * 10000 → v11 = 210000, v60 = 700000.
@@ -494,16 +506,18 @@ mod tests {
   </Period>
 </MPD>"#;
         let base = Url::parse("https://cdn.example.com/m.mpd").unwrap();
-        let DashExpansion { formats, subtitles: _ } = expand_dash_representations(xml, &base).unwrap();
+        let DashExpansion {
+            formats,
+            subtitles: _,
+        } = expand_dash_representations(xml, &base).unwrap();
         assert_eq!(formats.len(), 1);
         assert_eq!(formats[0].format_id, "dash_v_0_0");
     }
 
     // ---- DASH text-AdaptationSet expansion tests ------------------------------
 
-    const WITH_TEXT_TRACKS_MPD: &str = include_str!(
-        "../../../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd"
-    );
+    const WITH_TEXT_TRACKS_MPD: &str =
+        include_str!("../../../../../rdlp-downloader/tests/fixtures/dash/with_text_tracks.mpd");
 
     /// Inline MPD: one fragmented text track (SegmentTemplate-driven). Used
     /// to verify the expansion logs a warning and skips it instead of emitting
@@ -554,7 +568,10 @@ mod tests {
         let langs: Vec<Option<&str>> = r.subtitles.iter().map(|s| s.language.as_deref()).collect();
         assert!(langs.contains(&Some("en")), "en sub present: {langs:?}");
         assert!(langs.contains(&Some("sv")), "sv sub present: {langs:?}");
-        assert!(langs.contains(&None), "lang-less sub present (None): {langs:?}");
+        assert!(
+            langs.contains(&None),
+            "lang-less sub present (None): {langs:?}"
+        );
 
         let exts: Vec<&str> = r.subtitles.iter().map(|s| s.ext.as_str()).collect();
         assert!(exts.contains(&"ttml"), "ttml ext present: {exts:?}");
@@ -564,9 +581,16 @@ mod tests {
     #[test]
     fn expand_assigns_none_when_lang_attr_missing() {
         let r = expand_dash_representations(WITH_TEXT_TRACKS_MPD, &text_test_base_url()).unwrap();
-        let lang_less = r.subtitles.iter().find(|s| s.language.is_none())
+        let lang_less = r
+            .subtitles
+            .iter()
+            .find(|s| s.language.is_none())
             .expect("lang-less sub");
-        assert!(lang_less.url.ends_with("subs/und.vtt"), "url: {}", lang_less.url);
+        assert!(
+            lang_less.url.ends_with("subs/und.vtt"),
+            "url: {}",
+            lang_less.url
+        );
         assert_eq!(lang_less.ext, "vtt");
     }
 
@@ -574,7 +598,11 @@ mod tests {
     fn expand_skips_fragmented_text_template() {
         let r = expand_dash_representations(FRAGMENTED_TEXT_MPD, &text_test_base_url()).unwrap();
         assert_eq!(r.formats.len(), 1, "video survives");
-        assert_eq!(r.subtitles.len(), 0, "fragmented text track must be skipped");
+        assert_eq!(
+            r.subtitles.len(),
+            0,
+            "fragmented text track must be skipped"
+        );
     }
 
     #[test]

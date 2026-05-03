@@ -307,7 +307,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             ExtractHelpersSubtitle, MpdExtraction, MpdFormat, MpdFragment,
         };
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
-        use rdlp_extractor::base::common::dash::{expand_dash_representations, DashExpansion};
+        use rdlp_extractor::base::common::dash::{DashExpansion, expand_dash_representations};
         use url::Url;
 
         let result: Result<MpdExtraction, FetchError> = async {
@@ -1110,8 +1110,11 @@ hi.m3u8\n";
 
         // Build a lookup by language. Lang-less sub maps to empty string at the WIT layer
         // (Python shim handles the und fallback).
-        let by_lang: std::collections::HashMap<&str, &ExtractHelpersSubtitle> =
-            r.subtitles.iter().map(|s| (s.language.as_str(), s)).collect();
+        let by_lang: std::collections::HashMap<&str, &ExtractHelpersSubtitle> = r
+            .subtitles
+            .iter()
+            .map(|s| (s.language.as_str(), s))
+            .collect();
         assert!(
             by_lang.contains_key("en"),
             "en sub present: {:?}",
@@ -1137,7 +1140,11 @@ hi.m3u8\n";
             Some("vtt")
         );
         assert_eq!(
-            by_lang.get("").expect("lang-less sub present").ext.as_deref(),
+            by_lang
+                .get("")
+                .expect("lang-less sub present")
+                .ext
+                .as_deref(),
             Some("vtt")
         );
     }
