@@ -376,6 +376,12 @@ async fn build_info(
         xhr_formats
     };
 
+    // Pre-resolve any HLS variant playlists into per-variant Format rows so the
+    // downloader can take the Format.fragments fast path. Non-HLS rows pass
+    // through unchanged; expand failures keep the original row (graceful
+    // fallback to the legacy variant-URL path).
+    let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+
     let mut info = InfoDict::new(id, title, EPORNER_NAME, page_url);
     info.view_count = views;
     info.duration = duration_iso
@@ -502,6 +508,72 @@ mod tests {
             !meta.actors.is_empty(),
             "Expected at least one actor from live JSON-LD fixture"
         );
+    }
+
+    /// Regression guard for #258 — confirm `parse_xhr_formats` emits an
+    /// `M3u8Native` row when `sources.hls.src` is populated and that the
+    /// hoisted `expand_hls_in_place` helper resolves it into per-variant
+    /// fragments. Catches a wiring break where the helper call is removed
+    /// from `build_info` (rows would arrive at the downloader unexpanded).
+    #[tokio::test]
+    async fn xhr_hls_row_is_expanded_into_fragments() {
+        use rdlp_types::DownloadProtocol;
+
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/media.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let xhr_json = serde_json::json!({
+            "sources": {
+                "hls": { "src": format!("{}/media.m3u8", server.url()) },
+                "mp4": {}
+            }
+        });
+
+        let formats = parse_xhr_formats(&xhr_json);
+        assert_eq!(formats.len(), 1, "expect single HLS row");
+        assert!(matches!(formats[0].protocol, DownloadProtocol::M3u8Native));
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+        assert_eq!(expanded.len(), 1);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "HLS row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+    }
+
+    /// Non-HLS rows (the EPorner /dload/ MP4 fast path) MUST pass through
+    /// `expand_hls_in_place` unchanged. Guards against a regression where
+    /// the helper accidentally rewrites `Https` rows.
+    #[tokio::test]
+    async fn dload_mp4_rows_pass_through_unchanged() {
+        let formats = parse_dload_formats(
+            "https://www.eporner.com/video-svXh0Ne27Ig/harleysummers/",
+            PAGE_FIXTURE,
+        );
+        assert!(!formats.is_empty(), "fixture must yield /dload/ rows");
+        let count = formats.len();
+        let originals: Vec<(String, String)> = formats
+            .iter()
+            .map(|f| (f.format_id.clone(), f.url.clone()))
+            .collect();
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+        assert_eq!(expanded.len(), count, "row count preserved");
+        for (i, f) in expanded.iter().enumerate() {
+            assert_eq!(f.format_id, originals[i].0);
+            assert_eq!(f.url, originals[i].1);
+            assert!(f.fragments.is_none(), "non-HLS row must not gain fragments");
+        }
     }
 
     /// Regression guard for issue #207 — EPorner thumbnail rendered empty

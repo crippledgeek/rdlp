@@ -29,35 +29,6 @@ const SPANKBANG_NAME: &str = "SpankBang";
 const SPANKBANG_PRIORITY: i32 = 100;
 const FORMATS_API_URL: &str = "https://spankbang.com/api/videos/stream";
 
-/// Post-process a `Vec<Format>`, replacing M3u8 entries with the per-variant
-/// rows produced by [`crate::hls::expand_hls_url`]. On expand failure the
-/// original Format row is kept so the legacy variant-URL path still handles
-/// risky playlists (encrypted, live, byte-range init, multi-init, etc.).
-async fn expand_hls_in_place(
-    formats: Vec<rdlp_types::Format>,
-    http: std::sync::Arc<wreq::Client>,
-) -> Vec<rdlp_types::Format> {
-    use rdlp_types::DownloadProtocol;
-    let mut expanded = Vec::with_capacity(formats.len());
-    for f in formats {
-        if matches!(f.protocol, DownloadProtocol::M3u8) {
-            match crate::hls::expand_hls_url(&f, std::sync::Arc::clone(&http)).await {
-                Ok(rows) => expanded.extend(rows),
-                Err(e) => {
-                    log::warn!(
-                        "HLS expand failed for {} ({e}) — falling back to legacy variant-URL path",
-                        rdlp_security::sanitize_for_logging(&f.url)
-                    );
-                    expanded.push(f);
-                }
-            }
-        } else {
-            expanded.push(f);
-        }
-    }
-    expanded
-}
-
 /// SpankBang site extractor.
 #[derive(Default)]
 pub struct SpankBangExtractor;
@@ -167,7 +138,9 @@ impl InfoExtractor for SpankBangExtractor {
                 "[spankbang] inline stream_data produced {} formats",
                 formats.len()
             );
-            formats = expand_hls_in_place(formats, std::sync::Arc::clone(&ctx.http_client)).await;
+            formats =
+                crate::hls::expand_hls_in_place(formats, std::sync::Arc::clone(&ctx.http_client))
+                    .await;
         }
 
         if formats.is_empty() {
@@ -181,7 +154,9 @@ impl InfoExtractor for SpankBangExtractor {
             })?;
             let data = Self::fetch_formats_api(ctx, &key, &canonical).await?;
             formats = formats::build_formats(&data);
-            formats = expand_hls_in_place(formats, std::sync::Arc::clone(&ctx.http_client)).await;
+            formats =
+                crate::hls::expand_hls_in_place(formats, std::sync::Arc::clone(&ctx.http_client))
+                    .await;
         }
 
         if formats.is_empty() {
@@ -240,94 +215,5 @@ mod tests {
     fn name_matches_constant() {
         let ext = SpankBangExtractor::new();
         assert_eq!(ext.name(), "SpankBang");
-    }
-
-    #[tokio::test]
-    async fn expand_hls_in_place_replaces_m3u8_rows_with_fragments() {
-        use rdlp_types::{DownloadProtocol, Format};
-
-        let mut server = mockito::Server::new_async().await;
-        let _media = server
-            .mock("GET", "/v.m3u8")
-            .with_body(
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
-                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
-            )
-            .create_async()
-            .await;
-
-        let url = format!("{}/v.m3u8", server.url());
-        let f = Format::new("hls", &url, "m3u8", DownloadProtocol::M3u8);
-
-        let http = std::sync::Arc::new(wreq::Client::new());
-        let out = super::expand_hls_in_place(vec![f], http).await;
-        assert_eq!(out.len(), 1);
-        assert!(out[0].fragments.is_some());
-        assert_eq!(out[0].fragments.as_ref().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn expand_hls_in_place_preserves_non_m3u8_rows() {
-        use rdlp_types::{DownloadProtocol, Format};
-
-        let mp4 = Format::new(
-            "1080p",
-            "https://h.com/x.mp4",
-            "mp4",
-            DownloadProtocol::Https,
-        );
-        let http = std::sync::Arc::new(wreq::Client::new());
-        let out = super::expand_hls_in_place(vec![mp4.clone()], http).await;
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].format_id, "1080p");
-        assert!(out[0].fragments.is_none(), "MP4 row untouched");
-    }
-
-    #[tokio::test]
-    async fn expand_hls_in_place_keeps_original_on_encrypted() {
-        use rdlp_types::{DownloadProtocol, Format};
-
-        let mut server = mockito::Server::new_async().await;
-        let _media = server
-            .mock("GET", "/enc.m3u8")
-            .with_body(
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
-                 #EXT-X-KEY:METHOD=AES-128,URI=\"https://h.com/key\"\n\
-                 #EXTINF:6.0,\nseg-1.ts\n#EXT-X-ENDLIST\n",
-            )
-            .create_async()
-            .await;
-
-        let url = format!("{}/enc.m3u8", server.url());
-        let f = Format::new("hls", &url, "m3u8", DownloadProtocol::M3u8);
-
-        let http = std::sync::Arc::new(wreq::Client::new());
-        let out = super::expand_hls_in_place(vec![f.clone()], http).await;
-        assert_eq!(out.len(), 1, "graceful fallback keeps original");
-        assert_eq!(out[0].url, f.url);
-        assert!(out[0].fragments.is_none(), "no fragments on fallback");
-    }
-
-    #[tokio::test]
-    async fn expand_hls_in_place_keeps_original_on_live() {
-        use rdlp_types::{DownloadProtocol, Format};
-
-        let mut server = mockito::Server::new_async().await;
-        let _media = server
-            .mock("GET", "/live.m3u8")
-            .with_body(
-                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
-                 #EXTINF:6.0,\nseg-1.ts\n", // no #EXT-X-ENDLIST
-            )
-            .create_async()
-            .await;
-
-        let url = format!("{}/live.m3u8", server.url());
-        let f = Format::new("hls", &url, "m3u8", DownloadProtocol::M3u8);
-
-        let http = std::sync::Arc::new(wreq::Client::new());
-        let out = super::expand_hls_in_place(vec![f.clone()], http).await;
-        assert_eq!(out.len(), 1);
-        assert!(out[0].fragments.is_none());
     }
 }
