@@ -414,7 +414,8 @@ jobs:
             examples/plugins/ytdlp-golden/simple-html
             examples/plugins/ytdlp-golden/json-traversal
             examples/plugins/ytdlp-golden/m3u8-with-fallback
-          key: golden-wasm-${{ runner.os }}-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt', 'tools/ytdlp-compat/rdlp_ytdlp_compat/**/*.py', 'crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs', 'crates/rdlp-plugin/wit/**/*.wit', 'examples/plugins/svt/svt.py', 'examples/plugins/xxxymovies/xxxymovies.py', 'examples/plugins/ytdlp-golden/*.py') }}
+            examples/plugins/mpd-golden/mpd-golden
+          key: golden-wasm-${{ runner.os }}-${{ hashFiles('tools/ytdlp-compat/requirements-dev.txt', 'tools/ytdlp-compat/rdlp_ytdlp_compat/**/*.py', 'crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs', 'crates/rdlp-plugin/wit/**/*.wit', 'examples/plugins/svt/svt.py', 'examples/plugins/xxxymovies/xxxymovies.py', 'examples/plugins/ytdlp-golden/*.py', 'examples/plugins/mpd-golden/mpd_golden.py') }}
 
       - name: Run all goldens
         # Iterates every `crates/rdlp-plugin/tests/*_golden.rs` file —
