@@ -1,7 +1,7 @@
 //! HLS master/media playlist expansion into pre-resolved `Format` entries
 //! with `Format.fragments` populated.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rdlp_types::{Format, Fragment};
@@ -109,7 +109,16 @@ pub async fn expand_hls_url(
     seed: &Format,
     http: Arc<wreq::Client>,
 ) -> Result<Vec<Format>, HlsExpandError> {
-    let bytes = fetch_playlist_bytes(&http, &seed.url).await?;
+    let headers = seed.http_headers.as_ref();
+    // Seed origin (scheme + host + port) — used to gate cross-origin header
+    // forwarding on variant fetches. `Url::origin()` returns Opaque for URLs
+    // without a defined tuple origin (e.g. data:); Opaque values compare
+    // not-equal, so the cross-origin check defaults to the safe "drop headers"
+    // outcome when either side cannot be parsed.
+    let seed_origin = url::Url::parse(&seed.url).ok().map(|u| u.origin());
+
+    // Master fetch: always to seed.url — same origin by definition, headers safe.
+    let bytes = fetch_playlist_bytes(&http, &seed.url, headers).await?;
     let playlist = m3u8_rs::parse_playlist_res(&bytes)
         .map_err(|e| HlsExpandError::Parse(format!("playlist: {e:?}")))?;
 
@@ -137,7 +146,18 @@ pub async fn expand_hls_url(
                     .map_err(|e| HlsExpandError::Parse(format!("variant uri: {e}")))?
                     .to_string();
                 validate_resolved_url(&media_url)?;
-                let media_bytes = fetch_playlist_bytes(&http, &media_url).await?;
+                // Cross-origin header forwarding is suppressed: a malicious or
+                // compromised master playlist whose variant URI points to an
+                // attacker-controlled CDN must NOT receive Referer / Cookie /
+                // Authorization or any other operator-set header. Only forward
+                // when the variant's origin (scheme+host+port) matches the
+                // seed's origin.
+                let same_origin = match (&seed_origin, url::Url::parse(&media_url).ok()) {
+                    (Some(a), Some(b)) => *a == b.origin(),
+                    _ => false,
+                };
+                let variant_headers = if same_origin { headers } else { None };
+                let media_bytes = fetch_playlist_bytes(&http, &media_url, variant_headers).await?;
                 let f = expand_media_playlist(seed, &media_url, &media_bytes)?;
                 out.push(f);
             }
@@ -146,10 +166,25 @@ pub async fn expand_hls_url(
     }
 }
 
-async fn fetch_playlist_bytes(http: &wreq::Client, url: &str) -> Result<Vec<u8>, HlsExpandError> {
+/// Fetch a playlist body, forwarding the seed Format's `http_headers` (if any)
+/// on the GET request. This is what lets sites like 9anime/Megacloud (which
+/// require a `Referer` header on the master + variant playlist fetches)
+/// successfully reach the per-variant fragment fast path. Without forwarding,
+/// the fetch would 403 and `expand_hls_in_place` would silently fall back to
+/// the legacy variant-URL download path, defeating the optimization.
+async fn fetch_playlist_bytes(
+    http: &wreq::Client,
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+) -> Result<Vec<u8>, HlsExpandError> {
     let safe_url = rdlp_security::sanitize_for_logging(url);
-    let resp = http
-        .get(url)
+    let mut req = http.get(url);
+    if let Some(headers) = headers {
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| HlsExpandError::Network(format!("fetch {safe_url}: {e}")))?;
@@ -774,5 +809,169 @@ http://10.0.0.1/admin
             err,
             HlsExpandError::NoSegments | HlsExpandError::NoVariants | HlsExpandError::LiveStream
         ));
+    }
+
+    /// Regression guard for #258 — `expand_hls_url` MUST forward the seed
+    /// Format's `http_headers` (e.g. `Referer`) on BOTH the master and
+    /// variant playlist GETs. Without this, sites like 9anime/Megacloud
+    /// reject the master fetch with 403 and `expand_hls_in_place` silently
+    /// falls back to the legacy variant-URL path, defeating the optimization.
+    /// The mockito matcher rejects requests missing the header, turning
+    /// "header dropped" into a Network error in this test.
+    #[tokio::test]
+    async fn expand_forwards_seed_http_headers_on_master_and_variant_fetches() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new_async().await;
+
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .match_header("Referer", "https://megacloud.tv/embed-2/e-1/abc?k=1")
+            .with_body(MASTER_ONE_VARIANT)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let _variant = server
+            .mock("GET", "/v720.m3u8")
+            .match_header("Referer", "https://megacloud.tv/embed-2/e-1/abc?k=1")
+            .with_body(MEDIA_PLAIN)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // A "missed" mock fires a 501 if mockito sees a request that doesn't
+        // match the headers above — turning a regression into a fetch error.
+        let _master_unmatched = server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+        let mut h = HashMap::new();
+        h.insert(
+            "Referer".to_string(),
+            "https://megacloud.tv/embed-2/e-1/abc?k=1".to_string(),
+        );
+        s.http_headers = Some(h);
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http)
+            .await
+            .expect("expand must succeed when Referer is forwarded");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fragments.is_some());
+        // Seed header survives onto the expanded row via seed.clone().
+        assert_eq!(
+            out[0]
+                .http_headers
+                .as_ref()
+                .and_then(|h| h.get("Referer"))
+                .map(String::as_str),
+            Some("https://megacloud.tv/embed-2/e-1/abc?k=1")
+        );
+    }
+
+    /// Security regression guard for #258 — cross-host variant fetches MUST
+    /// NOT receive the seed's `http_headers`. A malicious master playlist
+    /// whose variant URI points to an attacker CDN should not exfiltrate
+    /// the operator's Referer/Cookie/Authorization. The mockito matcher
+    /// here expects the variant fetch to arrive WITHOUT a Referer header.
+    /// If header forwarding to cross-host variants regresses, the matcher
+    /// misses and the catch-all 501 fires, surfacing as Network error.
+    #[tokio::test]
+    async fn expand_does_not_forward_seed_headers_to_cross_host_variant() {
+        use mockito::Matcher;
+
+        // Master server — accepts the Referer header (same host as seed).
+        let mut master_server = mockito::Server::new_async().await;
+        // Variant server — different host (loopback but different port =
+        // different origin). The matcher REJECTS any request carrying a
+        // Referer header by requiring its absence.
+        let mut variant_server = mockito::Server::new_async().await;
+
+        // Body of the master playlist points the variant at the OTHER server
+        // (cross-host). Note: build the absolute URL pointing at variant_server.
+        let variant_abs_url = format!("{}/v720.m3u8", variant_server.url());
+        let master_body = format!(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=720x480\n{variant_abs_url}\n"
+        );
+
+        let _master = master_server
+            .mock("GET", "/master.m3u8")
+            .match_header("Referer", "https://operator.example.com/page")
+            .with_body(master_body)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Cross-host variant: must NOT see Referer.
+        let _variant = variant_server
+            .mock("GET", "/v720.m3u8")
+            .match_header("Referer", Matcher::Missing)
+            .with_body(MEDIA_PLAIN)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Catch-all on variant_server: 501 if Referer DID arrive.
+        let _variant_unmatched = variant_server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", master_server.url());
+        let mut h = HashMap::new();
+        h.insert(
+            "Referer".to_string(),
+            "https://operator.example.com/page".to_string(),
+        );
+        s.http_headers = Some(h);
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let out = expand_hls_url(&s, http).await.expect(
+            "expand must succeed: master sees Referer, variant on different host sees nothing",
+        );
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fragments.is_some());
+    }
+
+    /// Negative companion to the test above — proves the test infrastructure
+    /// is real: when the seed has NO `http_headers`, the master fetch hits
+    /// the unmatched-mock 501 path and `expand_hls_url` returns Network err.
+    #[tokio::test]
+    async fn expand_without_seed_headers_fails_when_server_requires_them() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new_async().await;
+
+        // Master mock requires Referer.
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .match_header("Referer", Matcher::Regex(r"^https://".to_string()))
+            .with_body(MASTER_ONE_VARIANT)
+            .create_async()
+            .await;
+
+        // Catch-all returns 501 when Referer is absent.
+        let _unmatched = server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+        s.http_headers = None;
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let err = expand_hls_url(&s, http)
+            .await
+            .expect_err("master fetch must fail without Referer");
+        assert!(matches!(err, HlsExpandError::Network(_)));
     }
 }
