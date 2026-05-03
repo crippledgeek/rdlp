@@ -95,8 +95,14 @@ impl InfoExtractor for GenericExtractor {
 
         // Check for direct media URL
         if let Some(ref pf) = prefetch_result
-            && let Some(info) = try_direct_media(url, pf)?
+            && let Some(mut info) = try_direct_media(url, pf)?
         {
+            // Pre-resolve HLS variant playlists into per-variant Format rows
+            // so the downloader can take the Format.fragments fast path.
+            // Non-HLS rows pass through unchanged; expand failures keep the
+            // original row (graceful fallback to the legacy variant-URL path).
+            info.formats =
+                crate::hls::expand_hls_in_place(info.formats, ctx.http_client.clone()).await;
             return Ok(info);
         }
 
@@ -181,6 +187,12 @@ impl InfoExtractor for GenericExtractor {
         }
 
         info.formats = formats.into_iter().map(detected_to_format).collect();
+
+        // Pre-resolve HLS variant playlists into per-variant Format rows so
+        // the downloader can take the Format.fragments fast path. Non-HLS
+        // rows pass through unchanged; expand failures keep the original row
+        // (graceful fallback to the legacy variant-URL path).
+        info.formats = crate::hls::expand_hls_in_place(info.formats, ctx.http_client.clone()).await;
 
         Ok(info)
     }
@@ -541,5 +553,57 @@ mod tests {
                 "body-sniffed fragments must be pre-resolved"
             );
         }
+    }
+
+    /// Regression guard for #258 — confirm the generic extractor's HLS
+    /// emission paths (both `try_direct_media` for direct .m3u8 URLs and
+    /// the strategy-detected path) feed through `expand_hls_in_place` and
+    /// produce per-variant rows with `Format.fragments` populated.
+    ///
+    /// The wiring in `extract` is what we're locking down: a regression
+    /// that removes either expand call would leave HLS rows with
+    /// `fragments = None`, so this test on the helper-output shape catches
+    /// both.
+    ///
+    /// Strategy-side: synthetic Format vec mirrors what `detected_to_format`
+    /// would emit for an HLS detection (M3u8 protocol seeded from extension
+    /// inference per `protocol_from_url`). Same shape as the other extractor
+    /// wiring tests added for #258.
+    #[tokio::test]
+    async fn generic_hls_row_expanded_and_https_pass_through() {
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", "/generic-master.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let hls_url = format!("{}/generic-master.m3u8", server.url());
+        let hls = Format::new("generic-hls", &hls_url, "m3u8", DownloadProtocol::M3u8);
+        let mp4 = Format::new(
+            "generic-mp4",
+            "https://cdn.example.com/v.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+
+        let formats = vec![hls, mp4];
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let expanded = crate::hls::expand_hls_in_place(formats, http).await;
+
+        assert_eq!(expanded.len(), 2);
+        assert!(
+            expanded[0].fragments.is_some(),
+            "M3u8 row must carry pre-resolved fragments after expand"
+        );
+        assert_eq!(expanded[0].fragments.as_ref().unwrap().len(), 2);
+        assert!(
+            expanded[1].fragments.is_none(),
+            "Https MP4 row must pass through untouched"
+        );
+        assert_eq!(expanded[1].url, "https://cdn.example.com/v.mp4");
     }
 }
