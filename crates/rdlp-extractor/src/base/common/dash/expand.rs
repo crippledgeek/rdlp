@@ -89,7 +89,7 @@ pub fn expand_dash_representations(
 
     let mut drm_dropped = 0usize;
     let mut formats: Vec<Format> = Vec::new();
-    let subtitles: Vec<DashSubtitle> = Vec::new();
+    let mut subtitles: Vec<DashSubtitle> = Vec::new();
 
     for (adapt_idx, adapt) in period.adaptations.iter().enumerate() {
         if !adapt.ContentProtection.is_empty() {
@@ -122,9 +122,39 @@ pub fn expand_dash_representations(
                 .as_deref()
                 .or(adapt.mimeType.as_deref())
                 .unwrap_or("");
+            let codecs_str = repr
+                .codecs
+                .as_deref()
+                .or(adapt.codecs.as_deref())
+                .unwrap_or("");
             let is_video = mime.starts_with("video/");
             let is_audio = mime.starts_with("audio/");
-            if !is_video && !is_audio {
+            let is_text = mime.starts_with("text/")
+                || (mime == "application/mp4"
+                    && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
+            if !is_video && !is_audio && !is_text {
+                continue;
+            }
+
+            if is_text {
+                // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
+                // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
+                let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
+                let plan =
+                    build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
+                if plan.is_empty() {
+                    let ext = mime_to_sub_ext(mime, codecs_str);
+                    subtitles.push(DashSubtitle {
+                        language: adapt_lang.clone(),
+                        url: final_base.to_string(),
+                        ext,
+                    });
+                } else {
+                    log::warn!(
+                        "DASH: skipping fragmented text track at adapt={} repr={} (SegmentTemplate subs not yet supported)",
+                        adapt_idx, repr_idx,
+                    );
+                }
                 continue;
             }
 
@@ -205,7 +235,7 @@ pub fn expand_dash_representations(
         log::warn!("DASH: capped representations at {MAX_REPS_PER_MPD} (dropped {dropped})");
     }
 
-    if formats.is_empty() {
+    if formats.is_empty() && subtitles.is_empty() {
         return Err(DashExpandError::NoUsableReps);
     }
     Ok(DashExpansion { formats, subtitles })
@@ -320,11 +350,23 @@ fn build_fragments(
     Vec::new()
 }
 
-#[cfg(test)]
-fn mime_to_sub_ext(_mime: &str, _codecs: &str) -> String {
-    // Stub: real implementation lands in Task 4 of the DASH-text-subtitle plan.
-    // Returning "ttml" lets Task 3's failing tests compile.
-    "ttml".to_owned()
+/// Derive a yt-dlp-style subtitle ext from an MPD text Representation's
+/// `mimeType` and (for `application/mp4` containers) `codecs`.
+///
+/// Defaults to `"ttml"` for unknown text mime types — defensive, matching
+/// yt-dlp's convention.
+fn mime_to_sub_ext(mime: &str, codecs: &str) -> String {
+    match mime {
+        "text/ttml" | "application/ttml+xml" => "ttml",
+        "text/vtt" => "vtt",
+        "application/mp4" => match codecs {
+            "stpp" | "ttml" | "dfxp" => "ttml",
+            "wvtt" => "vtt",
+            _ => "ttml",
+        },
+        _ => "ttml",
+    }
+    .to_owned()
 }
 
 #[cfg(test)]
