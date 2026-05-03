@@ -101,21 +101,33 @@ async fn pre_resolved_fragments_skip_playlist_fetch() {
     format.fragments = Some(vec![
         Fragment {
             url: format!("{base}/init.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-1.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-2.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-3.m4s"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
@@ -164,11 +176,17 @@ async fn fragment_404_propagates_as_error() {
     format.fragments = Some(vec![
         Fragment {
             url: format!("{base}/seg-1.ts"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },
         Fragment {
             url: format!("{base}/seg-2.ts"),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(2.0),
             filesize: None,
         },

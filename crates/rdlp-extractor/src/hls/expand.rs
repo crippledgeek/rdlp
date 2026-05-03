@@ -296,6 +296,9 @@ fn expand_media_playlist(
     if let Some(first_init) = playlist.segments.iter().find_map(|s| s.map.as_ref()) {
         fragments.push(Fragment {
             url: resolve(&first_init.uri)?,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         });
@@ -304,6 +307,9 @@ fn expand_media_playlist(
     for seg in &playlist.segments {
         fragments.push(Fragment {
             url: resolve(&seg.uri)?,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(f64::from(seg.duration)),
             filesize: None,
         });

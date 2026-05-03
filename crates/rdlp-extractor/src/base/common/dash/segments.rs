@@ -155,6 +155,9 @@ pub fn resolve_segment_template(
         let init_url = substitute_template(init_template, repr_id, bandwidth, None, None);
         fragments.push(Fragment {
             url: init_url,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         });
@@ -164,6 +167,9 @@ pub fn resolve_segment_template(
         let url = substitute_template(&plan.media, repr_id, bandwidth, Some(number), None);
         fragments.push(Fragment {
             url,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: Some(segment_duration_seconds),
             filesize: None,
         });
@@ -207,6 +213,9 @@ pub fn resolve_segment_timeline(
         let url = substitute_template(init_template, repr_id, bandwidth, None, None);
         fragments.push(Fragment {
             url,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         });
@@ -234,6 +243,9 @@ pub fn resolve_segment_timeline(
             let duration_seconds = entry.d as f64 / plan.timescale as f64;
             fragments.push(Fragment {
                 url,
+                byte_range: None,
+                init_url: None,
+                init_byte_range: None,
                 duration: Some(duration_seconds),
                 filesize: None,
             });
@@ -438,6 +450,9 @@ pub fn resolve_segment_list(plan: &SegmentListPlan) -> Vec<Fragment> {
     {
         fragments.push(Fragment {
             url: init.clone(),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: None,
             filesize: None,
         });
@@ -448,6 +463,9 @@ pub fn resolve_segment_list(plan: &SegmentListPlan) -> Vec<Fragment> {
         }
         fragments.push(Fragment {
             url: entry.media.clone(),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
             duration: entry.duration_seconds,
             filesize: None,
         });

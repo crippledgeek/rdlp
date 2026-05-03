@@ -359,18 +359,40 @@ impl fmt::Display for Format {
     }
 }
 
-/// Fragment of a segmented download
+/// Pre-resolved fragment (HLS segment / DASH segment) with optional
+/// byte-range subrange and per-fragment init reference.
+///
+/// Tuple convention for ranges is `(start, end_exclusive)` matching
+/// yt-dlp's `byte_range: {start, end}`. Conversion to FFmpeg's
+/// `(url_offset, size)`: `start = url_offset`, `end_exclusive = url_offset
+/// + size`. HTTP `Range:` emission must subtract 1 for the inclusive end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fragment {
-    /// Fragment URL (absolute or relative to `fragment_base_url`)
+    /// Absolute fragment URL (HLS segment URI or DASH segment URI).
     pub url: String,
 
-    /// Fragment duration in seconds
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Subrange of `url` to fetch via HTTP `Range:` header.
+    /// `(start, end_exclusive)`. `None` = whole resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_range: Option<(u64, u64)>,
+
+    /// `EXT-X-MAP` init segment URI for THIS fragment (HLS) or
+    /// `<Initialization>` URI (DASH). Per-fragment so multi-init streams
+    /// (RFC 8216 §4.4.2.5) work correctly: downloader refetches only
+    /// when this URI changes between consecutive fragments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init_url: Option<String>,
+
+    /// Subrange of `init_url`. Same `(start, end_exclusive)` convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init_byte_range: Option<(u64, u64)>,
+
+    /// Segment duration in seconds (from `#EXTINF` or DASH `@duration`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
 
-    /// Fragment size in bytes
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional pre-known segment size in bytes (rarely populated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filesize: Option<u64>,
 }
 

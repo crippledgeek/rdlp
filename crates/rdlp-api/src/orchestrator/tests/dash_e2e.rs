@@ -71,6 +71,9 @@ fn make_video_repr(
             .into_iter()
             .map(|url| Fragment {
                 url,
+                byte_range: None,
+                init_url: None,
+                init_byte_range: None,
                 duration: Some(4.0),
                 filesize: None,
             })
@@ -95,6 +98,9 @@ fn make_audio_repr(id: &str, abr_kbps: u32, fragment_urls: Vec<String>) -> Forma
             .into_iter()
             .map(|url| Fragment {
                 url,
+                byte_range: None,
+                init_url: None,
+                init_byte_range: None,
                 duration: Some(4.0),
                 filesize: None,
             })
