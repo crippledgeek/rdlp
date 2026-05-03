@@ -164,6 +164,10 @@ pub struct Config {
     /// `0` is a sentinel meaning "disable idle eviction entirely" — wired
     /// through to wreq/reqwest as `pool_idle_timeout(None)`. Any positive
     /// value caps how long an idle connection is kept in the pool.
+    ///
+    /// Connection count is still capped by `pool_max_idle_per_host`
+    /// (default 10), so disabling eviction does not permit unbounded
+    /// pool growth.
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
 
