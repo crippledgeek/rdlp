@@ -370,11 +370,10 @@ impl DownloaderRegistry {
             .with_rate_limiter(rate_limiter)
             .with_adaptive(config.adaptive_downloads);
 
-        // Create HLS downloader
-        let hls_downloader = HlsDownloader::new()
-            .with_http_downloader(http_downloader.clone())
-            .with_concurrent_segments(config.concurrent_fragments)
-            .with_buffer_size(config.buffer_size);
+        // Create HLS downloader. concurrent_segments/buffer_size were no-ops on the
+        // legacy parallel path (deleted in #270); the pre-resolved fragments path
+        // doesn't use them. See issue #271.
+        let hls_downloader = HlsDownloader::new().with_http_downloader(http_downloader.clone());
 
         // Create DASH downloader
         let dash_downloader = DashDownloader::new()
