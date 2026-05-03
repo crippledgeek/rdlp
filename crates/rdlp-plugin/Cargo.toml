@@ -46,6 +46,7 @@ sha2 = "0.10"
 hex = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
+percent-encoding = "2"
 html-escape = "0.2.13"
 rdlp-extractor = { version = "0.1.0", path = "../rdlp-extractor" }
 

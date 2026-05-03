@@ -32,6 +32,26 @@ static RE_P: LazyLock<regex::Regex> =
 static RE_TAGS: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"<.*?>").expect("valid tag-strip pattern"));
 
+fn build_url_with_query(base_url: String, query: &[(String, String)]) -> String {
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    if query.is_empty() {
+        return base_url;
+    }
+    let qs: String = query
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(k, NON_ALPHANUMERIC),
+                utf8_percent_encode(v, NON_ALPHANUMERIC)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    let sep = if base_url.contains('?') { '&' } else { '?' };
+    format!("{base_url}{sep}{qs}")
+}
+
 fn build_regex(
     pattern: &str,
     flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
@@ -227,7 +247,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options,
-        _fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
+        fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
     ) -> Result<
         crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction,
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
@@ -238,11 +258,12 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
 
         let result: Result<M3u8Extraction, FetchError> = async {
+            let url = build_url_with_query(url, &fetch.query);
             let req = Request {
                 url: url.clone(),
-                method: "GET".to_string(),
-                headers: vec![],
-                body: None,
+                method: if fetch.body.is_some() { "POST".into() } else { "GET".into() },
+                headers: fetch.headers.clone(),
+                body: fetch.body.clone(),
                 timeout_ms: Some(30_000),
             };
             let resp = self.fetch(req).await?;
@@ -300,7 +321,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
-        _fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
+        fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
     ) -> Result<
         crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
         crate::bindings::rdlp::plugin::host_fetch::FetchError,
@@ -313,11 +334,12 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         use url::Url;
 
         let result: Result<MpdExtraction, FetchError> = async {
+            let url = build_url_with_query(url, &fetch.query);
             let req = Request {
                 url: url.clone(),
-                method: "GET".to_string(),
-                headers: vec![],
-                body: None,
+                method: if fetch.body.is_some() { "POST".into() } else { "GET".into() },
+                headers: fetch.headers.clone(),
+                body: fetch.body.clone(),
                 timeout_ms: Some(30_000),
             };
             let resp = self.fetch(req).await?;
