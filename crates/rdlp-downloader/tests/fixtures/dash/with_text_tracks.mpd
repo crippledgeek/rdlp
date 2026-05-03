@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     mediaPresentationDuration="PT60S"
+     minBufferTime="PT2S"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet id="0" mimeType="video/mp4" contentType="video" segmentAlignment="true">
+      <Representation id="v1" bandwidth="1000000" codecs="avc1.640028" width="1920" height="1080">
+        <SegmentTemplate timescale="1000" duration="4000" media="v1/$Number$.m4s" initialization="v1/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="1" mimeType="audio/mp4" contentType="audio" lang="en" segmentAlignment="true">
+      <Representation id="a1" bandwidth="128000" codecs="mp4a.40.2" audioSamplingRate="48000">
+        <SegmentTemplate timescale="48000" duration="192000" media="a1/$Number$.m4s" initialization="a1/init.m4s" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="2" mimeType="text/ttml" contentType="text" lang="en">
+      <Representation id="t1" bandwidth="1000">
+        <BaseURL>subs/en.ttml</BaseURL>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="3" mimeType="application/mp4" contentType="text" lang="sv">
+      <Representation id="t2" bandwidth="1500" codecs="wvtt">
+        <BaseURL>subs/sv.vtt</BaseURL>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="4" mimeType="text/vtt" contentType="text">
+      <Representation id="t3" bandwidth="800">
+        <BaseURL>subs/und.vtt</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
