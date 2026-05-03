@@ -126,6 +126,17 @@ fn expand_media_playlist(
         return Err(HlsExpandError::ByteRangedInit);
     }
 
+    const MAX_SEGMENTS: usize = 10_000;
+    if playlist.segments.is_empty() {
+        return Err(HlsExpandError::NoSegments);
+    }
+    if playlist.segments.len() > MAX_SEGMENTS {
+        return Err(HlsExpandError::TooManySegments {
+            count: playlist.segments.len(),
+            max: MAX_SEGMENTS,
+        });
+    }
+
     // Subsequent tasks fill in the rest. For now, error so we don't return
     // a half-built Format.
     let _ = (seed, media_playlist_url);
@@ -278,5 +289,37 @@ seg-1.m4s
         let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_BYTE_RANGED_INIT)
             .expect_err("must refuse byte-range");
         assert!(matches!(err, HlsExpandError::ByteRangedInit));
+    }
+
+    const MEDIA_NO_SEGMENTS: &[u8] = b"\
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-ENDLIST
+";
+
+    #[test]
+    fn refuses_zero_segments() {
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", MEDIA_NO_SEGMENTS)
+            .expect_err("must refuse empty");
+        assert!(matches!(err, HlsExpandError::NoSegments));
+    }
+
+    #[test]
+    fn refuses_too_many_segments() {
+        let mut body = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n");
+        for i in 1..=10_001 {
+            body.push_str(&format!("#EXTINF:1.0,\nseg-{i}.ts\n"));
+        }
+        body.push_str("#EXT-X-ENDLIST\n");
+        let err = expand_media_playlist(&seed(), "https://h.com/v.m3u8", body.as_bytes())
+            .expect_err("must refuse oversized");
+        assert!(matches!(
+            err,
+            HlsExpandError::TooManySegments {
+                count: 10_001,
+                max: 10_000
+            }
+        ));
     }
 }
