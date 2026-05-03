@@ -156,4 +156,40 @@ interface host-extract-helpers {
                     -> result<m3u8-extraction, fetch-error>;
 
     extract-json-ld: func(html: string) -> option<json-ld-video>;
+
+    record mpd-options {
+        mpd-id: option<string>,
+        fatal: bool,
+    }
+
+    record mpd-fragment {
+        url: string,
+        duration: option<f64>,
+    }
+
+    record mpd-format {
+        format-id: string,
+        url: string,
+        ext: string,
+        vcodec: option<string>,
+        acodec: option<string>,
+        tbr: option<f32>,
+        width: option<u32>,
+        height: option<u32>,
+        fps: option<f32>,
+        asr: option<u32>,
+        language: option<string>,
+        container: option<string>,
+        manifest-url: option<string>,
+        fragment-base-url: option<string>,
+        fragments: list<mpd-fragment>,
+    }
+
+    record mpd-extraction {
+        formats: list<mpd-format>,
+        subtitles: list<extract-helpers-subtitle>,
+    }
+
+    extract-mpd: func(url: string, video-id: string, opts: mpd-options)
+                    -> result<mpd-extraction, fetch-error>;
 }
