@@ -58,6 +58,13 @@ describe("poolIdleTimeoutSchema (numeric input only — does not see the checkbo
     it("accepts empty string as null", () => {
         expect(poolIdleTimeoutSchema.parse("")).toBeNull();
     });
+    // Pin the superRefine ordering: each branch must surface a distinct message.
+    it("rejects negative with range message (not checkbox hint)", () => {
+        expect(() => poolIdleTimeoutSchema.parse("-1")).toThrow(/≥ 1/);
+    });
+    it("rejects non-integer with integer message (not checkbox hint)", () => {
+        expect(() => poolIdleTimeoutSchema.parse("3.5")).toThrow(/integer/i);
+    });
 });
 
 describe("pool-idle form mapping", () => {

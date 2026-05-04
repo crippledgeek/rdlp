@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// Coercion is via `Number(v)` after empty/null short-circuit, so leading/trailing
+// whitespace, scientific notation ("1e2" → 100), and hex literals ("0x10" → 16)
+// are tolerated; the post-coercion `.int()` filter rejects non-integer results
+// like NaN. Backend `Config::validate()` is the authoritative range check.
 const intInRange = (min: number, max: number, label: string) =>
     z.preprocess(
         (v) => (v === "" || v === null || v === undefined ? null : Number(v)),
@@ -17,6 +21,10 @@ export const readTimeoutSchema = intInRange(1, 600, "Read timeout");
 
 // Numeric input alone — the 0-sentinel is owned by the checkbox.
 // Reject 0 explicitly so users who type 0 see a hint to use the checkbox.
+//
+// superRefine ordering is load-bearing: integer → 0-sentinel → min → max.
+// Reordering would surface the generic "≥ 1" message for `0` instead of the
+// checkbox hint. Tests below pin one regression case per branch.
 export const poolIdleTimeoutSchema = z.preprocess(
     (v) => (v === "" || v === null || v === undefined ? null : Number(v)),
     z.union([
