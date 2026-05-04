@@ -772,7 +772,12 @@ mod tests {
         let token = tokio_util::sync::CancellationToken::new();
         let token_clone = token.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // 500ms gives the helper time to fully fetch + write + flush f1
+            // (mockito serves instantly; the budget covers tokio scheduling
+            // jitter on loaded CI runners). Lower budgets risk firing cancel
+            // before f1 lands on disk, which would break the partial-file
+            // assertion below.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             token_clone.cancel();
         });
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
@@ -862,7 +867,12 @@ mod tests {
         let token = tokio_util::sync::CancellationToken::new();
         let token_clone = token.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // 500ms gives the helper time to fully fetch + write + flush f1
+            // (mockito serves instantly; the budget covers tokio scheduling
+            // jitter on loaded CI runners). Lower budgets risk firing cancel
+            // before f1 lands on disk, which would break the partial-file
+            // assertion below.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             token_clone.cancel();
         });
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
