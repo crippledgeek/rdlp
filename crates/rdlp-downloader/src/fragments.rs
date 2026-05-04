@@ -543,7 +543,14 @@ mod tests {
             .expect("at least one")
             .progress
             .expect("set");
-        assert!(final_p.fraction() < 1.0);
+        // Pin the exact ratio: 100 / 1000 = 0.1. A regression that drops the
+        // numerator (e.g. emits with `bytes_downloaded = 0`) would still pass
+        // a bare `< 1.0` assertion — this catches it.
+        assert!(
+            (final_p.fraction() - 0.1).abs() < 0.01,
+            "expected ~0.1, got {}",
+            final_p.fraction()
+        );
     }
 
     #[tokio::test]
@@ -609,12 +616,20 @@ mod tests {
         let res =
             download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
                 .await;
-        assert!(res.is_err());
-        let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
+        // Pin the typed error: a regression that reshapes the failure into
+        // Cancelled / Network / Other would silently pass a bare is_err().
+        let err = res.expect_err("must error on f2 500");
         assert!(
-            written >= 100,
-            "first fragment should be on disk; got {written}"
+            matches!(
+                err,
+                rdlp_core::RdlpError::Download { .. } | rdlp_core::RdlpError::Http { .. }
+            ),
+            "unexpected err shape: {err:?}"
         );
+        let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
+        // First fragment was written + flushed before f2 attempted; f2 errors
+        // before any of its bytes reach the file.
+        assert_eq!(written, 100, "exact first-fragment bytes; got {written}");
     }
 
     #[tokio::test]
