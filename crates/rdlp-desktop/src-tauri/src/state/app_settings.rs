@@ -97,6 +97,20 @@ pub struct AppSettings {
     /// Embed subtitles into the output container.
     #[serde(default)]
     pub embed_subtitles: bool,
+    /// Connect/handshake timeout in seconds. `None` uses default (30).
+    /// Validated post-load by `Config::validate()`: must be 1..=300.
+    #[serde(default)]
+    pub socket_timeout: Option<u64>,
+    /// Per-read idle timeout in seconds. `None` uses default.
+    /// Validated post-load by `Config::validate()`: must be 1..=600.
+    #[serde(default)]
+    pub read_timeout: Option<u64>,
+    /// Idle keep-alive socket eviction timeout in seconds. `None` uses default;
+    /// `Some(0)` disables eviction (sentinel translated downstream by
+    /// `HttpClientConfig::from_rdlp_config`).
+    /// Validated post-load by `Config::validate()`: must be 0..=3600.
+    #[serde(default)]
+    pub pool_idle_timeout: Option<u64>,
 }
 
 impl AppSettings {
@@ -211,6 +225,9 @@ impl Default for AppSettings {
             rate_limit: None,
             output_template: None,
             embed_subtitles: false,
+            socket_timeout: None,
+            read_timeout: None,
+            pool_idle_timeout: None,
         }
     }
 }
@@ -355,6 +372,9 @@ mod tests {
         assert!(settings.rate_limit.is_none());
         assert!(settings.output_template.is_none());
         assert!(!settings.embed_subtitles);
+        assert!(settings.socket_timeout.is_none());
+        assert!(settings.read_timeout.is_none());
+        assert!(settings.pool_idle_timeout.is_none());
     }
 
     #[test]
@@ -465,6 +485,9 @@ mod tests {
             rate_limit: Some("500K".to_owned()),
             output_template: Some("%(title)s.%(ext)s".to_owned()),
             embed_subtitles: true,
+            socket_timeout: None,
+            read_timeout: None,
+            pool_idle_timeout: None,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -510,5 +533,38 @@ mod tests {
             Some("%(title)s.%(ext)s")
         );
         assert!(restored.embed_subtitles);
+    }
+
+    #[test]
+    fn test_default_timeout_fields_are_none() {
+        let s = AppSettings::default();
+        assert!(s.socket_timeout.is_none());
+        assert!(s.read_timeout.is_none());
+        assert!(s.pool_idle_timeout.is_none());
+    }
+
+    #[test]
+    fn test_timeout_fields_round_trip_json() {
+        let s = AppSettings {
+            socket_timeout: Some(45),
+            read_timeout: Some(120),
+            pool_idle_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&s).expect("serialize");
+        let back: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.socket_timeout, Some(45));
+        assert_eq!(back.read_timeout, Some(120));
+        assert_eq!(back.pool_idle_timeout, Some(0));
+    }
+
+    #[test]
+    fn test_legacy_settings_json_without_timeout_fields_loads() {
+        // Older settings.json files won't have these keys; serde(default) must populate them as None.
+        let json = r#"{"output_dir":".","embed_thumbnail":true,"embed_metadata":false,"verbose":false,"default_subtitle_langs":[]}"#;
+        let s: AppSettings = serde_json::from_str(json).expect("must load legacy json");
+        assert!(s.socket_timeout.is_none());
+        assert!(s.read_timeout.is_none());
+        assert!(s.pool_idle_timeout.is_none());
     }
 }
