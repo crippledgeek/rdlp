@@ -544,4 +544,55 @@ mod tests {
         assert_eq!(expanded[1].url, "https://cdn.example.com/v.mp4");
         assert_eq!(expanded[1].language.as_deref(), Some("DUB"));
     }
+
+    /// Regression guard for #279 — confirms nine_anime's HLS resolve path
+    /// expands master playlists BEFORE size probing.
+    ///
+    /// `resolve_episode_formats` itself is not a viable seam (Megacloud API +
+    /// JS decryption required). This test exercises the same shared helper
+    /// pair `extract` calls, naming the failure after nine_anime so a
+    /// regression in this extractor's pipeline is distinguishable from the
+    /// koreanpornmovie arm.
+    #[tokio::test]
+    async fn test_nine_anime_helper_pair_fetches_master_exactly_once() {
+        use crate::hls::test_support::{MASTER_TWO_VARIANTS, VARIANT_MEDIA, test_ctx};
+        use rdlp_types::{DownloadProtocol, Format};
+        use std::sync::Arc;
+
+        let mut server = mockito::Server::new_async().await;
+        let master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_TWO_VARIANTS)
+            .expect(1)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(VARIANT_MEDIA)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(VARIANT_MEDIA)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let master_url = format!("{}/master.m3u8", server.url());
+        let f = Format::new("hls", &master_url, "m3u8", DownloadProtocol::M3u8);
+
+        let ctx = test_ctx();
+        let http: Arc<wreq::Client> = ctx.http_client.clone();
+
+        let formats = crate::hls::expand_hls_in_place(vec![f], http).await;
+        let (formats, _flags) =
+            crate::hls::detect_format_sizes_lazy(formats, &ctx, "NineAnime").await;
+
+        assert!(
+            formats.iter().all(|fmt| fmt.fragments.is_some()),
+            "expanded formats must carry fragments"
+        );
+        master.assert_async().await;
+    }
 }

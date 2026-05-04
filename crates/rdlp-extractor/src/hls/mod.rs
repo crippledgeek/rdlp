@@ -40,6 +40,8 @@ mod expand;
 mod expand_in_place;
 mod format_detection;
 mod segments;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod types;
 mod variants;
 
