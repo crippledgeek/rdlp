@@ -5,6 +5,22 @@
 //! protocol is `M3u8` or `M3u8Native` with the per-variant rows produced by
 //! [`expand_hls_url`]. On any [`HlsExpandError`] the row is dropped entirely
 //! (no fallback to legacy variant-URL path).
+//!
+//! ## Convention
+//!
+//! Size probes (`detect_format_sizes_lazy`, custom HEAD probes,
+//! segment-count enrichment) MUST run AFTER `expand_hls_in_place`,
+//! not before. Probing the master-playlist URL yields manifest size,
+//! not per-variant size; per-variant size estimation requires the
+//! `Fragment` list this helper produces.
+//!
+//! Reference call shape (xhamster, the model):
+//! ```ignore
+//! let formats = expand_hls_in_place(formats, http_client).await;
+//! let (formats, flags) = detect_format_sizes_lazy(formats, ctx, name).await;
+//! ```
+//!
+//! See issue #269 for the audit and remediation history.
 
 use std::sync::Arc;
 

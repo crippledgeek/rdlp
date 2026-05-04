@@ -80,7 +80,7 @@ impl HttpClientFactory {
             .emulation(self.config.emulation.resolve())
             .redirect(wreq::redirect::Policy::limited(10))
             .pool_max_idle_per_host(self.config.pool_max_idle_per_host)
-            .pool_idle_timeout(Duration::from_secs(self.config.pool_idle_timeout_secs))
+            .pool_idle_timeout(self.config.pool_idle_timeout_secs.map(Duration::from_secs))
             .tcp_keepalive(Duration::from_secs(self.config.tcp_keepalive_secs))
             .tcp_nodelay(self.config.tcp_nodelay)
             .connect_timeout(Duration::from_secs(self.config.connect_timeout_secs))

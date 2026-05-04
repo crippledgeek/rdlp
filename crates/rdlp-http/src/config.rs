@@ -32,8 +32,9 @@ pub struct HttpClientConfig {
     /// Maximum idle connections per host
     pub pool_max_idle_per_host: usize,
 
-    /// Idle connection timeout in seconds
-    pub pool_idle_timeout_secs: u64,
+    /// Idle connection timeout in seconds. `None` disables idle eviction
+    /// entirely (wired to `wreq::ClientBuilder::pool_idle_timeout(None)`).
+    pub pool_idle_timeout_secs: Option<u64>,
 
     /// TCP keepalive interval in seconds
     pub tcp_keepalive_secs: u64,
@@ -53,7 +54,7 @@ impl Default for HttpClientConfig {
             connect_timeout_secs: 30,
             read_timeout_secs: 60,
             pool_max_idle_per_host: 10,
-            pool_idle_timeout_secs: 90,
+            pool_idle_timeout_secs: Some(90),
             tcp_keepalive_secs: 60,
             tcp_nodelay: true,
             proxy: None,
@@ -79,6 +80,13 @@ impl HttpClientConfig {
 
         if let Some(timeout) = config.socket_timeout {
             http_config.connect_timeout_secs = timeout;
+        }
+        if let Some(timeout) = config.read_timeout {
+            http_config.read_timeout_secs = timeout;
+        }
+        if let Some(timeout) = config.pool_idle_timeout {
+            // 0 is the user-facing sentinel for "disable eviction".
+            http_config.pool_idle_timeout_secs = if timeout == 0 { None } else { Some(timeout) };
         }
 
         http_config.emulation = config.browser_emulation.clone();
@@ -125,10 +133,17 @@ impl HttpClientConfig {
         self
     }
 
-    /// Set the idle connection timeout in seconds
+    /// Set the idle connection timeout in seconds.
     #[must_use]
     pub const fn with_pool_idle_timeout_secs(mut self, secs: u64) -> Self {
-        self.pool_idle_timeout_secs = secs;
+        self.pool_idle_timeout_secs = Some(secs);
+        self
+    }
+
+    /// Disable idle connection eviction entirely.
+    #[must_use]
+    pub const fn with_pool_idle_disabled(mut self) -> Self {
+        self.pool_idle_timeout_secs = None;
         self
     }
 
@@ -188,5 +203,64 @@ mod tests {
     fn test_with_emulation() {
         let config = HttpClientConfig::new().with_emulation(BrowserEmulation::FirefoxLatest);
         assert!(matches!(config.emulation, BrowserEmulation::FirefoxLatest));
+    }
+
+    #[test]
+    fn pool_idle_timeout_secs_can_be_disabled() {
+        let config = HttpClientConfig::new().with_pool_idle_disabled();
+        assert!(config.pool_idle_timeout_secs.is_none());
+    }
+
+    #[test]
+    fn default_pool_idle_timeout_is_some_90() {
+        let config = HttpClientConfig::default();
+        assert_eq!(config.pool_idle_timeout_secs, Some(90));
+    }
+
+    #[test]
+    fn from_rdlp_config_maps_read_timeout() {
+        let cfg = rdlp_types::Config {
+            read_timeout: Some(120),
+            ..rdlp_types::Config::default()
+        };
+        let http = HttpClientConfig::from_rdlp_config(&cfg);
+        assert_eq!(http.read_timeout_secs, 120);
+    }
+
+    #[test]
+    fn from_rdlp_config_maps_pool_idle_timeout_zero_to_none() {
+        let cfg = rdlp_types::Config {
+            pool_idle_timeout: Some(0),
+            ..rdlp_types::Config::default()
+        };
+        let http = HttpClientConfig::from_rdlp_config(&cfg);
+        assert!(
+            http.pool_idle_timeout_secs.is_none(),
+            "0 must map to None (disable)"
+        );
+    }
+
+    #[test]
+    fn from_rdlp_config_maps_pool_idle_timeout_positive() {
+        let cfg = rdlp_types::Config {
+            pool_idle_timeout: Some(60),
+            ..rdlp_types::Config::default()
+        };
+        let http = HttpClientConfig::from_rdlp_config(&cfg);
+        assert_eq!(http.pool_idle_timeout_secs, Some(60));
+    }
+
+    #[test]
+    fn from_rdlp_config_with_no_timeout_overrides_uses_defaults() {
+        let cfg = rdlp_types::Config {
+            socket_timeout: None,
+            read_timeout: None,
+            pool_idle_timeout: None,
+            ..rdlp_types::Config::default()
+        };
+        let http = HttpClientConfig::from_rdlp_config(&cfg);
+        assert_eq!(http.connect_timeout_secs, 30);
+        assert_eq!(http.read_timeout_secs, 60);
+        assert_eq!(http.pool_idle_timeout_secs, Some(90));
     }
 }

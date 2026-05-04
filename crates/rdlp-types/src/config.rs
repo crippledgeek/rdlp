@@ -141,8 +141,35 @@ pub struct Config {
     /// HTTP/SOCKS proxy URL
     pub proxy: Option<String>,
 
-    /// Socket timeout in seconds
+    /// Connect-axis timeout in seconds (TCP + TLS handshake).
+    ///
+    /// Default: 30. Range validation enforces 1..=300 if set.
+    ///
+    /// Named `socket_timeout` for historical compatibility with the
+    /// pre-1.0 single-knob model; the actual semantics are connect-only.
+    /// Read and pool-idle timeouts are configured separately via
+    /// `read_timeout` and `pool_idle_timeout`.
     pub socket_timeout: Option<u64>,
+
+    /// Read-axis timeout in seconds (per-read inactivity, not total).
+    ///
+    /// Default: 60. Range: 1..=600.
+    #[serde(default)]
+    pub read_timeout: Option<u64>,
+
+    /// Pool idle-connection timeout in seconds.
+    ///
+    /// Default: 90. Range: 0..=3600.
+    ///
+    /// `0` is a sentinel meaning "disable idle eviction entirely" — wired
+    /// through to wreq/reqwest as `pool_idle_timeout(None)`. Any positive
+    /// value caps how long an idle connection is kept in the pool.
+    ///
+    /// Connection count is still capped by `pool_max_idle_per_host`
+    /// (default 10), so disabling eviction does not permit unbounded
+    /// pool growth.
+    #[serde(default)]
+    pub pool_idle_timeout: Option<u64>,
 
     /// Source IP address to bind to
     pub source_address: Option<String>,
@@ -330,6 +357,8 @@ impl Default for Config {
             // Network options
             proxy: None,
             socket_timeout: Some(30),
+            read_timeout: None,
+            pool_idle_timeout: None,
             source_address: None,
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
@@ -405,6 +434,7 @@ impl Config {
     /// Returns [`ConfigValidationError`] if any field is out of range or
     /// inconsistent (e.g. `concurrent_fragments == 0`, `buffer_size == 0`,
     /// invalid `playlist_start`).
+    #[allow(clippy::too_many_lines)] // Linear sequence of independent range checks; splitting harms readability.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.concurrent_fragments == 0 {
             return Err(ConfigValidationError::InvalidConcurrentFragments);
@@ -488,6 +518,32 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "plugin_stack_limit_mb",
                 reason: "must be 1..=64 MB",
+            });
+        }
+
+        // HTTP timeout range checks
+        if let Some(t) = self.socket_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "socket_timeout",
+                reason: "must be 1..=300 seconds",
+            });
+        }
+        if let Some(t) = self.read_timeout
+            && !(1..=600).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "read_timeout",
+                reason: "must be 1..=600 seconds",
+            });
+        }
+        if let Some(t) = self.pool_idle_timeout
+            && t > 3600
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "pool_idle_timeout",
+                reason: "must be 0..=3600 seconds (0 = disabled)",
             });
         }
 

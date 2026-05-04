@@ -223,10 +223,23 @@ pub(crate) async fn resolve_episode_formats(
         }));
     }
 
+    // Pre-resolve HLS variant playlists into per-variant Format rows FIRST.
+    // The seed Format's `http_headers` (Referer) is preserved on every
+    // expanded row via `seed.clone()` inside `expand_media_playlist`.
+    // Non-HLS rows pass through unchanged; expand failures keep the
+    // original row (graceful fallback to the legacy variant-URL path).
+    //
+    // Probe ordering convention (issue #269): expand MUST run before
+    // detect_format_sizes_lazy so HEAD probes target per-variant URLs
+    // rather than the master playlist URL.
+    let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
+
     // Enrich HLS formats with resolution, codecs, duration, segments
     let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, "9anime").await;
 
-    // Restore audio type label in format_note (enrichment overwrites it)
+    // Restore audio type label in format_note (enrichment overwrites it).
+    // Must run AFTER detect_format_sizes_lazy because the helper sets
+    // format_note from resolution; this loop prepends the language tag.
     for f in &mut all_formats {
         if let Some(lang) = &f.language {
             match &f.format_note {
@@ -248,14 +261,6 @@ pub(crate) async fn resolve_episode_formats(
     } else {
         dub_subtitle_tracks
     };
-
-    // Pre-resolve HLS variant playlists into per-variant Format rows so the
-    // downloader can take the Format.fragments fast path. Non-HLS rows pass
-    // through unchanged; expand failures keep the original row (graceful
-    // fallback to the legacy variant-URL path). The seed Format's
-    // `http_headers` (Referer) is preserved on every expanded row via
-    // `seed.clone()` inside `expand_media_playlist`.
-    let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
 
     Ok((all_formats, hls_flags, subtitle_tracks))
 }

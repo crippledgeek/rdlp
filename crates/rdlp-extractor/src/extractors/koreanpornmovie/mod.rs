@@ -164,19 +164,13 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             ));
         }
 
-        // === Phase 3: Probe filesize via HEAD request (async) ===
-        let mut formats = formats;
-        for format in &mut formats {
-            if let Some(size) = probe_filesize(&format.url, ctx).await {
-                format.filesize = Some(size);
-            }
-        }
-
         // Pre-resolve HLS variant playlists into per-variant Format rows so
         // the downloader can take the Format.fragments fast path. Non-HLS
         // rows pass through unchanged; expand failures keep the original row
         // (graceful fallback to the legacy variant-URL path).
         let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+        let (formats, _hls_flags) =
+            crate::hls::detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;
 
         info.formats = formats;
         Ok(info)
@@ -723,29 +717,6 @@ fn looks_like_media(url: &str) -> bool {
         .and_then(|s| s.rsplit_once('.').map(|(_, e)| e))
         .map(str::to_ascii_lowercase);
     matches!(ext.as_deref(), Some("mp4" | "m3u8" | "m3u" | "webm"))
-}
-
-/// Probe a video URL via HEAD request to get Content-Length (filesize).
-///
-/// Returns `None` on any error (timeout, 403, etc.) — non-fatal.
-async fn probe_filesize(url: &str, ctx: &ExtractionContext) -> Option<u64> {
-    let response = ctx
-        .http_client
-        .head(url)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .ok()?;
-
-    if !response.status().is_success() {
-        return None;
-    }
-
-    response
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
 }
 
 /// Extract `content` attribute from a meta[itemprop] element.

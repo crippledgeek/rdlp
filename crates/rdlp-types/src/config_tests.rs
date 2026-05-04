@@ -340,3 +340,114 @@ fn test_out_of_range_error_display() {
         "plugin_memory_limit_mb: must be 1..=1024 MB"
     );
 }
+
+#[test]
+fn read_timeout_accepts_valid_range() {
+    for v in [1u64, 60, 600] {
+        let cfg = Config {
+            read_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_ok(), "read_timeout={v} should be valid");
+    }
+}
+
+#[test]
+fn read_timeout_rejects_zero() {
+    let cfg = Config {
+        read_timeout: Some(0),
+        ..Config::default()
+    };
+    assert!(matches!(
+        cfg.validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "read_timeout",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn read_timeout_rejects_above_600() {
+    let cfg = Config {
+        read_timeout: Some(601),
+        ..Config::default()
+    };
+    assert!(matches!(
+        cfg.validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "read_timeout",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn pool_idle_timeout_accepts_zero_and_max() {
+    for v in [0u64, 90, 3600] {
+        let cfg = Config {
+            pool_idle_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(
+            cfg.validate().is_ok(),
+            "pool_idle_timeout={v} should be valid"
+        );
+    }
+}
+
+#[test]
+fn pool_idle_timeout_rejects_above_3600() {
+    let cfg = Config {
+        pool_idle_timeout: Some(3601),
+        ..Config::default()
+    };
+    assert!(matches!(
+        cfg.validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "pool_idle_timeout",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn socket_timeout_accepts_valid_range() {
+    for v in [1u64, 30, 300] {
+        let cfg = Config {
+            socket_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_ok(), "socket_timeout={v} should be valid");
+    }
+}
+
+#[test]
+fn socket_timeout_rejects_zero() {
+    let cfg = Config {
+        socket_timeout: Some(0),
+        ..Config::default()
+    };
+    assert!(matches!(
+        cfg.validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "socket_timeout",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn socket_timeout_rejects_above_300() {
+    let cfg = Config {
+        socket_timeout: Some(301),
+        ..Config::default()
+    };
+    assert!(matches!(
+        cfg.validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "socket_timeout",
+            ..
+        })
+    ));
+}
