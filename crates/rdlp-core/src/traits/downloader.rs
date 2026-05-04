@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use tokio_util::sync::CancellationToken;
 
 use crate::Result;
 
@@ -95,7 +96,9 @@ pub trait Downloader: Send + Sync {
         format: &rdlp_types::Format,
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<DownloadStats> {
+        let _ = cancel; // default impl: outer select! handles cancellation
         self.download_to_file(&format.url, path, progress).await
     }
 

@@ -165,7 +165,8 @@ impl Downloader for HlsDownloader {
         &self,
         format: &rdlp_types::Format,
         output: &Path,
-        _progress: Option<Box<dyn ProgressCallback>>,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<DownloadStats> {
         // After #267, every M3u8 / M3u8Native row reaching the downloader has
         // Format.fragments populated by expand_hls_in_place. A row without
@@ -187,7 +188,10 @@ impl Downloader for HlsDownloader {
             &self.http_downloader,
             fragments,
             format.fragment_base_url.as_deref(),
+            format.filesize,
+            progress.as_deref(),
             output,
+            cancel,
         )
         .await
     }

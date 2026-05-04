@@ -98,6 +98,10 @@ pub enum RdlpError {
     /// Generic errors
     #[error("{0}")]
     Other(String),
+
+    /// User cancelled the operation. Cooperative-cancellation typed signal.
+    #[error("operation cancelled")]
+    Cancelled,
 }
 
 impl RdlpError {
@@ -223,5 +227,17 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+}
+
+#[cfg(test)]
+mod cancelled_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_variant_displays_lowercase() {
+        let e = RdlpError::Cancelled;
+        let s = format!("{e}");
+        assert!(s.to_lowercase().contains("cancelled"), "got: {s}");
     }
 }

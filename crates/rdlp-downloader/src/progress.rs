@@ -29,6 +29,68 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+/// EWMA speed tracker for sequential-download contexts.
+///
+/// Encapsulates the same `alpha=0.3` exponentially-weighted moving average
+/// pattern used inline in `spawn_progress_reporter`, but surfaced as a
+/// `pub(crate)` struct so callers that don't run a spawned reporter task
+/// (e.g. `download_pre_resolved_fragments`) can reuse it.
+///
+/// Usage: call `observe(bytes_delta, time_delta)` after each fragment
+/// completes; read `bytes_per_sec()` for the smoothed speed; read
+/// `eta(remaining)` for the projected time to completion.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SpeedTracker {
+    smooth_speed: f64,
+    has_observation: bool,
+}
+
+impl SpeedTracker {
+    /// EWMA alpha — matches the inline value in `spawn_progress_reporter`.
+    const ALPHA: f64 = 0.3;
+
+    pub(crate) const fn new() -> Self {
+        Self {
+            smooth_speed: 0.0,
+            has_observation: false,
+        }
+    }
+
+    /// Record `bytes` transferred over `elapsed` since the previous
+    /// observation. Zero or near-zero `elapsed` is ignored to avoid
+    /// divide-by-zero / spike.
+    pub(crate) fn observe(&mut self, bytes: u64, elapsed: std::time::Duration) {
+        let secs = elapsed.as_secs_f64();
+        if secs <= 0.0 {
+            return;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let raw = (bytes as f64) / secs;
+        self.smooth_speed = if self.has_observation {
+            Self::ALPHA.mul_add(raw, (1.0 - Self::ALPHA) * self.smooth_speed)
+        } else {
+            raw
+        };
+        self.has_observation = true;
+    }
+
+    pub(crate) const fn bytes_per_sec(&self) -> f64 {
+        self.smooth_speed
+    }
+
+    /// Projected ETA given a known `remaining_bytes`. Returns `None` if the
+    /// speed is zero (no progress yet) or if `remaining_bytes` is `None`.
+    pub(crate) fn eta(&self, remaining_bytes: Option<u64>) -> Option<std::time::Duration> {
+        let r = remaining_bytes?;
+        if self.smooth_speed <= 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let secs = (r as f64) / self.smooth_speed;
+        Some(std::time::Duration::from_secs_f64(secs))
+    }
+}
+
 /// RAII guard for progress reporter tasks.
 ///
 /// Ensures the progress reporter task is aborted when the guard goes out of scope,
@@ -292,5 +354,69 @@ mod tests {
         assert!(config.total_size.is_none());
         assert_eq!(config.total_segments, Some(100));
         assert_eq!(config.total_duration, Some(600.0));
+    }
+}
+
+#[cfg(test)]
+mod speed_tracker_tests {
+    use super::SpeedTracker;
+    use std::time::Duration;
+
+    #[test]
+    fn speed_tracker_zero_at_start() {
+        let st = SpeedTracker::new();
+        assert!(st.bytes_per_sec().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn speed_tracker_first_observation_initializes_smooth_speed() {
+        let mut st = SpeedTracker::new();
+        st.observe(1_000, Duration::from_millis(100));
+        // 1000 bytes / 0.1s = 10_000 B/s; first observation skips EWMA blend.
+        assert!(
+            (st.bytes_per_sec() - 10_000.0).abs() < 0.01,
+            "got {}",
+            st.bytes_per_sec()
+        );
+    }
+
+    #[test]
+    fn speed_tracker_subsequent_observations_blend_via_ewma() {
+        let mut st = SpeedTracker::new();
+        st.observe(1_000, Duration::from_millis(100)); // raw 10_000
+        st.observe(1_000, Duration::from_millis(100)); // raw 10_000, EWMA stable
+        let v = st.bytes_per_sec();
+        assert!((v - 10_000.0).abs() < 0.01, "stable rate, got {v}");
+    }
+
+    #[test]
+    fn speed_tracker_zero_delta_secs_is_a_noop() {
+        let mut st = SpeedTracker::new();
+        st.observe(0, Duration::ZERO);
+        // Zero-delta observation MUST be a no-op against the initial state
+        // — not just "doesn't panic", but pinned to 0.0.
+        assert!(st.bytes_per_sec().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn speed_tracker_eta_with_speed() {
+        let mut st = SpeedTracker::new();
+        st.observe(1_000, Duration::from_secs(1)); // 1000 B/s
+        let eta = st.eta(Some(2_000));
+        // 2000 / 1000 = 2s
+        assert!(matches!(eta, Some(d) if (d.as_secs_f64() - 2.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn speed_tracker_eta_returns_none_when_speed_is_zero() {
+        let st = SpeedTracker::new();
+        assert!(st.eta(Some(1_000)).is_none());
+    }
+
+    #[test]
+    fn speed_tracker_eta_returns_none_when_remaining_is_unknown() {
+        let mut st = SpeedTracker::new();
+        st.observe(1_000, Duration::from_secs(1));
+        assert!(st.eta(None).is_none());
     }
 }

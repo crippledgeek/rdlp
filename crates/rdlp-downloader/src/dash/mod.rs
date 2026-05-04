@@ -123,6 +123,7 @@ impl Downloader for DashDownloader {
         format: &Format,
         output: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<DownloadStats> {
         if let Some(fragments) = format.fragments.as_deref() {
             let base = format.fragment_base_url.as_deref();
@@ -130,10 +131,15 @@ impl Downloader for DashDownloader {
                 &self.http_downloader,
                 fragments,
                 base,
+                format.filesize,
+                progress.as_deref(),
                 output,
+                cancel,
             )
             .await
         } else {
+            // Non-fragment branch: cancellation owned by outer select! today.
+            // TODO(#287): cooperative cancellation for download_to_file path.
             self.download_to_file(&format.url, output, progress).await
         }
     }
