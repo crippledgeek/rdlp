@@ -1,18 +1,22 @@
 # rdlp
 
 A video downloader that extracts metadata and media from supported
-sites, downloads via HTTP or HLS with parallel chunking, and
+sites, downloads via HTTP, HLS, or DASH with parallel chunking, and
 post-processes with FFmpeg library bindings. Inspired by
 [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 ## Features
 
-- HTTP and HLS downloads with resume support
-- Parallel chunked transfers
+- HTTP, HLS, and DASH (static VoD) downloads with resume support
+- Parallel chunked transfers with adaptive controller
 - FFmpeg-based post-processing (remux, transcode, audio extraction, metadata/thumbnail embedding)
+- Audio normalization (peak / EBU R128 loudnorm) with limiter-boost fallback
+- Subtitle download, format conversion, and embedding
 - yt-dlp-compatible format selection and output templates
 - Browser cookie extraction (Chrome, Firefox) and Netscape cookie files
-- Keyword search across supported sites with filters (12 search-capable extractors)
+- Browser TLS fingerprint impersonation for sites that block other downloaders
+- Keyword search across supported sites with filters (13 search-capable extractors)
+- Signed WASM plugin system for adding new sites without recompiling
 - Rate limiting, download archive, JSON metadata export
 - Interactive format and container selection
 
@@ -58,7 +62,7 @@ Run `rdlp --help` for the full option list.
 
 ## Architecture
 
-17-crate Cargo workspace. Three-stage pipeline: extract, download, post-process.
+19-crate Cargo workspace. Three-stage pipeline: extract, download, post-process.
 
 | Crate | Purpose |
 |-------|---------|
@@ -66,16 +70,18 @@ Run `rdlp --help` for the full option list.
 | `rdlp-core` | Traits and error types |
 | `rdlp-api` | Frontend-agnostic download engine |
 | `rdlp-security` | SSRF protection, URL validation |
-| `rdlp-http` | HTTP client factory |
+| `rdlp-http` | HTTP client factory with TLS fingerprint impersonation |
 | `rdlp-ratelimit` | Token-bucket rate limiter |
 | `rdlp-crypto` | URL decryption |
 | `rdlp-extractor` | Site extractors and search |
-| `rdlp-downloader` | HTTP + HLS downloaders |
+| `rdlp-downloader` | HTTP, HLS, and DASH downloaders |
 | `rdlp-ffmpeg` | FFmpeg library bindings |
 | `rdlp-postprocess` | Post-processing pipeline |
 | `rdlp-cookies` | Browser cookie extraction |
 | `rdlp-jsinterp` | JavaScript interpreter |
-| `rdlp-plugin` | Plugin system |
+| `rdlp-plugin-manifest` | WASM plugin manifest schema |
+| `rdlp-plugin` | WASM plugin host (Wasmtime + WASI 0.2) |
+| `rdlp-probe` | Extractor authoring CLI (fetch, eval, extract, record) |
 | `rdlp-table` | Format selection table layout |
 | `rdlp-desktop` | Tauri v2 desktop GUI |
 | `rdlp-cli` | CLI application |
