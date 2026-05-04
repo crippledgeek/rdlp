@@ -299,6 +299,9 @@ pub async fn start_download(
             cookies_file,
             rate_limit,
             proxy,
+            timeout_secs: settings.socket_timeout,
+            read_timeout_secs: settings.read_timeout,
+            pool_idle_timeout_secs: settings.pool_idle_timeout,
             ..NetworkOptions::default()
         },
         verbose: if options.verbose.unwrap_or(settings.verbose) {
@@ -737,6 +740,54 @@ mod tests {
         assert_eq!(result.loudnorm_target_i, Some(-14.0));
         assert_eq!(result.loudnorm_target_tp, Some(-1.0));
         assert_eq!(result.normalize_boost_db, Some(4.0));
+    }
+
+    // ------------------------------------------------------------------ //
+    // G. Network timeouts: AppSettings → NetworkOptions plumbing
+    // ------------------------------------------------------------------ //
+
+    /// Replicates the network-field merge from `start_download`
+    /// (the `network` block) for isolated testing.
+    fn merge_network_options(_options: &DownloadOptions, settings: &AppSettings) -> NetworkOptions {
+        // Mirrors the production `network: NetworkOptions { ... }` literal
+        // in `start_download`. Updated when production fields change.
+        NetworkOptions {
+            timeout_secs: settings.socket_timeout,
+            read_timeout_secs: settings.read_timeout,
+            pool_idle_timeout_secs: settings.pool_idle_timeout,
+            ..NetworkOptions::default()
+        }
+    }
+
+    /// When `AppSettings` carries the three timeout fields, they MUST
+    /// propagate into the `NetworkOptions` literal that backs the
+    /// `DownloadRequest`.
+    #[test]
+    fn test_settings_timeouts_propagate_to_network_options() {
+        let settings = AppSettings {
+            socket_timeout: Some(45),
+            read_timeout: Some(120),
+            pool_idle_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        let options = default_download_options();
+        let net = merge_network_options(&options, &settings);
+        assert_eq!(net.timeout_secs, Some(45));
+        assert_eq!(net.read_timeout_secs, Some(120));
+        assert_eq!(net.pool_idle_timeout_secs, Some(0));
+    }
+
+    /// Default `AppSettings` MUST leave all three timeout fields unset
+    /// in the resulting `NetworkOptions` so the HTTP client falls back
+    /// to its baked-in defaults.
+    #[test]
+    fn test_default_settings_leave_timeouts_unset_in_network_options() {
+        let settings = AppSettings::default();
+        let options = default_download_options();
+        let net = merge_network_options(&options, &settings);
+        assert!(net.timeout_secs.is_none());
+        assert!(net.read_timeout_secs.is_none());
+        assert!(net.pool_idle_timeout_secs.is_none());
     }
 }
 
