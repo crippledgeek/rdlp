@@ -24,12 +24,16 @@ impl HlsSizeDetector {
     /// # Returns
     /// * `Ok(Vec<String>)` - List of segment URLs
     /// * `Err(_)` - Network error, parse error, or master playlist detected
-    pub(super) async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<String>> {
+    pub(super) async fn parse_playlist(
+        &self,
+        m3u8_url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<String>> {
         if self.verbose {
             debug!(url:? = m3u8_url; "HLS fetching playlist");
         }
 
-        let playlist_text = self.fetch_playlist_text(m3u8_url).await?;
+        let playlist_text = self.fetch_playlist_text(m3u8_url, timeout).await?;
 
         if self.verbose {
             debug!(bytes = playlist_text.len(); "HLS playlist size");
@@ -145,8 +149,13 @@ impl HlsSizeDetector {
                 // Validate the resolved media playlist URL (SSRF protection)
                 BaseExtractor::validate_url_security(&media_playlist_url)?;
 
-                // Recursively parse the media playlist
-                Box::pin(self.parse_playlist(&media_playlist_url)).await
+                // Recursively parse the media playlist. Each recursion level
+                // passes the FULL `timeout` to its own `RequestBuilder::timeout`
+                // (per-request budget, not per-tree). The wall-clock cap on
+                // the entire call tree is enforced by the outer
+                // `tokio::time::timeout` at the call site in
+                // `hls/format_detection.rs`, not here.
+                Box::pin(self.parse_playlist(&media_playlist_url, timeout)).await
             }
         }
     }

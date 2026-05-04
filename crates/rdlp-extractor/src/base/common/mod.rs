@@ -30,7 +30,7 @@
 //! let id = BaseExtractor::extract_id_from_url(url, &MY_URL_PATTERN, "id");
 //!
 //! // Detect file size with fallback strategies
-//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
+//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None, std::time::Duration::from_secs(5)).await;
 //! ```
 
 pub mod dash;
@@ -373,16 +373,18 @@ impl BaseExtractor {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None).await;
-    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS")).await;
+    /// use std::time::Duration;
+    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None, Duration::from_secs(5)).await;
+    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS"), Duration::from_secs(5)).await;
     /// ```
     pub(crate) async fn detect_file_size(
         url: &str,
         http_client: &wreq::Client,
         log_prefix: Option<&str>,
+        timeout: std::time::Duration,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
-        if let Ok(response) = http_client.head(url).send().await
+        if let Ok(response) = http_client.head(url).timeout(timeout).send().await
             && let Some(size) = response.content_length().filter(|&s| s > 0)
         {
             if let Some(prefix) = log_prefix {
@@ -395,6 +397,7 @@ impl BaseExtractor {
         if let Ok(response) = http_client
             .get(url)
             .header("Range", "bytes=0-0")
+            .timeout(timeout)
             .send()
             .await
             && let Some(size) = Self::parse_content_range_total(response.headers())
@@ -542,5 +545,71 @@ impl BaseExtractor {
                 format.format_id = format!("{}-{}", format.format_id, count);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod detect_file_size_timeout_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Black-hole TCP listener: accepts connections, then sleeps without
+    /// responding. Forces the client to time out instead of completing.
+    ///
+    /// The spawned task is intentionally not joined; it lives for the rest
+    /// of the test process. Each invocation leaks one tokio task plus one
+    /// open TCP listener socket. Acceptable for a handful of tests; revisit
+    /// if the helper sees heavier reuse.
+    async fn spawn_blackhole() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                if let Ok((stream, _)) = listener.accept().await {
+                    // Hold the connection open without writing a response.
+                    // The 60s sleep is deliberately longer than any test's
+                    // configured timeout — the inner timeout fires first.
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    drop(stream);
+                }
+            }
+        });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn detect_file_size_respects_configured_timeout() {
+        let port = spawn_blackhole().await;
+        let url = format!("http://127.0.0.1:{port}/probe");
+        let client = wreq::Client::new();
+        let configured = Duration::from_secs(1);
+
+        let started = Instant::now();
+        let result = BaseExtractor::detect_file_size(&url, &client, None, configured).await;
+        let elapsed = started.elapsed();
+
+        // detect_file_size returns None on inner-timeout (both inner requests
+        // time out, falling through to the final `None`).
+        assert_eq!(result, None);
+
+        // Wall-clock must be roughly the configured timeout, with a generous
+        // tolerance for CI scheduling jitter. detect_file_size makes TWO
+        // sequential inner requests (HEAD then Range-GET fallback), each
+        // bounded by the configured timeout. Worst-case is therefore
+        // 2 * configured. Pin upper bound at 2 * configured + 500ms.
+        let upper_bound = configured * 2 + Duration::from_millis(500);
+        assert!(
+            elapsed < upper_bound,
+            "expected elapsed < {upper_bound:?}, got {elapsed:?} (configured: {configured:?})",
+        );
+
+        // Also assert lower bound: must not return faster than the configured
+        // timeout (otherwise we know it didn't actually wait).
+        assert!(
+            elapsed >= configured,
+            "expected elapsed >= {configured:?}, got {elapsed:?}",
+        );
     }
 }

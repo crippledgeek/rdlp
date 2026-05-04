@@ -171,6 +171,21 @@ pub struct Config {
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
 
+    /// Wall-clock cap on multi-step HLS probes (master playlist fetch + parse,
+    /// per-format metadata refresh). Distinct from the socket-level
+    /// `read_timeout`: this is total elapsed time for the helper, regardless
+    /// of how many TCP reads it spans. Used by
+    /// `crates/rdlp-extractor/src/hls/format_detection.rs`.
+    /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
+    pub hls_operation_timeout: Option<u64>,
+
+    /// Wall-clock cap on a single HEAD probe used to detect content-length on
+    /// non-HLS formats. Smaller than `hls_operation_timeout` because the
+    /// operation is a single HEAD request (with a Range-GET fallback), not a
+    /// multi-step playlist parse.
+    /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
+    pub hls_head_probe_timeout: Option<u64>,
+
     /// Source IP address to bind to
     pub source_address: Option<String>,
 
@@ -359,6 +374,8 @@ impl Default for Config {
             socket_timeout: Some(30),
             read_timeout: None,
             pool_idle_timeout: None,
+            hls_operation_timeout: Some(10),
+            hls_head_probe_timeout: Some(5),
             source_address: None,
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
@@ -544,6 +561,22 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "pool_idle_timeout",
                 reason: "must be 0..=3600 seconds (0 = disabled)",
+            });
+        }
+        if let Some(t) = self.hls_operation_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "hls_operation_timeout",
+                reason: "must be 1..=300 seconds",
+            });
+        }
+        if let Some(t) = self.hls_head_probe_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "hls_head_probe_timeout",
+                reason: "must be 1..=300 seconds",
             });
         }
 
