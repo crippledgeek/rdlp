@@ -9,6 +9,37 @@ use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_types::Codec;
 
+/// Default cap on multi-step HLS probes when `Config::hls_operation_timeout`
+/// is unset. Matches the legacy hard-coded value before #277.
+const DEFAULT_HLS_OPERATION_TIMEOUT_SECS: u64 = 10;
+
+/// Default cap on the single-HEAD probe for non-HLS file size detection
+/// when `Config::hls_head_probe_timeout` is unset. Matches the legacy
+/// hard-coded value before #277.
+const DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS: u64 = 5;
+
+/// Resolve the wall-clock cap for HLS metadata / variant probes from `Config`,
+/// falling back to `DEFAULT_HLS_OPERATION_TIMEOUT_SECS` when unset.
+#[allow(dead_code)] // wired in Tasks 3-5 of #277
+pub(crate) fn resolve_hls_operation_timeout(config: &rdlp_types::Config) -> std::time::Duration {
+    std::time::Duration::from_secs(
+        config
+            .hls_operation_timeout
+            .unwrap_or(DEFAULT_HLS_OPERATION_TIMEOUT_SECS),
+    )
+}
+
+/// Resolve the wall-clock cap for the non-HLS HEAD-probe from `Config`,
+/// falling back to `DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS` when unset.
+#[allow(dead_code)] // wired in Tasks 3-5 of #277
+pub(crate) fn resolve_hls_head_probe_timeout(config: &rdlp_types::Config) -> std::time::Duration {
+    std::time::Duration::from_secs(
+        config
+            .hls_head_probe_timeout
+            .unwrap_or(DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS),
+    )
+}
+
 /// Slugify a rendition tag (`LANGUAGE` / `GROUP-ID` / `NAME`) into a
 /// format-id-safe token: lowercase ASCII alphanumerics with `-` for
 /// any other character, collapsed and trimmed. Keeps audio-only format
@@ -524,5 +555,48 @@ mod is_hls_tests {
             "hls",
             "https://cdn.example.com/no-extension/abc123"
         ));
+    }
+}
+
+#[cfg(test)]
+mod resolve_timeout_tests {
+    use super::{resolve_hls_head_probe_timeout, resolve_hls_operation_timeout};
+    use rdlp_types::Config;
+    use std::time::Duration;
+
+    #[test]
+    fn op_timeout_uses_default_when_none() {
+        let c = Config {
+            hls_operation_timeout: None,
+            ..Config::default()
+        };
+        assert_eq!(resolve_hls_operation_timeout(&c), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn op_timeout_uses_override_when_some() {
+        let c = Config {
+            hls_operation_timeout: Some(45),
+            ..Config::default()
+        };
+        assert_eq!(resolve_hls_operation_timeout(&c), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn head_probe_timeout_uses_default_when_none() {
+        let c = Config {
+            hls_head_probe_timeout: None,
+            ..Config::default()
+        };
+        assert_eq!(resolve_hls_head_probe_timeout(&c), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn head_probe_timeout_uses_override_when_some() {
+        let c = Config {
+            hls_head_probe_timeout: Some(2),
+            ..Config::default()
+        };
+        assert_eq!(resolve_hls_head_probe_timeout(&c), Duration::from_secs(2));
     }
 }
