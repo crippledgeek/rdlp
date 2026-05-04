@@ -239,6 +239,13 @@ pub enum SettingsValidationError {
     CookiesFileTraversal,
     /// `proxy` URL failed security validation.
     InvalidProxy(String),
+    /// A timeout field is outside its allowed range.
+    TimeoutOutOfRange {
+        /// Name of the offending field (e.g. `"socket_timeout"`).
+        field: &'static str,
+        /// Human-readable description of the allowed range.
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for SettingsValidationError {
@@ -248,6 +255,9 @@ impl std::fmt::Display for SettingsValidationError {
                 f.write_str("cookies_file path must not contain '..' components")
             }
             Self::InvalidProxy(msg) => write!(f, "invalid proxy URL: {msg}"),
+            Self::TimeoutOutOfRange { field, reason } => {
+                write!(f, "{field}: {reason}")
+            }
         }
     }
 }
@@ -275,6 +285,33 @@ impl AppSettings {
                 .map_err(|e| SettingsValidationError::InvalidProxy(e.to_string()))?;
         }
 
+        // HTTP timeout ranges — mirror `rdlp_types::Config::validate()` so a
+        // hand-edited settings.json can't bypass the frontend's zod parsing.
+        if let Some(t) = self.socket_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(SettingsValidationError::TimeoutOutOfRange {
+                field: "socket_timeout",
+                reason: "must be 1..=300 seconds",
+            });
+        }
+        if let Some(t) = self.read_timeout
+            && !(1..=600).contains(&t)
+        {
+            return Err(SettingsValidationError::TimeoutOutOfRange {
+                field: "read_timeout",
+                reason: "must be 1..=600 seconds",
+            });
+        }
+        if let Some(t) = self.pool_idle_timeout
+            && t > 3600
+        {
+            return Err(SettingsValidationError::TimeoutOutOfRange {
+                field: "pool_idle_timeout",
+                reason: "must be 0..=3600 seconds (0 = disabled)",
+            });
+        }
+
         Ok(())
     }
 }
@@ -299,6 +336,54 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_validate_security_rejects_socket_timeout_zero() {
+        let s = AppSettings {
+            socket_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        let err = s.validate_security().expect_err("must reject");
+        assert!(err.to_string().contains("socket_timeout"));
+    }
+
+    #[test]
+    fn test_validate_security_rejects_socket_timeout_above_max() {
+        let s = AppSettings {
+            socket_timeout: Some(301),
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_validate_security_rejects_read_timeout_above_max() {
+        let s = AppSettings {
+            read_timeout: Some(601),
+            ..AppSettings::default()
+        };
+        let err = s.validate_security().expect_err("must reject");
+        assert!(err.to_string().contains("read_timeout"));
+    }
+
+    #[test]
+    fn test_validate_security_accepts_pool_idle_timeout_zero_sentinel() {
+        let s = AppSettings {
+            pool_idle_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok(), "0 is the disable sentinel");
+    }
+
+    #[test]
+    fn test_validate_security_rejects_pool_idle_timeout_above_max() {
+        let s = AppSettings {
+            pool_idle_timeout: Some(3601),
+            ..AppSettings::default()
+        };
+        let err = s.validate_security().expect_err("must reject");
+        assert!(err.to_string().contains("pool_idle_timeout"));
     }
 
     #[test]
