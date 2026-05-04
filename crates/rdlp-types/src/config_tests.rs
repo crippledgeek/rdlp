@@ -480,7 +480,14 @@ fn hls_operation_timeout_above_max_rejected() {
         hls_operation_timeout: Some(301),
         ..Config::default()
     };
-    assert!(c.validate().is_err());
+    let err = c.validate().expect_err("must reject");
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "hls_operation_timeout",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -499,7 +506,25 @@ fn hls_head_probe_timeout_above_max_rejected() {
         hls_head_probe_timeout: Some(301),
         ..Config::default()
     };
-    assert!(c.validate().is_err());
+    let err = c.validate().expect_err("must reject");
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "hls_head_probe_timeout",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn hls_timeouts_partial_json_inherits_struct_default() {
+    // Struct-level `#[serde(default)]` means an empty/partial JSON deserializes
+    // to `Config::default()`-overlaid values. Pin the documented default
+    // (Some(10) / Some(5)) so a future refactor that strips struct-level
+    // serde(default) and forgets to add per-field annotations gets caught.
+    let c: Config = serde_json::from_str("{}").expect("partial config must deserialize");
+    assert_eq!(c.hls_operation_timeout, Some(10));
+    assert_eq!(c.hls_head_probe_timeout, Some(5));
 }
 
 #[test]
