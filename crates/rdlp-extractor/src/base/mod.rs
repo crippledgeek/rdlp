@@ -33,7 +33,7 @@
 //! // Generic utilities (all extractors)
 //! let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 //! let title = BaseExtractor::extract_title_multi_strategy(&html);
-//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
+//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None, std::time::Duration::from_secs(5)).await;
 //!
 //! // Network-specific utilities (TNAFlix family only)
 //! let base = TnaFlixNetworkBase::new();

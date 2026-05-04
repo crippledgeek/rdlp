@@ -30,7 +30,7 @@
 //! let id = BaseExtractor::extract_id_from_url(url, &MY_URL_PATTERN, "id");
 //!
 //! // Detect file size with fallback strategies
-//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None).await;
+//! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None, std::time::Duration::from_secs(5)).await;
 //! ```
 
 pub mod dash;
@@ -373,16 +373,18 @@ impl BaseExtractor {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None).await;
-    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS")).await;
+    /// use std::time::Duration;
+    /// let size = BaseExtractor::detect_file_size(&url, &ctx.http_client, None, Duration::from_secs(5)).await;
+    /// let size = BaseExtractor::detect_file_size(&url, &client, Some("HLS"), Duration::from_secs(5)).await;
     /// ```
     pub(crate) async fn detect_file_size(
         url: &str,
         http_client: &wreq::Client,
         log_prefix: Option<&str>,
+        timeout: std::time::Duration,
     ) -> Option<u64> {
         // Strategy 1: HEAD request
-        if let Ok(response) = http_client.head(url).send().await
+        if let Ok(response) = http_client.head(url).timeout(timeout).send().await
             && let Some(size) = response.content_length().filter(|&s| s > 0)
         {
             if let Some(prefix) = log_prefix {
@@ -395,6 +397,7 @@ impl BaseExtractor {
         if let Ok(response) = http_client
             .get(url)
             .header("Range", "bytes=0-0")
+            .timeout(timeout)
             .send()
             .await
             && let Some(size) = Self::parse_content_range_total(response.headers())

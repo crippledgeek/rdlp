@@ -20,7 +20,6 @@ const DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS: u64 = 5;
 
 /// Resolve the wall-clock cap for HLS metadata / variant probes from `Config`,
 /// falling back to `DEFAULT_HLS_OPERATION_TIMEOUT_SECS` when unset.
-#[allow(dead_code)] // wired in Tasks 3-5 of #277
 pub(crate) fn resolve_hls_operation_timeout(config: &rdlp_types::Config) -> std::time::Duration {
     std::time::Duration::from_secs(
         config
@@ -31,7 +30,6 @@ pub(crate) fn resolve_hls_operation_timeout(config: &rdlp_types::Config) -> std:
 
 /// Resolve the wall-clock cap for the non-HLS HEAD-probe from `Config`,
 /// falling back to `DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS` when unset.
-#[allow(dead_code)] // wired in Tasks 3-5 of #277
 pub(crate) fn resolve_hls_head_probe_timeout(config: &rdlp_types::Config) -> std::time::Duration {
     std::time::Duration::from_secs(
         config
@@ -103,13 +101,13 @@ async fn enrich_single_hls_format(
     url: &str,
     extractor_name: &str,
     verbose: bool,
+    op_timeout: std::time::Duration,
 ) -> (Option<bool>, Option<bool>) {
-    use std::time::Duration;
     use tokio::time::timeout;
 
     let result = timeout(
-        Duration::from_secs(10),
-        hls_detector.detect_hls_metadata(url),
+        op_timeout,
+        hls_detector.detect_hls_metadata(url, op_timeout),
     )
     .await;
 
@@ -214,10 +212,11 @@ async fn detect_format_sizes_inner(
     detect_sizes: bool,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     use futures::future::join_all;
-    use std::time::Duration;
     use tokio::time::timeout;
 
     let verbose = ctx.config.verbose;
+    let op_timeout = resolve_hls_operation_timeout(&ctx.config);
+    let head_timeout = resolve_hls_head_probe_timeout(&ctx.config);
     let mut hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
 
     // Propagate HTTP headers from formats (e.g., Referer) to the HLS detector.
@@ -262,8 +261,8 @@ async fn detect_format_sizes_inner(
                 if is_hls {
                     // Try to expand master playlist into per-variant formats
                     let result = timeout(
-                        Duration::from_secs(10),
-                        hls_detector.detect_hls_variants(&url),
+                        op_timeout,
+                        hls_detector.detect_hls_variants(&url, op_timeout),
                     )
                     .await;
 
@@ -283,6 +282,7 @@ async fn detect_format_sizes_inner(
                                 &url,
                                 &extractor_name,
                                 verbose,
+                                op_timeout,
                             )
                             .await;
                             return vec![(format, is_live, has_enc)];
@@ -420,8 +420,8 @@ async fn detect_format_sizes_inner(
                     let mut format = format;
                     if detect_sizes {
                         let result = timeout(
-                            Duration::from_secs(5),
-                            BaseExtractor::detect_file_size(&url, &http_client, None),
+                            head_timeout,
+                            BaseExtractor::detect_file_size(&url, &http_client, None, head_timeout),
                         )
                         .await;
 

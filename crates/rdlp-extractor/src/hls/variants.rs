@@ -164,14 +164,18 @@ impl HlsSizeDetector {
     ///
     /// Panics if a master playlist has variants but none can be selected
     /// (programmer error — the filter + `or_else` fallback should always find one).
-    pub async fn detect_hls_metadata(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
+    pub async fn detect_hls_metadata(
+        &self,
+        m3u8_url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Option<HlsInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
             debug!(url:? = m3u8_url; "HLS detecting metadata");
         }
 
-        let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
+        let playlist_text = match self.fetch_playlist_text(m3u8_url, timeout).await {
             Ok(text) => text,
             Err(e) => {
                 if self.verbose {
@@ -249,7 +253,8 @@ impl HlsSizeDetector {
 
                 BaseExtractor::validate_url_security(&media_url)?;
 
-                let media_info = match self.fetch_and_extract_media_info(&media_url).await {
+                let media_info = match self.fetch_and_extract_media_info(&media_url, timeout).await
+                {
                     Ok(Some(info)) => info,
                     Ok(None) | Err(_) => {
                         // Return what we have from the master playlist
@@ -336,10 +341,14 @@ impl HlsSizeDetector {
     ///
     /// Panics if a master playlist has non-I-frame variants but none can be selected
     /// (programmer error — the filter + `or_else` fallback should always find one).
-    pub async fn detect_hls_variants(&self, m3u8_url: &str) -> Result<Vec<HlsVariantInfo>> {
+    pub async fn detect_hls_variants(
+        &self,
+        m3u8_url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<HlsVariantInfo>> {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
-        let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
+        let playlist_text = match self.fetch_playlist_text(m3u8_url, timeout).await {
             Ok(text) => text,
             Err(e) => {
                 if self.verbose {
@@ -400,7 +409,10 @@ impl HlsSizeDetector {
             })?
             .to_string();
 
-        if let Ok(Some(media_info)) = self.fetch_and_extract_media_info(&best_media_url).await {
+        if let Ok(Some(media_info)) = self
+            .fetch_and_extract_media_info(&best_media_url, timeout)
+            .await
+        {
             for v in &mut variants {
                 v.segment_count = media_info.segment_count;
                 v.total_duration = Some(media_info.total_duration);
