@@ -33,6 +33,7 @@ use rdlp_security;
 ///
 /// Returns `RdlpError::Download` if any fragment fetch fails, if a URL fails
 /// to resolve against the base URL, or if the output file cannot be created.
+#[allow(clippy::too_many_lines)]
 pub async fn download_pre_resolved_fragments(
     http: &HttpDownloader,
     fragments: &[Fragment],
@@ -92,7 +93,8 @@ pub async fn download_pre_resolved_fragments(
             if let Some(init_url) = &frag.init_url {
                 let resolved_init = resolve_fragment_url(init_url, base_url)?;
                 let init_bytes =
-                    fetch_with_optional_range(http, &resolved_init, frag.init_byte_range).await?;
+                    fetch_with_optional_cancel(http, &resolved_init, frag.init_byte_range, cancel)
+                        .await?;
                 total_bytes += init_bytes.len() as u64;
                 out_file.write_all(&init_bytes).await.map_err(|e| {
                     rdlp_core::RdlpError::Download {
@@ -106,7 +108,8 @@ pub async fn download_pre_resolved_fragments(
             }
         }
 
-        let bytes = fetch_with_optional_range(http, &resolved_url, frag.byte_range).await?;
+        let bytes =
+            fetch_with_optional_cancel(http, &resolved_url, frag.byte_range, cancel).await?;
 
         out_file
             .write_all(&bytes)
@@ -198,6 +201,29 @@ pub(crate) fn resolve_fragment_url(fragment_url: &str, base_url: Option<&str>) -
             Ok(resolved.to_string())
         }
         None => Ok(fragment_url.to_string()),
+    }
+}
+
+/// Fetch a fragment with cooperative cancellation.
+///
+/// Wraps `fetch_with_optional_range` in `tokio::select!` against the optional
+/// cancellation token. Without this, a hung connection (TCP accepted but body
+/// never arrives) would block indefinitely between cooperative cancel points
+/// — `fetch_with_optional_range` itself has no per-read timeout, and the
+/// helper's only `is_cancelled()` checks are between fragments.
+async fn fetch_with_optional_cancel(
+    http: &HttpDownloader,
+    url: &str,
+    byte_range: Option<(u64, u64)>,
+    cancel: Option<&CancellationToken>,
+) -> Result<Vec<u8>> {
+    match cancel {
+        Some(token) => tokio::select! {
+            biased;
+            () = token.cancelled() => Err(rdlp_core::RdlpError::Cancelled),
+            res = fetch_with_optional_range(http, url, byte_range) => res,
+        },
+        None => fetch_with_optional_range(http, url, byte_range).await,
     }
 }
 
@@ -674,5 +700,191 @@ mod tests {
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         // 4 (INIT) + 10 × 1 (D) = 14 bytes.
         assert_eq!(written.len(), 14);
+    }
+
+    // ---- Cancellation regression tests (issue #272) ----
+
+    /// Black-hole TCP listener: accepts connections, then sleeps without
+    /// responding. Forces the client to hang until cancellation fires.
+    ///
+    /// The spawned task is intentionally not joined; it lives for the rest
+    /// of the test process. Each invocation leaks one tokio task plus one
+    /// open TCP listener socket. Acceptable for a handful of tests.
+    ///
+    /// Mirror of `crates/rdlp-extractor/src/base/common/mod.rs:563`'s helper,
+    /// which is module-private to that crate.
+    async fn spawn_blackhole() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                if let Ok((stream, _)) = listener.accept().await {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    drop(stream);
+                }
+            }
+        });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fragment_cancel_before_first_returns_immediately() {
+        let port = spawn_blackhole().await;
+        let frags = vec![frag(format!("http://127.0.0.1:{port}/f1"))];
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel(); // pre-cancel
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let started = std::time::Instant::now();
+        let res = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            Some(&token),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert!(matches!(res, Err(rdlp_core::RdlpError::Cancelled)));
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "should return fast; got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fragment_cancel_mid_stream_returns_cancelled_partial_file() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let port = spawn_blackhole().await;
+        let frags = vec![
+            frag(format!("{}/f1", server.url())),
+            frag(format!("http://127.0.0.1:{port}/f2")),
+        ];
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_clone = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            token_clone.cancel();
+        });
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            download_pre_resolved_fragments(
+                &http,
+                &frags,
+                None,
+                None,
+                None,
+                tmp.path(),
+                Some(&token),
+            ),
+        )
+        .await
+        .expect("test timeout");
+        assert!(matches!(res, Err(rdlp_core::RdlpError::Cancelled)));
+        let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
+        // First fragment fully written + flushed; second hung in the black-hole
+        // until token.cancel() fired between fragments. Output has exactly the
+        // first fragment's bytes.
+        assert_eq!(
+            written, 100,
+            "first fragment should be flushed; got {written}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fragment_cancel_none_runs_to_completion() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        assert_eq!(stats.bytes_downloaded, 100);
+    }
+
+    #[tokio::test]
+    async fn fragment_cancel_never_fired_runs_to_completion() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let token = tokio_util::sync::CancellationToken::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            Some(&token),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(stats.bytes_downloaded, 100);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fragment_cancel_does_not_delete_partial_file() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let port = spawn_blackhole().await;
+        let frags = vec![
+            frag(format!("{}/f1", server.url())),
+            frag(format!("http://127.0.0.1:{port}/f2")),
+        ];
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_clone = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            token_clone.cancel();
+        });
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            download_pre_resolved_fragments(
+                &http,
+                &frags,
+                None,
+                None,
+                None,
+                tmp.path(),
+                Some(&token),
+            ),
+        )
+        .await;
+        assert!(
+            tmp.path().exists(),
+            "partial file should be preserved for resume"
+        );
+        let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
+        assert!(written > 0);
     }
 }
