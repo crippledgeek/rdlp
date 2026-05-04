@@ -29,10 +29,28 @@ use rdlp_security;
 /// Each URL is resolved against the optional `base_url`. Fragments are written
 /// sequentially — no intermediate files or `FFmpeg` mux step is required.
 ///
+/// # Progress
+///
+/// When `progress` is `Some`, emits `DownloadProgress` events on a 100ms
+/// throttle plus a forced emit at the final-fragment boundary. When
+/// `expected_total` is `None`, emitted events carry `total_bytes = None`
+/// and `progress = None`; consumers see fragment-count progress only
+/// (`segments_downloaded` / `total_segments`).
+///
+/// # Cancellation
+///
+/// When `cancel` is `Some`, the helper checks `is_cancelled()` pre-loop
+/// and after each fragment write, and races each fragment fetch against
+/// `cancelled()`. On cancel: flushes the partial output and returns
+/// `Err(RdlpError::Cancelled)`.
+///
 /// # Errors
 ///
 /// Returns `RdlpError::Download` if any fragment fetch fails, if a URL fails
 /// to resolve against the base URL, or if the output file cannot be created.
+/// Returns `RdlpError::Cancelled` if `cancel` fires.
+// 102/100 lines after the cancellation wrapper additions; splitting would
+// obscure the loop's bookkeeping flow.
 #[allow(clippy::too_many_lines)]
 pub async fn download_pre_resolved_fragments(
     http: &HttpDownloader,
