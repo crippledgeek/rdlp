@@ -153,6 +153,12 @@ impl MergeOverrides for NetworkOptions {
         if let Some(v) = self.timeout_secs {
             config.socket_timeout = Some(v);
         }
+        if let Some(v) = self.read_timeout_secs {
+            config.read_timeout = Some(v);
+        }
+        if let Some(v) = self.pool_idle_timeout_secs {
+            config.pool_idle_timeout = Some(v);
+        }
         if let Some(v) = self.concurrent_fragments {
             config.concurrent_fragments = v as usize;
         }

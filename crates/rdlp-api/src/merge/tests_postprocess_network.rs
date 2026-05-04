@@ -554,3 +554,48 @@ fn test_network_some_overrides_cookies_file() {
     opts.merge_into(&mut config);
     assert_eq!(config.cookies_file, Some(PathBuf::from("/new/cookies.txt")));
 }
+
+#[test]
+fn network_options_merges_read_timeout() {
+    let mut config = Config::default();
+    let opts = NetworkOptions {
+        read_timeout_secs: Some(45),
+        ..NetworkOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.read_timeout, Some(45));
+}
+
+#[test]
+fn network_options_merges_pool_idle_timeout_positive() {
+    let mut config = Config::default();
+    let opts = NetworkOptions {
+        pool_idle_timeout_secs: Some(120),
+        ..NetworkOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.pool_idle_timeout, Some(120));
+}
+
+#[test]
+fn network_options_merges_pool_idle_timeout_zero_sentinel() {
+    let mut config = Config::default();
+    let opts = NetworkOptions {
+        pool_idle_timeout_secs: Some(0),
+        ..NetworkOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.pool_idle_timeout, Some(0));
+}
+
+#[test]
+fn network_options_none_preserves_base_timeouts() {
+    let mut config = Config {
+        read_timeout: Some(99),
+        pool_idle_timeout: Some(99),
+        ..Config::default()
+    };
+    NetworkOptions::default().merge_into(&mut config);
+    assert_eq!(config.read_timeout, Some(99));
+    assert_eq!(config.pool_idle_timeout, Some(99));
+}
