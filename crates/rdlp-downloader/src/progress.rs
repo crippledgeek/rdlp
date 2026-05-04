@@ -392,11 +392,12 @@ mod speed_tracker_tests {
     }
 
     #[test]
-    fn speed_tracker_zero_delta_secs_does_not_panic() {
+    fn speed_tracker_zero_delta_secs_is_a_noop() {
         let mut st = SpeedTracker::new();
         st.observe(0, Duration::ZERO);
-        // Either returns 0.0 or skips the update; must not panic or NaN.
-        assert!(st.bytes_per_sec().is_finite());
+        // Zero-delta observation MUST be a no-op against the initial state
+        // — not just "doesn't panic", but pinned to 0.0.
+        assert!(st.bytes_per_sec().abs() < f64::EPSILON);
     }
 
     #[test]
