@@ -28,7 +28,7 @@ interface TimeoutFieldProps {
     id: string;
     label: string;
     helper: string;
-    initial: number | null;
+    value: number | null;
     placeholder: string;
     schema: ZodTypeAny;
     onCommit: (next: number | null) => void;
@@ -39,17 +39,22 @@ function TimeoutField({
     id,
     label,
     helper,
-    initial,
+    value,
     placeholder,
     schema,
     onCommit,
     disabled,
 }: TimeoutFieldProps) {
-    const [raw, setRaw] = useState<string>(initial === null ? "" : String(initial));
+    // Local state for the in-flight edit + inline error. The displayed string
+    // is derived from `value` whenever the user is not actively editing, so
+    // external prop updates (settings reload, reset-to-defaults) propagate.
+    const [draft, setDraft] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    const displayed = draft ?? (value === null ? "" : String(value));
+
     const handleChange = (next: string) => {
-        setRaw(next);
+        setDraft(next);
         const result = schema.safeParse(next);
         if (!result.success) {
             setError(result.error.errors[0]?.message ?? "Invalid value");
@@ -57,6 +62,11 @@ function TimeoutField({
         }
         setError(null);
         onCommit(result.data as number | null);
+    };
+
+    const handleBlur = () => {
+        // Drop the local draft so subsequent prop updates flow through.
+        setDraft(null);
     };
 
     return (
@@ -71,8 +81,9 @@ function TimeoutField({
                     inputMode="numeric"
                     min={0}
                     placeholder={placeholder}
-                    value={raw}
+                    value={displayed}
                     onChange={(e) => handleChange(e.target.value)}
+                    onBlur={handleBlur}
                     aria-describedby={`${id}-help`}
                     aria-invalid={error !== null}
                     disabled={disabled}
@@ -92,21 +103,28 @@ function TimeoutField({
 
 export function NetworkSection({ draft, onChange }: Props) {
     const poolIdleForm: PoolIdleFormState = poolIdleTimeoutToFormState(draft.pool_idle_timeout);
-    const [poolIdleRaw, setPoolIdleRaw] = useState<string>(poolIdleForm.secondsInput);
+    // Local state: in-flight numeric draft (null = not editing, derive from
+    // prop) + inline error. Both are reset by the checkbox toggle handler so
+    // that disabling eviction always clears stale errors and edits.
+    const [poolIdleDraft, setPoolIdleDraft] = useState<string | null>(null);
     const [poolIdleError, setPoolIdleError] = useState<string | null>(null);
 
+    const displayedPoolIdle = poolIdleDraft ?? poolIdleForm.secondsInput;
+
     const handleEvictToggle = (next: boolean) => {
+        setPoolIdleDraft(null);
+        setPoolIdleError(null);
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: next,
-                secondsInput: poolIdleRaw,
+                secondsInput: poolIdleForm.secondsInput,
             }),
         });
     };
 
-    const handlePoolIdleChange = (next: string) => {
-        setPoolIdleRaw(next);
-        const result = poolIdleTimeoutSchema.safeParse(next);
+    const handlePoolIdleChange = (nextRaw: string) => {
+        setPoolIdleDraft(nextRaw);
+        const result = poolIdleTimeoutSchema.safeParse(nextRaw);
         if (!result.success) {
             setPoolIdleError(result.error.errors[0]?.message ?? "Invalid value");
             return;
@@ -115,9 +133,13 @@ export function NetworkSection({ draft, onChange }: Props) {
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: poolIdleForm.evictIdle,
-                secondsInput: next,
+                secondsInput: nextRaw,
             }),
         });
+    };
+
+    const handlePoolIdleBlur = () => {
+        setPoolIdleDraft(null);
     };
 
     return (
@@ -155,7 +177,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         id="socket-timeout"
                         label="Connection Timeout"
                         helper="Time to establish a connection to the server."
-                        initial={draft.socket_timeout}
+                        value={draft.socket_timeout}
                         placeholder="30"
                         schema={socketTimeoutSchema}
                         onCommit={(v) => onChange({ socket_timeout: v })}
@@ -164,7 +186,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         id="read-timeout"
                         label="Read Timeout"
                         helper="Maximum gap between bytes during a download."
-                        initial={draft.read_timeout}
+                        value={draft.read_timeout}
                         placeholder="60"
                         schema={readTimeoutSchema}
                         onCommit={(v) => onChange({ read_timeout: v })}
@@ -176,7 +198,6 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 isSelected={poolIdleForm.evictIdle}
                                 onChange={handleEvictToggle}
                                 aria-controls="pool-idle-timeout"
-                                aria-label="Evict idle connections"
                             >
                                 <span className="settings-label !mb-0">Evict idle connections after</span>
                             </Checkbox>
@@ -186,8 +207,9 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 inputMode="numeric"
                                 min={1}
                                 placeholder="90"
-                                value={poolIdleRaw}
+                                value={displayedPoolIdle}
                                 onChange={(e) => handlePoolIdleChange(e.target.value)}
+                                onBlur={handlePoolIdleBlur}
                                 disabled={!poolIdleForm.evictIdle}
                                 aria-describedby="evict-idle-help"
                                 aria-invalid={poolIdleError !== null}

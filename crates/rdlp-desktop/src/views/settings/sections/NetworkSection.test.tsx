@@ -96,4 +96,29 @@ describe("NetworkSection — timeout controls", () => {
         const numeric = screen.getByPlaceholderText("90") as HTMLInputElement;
         expect(numeric).toBeDisabled();
     });
+
+    it("updates connection-timeout display when draft prop changes externally", () => {
+        const onChange = vi.fn();
+        const { rerender } = render(
+            <NetworkSection draft={{ ...baseDraft, socket_timeout: 30 }} onChange={onChange} />,
+        );
+        let input = screen.getByLabelText(/connection timeout/i) as HTMLInputElement;
+        expect(input.value).toBe("30");
+        rerender(<NetworkSection draft={{ ...baseDraft, socket_timeout: 60 }} onChange={onChange} />);
+        input = screen.getByLabelText(/connection timeout/i) as HTMLInputElement;
+        expect(input.value).toBe("60");
+    });
+
+    it("clears stale pool-idle error when the user unchecks the checkbox", () => {
+        const onChange = vi.fn();
+        render(
+            <NetworkSection draft={{ ...baseDraft, pool_idle_timeout: 90 }} onChange={onChange} />,
+        );
+        const numeric = screen.getByPlaceholderText("90") as HTMLInputElement;
+        fireEvent.change(numeric, { target: { value: "9999" } });
+        expect(screen.getByText(/≤ 3600/)).toBeInTheDocument();
+        const checkbox = screen.getByRole("checkbox", { name: /evict idle/i });
+        fireEvent.click(checkbox);
+        expect(screen.queryByText(/≤ 3600/)).not.toBeInTheDocument();
+    });
 });
