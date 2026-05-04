@@ -357,6 +357,266 @@ mod tests {
         assert_eq!(&written[18..22], b"DATA");
     }
 
+    // ---- Progress capture mock + tests (issue #272) ----
+
+    use std::sync::Mutex;
+
+    struct CaptureCallback {
+        events: Mutex<Vec<DownloadProgress>>,
+    }
+
+    impl CaptureCallback {
+        fn new() -> Self {
+            Self {
+                events: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn events(&self) -> Vec<DownloadProgress> {
+            self.events.lock().expect("lock").clone()
+        }
+    }
+
+    impl ProgressCallback for CaptureCallback {
+        fn on_progress(&self, p: &DownloadProgress) {
+            self.events.lock().expect("lock").push(p.clone());
+        }
+        fn on_complete(&self, _stats: &DownloadStats) {}
+        fn on_error(&self, _msg: &str) {}
+    }
+
+    fn frag(url: String) -> Fragment {
+        Fragment {
+            url,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
+            duration: None,
+            filesize: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_final_boundary_emit_covers_all_frags() {
+        // N=2 fragments. The 100ms throttle suppresses intermediate emits when
+        // fragments arrive quickly, but the final-fragment boundary rule
+        // (`frags_done == total_frags`) guarantees at least one event with
+        // segments_downloaded == total_segments and bytes_downloaded == total.
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let _f2 = server
+            .mock("GET", "/f2")
+            .with_body(vec![0u8; 200])
+            .create_async()
+            .await;
+        let frags = vec![
+            frag(format!("{}/f1", server.url())),
+            frag(format!("{}/f2", server.url())),
+        ];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            Some(300),
+            Some(&cb),
+            tmp.path(),
+            None,
+        )
+        .await
+        .expect("ok");
+        let evs = cb.events();
+        assert!(!evs.is_empty(), "boundary emit must fire at least once");
+        let last = evs.last().expect("at least one");
+        assert_eq!(last.segments_downloaded, Some(2));
+        assert_eq!(last.total_segments, Some(2));
+        assert_eq!(last.bytes_downloaded, 300);
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_none_callback_runs_to_completion() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        assert_eq!(stats.bytes_downloaded, 100);
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_expected_total_none_emits_none_total() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _ =
+            download_pre_resolved_fragments(&http, &frags, None, None, Some(&cb), tmp.path(), None)
+                .await
+                .expect("ok");
+        let evs = cb.events();
+        assert!(!evs.is_empty());
+        assert!(
+            evs.iter()
+                .all(|e| e.total_bytes.is_none() && e.progress.is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_cdn_overrun_saturates_at_one() {
+        // expected_total smaller than actual bytes — Progress::from_ratio saturates.
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 200])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _ = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            Some(100),
+            Some(&cb),
+            tmp.path(),
+            None,
+        )
+        .await
+        .expect("ok");
+        let final_p = cb
+            .events()
+            .last()
+            .expect("at least one")
+            .progress
+            .expect("set");
+        assert!((final_p.fraction() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_expected_total_larger_completes_under_one() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _ = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            Some(1_000),
+            Some(&cb),
+            tmp.path(),
+            None,
+        )
+        .await
+        .expect("ok");
+        let final_p = cb
+            .events()
+            .last()
+            .expect("at least one")
+            .progress
+            .expect("set");
+        assert!(final_p.fraction() < 1.0);
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_zero_fragments_no_emit() {
+        let frags: Vec<Fragment> = vec![];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, Some(&cb), tmp.path(), None)
+                .await
+                .expect("ok");
+        assert_eq!(stats.bytes_downloaded, 0);
+        assert_eq!(cb.events().len(), 0);
+        assert!(tmp.path().exists());
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_n_one_emits_exactly_once() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let frags = vec![frag(format!("{}/f1", server.url()))];
+        let cb = CaptureCallback::new();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _ = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            Some(100),
+            Some(&cb),
+            tmp.path(),
+            None,
+        )
+        .await
+        .expect("ok");
+        assert_eq!(cb.events().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn fragment_progress_mid_stream_failure_returns_error_partial_file() {
+        let mut server = mockito::Server::new_async().await;
+        let _f1 = server
+            .mock("GET", "/f1")
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+        let _f2 = server
+            .mock("GET", "/f2")
+            .with_status(500)
+            .create_async()
+            .await;
+        let frags = vec![
+            frag(format!("{}/f1", server.url())),
+            frag(format!("{}/f2", server.url())),
+        ];
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let res =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await;
+        assert!(res.is_err());
+        let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
+        assert!(
+            written >= 100,
+            "first fragment should be on disk; got {written}"
+        );
+    }
+
     #[tokio::test]
     async fn single_init_fetched_once() {
         let mut server = mockito::Server::new_async().await;
