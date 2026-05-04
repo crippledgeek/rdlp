@@ -149,7 +149,12 @@ impl HlsSizeDetector {
                 // Validate the resolved media playlist URL (SSRF protection)
                 BaseExtractor::validate_url_security(&media_playlist_url)?;
 
-                // Recursively parse the media playlist
+                // Recursively parse the media playlist. Each recursion level
+                // passes the FULL `timeout` to its own `RequestBuilder::timeout`
+                // (per-request budget, not per-tree). The wall-clock cap on
+                // the entire call tree is enforced by the outer
+                // `tokio::time::timeout` at the call site in
+                // `hls/format_detection.rs`, not here.
                 Box::pin(self.parse_playlist(&media_playlist_url, timeout)).await
             }
         }
