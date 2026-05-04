@@ -33,7 +33,7 @@ The issue's premise that we are "mirroring the existing `--socket-timeout`" is f
 |-------|------|---------|----------|
 | `socket_timeout` | `Option<u64>` | `Some(30)` | none |
 | `read_timeout` | `Option<u64>` | `None` (= use http default) | none |
-| `pool_idle_timeout` | `Option<u64>` | `None` (= use reqwest default) | `Some(0)` = disable eviction (keep idle sockets forever, mapped to `pool_idle_timeout(None)` at the wreq/reqwest layer) |
+| `pool_idle_timeout` | `Option<u64>` | `None` (= use reqwest default of 90s) | `Some(0)` = disable eviction (keep idle sockets forever). The sentinel is translated to `pool_idle_timeout(None)` inside `HttpClientConfig::from_rdlp_config` (`crates/rdlp-http/src/config.rs:87-89`); see the existing test `from_rdlp_config_maps_pool_idle_timeout_zero_to_none`. |
 
 All three are validated by `Config::validate()` returning `ConfigValidationError`.
 
@@ -157,7 +157,7 @@ import { z } from "zod";
 
 const positiveSeconds = z.preprocess(
     (v) => (v === "" || v === null ? null : Number(v)),
-    z.union([z.null(), z.number().int().positive().max(86_400)]),
+    z.number().int().positive().max(86_400).nullable(),
 );
 
 export const networkTimeoutsSchema = z.object({
