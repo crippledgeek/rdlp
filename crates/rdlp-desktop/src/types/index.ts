@@ -385,6 +385,9 @@ export interface AppSettings {
     cookies_file: string | null;
     proxy: string | null;
     rate_limit: string | null;
+    socket_timeout: number | null;
+    read_timeout: number | null;
+    pool_idle_timeout: number | null;
     normalize_audio: boolean;
     audio_gain_target: number | null;
     loudnorm: boolean;

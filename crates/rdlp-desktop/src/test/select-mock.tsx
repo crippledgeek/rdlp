@@ -148,12 +148,20 @@ function SelectSeparator() { return <hr />; }
 function SelectScrollUpButton() { return null; }
 function SelectScrollDownButton() { return null; }
 
+// React Aria-style aliases used by the desktop's Jolly UI Select.
+// SelectPopover wraps the listbox; SelectListBox is the listbox container.
+// Map both to SelectContent so existing test queries (role="listbox", role="option") still work.
+const SelectPopover = SelectContent;
+const SelectListBox = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+
 export {
     Select,
     SelectContent,
     SelectGroup,
     SelectItem,
     SelectLabel,
+    SelectListBox,
+    SelectPopover,
     SelectScrollDownButton,
     SelectScrollUpButton,
     SelectSeparator,

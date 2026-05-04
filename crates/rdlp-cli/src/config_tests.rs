@@ -54,6 +54,9 @@ fn default_args() -> Args {
         keep_video: false,
         ffmpeg_location: None,
         proxy: None,
+        socket_timeout: None,
+        read_timeout: None,
+        pool_idle_timeout: None,
         limit_rate: None,
         cookies_from_browser: None,
         cookies: None,
@@ -592,5 +595,114 @@ fn accepts_proxy_at_public_https_endpoint() {
     assert_eq!(
         cfg.proxy.as_deref(),
         Some("https://corp-proxy.example.com:443")
+    );
+}
+
+// === Network timeout CLI tests (#278) ===
+
+#[test]
+fn cli_socket_timeout_flag_sets_field() {
+    use clap::Parser;
+    let args = Args::try_parse_from(["rdlp", "--socket-timeout", "45", "https://example.com/x"])
+        .expect("parse should succeed");
+    assert_eq!(args.socket_timeout, Some(45));
+}
+
+#[test]
+fn cli_read_timeout_flag_sets_field() {
+    use clap::Parser;
+    let args = Args::try_parse_from(["rdlp", "--read-timeout", "120", "https://example.com/x"])
+        .expect("parse should succeed");
+    assert_eq!(args.read_timeout, Some(120));
+}
+
+#[test]
+fn cli_pool_idle_timeout_flag_accepts_zero_sentinel() {
+    use clap::Parser;
+    let args = Args::try_parse_from(["rdlp", "--pool-idle-timeout", "0", "https://example.com/x"])
+        .expect("parse should succeed");
+    assert_eq!(args.pool_idle_timeout, Some(0));
+}
+
+#[test]
+fn cli_pool_idle_timeout_flag_accepts_positive() {
+    use clap::Parser;
+    let args = Args::try_parse_from([
+        "rdlp",
+        "--pool-idle-timeout",
+        "300",
+        "https://example.com/x",
+    ])
+    .expect("parse should succeed");
+    assert_eq!(args.pool_idle_timeout, Some(300));
+}
+
+#[test]
+fn cli_timeout_flags_unset_default_to_none() {
+    use clap::Parser;
+    let args =
+        Args::try_parse_from(["rdlp", "https://example.com/x"]).expect("parse should succeed");
+    assert!(args.socket_timeout.is_none());
+    assert!(args.read_timeout.is_none());
+    assert!(args.pool_idle_timeout.is_none());
+}
+
+#[test]
+fn cli_timeout_flags_merge_into_config() {
+    let mut args = default_args();
+    args.socket_timeout = Some(45);
+    args.read_timeout = Some(200);
+    args.pool_idle_timeout = Some(0);
+
+    let cfg = merge_config(&args, Config::default(), no_interactive()).expect("merge");
+    assert_eq!(cfg.socket_timeout, Some(45));
+    assert_eq!(cfg.read_timeout, Some(200));
+    assert_eq!(cfg.pool_idle_timeout, Some(0));
+}
+
+#[test]
+fn cli_timeout_flags_unset_preserve_config() {
+    let args = default_args();
+    // Seed all three with NON-default values so a regression that overwrites
+    // a field with `Config::default()` would no longer pass by coincidence.
+    // `Config::default().socket_timeout` is `Some(30)`, hence 99 here.
+    let file_config = Config {
+        socket_timeout: Some(99),
+        read_timeout: Some(77),
+        pool_idle_timeout: Some(88),
+        ..Config::default()
+    };
+    let cfg = merge_config(&args, file_config, no_interactive()).expect("merge");
+    assert_eq!(cfg.socket_timeout, Some(99));
+    assert_eq!(cfg.read_timeout, Some(77));
+    assert_eq!(cfg.pool_idle_timeout, Some(88));
+}
+
+#[test]
+fn cli_socket_timeout_zero_is_rejected_by_validate() {
+    let mut args = default_args();
+    args.socket_timeout = Some(0);
+    let err = merge_config(&args, Config::default(), no_interactive())
+        .expect_err("Config::validate must reject socket_timeout=0");
+    let msg = format!("{err:#}");
+    // ConfigValidationError::OutOfRange { field, .. } renders as "{field}: {reason}";
+    // pin the field name so an unrelated validation triggering the same Err
+    // would no longer make this test pass silently.
+    assert!(
+        msg.contains("socket_timeout"),
+        "rejection should cite socket_timeout, got: {msg}"
+    );
+}
+
+#[test]
+fn cli_pool_idle_timeout_above_max_is_rejected_by_validate() {
+    let mut args = default_args();
+    args.pool_idle_timeout = Some(9999);
+    let err = merge_config(&args, Config::default(), no_interactive())
+        .expect_err("Config::validate must reject pool_idle_timeout > 3600");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("pool_idle_timeout"),
+        "rejection should cite pool_idle_timeout, got: {msg}"
     );
 }

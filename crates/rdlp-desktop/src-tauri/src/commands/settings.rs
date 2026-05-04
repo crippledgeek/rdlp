@@ -72,10 +72,10 @@ pub async fn update_settings(
         .validate_security()
         .map_err(|e| AppError::InvalidInput {
             field: match &e {
-                SettingsValidationError::CookiesFileTraversal => "cookies_file",
-                SettingsValidationError::InvalidProxy(_) => "proxy",
-            }
-            .to_owned(),
+                SettingsValidationError::CookiesFileTraversal => "cookies_file".to_owned(),
+                SettingsValidationError::InvalidProxy(_) => "proxy".to_owned(),
+                SettingsValidationError::TimeoutOutOfRange { field, .. } => (*field).to_owned(),
+            },
             message: e.to_string(),
         })?;
 

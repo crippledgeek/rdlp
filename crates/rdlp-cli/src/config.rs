@@ -279,6 +279,15 @@ pub fn merge_config(
             .map_err(|e| anyhow::anyhow!("--proxy validation failed: {e}"))?;
         config.proxy = Some(proxy.clone());
     }
+    if let Some(secs) = args.socket_timeout {
+        config.socket_timeout = Some(secs);
+    }
+    if let Some(secs) = args.read_timeout {
+        config.read_timeout = Some(secs);
+    }
+    if let Some(secs) = args.pool_idle_timeout {
+        config.pool_idle_timeout = Some(secs);
+    }
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);
