@@ -97,7 +97,7 @@ async fn pre_resolved_fragments_skip_mpd_fetch() {
 
     let downloader = DashDownloader::new();
     let stats = downloader
-        .download_format(&format, &output, None)
+        .download_format(&format, &output, None, None)
         .await
         .expect("download should succeed");
 

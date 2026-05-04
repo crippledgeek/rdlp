@@ -40,13 +40,11 @@ use std::time::{Duration, Instant};
 /// completes; read `bytes_per_sec()` for the smoothed speed; read
 /// `eta(remaining)` for the projected time to completion.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // wired into download_pre_resolved_fragments in the next batch (issue #272)
 pub(crate) struct SpeedTracker {
     smooth_speed: f64,
     has_observation: bool,
 }
 
-#[allow(dead_code)] // wired into download_pre_resolved_fragments in the next batch (issue #272)
 impl SpeedTracker {
     /// EWMA alpha — matches the inline value in `spawn_progress_reporter`.
     const ALPHA: f64 = 0.3;

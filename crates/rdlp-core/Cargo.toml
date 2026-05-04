@@ -9,6 +9,7 @@ license.workspace = true
 rdlp-types = { path = "../rdlp-types" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 wreq = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -23,7 +23,7 @@ async fn fragments_none_returns_typed_download_error() {
     let output = tmp.path().join("video.ts");
 
     let result = HlsDownloader::new()
-        .download_format(&format, &output, None)
+        .download_format(&format, &output, None, None)
         .await;
 
     assert!(
@@ -140,7 +140,7 @@ async fn pre_resolved_fragments_skip_playlist_fetch() {
     let output = tmp.path().join("video.m4s");
 
     let stats = HlsDownloader::new()
-        .download_format(&format, &output, None)
+        .download_format(&format, &output, None, None)
         .await
         .expect("pre-resolved download must succeed");
 
@@ -199,7 +199,7 @@ async fn fragment_404_propagates_as_error() {
     let output = tmp.path().join("video.ts");
 
     let result = HlsDownloader::new()
-        .download_format(&format, &output, None)
+        .download_format(&format, &output, None, None)
         .await;
     assert!(result.is_err(), "404 must propagate");
 }
@@ -218,7 +218,7 @@ async fn empty_fragments_vec_writes_empty_file() {
     let output = tmp.path().join("video.ts");
 
     let stats = HlsDownloader::new()
-        .download_format(&format, &output, None)
+        .download_format(&format, &output, None, None)
         .await
         .expect("empty vec writes empty file");
     // Documented no-op: the shared helper writes zero bytes when fragments

@@ -98,7 +98,12 @@ impl Orchestrator {
                 progress_callback,
             )
         } else {
-            downloader.download_format(format, output_path, progress_callback)
+            downloader.download_format(
+                format,
+                output_path,
+                progress_callback,
+                Some(&self.cancel_token),
+            )
         };
 
         // Race between download and cancellation token

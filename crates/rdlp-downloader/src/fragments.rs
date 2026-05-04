@@ -14,11 +14,13 @@
 use std::path::Path;
 use std::time::Instant;
 
-use rdlp_core::{DownloadStats, Result};
-use rdlp_types::Fragment;
+use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
+use rdlp_types::{Fragment, Progress};
 use tokio::io::AsyncWriteExt as _;
+use tokio_util::sync::CancellationToken;
 
 use crate::http::HttpDownloader;
+use crate::progress::SpeedTracker;
 use rdlp_security;
 
 /// Fetch a pre-resolved list of fragment URLs and concatenate them into
@@ -35,7 +37,10 @@ pub async fn download_pre_resolved_fragments(
     http: &HttpDownloader,
     fragments: &[Fragment],
     base_url: Option<&str>,
+    expected_total: Option<u64>,
+    progress: Option<&dyn ProgressCallback>,
     output: &Path,
+    cancel: Option<&CancellationToken>,
 ) -> Result<DownloadStats> {
     let started = Instant::now();
 
@@ -52,6 +57,19 @@ pub async fn download_pre_resolved_fragments(
 
     let mut total_bytes: u64 = 0;
     let mut current_init: Option<String> = None;
+
+    const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+    let mut last_emit = Instant::now();
+    let mut last_observed_at = Instant::now();
+    let mut frags_done: u64 = 0;
+    let total_frags = fragments.len() as u64;
+    let mut speed = SpeedTracker::new();
+
+    // Pre-loop cancellation check.
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        out_file.flush().await.ok();
+        return Err(rdlp_core::RdlpError::Cancelled);
+    }
 
     for frag in fragments {
         let resolved_url = resolve_fragment_url(&frag.url, base_url)?;
@@ -99,6 +117,37 @@ pub async fn download_pre_resolved_fragments(
             })?;
 
         total_bytes += bytes.len() as u64;
+
+        // Update progress accounting.
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_observed_at);
+        speed.observe(bytes.len() as u64, elapsed);
+        last_observed_at = now;
+        frags_done += 1;
+
+        // Emit progress (100ms throttle OR fragment-N boundary).
+        if let Some(cb) = progress
+            && (now.duration_since(last_emit) >= PROGRESS_INTERVAL || frags_done == total_frags)
+        {
+            cb.on_progress(&DownloadProgress {
+                bytes_downloaded: total_bytes,
+                total_bytes: expected_total,
+                progress: expected_total.map(|t| Progress::from_ratio(total_bytes, t)),
+                segments_downloaded: Some(frags_done),
+                total_segments: Some(total_frags),
+                speed: speed.bytes_per_sec(),
+                eta: speed.eta(expected_total.map(|t| t.saturating_sub(total_bytes))),
+                duration_downloaded: None,
+                total_duration: None,
+            });
+            last_emit = now;
+        }
+
+        // Cancellation check between fragments.
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            out_file.flush().await.ok();
+            return Err(rdlp_core::RdlpError::Cancelled);
+        }
     }
 
     out_file
@@ -239,7 +288,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, tmp.path())
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
             .await
             .expect("download must succeed with Range header");
     }
@@ -294,7 +343,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, tmp.path())
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
             .await
             .expect("multi-init download must succeed");
 
@@ -343,7 +392,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, tmp.path())
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
             .await
             .expect("single-init download must succeed");
 
