@@ -931,6 +931,55 @@ mod tests {
         assert_eq!(expanded[1].url, "https://koreanporn.stream/Movie.mp4");
     }
 
+    /// Regression guard for #258 + #279 — confirms koreanpornmovie's HLS row
+    /// expansion happens BEFORE size probing.
+    ///
+    /// Mirrors the helper pair invoked by `extract` (`expand_hls_in_place` then
+    /// `detect_format_sizes_lazy`). The master `expect(1)` assertion fails if
+    /// the order is reverted: `detect_hls_variants` would re-fetch the master,
+    /// pushing the GET count to >= 2.
+    #[tokio::test]
+    async fn test_koreanpornmovie_helper_pair_fetches_master_exactly_once() {
+        use crate::hls::test_support::{MASTER_TWO_VARIANTS, VARIANT_MEDIA, test_ctx};
+        use std::sync::Arc;
+
+        let mut server = mockito::Server::new_async().await;
+        let master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_TWO_VARIANTS)
+            .expect(1)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(VARIANT_MEDIA)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(VARIANT_MEDIA)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let master_url = format!("{}/master.m3u8", server.url());
+        let hls = Format::new("hls", &master_url, "m3u8", DownloadProtocol::M3u8);
+
+        let ctx = test_ctx();
+        let http: Arc<wreq::Client> = ctx.http_client.clone();
+
+        let formats = crate::hls::expand_hls_in_place(vec![hls], http).await;
+        let (formats, _flags) =
+            crate::hls::detect_format_sizes_lazy(formats, &ctx, "KoreanPornMovie").await;
+
+        assert!(
+            formats.iter().all(|fmt| fmt.fragments.is_some()),
+            "expanded formats must carry fragments"
+        );
+        master.assert_async().await;
+    }
+
     #[test]
     fn make_video_format_rejects_m3u8_substring_in_query() {
         // Regression: issue #268. A crafted MP4 URL with `.m3u8` in the
