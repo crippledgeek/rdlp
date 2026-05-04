@@ -209,6 +209,7 @@ impl From<RdlpError> for RdlpApiError {
             },
             RdlpError::Unsupported(msg) => Self::UnsupportedPlatform { feature: msg },
             RdlpError::Other(msg) => Self::Soft { message: msg },
+            RdlpError::Cancelled => Self::UserCancelled,
         }
     }
 }
