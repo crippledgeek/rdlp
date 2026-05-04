@@ -234,15 +234,18 @@ pub struct NetworkOptions {
     /// Maximum number of retries for failed requests. `None` preserves base config.
     pub retries: Option<u32>,
     /// Connect/handshake timeout in seconds. Maps to `Config::socket_timeout`.
-    /// `None` preserves base config. Allowed range: 1..=300.
+    /// `None` preserves base config. Allowed range: 1..=300 (enforced by
+    /// `Config::validate()`).
     pub timeout_secs: Option<u64>,
     /// Per-read idle timeout in seconds. Maps to `Config::read_timeout`.
-    /// `None` preserves base config. Allowed range: 1..=600.
+    /// `None` preserves base config. Allowed range: 1..=600 (enforced by
+    /// `Config::validate()`).
     pub read_timeout_secs: Option<u64>,
     /// Idle keep-alive socket eviction timeout in seconds. Maps to
     /// `Config::pool_idle_timeout`. `None` preserves base config.
     /// `Some(0)` is the documented sentinel meaning "disable eviction
-    /// (keep idle sockets forever)"; allowed range: 0..=3600.
+    /// (keep idle sockets forever)"; allowed range: 0..=3600 (enforced
+    /// by `Config::validate()`).
     pub pool_idle_timeout_secs: Option<u64>,
     /// Number of concurrent download fragments/chunks. `None` preserves base config.
     pub concurrent_fragments: Option<u32>,

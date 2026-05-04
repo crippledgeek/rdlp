@@ -278,16 +278,20 @@ pub struct Args {
     #[arg(long)]
     pub proxy: Option<String>,
 
-    /// Connect/handshake timeout in seconds (range: 1..=300).
+    /// Connect/handshake timeout in seconds.
+    /// Validated post-parse by `Config::validate()`: must be 1..=300.
     #[arg(long, value_name = "SECS")]
     pub socket_timeout: Option<u64>,
 
-    /// Per-read idle timeout in seconds (range: 1..=600).
+    /// Per-read idle timeout in seconds.
+    /// Validated post-parse by `Config::validate()`: must be 1..=600.
     #[arg(long, value_name = "SECS")]
     pub read_timeout: Option<u64>,
 
-    /// Idle keep-alive socket eviction timeout in seconds. Use `0` to keep
-    /// idle connections forever (range: 0..=3600).
+    /// Idle keep-alive socket eviction timeout in seconds. `0` is the
+    /// documented sentinel meaning "disable eviction (keep idle sockets
+    /// forever)".
+    /// Validated post-parse by `Config::validate()`: must be 0..=3600.
     #[arg(long, value_name = "SECS")]
     pub pool_idle_timeout: Option<u64>,
 
