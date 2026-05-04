@@ -555,6 +555,11 @@ mod detect_file_size_timeout_tests {
 
     /// Black-hole TCP listener: accepts connections, then sleeps without
     /// responding. Forces the client to time out instead of completing.
+    ///
+    /// The spawned task is intentionally not joined; it lives for the rest
+    /// of the test process. Each invocation leaks one tokio task plus one
+    /// open TCP listener socket. Acceptable for a handful of tests; revisit
+    /// if the helper sees heavier reuse.
     async fn spawn_blackhole() -> u16 {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
