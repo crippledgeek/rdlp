@@ -360,7 +360,7 @@ impl Default for Config {
             audio_multistreams: false,
 
             // Download options
-            concurrent_fragments: 4,
+            concurrent_fragments: 8,
             rate_limit: None,
             retries: 10,
             fragment_retries: 10,

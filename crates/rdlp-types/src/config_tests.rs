@@ -10,7 +10,7 @@ fn test_default_config() {
     assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
     assert!(config.format.is_none());
     assert!(config.continue_downloads);
-    assert_eq!(config.concurrent_fragments, 4);
+    assert_eq!(config.concurrent_fragments, 8);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn test_validate_config() {
     assert!(config.validate().is_err());
 
     // Fix and test buffer_size
-    config.concurrent_fragments = 4;
+    config.concurrent_fragments = 8;
     config.buffer_size = 0;
     assert!(config.validate().is_err());
 
@@ -538,4 +538,15 @@ fn hls_timeouts_round_trip_serde() {
     let back: Config = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back.hls_operation_timeout, Some(15));
     assert_eq!(back.hls_head_probe_timeout, Some(7));
+}
+
+#[test]
+fn test_default_concurrent_fragments_is_8() {
+    let config = Config::default();
+    assert_eq!(
+        config.concurrent_fragments, 8,
+        "default concurrent_fragments was bumped 4 → 8 in F1 to match \
+         AdaptiveConfig::default().max_connections and align with industry standard \
+         (yt-dlp 1..16, N_m3u8DL-RE 8). See docs/superpowers/specs/2026-05-04-download-optimization-audit.md Q4."
+    );
 }
