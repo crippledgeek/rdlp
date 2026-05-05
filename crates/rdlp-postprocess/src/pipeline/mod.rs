@@ -31,6 +31,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use rdlp_core::PostProcessCallbackFactory;
 use rdlp_types::InfoDict;
@@ -54,6 +55,20 @@ pub enum PipelineError {
         /// Human-readable cause.
         cause: String,
     },
+    /// The pipeline was cancelled via its `CancellationToken`.
+    ///
+    /// Surfaced when `Pipeline::run`'s final receiver closes AND the token
+    /// has been cancelled — the cascade of dropped `out_tx`s in `spawn_chain`
+    /// stage tasks reaches the final receiver, and the post-loop check sees
+    /// `token.is_cancelled() == true`. Distinct from `StageFailure` because
+    /// no stage actually errored — the work was simply abandoned on user
+    /// cancel. Call sites (notably the orchestrator at
+    /// `crates/rdlp-api/src/orchestrator/postprocess.rs`) MUST distinguish
+    /// this from `StageFailure` via `anyhow::Error::downcast_ref` and
+    /// propagate cancellation as `OrchestratorError::UserCancelled` rather
+    /// than the silent warn-and-fallback path used for stage failures.
+    #[error("pipeline cancelled by token")]
+    Cancelled,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +183,7 @@ impl Pipeline {
         is_hls: bool,
         verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
+        cancel: Option<CancellationToken>,
     ) -> anyhow::Result<Vec<std::path::PathBuf>> {
         let _permit =
             self.concurrency.acquire().await.map_err(|_| {
@@ -191,37 +207,49 @@ impl Pipeline {
             encoding_tool: None,
         };
 
+        // `None` callers get a fresh token that nobody else holds — zero-cost.
+        // The isolation guarantee is load-bearing: a `None` caller can never
+        // observe a spurious cancel because the locally-created token is held
+        // exclusively by this function's scope (cloned only into the per-stage
+        // tasks below; never escapes outward via channels or shared state).
+        // A future refactor that hands the local token to a sibling supervisor
+        // task would silently break this property — keep it scope-local.
+        let token = cancel.unwrap_or_default();
+
         // Build channel chain: one mpsc(1) between consecutive stages.
         // first_tx → stage_0 → stage_1 → ... → stage_N → final_rx
-        let mut final_rx = self.spawn_chain(msg);
+        let mut final_rx = self.spawn_chain(msg, &token);
 
         // Await the final message.
-        match final_rx.recv().await {
-            Some(final_msg) => {
-                // FileTracker::cleanup performs N × std::fs::remove_file and
-                // std::fs::rename. These are blocking syscalls that can stall
-                // the async runtime on slow or network filesystems. Move the
-                // work to a blocking worker so the executor stays responsive
-                // for any concurrent pipeline runs.
-                let current_files = tokio::task::spawn_blocking(move || {
-                    let mut tracker = final_msg.tracker;
-                    tracker.cleanup();
-                    tracker.current_files
-                })
-                .await
-                .map_err(|e| anyhow::anyhow!("pipeline cleanup task join failed: {e}"))?;
-                Ok(current_files)
+        let Some(final_msg) = final_rx.recv().await else {
+            // If the cascade ended because the token was cancelled, surface that
+            // distinct from "pipeline terminated with no output" (which is a bug
+            // scenario — every stage cascaded None without error).
+            if token.is_cancelled() {
+                return Err(PipelineError::Cancelled.into());
             }
-            None => {
-                // Pipeline was interrupted — recover error from the oneshot.
-                match error_rx.await.ok() {
-                    Some(err) => Err(anyhow::anyhow!("{err}")),
-                    None => Err(anyhow::anyhow!(
-                        "pipeline terminated with no output and no error"
-                    )),
-                }
-            }
-        }
+            // Pipeline was interrupted — recover error from the oneshot.
+            return match error_rx.await.ok() {
+                Some(err) => Err(anyhow::anyhow!("{err}")),
+                None => Err(anyhow::anyhow!(
+                    "pipeline terminated with no output and no error"
+                )),
+            };
+        };
+
+        // FileTracker::cleanup performs N × std::fs::remove_file and
+        // std::fs::rename. These are blocking syscalls that can stall
+        // the async runtime on slow or network filesystems. Move the
+        // work to a blocking worker so the executor stays responsive
+        // for any concurrent pipeline runs.
+        let current_files = tokio::task::spawn_blocking(move || {
+            let mut tracker = final_msg.tracker;
+            tracker.cleanup();
+            tracker.current_files
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("pipeline cleanup task join failed: {e}"))?;
+        Ok(current_files)
     }
 
     /// Run the pipeline concurrently for multiple videos.
@@ -235,12 +263,14 @@ impl Pipeline {
         config: Arc<PostProcess>,
         verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
+        cancel: Option<CancellationToken>,
     ) -> Vec<anyhow::Result<Vec<std::path::PathBuf>>> {
         let mut handles = Vec::with_capacity(inputs.len());
         for input in inputs {
             let pipeline = Arc::clone(&self);
             let config = Arc::clone(&config);
             let factory = callback_factory.clone();
+            let cancel_clone = cancel.clone();
             let handle = tokio::spawn(async move {
                 pipeline
                     .run(
@@ -251,6 +281,7 @@ impl Pipeline {
                         input.is_hls,
                         verbose,
                         factory,
+                        cancel_clone,
                     )
                     .await
             });
@@ -274,7 +305,11 @@ impl Pipeline {
     /// Each stage task reads from `in_rx`, may process or pass-through,
     /// then sends to `out_tx`. When a fatal stage fails, it drops `out_tx`
     /// which cascades None through all downstream stages.
-    fn spawn_chain(&self, initial_msg: PipelineMessage) -> mpsc::Receiver<PipelineMessage> {
+    fn spawn_chain(
+        &self,
+        initial_msg: PipelineMessage,
+        token: &CancellationToken,
+    ) -> mpsc::Receiver<PipelineMessage> {
         if self.stages.is_empty() {
             // No stages — connect directly.
             let (tx, rx) = mpsc::channel::<PipelineMessage>(1);
@@ -311,11 +346,33 @@ impl Pipeline {
                 .expect("pipeline: rxs has stages+1 elements; iteration {i} must yield Some");
             let out_tx = txs[i + 1].clone();
             let stage_name = stage.name().to_owned();
+            let stage_token = token.clone();
 
             tokio::spawn(async move {
                 let mut in_rx = in_rx_i;
-                let Some(msg) = in_rx.recv().await else {
-                    return; // upstream cascade
+                // Cancellation granularity: this select! fires BETWEEN stages.
+                // A stage already executing inside `process()` (e.g. FFmpeg
+                // work in MergeStage / RecodeStage) will not observe the
+                // token until it returns — `spawn_blocking` workers cannot
+                // be interrupted, and FFmpeg's `AVIOInterruptCB` is IO-layer
+                // only (does not interrupt codec encode/decode loops). Mid-
+                // stage interruption is a separate, deferred follow-up.
+                //
+                // `biased;` ensures cancel observation wins ties — without
+                // it, tokio::select!'s pseudo-random arm selection could
+                // process one more message after the cancel fired. Same
+                // pattern used in `crates/rdlp-downloader/src/fragments.rs`
+                // for the per-fragment fetch race.
+                let msg = tokio::select! {
+                    biased;
+                    () = stage_token.cancelled() => {
+                        drop(out_tx); // cascade None downstream — mirrors fatal-error path
+                        return;
+                    }
+                    result = in_rx.recv() => match result {
+                        Some(m) => m,
+                        None => return, // upstream cascade (existing behavior)
+                    },
                 };
 
                 if !stage.should_run(&msg) {
@@ -380,6 +437,18 @@ pub struct BatchInput {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// 8-tuple returned by `run_args` for `Pipeline::run` calls in tests.
+    type RunArgs = (
+        InfoDict,
+        Vec<PathBuf>,
+        Arc<PostProcess>,
+        String,
+        bool,
+        bool,
+        Option<PostProcessCallbackFactory>,
+        Option<CancellationToken>,
+    );
 
     fn make_pipeline(stages: Vec<Arc<dyn PipelineStage>>) -> Pipeline {
         let reg = Arc::new(TempRegistry::new());
@@ -463,17 +532,7 @@ mod tests {
         }
     }
 
-    fn run_args(
-        files: Vec<PathBuf>,
-    ) -> (
-        InfoDict,
-        Vec<PathBuf>,
-        Arc<PostProcess>,
-        String,
-        bool,
-        bool,
-        Option<PostProcessCallbackFactory>,
-    ) {
+    fn run_args(files: Vec<PathBuf>) -> RunArgs {
         (
             make_info(),
             files,
@@ -482,16 +541,17 @@ mod tests {
             false,
             false,
             None,
+            None, // cancel — default to None for back-compat tests
         )
     }
 
     #[tokio::test]
     async fn test_pipeline_passthrough() {
         let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) =
+        let (info, files, config, stem, hls, verbose, cb, cancel) =
             run_args(vec![PathBuf::from("/tmp/video.mp4")]);
         let result = pipeline
-            .run(info, files, config, stem, hls, verbose, cb)
+            .run(info, files, config, stem, hls, verbose, cb, cancel)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
@@ -500,10 +560,10 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_skip_stage() {
         let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) =
+        let (info, files, config, stem, hls, verbose, cb, cancel) =
             run_args(vec![PathBuf::from("/tmp/video.mp4")]);
         let result = pipeline
-            .run(info, files, config, stem, hls, verbose, cb)
+            .run(info, files, config, stem, hls, verbose, cb, cancel)
             .await;
         assert!(result.is_ok());
     }
@@ -511,10 +571,10 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_fatal_error_cascades() {
         let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
-        let (info, files, config, stem, hls, verbose, cb) =
+        let (info, files, config, stem, hls, verbose, cb, cancel) =
             run_args(vec![PathBuf::from("/tmp/video.mp4")]);
         let result = pipeline
-            .run(info, files, config, stem, hls, verbose, cb)
+            .run(info, files, config, stem, hls, verbose, cb, cancel)
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -527,10 +587,10 @@ mod tests {
             Arc::new(NonFatalFailStage),
             Arc::new(PassthroughStage),
         ]);
-        let (info, files, config, stem, hls, verbose, cb) =
+        let (info, files, config, stem, hls, verbose, cb, cancel) =
             run_args(vec![PathBuf::from("/tmp/video.mp4")]);
         let result = pipeline
-            .run(info, files, config, stem, hls, verbose, cb)
+            .run(info, files, config, stem, hls, verbose, cb, cancel)
             .await;
         assert!(result.is_ok());
     }
@@ -593,9 +653,9 @@ mod tests {
             }
         });
 
-        let (info, files, config, stem, hls, verbose, cb) = run_args(vec![video.clone()]);
+        let (info, files, config, stem, hls, verbose, cb, cancel) = run_args(vec![video.clone()]);
         let result = pipeline
-            .run(info, files, config, stem, hls, verbose, cb)
+            .run(info, files, config, stem, hls, verbose, cb, cancel)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![video]);
@@ -639,9 +699,10 @@ mod tests {
         for _ in 0..6 {
             let p = StdArc::clone(&pipeline);
             handles.push(tokio::spawn(async move {
-                let (info, files, config, stem, hls, verbose, cb) =
+                let (info, files, config, stem, hls, verbose, cb, cancel) =
                     run_args(vec![PathBuf::from("/tmp/v.mp4")]);
-                p.run(info, files, config, stem, hls, verbose, cb).await
+                p.run(info, files, config, stem, hls, verbose, cb, cancel)
+                    .await
             }));
         }
         for h in handles {
@@ -653,5 +714,241 @@ mod tests {
             "max concurrent was {}",
             MAX_SEEN.load(Ordering::SeqCst)
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::items_after_statements)]
+    async fn pipeline_run_returns_cancelled_when_token_pre_cancelled() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Counter-stage that increments every time `process` is called.
+        let count = Arc::new(AtomicUsize::new(0));
+
+        struct CountingStage(Arc<AtomicUsize>);
+        #[async_trait]
+        impl PipelineStage for CountingStage {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            fn should_run(&self, _msg: &PipelineMessage) -> bool {
+                true
+            }
+            fn is_fatal(&self) -> bool {
+                false
+            }
+            async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(msg)
+            }
+        }
+
+        let pipeline = make_pipeline(vec![Arc::new(CountingStage(Arc::clone(&count)))]);
+        let (info, files, config, stem, hls, verbose, cb, _) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+
+        let token = CancellationToken::new();
+        token.cancel(); // pre-cancel BEFORE run
+
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb, Some(token))
+            .await;
+
+        assert!(result.is_err(), "pre-cancelled token must surface as Err");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<PipelineError>(),
+                Some(PipelineError::Cancelled)
+            ),
+            "expected PipelineError::Cancelled, got: {err:?}"
+        );
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "stage MUST NOT execute when token is pre-cancelled"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::items_after_statements)]
+    async fn pipeline_run_cancels_mid_pipeline() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Stage 0: cancels the token at the end of `process`, returns Ok(msg).
+        // Stages 1, 2: increment a counter; assert they never run.
+        //
+        // Determinism: `process` calls `token.cancel()` BEFORE returning Ok,
+        // so the cancel atomic flag is set before the spawn_chain caller's
+        // `out_tx.send(msg)` runs. Downstream stages' `tokio::select!` is
+        // `biased;` — the cancel arm is checked before the recv arm. Per
+        // tokio docs, `biased;` is a hard ordering guarantee (not "usually"
+        // / "preferred"). So the count assertion is deterministic regardless
+        // of multi-thread scheduling: every downstream stage sees the cancel
+        // first when its task is polled, regardless of whether the message
+        // arrived in its mpsc channel before or after the wake.
+        let token = CancellationToken::new();
+        let token_for_stage = token.clone();
+        let downstream_count = Arc::new(AtomicUsize::new(0));
+
+        struct CancelOnExitStage {
+            token: CancellationToken,
+        }
+        #[async_trait]
+        impl PipelineStage for CancelOnExitStage {
+            fn name(&self) -> &str {
+                "cancel-on-exit"
+            }
+            fn should_run(&self, _msg: &PipelineMessage) -> bool {
+                true
+            }
+            fn is_fatal(&self) -> bool {
+                false
+            }
+            async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+                // Process succeeds, then trigger cancel before returning.
+                self.token.cancel();
+                Ok(msg)
+            }
+        }
+
+        struct DownstreamCountingStage(Arc<AtomicUsize>);
+        #[async_trait]
+        impl PipelineStage for DownstreamCountingStage {
+            fn name(&self) -> &str {
+                "downstream-counting"
+            }
+            fn should_run(&self, _msg: &PipelineMessage) -> bool {
+                true
+            }
+            fn is_fatal(&self) -> bool {
+                false
+            }
+            async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(msg)
+            }
+        }
+
+        let pipeline = make_pipeline(vec![
+            Arc::new(CancelOnExitStage {
+                token: token_for_stage,
+            }),
+            Arc::new(DownstreamCountingStage(Arc::clone(&downstream_count))),
+            Arc::new(DownstreamCountingStage(Arc::clone(&downstream_count))),
+        ]);
+        let (info, files, config, stem, hls, verbose, cb, _) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb, Some(token))
+            .await;
+
+        assert!(result.is_err(), "mid-pipeline cancel must surface as Err");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<PipelineError>(),
+                Some(PipelineError::Cancelled)
+            ),
+            "expected PipelineError::Cancelled, got: {err:?}"
+        );
+        assert_eq!(
+            downstream_count.load(Ordering::SeqCst),
+            0,
+            "downstream stages MUST NOT run after stage 0 cancels the token"
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_run_with_none_cancel_runs_to_completion() {
+        let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
+        let (info, files, config, stem, hls, verbose, cb, _) =
+            run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+
+        let result = pipeline
+            .run(info, files, config, stem, hls, verbose, cb, None)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "None cancel arg MUST run to completion identically to the pre-token behaviour: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::items_after_statements)]
+    async fn run_batch_cancels_all_in_flight_items() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Verifies the shared-parent-token semantic: ONE token cancels ALL
+        // in-flight batch items. We pre-cancel the token so each item's
+        // first stage hits the select! cancel branch deterministically —
+        // this avoids racing the test against tokio's scheduler. The
+        // architectural property under test is "items share the token,"
+        // not "items observe the cancel within X ms."
+        let count = Arc::new(AtomicUsize::new(0));
+
+        struct CountingStage(Arc<AtomicUsize>);
+        #[async_trait]
+        impl PipelineStage for CountingStage {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            fn should_run(&self, _msg: &PipelineMessage) -> bool {
+                true
+            }
+            fn is_fatal(&self) -> bool {
+                false
+            }
+            async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(msg)
+            }
+        }
+
+        let pipeline = std::sync::Arc::new(make_pipeline(vec![Arc::new(CountingStage(
+            Arc::clone(&count),
+        ))]));
+
+        let inputs: Vec<BatchInput> = (0..3)
+            .map(|i| BatchInput {
+                info: make_info(),
+                files: vec![PathBuf::from(format!("/tmp/video-{i}.mp4"))],
+                original_stem: format!("video-{i}"),
+                is_hls: false,
+            })
+            .collect();
+
+        let token = CancellationToken::new();
+        token.cancel(); // pre-cancel — all items see it on first poll
+
+        let results = pipeline
+            .run_batch(
+                inputs,
+                Arc::new(PostProcess::default()),
+                false,
+                None,
+                Some(token),
+            )
+            .await;
+
+        assert_eq!(results.len(), 3, "all 3 batch items must be returned");
+        for (i, result) in results.iter().enumerate() {
+            assert!(
+                result.is_err(),
+                "batch item {i}: shared-token cancel must surface as Err in every item"
+            );
+            let err = result.as_ref().unwrap_err();
+            assert!(
+                matches!(
+                    err.downcast_ref::<PipelineError>(),
+                    Some(PipelineError::Cancelled)
+                ),
+                "batch item {i}: expected PipelineError::Cancelled, got: {err:?}"
+            );
+        }
+        // Stage MAY have run on items that beat the cancel into recv — accept
+        // 0..=3 here (depending on scheduler). The load-bearing assertion is
+        // that every item's RESULT is Err(Cancelled), not the count.
     }
 }

@@ -5,8 +5,10 @@
 use super::{Orchestrator, Result};
 use crate::events::Event;
 use crate::handle::DownloadId;
+use crate::orchestrator::errors::OrchestratorError;
 use log::{debug, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
+use rdlp_postprocess::pipeline::PipelineError;
 use rdlp_types::Progress;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -143,6 +145,7 @@ impl Orchestrator {
                 is_hls,
                 self.config.verbose,
                 callback_factory,
+                Some(self.cancel_token.clone()),
             )
             .await
         {
@@ -163,6 +166,15 @@ impl Orchestrator {
                 Ok(output_files)
             }
             Err(e) => {
+                // Cancellation MUST propagate as OrchestratorError::UserCancelled.
+                // Any non-cancel pipeline error keeps today's silent warn-and-fallback
+                // behaviour (returns the original input files; logs a warning).
+                if matches!(
+                    e.downcast_ref::<PipelineError>(),
+                    Some(PipelineError::Cancelled)
+                ) {
+                    return Err(OrchestratorError::UserCancelled);
+                }
                 warn!("Post-processing pipeline failed: {e}");
                 // Return original files on failure.
                 Ok(files)
