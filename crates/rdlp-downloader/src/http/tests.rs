@@ -602,7 +602,10 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     // means we took the parallel path; the mock asserts ≥2 invocations.
     let _get_range = server
         .mock("GET", "/file.bin")
-        .match_header("range", mockito::Matcher::Regex(r"^bytes=\d+-\d+$".to_string()))
+        .match_header(
+            "range",
+            mockito::Matcher::Regex(r"^bytes=\d+-\d+$".to_string()),
+        )
         .with_status(206)
         .with_body(&body[..1024]) // any body; size mismatch is fine — we only assert call count
         .expect_at_least(2)
@@ -610,7 +613,7 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
         .await;
 
     let downloader = HttpDownloader::new()
-        .with_parallel_threshold(1 * 1024 * 1024)  // 1 MiB — below the 5 MiB file
+        .with_parallel_threshold(1 * 1024 * 1024) // 1 MiB — below the 5 MiB file
         .with_concurrent_fragments(2)
         .with_read_timeout(std::time::Duration::from_secs(5))
         .with_download_timeout(std::time::Duration::from_secs(10));

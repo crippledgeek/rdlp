@@ -553,7 +553,10 @@ fn test_validate_parallel_threshold_rejects_zero() {
     let err = config.validate().unwrap_err();
     assert!(matches!(
         err,
-        ConfigValidationError::OutOfRange { field: "parallel_threshold", .. }
+        ConfigValidationError::OutOfRange {
+            field: "parallel_threshold",
+            ..
+        }
     ));
 }
 
@@ -564,7 +567,10 @@ fn test_validate_parallel_threshold_rejects_above_1_gib() {
     let err = config.validate().unwrap_err();
     assert!(matches!(
         err,
-        ConfigValidationError::OutOfRange { field: "parallel_threshold", .. }
+        ConfigValidationError::OutOfRange {
+            field: "parallel_threshold",
+            ..
+        }
     ));
 }
 
@@ -582,5 +588,8 @@ fn test_validate_parallel_threshold_accepts_boundaries() {
 fn test_validate_parallel_threshold_none_is_valid() {
     let mut config = Config::default();
     config.parallel_threshold = None;
-    assert!(config.validate().is_ok(), "None must be valid (uses downloader default)");
+    assert!(
+        config.validate().is_ok(),
+        "None must be valid (uses downloader default)"
+    );
 }
