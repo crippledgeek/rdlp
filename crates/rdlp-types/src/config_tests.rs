@@ -539,3 +539,48 @@ fn hls_timeouts_round_trip_serde() {
     assert_eq!(back.hls_operation_timeout, Some(15));
     assert_eq!(back.hls_head_probe_timeout, Some(7));
 }
+
+#[test]
+fn test_default_parallel_threshold_is_10_mib() {
+    let config = Config::default();
+    assert_eq!(config.parallel_threshold, Some(10 * 1024 * 1024));
+}
+
+#[test]
+fn test_validate_parallel_threshold_rejects_zero() {
+    let mut config = Config::default();
+    config.parallel_threshold = Some(0);
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange { field: "parallel_threshold", .. }
+    ));
+}
+
+#[test]
+fn test_validate_parallel_threshold_rejects_above_1_gib() {
+    let mut config = Config::default();
+    config.parallel_threshold = Some(1024 * 1024 * 1024 + 1);
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange { field: "parallel_threshold", .. }
+    ));
+}
+
+#[test]
+fn test_validate_parallel_threshold_accepts_boundaries() {
+    let mut config = Config::default();
+    config.parallel_threshold = Some(1);
+    assert!(config.validate().is_ok(), "1 byte must be valid");
+
+    config.parallel_threshold = Some(1024 * 1024 * 1024);
+    assert!(config.validate().is_ok(), "1 GiB must be valid");
+}
+
+#[test]
+fn test_validate_parallel_threshold_none_is_valid() {
+    let mut config = Config::default();
+    config.parallel_threshold = None;
+    assert!(config.validate().is_ok(), "None must be valid (uses downloader default)");
+}

@@ -186,6 +186,14 @@ pub struct Config {
     /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
     pub hls_head_probe_timeout: Option<u64>,
 
+    /// Minimum file size in bytes at which the HTTP downloader switches from
+    /// sequential to parallel chunked download. Below this, parallel fan-out
+    /// overhead (HEAD probes, chunk-merge step) outweighs the throughput gain.
+    /// `None` falls back to the downloader's default
+    /// (`DEFAULT_PARALLEL_THRESHOLD_BYTES`, currently 10 MiB).
+    /// Validated post-load by `Config::validate()`: must be 1..=1_073_741_824 bytes (1 GiB).
+    pub parallel_threshold: Option<u64>,
+
     /// Source IP address to bind to
     pub source_address: Option<String>,
 
@@ -376,6 +384,7 @@ impl Default for Config {
             pool_idle_timeout: None,
             hls_operation_timeout: Some(10),
             hls_head_probe_timeout: Some(5),
+            parallel_threshold: Some(10 * 1024 * 1024),
             source_address: None,
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
@@ -577,6 +586,14 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "hls_head_probe_timeout",
                 reason: "must be 1..=300 seconds",
+            });
+        }
+        if let Some(t) = self.parallel_threshold
+            && !(1..=1024 * 1024 * 1024).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "parallel_threshold",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
             });
         }
 
