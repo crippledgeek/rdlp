@@ -211,15 +211,31 @@ pub async fn download_pre_resolved_fragments(
 
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
-        let (bytes, fetch_elapsed, seg_dur) = item?;
+        // Flush before propagating any per-fragment Err. `tokio::fs::File`'s
+        // `write_all` schedules the actual write on a blocking thread and
+        // returns before the bytes reach the kernel; without an explicit
+        // flush, returning Err drops `out_file` synchronously and abandons
+        // the in-flight spawn_blocking handle — so previously-written
+        // fragment bytes can disappear from the partial output. The success
+        // path already flushes after the loop (see end of function); the
+        // cancellation path already flushes before its own return.
+        // See tokio::fs module docs ("calls to write will return before the
+        // write has finished; flush will wait for the write to finish").
+        let (bytes, fetch_elapsed, seg_dur) = match item {
+            Ok(v) => v,
+            Err(e) => {
+                out_file.flush().await.ok();
+                return Err(e);
+            }
+        };
 
-        out_file
-            .write_all(&bytes)
-            .await
-            .map_err(|e| rdlp_core::RdlpError::Download {
+        if let Err(e) = out_file.write_all(&bytes).await {
+            out_file.flush().await.ok();
+            return Err(rdlp_core::RdlpError::Download {
                 message: format!("write fragment: {e}"),
                 url: Some(output.display().to_string()),
-            })?;
+            });
+        }
 
         total_bytes += bytes.len() as u64;
 
