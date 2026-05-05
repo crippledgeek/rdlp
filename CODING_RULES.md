@@ -50,6 +50,53 @@ This document establishes the core coding standards for the rdlp video downloade
 - Use `Arc<AtomicU64>` for shared progress counters
 - Apply `buffer_unordered` for bounded parallelism
 
+### `tokio::fs::File` — Always flush before early return (Mandatory)
+
+`tokio::fs::File`'s write methods (`write`, `write_all`, `write_buf`, `write_vectored`) schedule the actual I/O on a `spawn_blocking` task and **return BEFORE the kernel write completes**. Dropping the file synchronously (function return, `?` short-circuit) abandons the in-flight handle and previously-buffered bytes can disappear from disk. Documented at [tokio::fs](https://docs.rs/tokio/latest/tokio/fs/index.html): *"calls to `write` will return before the write has finished; `flush` will wait for the write to finish."*
+
+`tokio::io::BufWriter` adds a second buffering layer (app-side buffer) with the same hazard: *"When the BufWriter is dropped, the contents of its buffer will be discarded."* No async Drop in Rust — neither layer auto-flushes.
+
+**Rule:** Any function that owns a `tokio::fs::File` (directly or wrapped in `BufWriter`) and has `?` or `return Err(...)` paths MUST call `writer.flush().await.ok()` before each early return. The flush is best-effort — use `.ok()` so the original error message is preserved as the user-visible failure. The post-loop success-path flush MUST propagate its error normally (`flush().await.map_err(...)?`), since a flush failure on the success path is the primary failure.
+
+**Canonical pattern** (mirrors `crates/rdlp-downloader/src/fragments.rs::download_pre_resolved_fragments`):
+
+```rust
+while let Some(item) = stream.next().await {
+    // Replace `let v = item?;` with explicit match so we can flush on Err.
+    let bytes = match item {
+        Ok(v) => v,
+        Err(e) => {
+            out_file.flush().await.ok();
+            return Err(e);
+        }
+    };
+
+    // Replace `out_file.write_all(&bytes).await.map_err(...)?` likewise.
+    if let Err(e) = out_file.write_all(&bytes).await {
+        out_file.flush().await.ok();
+        return Err(rdlp_core::RdlpError::Download {
+            message: format!("write fragment: {e}"),
+            url: Some(output.display().to_string()),
+        });
+    }
+}
+
+// Success-path flush at end of loop — propagate normally:
+out_file
+    .flush()
+    .await
+    .map_err(|e| rdlp_core::RdlpError::Download {
+        message: format!("flush output: {e}"),
+        url: Some(output.display().to_string()),
+    })?;
+```
+
+**Why this is a hand-checked rule:** No clippy lint as of 2026-05 catches missing-flush-before-drop on async writers. `cargo-careful` doesn't catch it either (semantic loss, not UB). `scopeguard::defer!` runs synchronous closures and cannot `.await`, so RAII flush is not a safe alternative. Manual code review and this rule are the only gates.
+
+**Reviewers MUST reject** any PR that introduces a new `tokio::fs::File` (or `BufWriter<tokio::fs::File>`) write loop with an Err short-circuit that lacks a flush before the early return.
+
+**Atomic writes** via `tokio::fs::write(path, body)` (single call) and `tokio::fs::write_all_buf` on a fully-collected buffer are exempt — they have no intermediate drop point. Sync `std::fs::File` is also exempt — `std::io::BufWriter::Drop` attempts a sync flush (silently swallows any error, but data isn't lost in normal cases).
+
 ## Project Structure
 
 ```
