@@ -54,6 +54,20 @@ pub enum PipelineError {
         /// Human-readable cause.
         cause: String,
     },
+    /// The pipeline was cancelled via its `CancellationToken`.
+    ///
+    /// Surfaced when `Pipeline::run`'s final receiver closes AND the token
+    /// has been cancelled — the cascade of dropped `out_tx`s in `spawn_chain`
+    /// stage tasks reaches the final receiver, and the post-loop check sees
+    /// `token.is_cancelled() == true`. Distinct from `StageFailure` because
+    /// no stage actually errored — the work was simply abandoned on user
+    /// cancel. Call sites (notably the orchestrator at
+    /// `crates/rdlp-api/src/orchestrator/postprocess.rs`) MUST distinguish
+    /// this from `StageFailure` via `anyhow::Error::downcast_ref` and
+    /// propagate cancellation as `OrchestratorError::UserCancelled` rather
+    /// than the silent warn-and-fallback path used for stage failures.
+    #[error("pipeline cancelled by token")]
+    Cancelled,
 }
 
 // ---------------------------------------------------------------------------

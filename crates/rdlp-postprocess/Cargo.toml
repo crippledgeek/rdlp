@@ -12,7 +12,7 @@ rdlp-types = { path = "../rdlp-types" }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
