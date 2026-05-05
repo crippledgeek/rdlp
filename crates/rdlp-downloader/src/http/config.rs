@@ -15,8 +15,10 @@ use std::time::Duration;
 // Constants
 // =============================================================================
 
-/// Minimum file size to enable parallel downloads (10 MB)
-pub(super) const PARALLEL_THRESHOLD: u64 = 10 * 1024 * 1024;
+/// Default minimum file size to enable parallel downloads (10 MiB).
+/// Used when `Config::parallel_threshold` is `None` and as the
+/// `DownloaderConfig::default()` value.
+pub(super) const DEFAULT_PARALLEL_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Progress callback update interval
 pub(super) const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
@@ -51,6 +53,9 @@ pub struct DownloaderConfig {
     pub retry_config: RetryConfig,
     pub concurrent_fragments: usize,
     pub chunk_strategy: ChunkSizeStrategy,
+    /// Minimum file size at which `download_to_file` switches to parallel chunked
+    /// download. Defaults to `DEFAULT_PARALLEL_THRESHOLD_BYTES` (10 MiB).
+    pub parallel_threshold: u64,
     /// Per-read idle timeout (no data received for this long = abort)
     pub read_timeout: Duration,
     /// Total download timeout (entire operation must complete within this)
@@ -79,6 +84,7 @@ impl Default for DownloaderConfig {
             retry_config: RetryConfig::default_config(),
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
+            parallel_threshold: DEFAULT_PARALLEL_THRESHOLD_BYTES,
             read_timeout: DEFAULT_READ_TIMEOUT,
             download_timeout: DEFAULT_DOWNLOAD_TIMEOUT,
             merge_timeout: DEFAULT_MERGE_TIMEOUT,

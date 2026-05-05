@@ -132,6 +132,19 @@ impl HttpDownloader {
         self
     }
 
+    /// Set the minimum file size in bytes at which the downloader switches
+    /// to parallel chunked mode. Below this, sequential I/O is used.
+    /// Default: `DEFAULT_PARALLEL_THRESHOLD_BYTES` (10 MiB).
+    ///
+    /// `bytes` is clamped to a floor of 1 to mirror the `Config::validate()`
+    /// lower bound and prevent threshold = 0 from amplifying HEAD-probe
+    /// traffic on every download.
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_parallel_threshold(mut self, bytes: u64) -> Self {
+        Arc::make_mut(&mut self.config).parallel_threshold = bytes.max(1);
+        self
+    }
+
     /// Set chunk size strategy.
     ///
     /// When `Fixed` or `Legacy` is used, adaptive mode is forced off because
