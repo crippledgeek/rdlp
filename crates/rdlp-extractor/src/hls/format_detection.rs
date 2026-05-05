@@ -9,24 +9,10 @@ use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_types::Codec;
 
-/// Default cap on multi-step HLS probes when `Config::hls_operation_timeout`
-/// is unset. Matches the legacy hard-coded value before #277.
-const DEFAULT_HLS_OPERATION_TIMEOUT_SECS: u64 = 10;
-
 /// Default cap on the single-HEAD probe for non-HLS file size detection
 /// when `Config::hls_head_probe_timeout` is unset. Matches the legacy
 /// hard-coded value before #277.
 const DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS: u64 = 5;
-
-/// Resolve the wall-clock cap for HLS metadata / variant probes from `Config`,
-/// falling back to `DEFAULT_HLS_OPERATION_TIMEOUT_SECS` when unset.
-pub(crate) fn resolve_hls_operation_timeout(config: &rdlp_types::Config) -> std::time::Duration {
-    std::time::Duration::from_secs(
-        config
-            .hls_operation_timeout
-            .unwrap_or(DEFAULT_HLS_OPERATION_TIMEOUT_SECS),
-    )
-}
 
 /// Resolve the wall-clock cap for the non-HLS HEAD-probe from `Config`,
 /// falling back to `DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS` when unset.
@@ -101,18 +87,11 @@ async fn enrich_single_hls_format(
     url: &str,
     extractor_name: &str,
     verbose: bool,
-    op_timeout: std::time::Duration,
 ) -> (Option<bool>, Option<bool>) {
-    use tokio::time::timeout;
-
-    let result = timeout(
-        op_timeout,
-        hls_detector.detect_hls_metadata(url, op_timeout),
-    )
-    .await;
+    let result = hls_detector.detect_hls_metadata(url).await;
 
     let hls_info = match result {
-        Ok(Ok(Some(info))) => info,
+        Ok(Some(info)) => info,
         _ => {
             if verbose {
                 debug!(
@@ -215,7 +194,6 @@ async fn detect_format_sizes_inner(
     use tokio::time::timeout;
 
     let verbose = ctx.config.verbose;
-    let op_timeout = resolve_hls_operation_timeout(&ctx.config);
     let head_timeout = resolve_hls_head_probe_timeout(&ctx.config);
     let mut hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
 
@@ -260,18 +238,14 @@ async fn detect_format_sizes_inner(
 
                 if is_hls {
                     // Try to expand master playlist into per-variant formats
-                    let result = timeout(
-                        op_timeout,
-                        hls_detector.detect_hls_variants(&url, op_timeout),
-                    )
-                    .await;
+                    let variants_res = hls_detector.detect_hls_variants(&url).await;
 
-                    let variants = match result {
+                    let variants = match variants_res {
                         // Expand when the master produced multiple variants,
                         // OR when any audio-only rendition is present (even
                         // if there's only one video-only variant paired with
                         // it — the XHamster AV1 case).
-                        Ok(Ok(v)) if v.len() > 1 || v.iter().any(|x| x.is_audio_only) => v,
+                        Ok(v) if v.len() > 1 || v.iter().any(|x| x.is_audio_only) => v,
                         _ => {
                             // Not a master playlist or detection failed — fall back to
                             // single-format enrichment via detect_hls_metadata
@@ -282,7 +256,6 @@ async fn detect_format_sizes_inner(
                                 &url,
                                 &extractor_name,
                                 verbose,
-                                op_timeout,
                             )
                             .await;
                             return vec![(format, is_live, has_enc)];
@@ -560,27 +533,9 @@ mod is_hls_tests {
 
 #[cfg(test)]
 mod resolve_timeout_tests {
-    use super::{resolve_hls_head_probe_timeout, resolve_hls_operation_timeout};
+    use super::resolve_hls_head_probe_timeout;
     use rdlp_types::Config;
     use std::time::Duration;
-
-    #[test]
-    fn op_timeout_uses_default_when_none() {
-        let c = Config {
-            hls_operation_timeout: None,
-            ..Config::default()
-        };
-        assert_eq!(resolve_hls_operation_timeout(&c), Duration::from_secs(10));
-    }
-
-    #[test]
-    fn op_timeout_uses_override_when_some() {
-        let c = Config {
-            hls_operation_timeout: Some(45),
-            ..Config::default()
-        };
-        assert_eq!(resolve_hls_operation_timeout(&c), Duration::from_secs(45));
-    }
 
     #[test]
     fn head_probe_timeout_uses_default_when_none() {

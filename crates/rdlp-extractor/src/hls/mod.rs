@@ -28,7 +28,7 @@
 //! let detector = HlsSizeDetector::new(http_client, false);
 //!
 //! let m3u8_url = "https://example.com/playlist.m3u8";
-//! if let Some(size) = detector.detect_size(m3u8_url, std::time::Duration::from_secs(10)).await? {
+//! if let Some(size) = detector.detect_size(m3u8_url).await? {
 //!     println!("Total size: {} MB", size / 1_000_000);
 //! }
 //! # Ok(())

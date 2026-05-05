@@ -453,41 +453,9 @@ fn socket_timeout_rejects_above_300() {
 }
 
 #[test]
-fn hls_operation_timeout_default_is_some_10() {
-    let c = Config::default();
-    assert_eq!(c.hls_operation_timeout, Some(10));
-}
-
-#[test]
 fn hls_head_probe_timeout_default_is_some_5() {
     let c = Config::default();
     assert_eq!(c.hls_head_probe_timeout, Some(5));
-}
-
-#[test]
-fn hls_operation_timeout_zero_rejected() {
-    let c = Config {
-        hls_operation_timeout: Some(0),
-        ..Config::default()
-    };
-    let err = c.validate().expect_err("must reject");
-    assert!(format!("{err:#}").contains("hls_operation_timeout"));
-}
-
-#[test]
-fn hls_operation_timeout_above_max_rejected() {
-    let c = Config {
-        hls_operation_timeout: Some(301),
-        ..Config::default()
-    };
-    let err = c.validate().expect_err("must reject");
-    assert!(matches!(
-        err,
-        ConfigValidationError::OutOfRange {
-            field: "hls_operation_timeout",
-            ..
-        }
-    ));
 }
 
 #[test]
@@ -520,23 +488,20 @@ fn hls_head_probe_timeout_above_max_rejected() {
 fn hls_timeouts_partial_json_inherits_struct_default() {
     // Struct-level `#[serde(default)]` means an empty/partial JSON deserializes
     // to `Config::default()`-overlaid values. Pin the documented default
-    // (Some(10) / Some(5)) so a future refactor that strips struct-level
+    // (Some(5)) so a future refactor that strips struct-level
     // serde(default) and forgets to add per-field annotations gets caught.
     let c: Config = serde_json::from_str("{}").expect("partial config must deserialize");
-    assert_eq!(c.hls_operation_timeout, Some(10));
     assert_eq!(c.hls_head_probe_timeout, Some(5));
 }
 
 #[test]
 fn hls_timeouts_round_trip_serde() {
     let c = Config {
-        hls_operation_timeout: Some(15),
         hls_head_probe_timeout: Some(7),
         ..Config::default()
     };
     let json = serde_json::to_string(&c).expect("serialize");
     let back: Config = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(back.hls_operation_timeout, Some(15));
     assert_eq!(back.hls_head_probe_timeout, Some(7));
 }
 
