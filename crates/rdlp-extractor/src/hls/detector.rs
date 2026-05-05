@@ -79,7 +79,7 @@ impl HlsSizeDetector {
     /// #     std::sync::Arc::new(wreq::Client::new()),
     /// #     false
     /// # );
-    /// match detector.detect_size("https://example.com/playlist.m3u8", std::time::Duration::from_secs(10)).await {
+    /// match detector.detect_size("https://example.com/playlist.m3u8").await {
     ///     Ok(Some(size)) => println!("Size: {} MB", size / 1_000_000),
     ///     Ok(None) => println!("Size could not be determined"),
     ///     Err(e) => eprintln!("Error: {e}"),
@@ -93,14 +93,10 @@ impl HlsSizeDetector {
     /// Returns `Err` when:
     /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
     /// - Delegated `detect_info` call fails (`RdlpError::Network` or `RdlpError::Extraction`)
-    pub async fn detect_size(
-        &self,
-        m3u8_url: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Option<u64>> {
+    pub async fn detect_size(&self, m3u8_url: &str) -> Result<Option<u64>> {
         // Use detect_info and extract just the size
         Ok(self
-            .detect_info(m3u8_url, timeout)
+            .detect_info(m3u8_url)
             .await?
             .and_then(|info| info.total_size))
     }
@@ -118,11 +114,7 @@ impl HlsSizeDetector {
     ///
     /// Returns `Err` when:
     /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
-    pub async fn count_segments(
-        &self,
-        m3u8_url: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Option<usize>> {
+    pub async fn count_segments(&self, m3u8_url: &str) -> Result<Option<usize>> {
         // Validate the input URL for security (SSRF protection)
         BaseExtractor::validate_url_security(m3u8_url)?;
 
@@ -131,7 +123,7 @@ impl HlsSizeDetector {
         }
 
         // Parse playlist to extract segment URLs
-        match self.parse_playlist(m3u8_url, timeout).await {
+        match self.parse_playlist(m3u8_url).await {
             Ok(urls) => {
                 let count = urls.len();
                 if self.verbose {
@@ -166,11 +158,7 @@ impl HlsSizeDetector {
     /// Returns `Err` when:
     /// - URL security validation fails (SSRF protection) (`RdlpError::Security`)
     /// - Playlist URL parsing fails (`RdlpError::Extraction`)
-    pub async fn detect_info(
-        &self,
-        m3u8_url: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Option<HlsInfo>> {
+    pub async fn detect_info(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
         let start = std::time::Instant::now();
 
         // Validate the input URL for security (SSRF protection)
@@ -181,7 +169,7 @@ impl HlsSizeDetector {
         }
 
         // Step 1: Parse playlist to extract segment URLs
-        let segment_urls = match self.parse_playlist(m3u8_url, timeout).await {
+        let segment_urls = match self.parse_playlist(m3u8_url).await {
             Ok(urls) => urls,
             Err(e) => {
                 if self.verbose {
@@ -244,12 +232,8 @@ impl HlsSizeDetector {
     }
 
     /// Fetch M3U8 playlist text from a URL
-    pub(super) async fn fetch_playlist_text(
-        &self,
-        m3u8_url: &str,
-        timeout: std::time::Duration,
-    ) -> Result<String> {
-        let mut request = self.http_client.get(m3u8_url).timeout(timeout);
+    pub(super) async fn fetch_playlist_text(&self, m3u8_url: &str) -> Result<String> {
+        let mut request = self.http_client.get(m3u8_url);
         if let Some(headers) = &self.default_headers {
             request = request.headers(headers.clone());
         }
@@ -294,9 +278,8 @@ impl HlsSizeDetector {
     pub(super) async fn fetch_and_extract_media_info(
         &self,
         media_url: &str,
-        timeout: std::time::Duration,
     ) -> Result<Option<MediaPlaylistInfo>> {
-        let text = self.fetch_playlist_text(media_url, timeout).await?;
+        let text = self.fetch_playlist_text(media_url).await?;
         let playlist = m3u8_rs::parse_playlist_res(text.as_bytes()).map_err(|e| {
             if !text.trim().starts_with("#EXTM3U") {
                 let preview: String = text.chars().take(200).collect();
