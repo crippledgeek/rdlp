@@ -364,11 +364,14 @@ impl DownloaderRegistry {
         let rate_limiter = config.rate_limit.map(|bps| Arc::new(RateLimiter::new(bps)));
 
         // Create HTTP downloader with optimized settings
-        let http_downloader = HttpDownloader::with_client(client)
+        let mut http_downloader = HttpDownloader::with_client(client)
             .with_buffer_size(config.buffer_size)
             .with_concurrent_fragments(config.concurrent_fragments)
             .with_rate_limiter(rate_limiter)
             .with_adaptive(config.adaptive_downloads);
+        if let Some(threshold) = config.parallel_threshold {
+            http_downloader = http_downloader.with_parallel_threshold(threshold);
+        }
 
         // Create HLS downloader. concurrent_segments/buffer_size were no-ops on the
         // legacy parallel path (deleted in #270); the pre-resolved fragments path
@@ -524,6 +527,34 @@ mod tests {
 
         let unknown = registry.find_downloader("rtmp://example.com/stream");
         assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn registry_wires_parallel_threshold_from_config() {
+        let config = Config {
+            parallel_threshold: Some(5 * 1024 * 1024), // 5 MiB override
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.parallel_threshold,
+            5 * 1024 * 1024,
+            "Config::parallel_threshold must reach HttpDownloader via build_registry"
+        );
+    }
+
+    #[test]
+    fn registry_uses_http_default_when_parallel_threshold_is_none() {
+        let config = Config {
+            parallel_threshold: None,
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.parallel_threshold,
+            10 * 1024 * 1024,
+            "None must fall back to HttpDownloader's DEFAULT_PARALLEL_THRESHOLD_BYTES"
+        );
     }
 
     #[test]
