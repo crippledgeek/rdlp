@@ -215,12 +215,21 @@ jobs:
       # the npm registry, which intermittently fails on Windows runners
       # (registry redirect / DNS / antivirus scanning) — observed on
       # PR #297 CI run 25398198158.
+      #
+      # The cache path is queried via `npm config get cache` to avoid the
+      # earlier-PR-#299 Windows mistake (hardcoded `~\AppData\Local\npm-cache`
+      # is wrong — Windows default is `%APPDATA%\npm-cache` at
+      # `~\AppData\Roaming\npm-cache`, not Local). `npm config get cache` is
+      # authoritative across platforms and respects any project `.npmrc`.
+      - name: Resolve npm cache path
+        id: npm-cache-path
+        shell: bash
+        run: echo "path=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+
       - name: Cache npm tarball cache
         uses: actions/cache@v5
         with:
-          path: |
-            ~/.npm
-            ~\AppData\Local\npm-cache
+          path: ${{ steps.npm-cache-path.outputs.path }}
           key: ${{ runner.os }}-npm-${{ hashFiles('crates/rdlp-desktop/package.json') }}
           restore-keys: |
             ${{ runner.os }}-npm-
