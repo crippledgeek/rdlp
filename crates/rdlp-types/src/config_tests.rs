@@ -550,3 +550,30 @@ fn test_default_concurrent_fragments_is_8() {
          (yt-dlp 1..16, N_m3u8DL-RE 8). See docs/superpowers/specs/2026-05-04-download-optimization-audit.md Q4."
     );
 }
+
+#[test]
+fn test_validate_concurrent_fragments_rejects_above_64() {
+    let mut config = Config::default();
+    config.concurrent_fragments = 65;
+    let err = config.validate().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ConfigValidationError::OutOfRange {
+                field: "concurrent_fragments",
+                ..
+            }
+        ),
+        "expected OutOfRange for concurrent_fragments, got {err:?}"
+    );
+}
+
+#[test]
+fn test_validate_concurrent_fragments_accepts_64_boundary() {
+    let mut config = Config::default();
+    config.concurrent_fragments = 64;
+    assert!(
+        config.validate().is_ok(),
+        "64 must be the inclusive upper bound"
+    );
+}

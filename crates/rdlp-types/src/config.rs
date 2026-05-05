@@ -113,7 +113,16 @@ pub struct Config {
     pub audio_multistreams: bool,
 
     // === Download options ===
-    /// Number of concurrent fragments to download
+    /// Number of concurrent fragments to download.
+    ///
+    /// Default `8`: power-of-two, well below H2 `SETTINGS_MAX_CONCURRENT_STREAMS`
+    /// (RFC default 100; Cloudflare advertises 100), conservative enough for
+    /// H1.1 fallback. Validated 1..=64.
+    ///
+    /// Memory note: under the parallel pre-resolved-fragments path, peak
+    /// transient memory ≈ `concurrent_fragments × max_fragment_size`. With the
+    /// default 8 and typical 2–5 MiB segments this is ~16–40 MiB. The 64 cap
+    /// keeps the worst case bounded under operator-tunable configurations.
     pub concurrent_fragments: usize,
 
     /// Rate limit in bytes per second
@@ -455,6 +464,12 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.concurrent_fragments == 0 {
             return Err(ConfigValidationError::InvalidConcurrentFragments);
+        }
+        if self.concurrent_fragments > 64 {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "concurrent_fragments",
+                reason: "must be 1..=64 (caps peak transient memory under parallel fragment fetch)",
+            });
         }
         if self.buffer_size == 0 {
             return Err(ConfigValidationError::InvalidBufferSize);

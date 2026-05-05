@@ -47,6 +47,12 @@ use rdlp_security;
 /// `cancelled()`. On cancel: flushes the partial output and returns
 /// `Err(RdlpError::Cancelled)`.
 ///
+/// Under parallel mode (concurrency > 1), at most `concurrent_fragments - 1`
+/// extra fragments may have completed in-flight before the post-write cancel
+/// check fires; their bytes will appear in the partial output. This is the
+/// price of parallelism — sequential mode (`concurrent_fragments = 1`)
+/// preserves the strict "at most 1 extra fragment after cancel" semantic.
+///
 /// # Errors
 ///
 /// Returns `RdlpError::Download` if any fragment fetch fails, if a URL fails
@@ -104,8 +110,11 @@ pub async fn download_pre_resolved_fragments(
     // inside `AdaptiveController::new` regardless of `log_callback`.
     let concurrency = http.concurrent_fragments().max(1);
 
+    // total_size = 0: not meaningful for segment-based downloads (mirrors
+    // dash/download.rs:390). HlsSegments mode skips chunk-level adjustments
+    // anyway, so the value is unused; passing 0 keeps parity with DASH.
     let controller = Arc::new(AdaptiveController::new(
-        expected_total.unwrap_or(0),
+        0,
         AdaptiveConfig {
             max_connections: concurrency,
             initial_connections: concurrency.min(2),
