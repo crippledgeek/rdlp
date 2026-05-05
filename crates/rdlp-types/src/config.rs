@@ -191,7 +191,7 @@ pub struct Config {
     /// overhead (HEAD probes, chunk-merge step) outweighs the throughput gain.
     /// `None` falls back to the downloader's default
     /// (`DEFAULT_PARALLEL_THRESHOLD_BYTES`, currently 10 MiB).
-    /// Validated post-load by `Config::validate()`: must be 1..=1_073_741_824 bytes (1 GiB).
+    /// Validated post-load by `Config::validate()`: must be `1..=1_073_741_824` bytes (1 GiB).
     pub parallel_threshold: Option<u64>,
 
     /// Source IP address to bind to
