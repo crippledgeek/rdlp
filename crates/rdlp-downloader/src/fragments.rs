@@ -132,9 +132,16 @@ pub async fn download_pre_resolved_fragments(
     // lived in the sequential loop's `current_init` variable — we must compute
     // it eagerly because each parallel task cannot share mutable state.
     //
-    // NOTE: per-fragment SSRF validation is intentionally NOT performed here.
-    // It mirrors the legacy MPD-URL path; see the original comment in the
-    // previous sequential loop for rationale and the follow-up tracker ref.
+    // SSRF validation runs at the producing layer:
+    // - DASH: `crates/rdlp-extractor/src/base/common/dash/expand.rs::validate_resolved_url`
+    //   validates `<BaseURL>` chain + each emitted fragment URL during
+    //   `expand_dash_representations` (closes #290).
+    // - HLS:  `crates/rdlp-extractor/src/hls/expand.rs::validate_resolved_url`
+    //   validates each variant + segment URI during master/media playlist
+    //   expansion.
+    // Per-fragment validation here would be redundant for built-in extractor
+    // output; plugin-emitted fragments that bypass both expanders are tracked
+    // as a separate sandbox-trust concern in the plugin runtime.
     let mut last_init: Option<String> = None;
     let tasks: Vec<(Fragment, bool)> = fragments
         .iter()

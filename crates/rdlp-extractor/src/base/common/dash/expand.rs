@@ -19,6 +19,36 @@ use super::segments::{
 /// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
 pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 
+/// Validate a resolved URL via `rdlp_security::validate_url_security`.
+///
+/// Production behavior: rejects `file://`, `javascript:`, RFC 1918 private
+/// hosts, link-local `169.254.0.0/16` (incl. cloud-metadata IPs), and other
+/// SSRF-prone targets.
+///
+/// Test behavior: allows `http`/`https` on `127.0.0.1` / `localhost` / `[::1]`
+/// so mockito-driven unit tests in this file can drive expansion against
+/// loopback fixtures. All other private hosts and non-http(s) schemes still
+/// go through the real validator. Bypass is `cfg(test)`-gated; production
+/// builds compile without any loopback exemption. Mirrors
+/// `crates/rdlp-extractor/src/hls/expand.rs:92`.
+fn validate_resolved_url(url: &str) -> Result<(), DashExpandError> {
+    #[cfg(test)]
+    {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
+            let host_loopback = parsed.host_str().is_some_and(|h| {
+                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
+            });
+            if scheme_ok && host_loopback {
+                return Ok(());
+            }
+        }
+    }
+    rdlp_security::validate_url_security(url).map_err(|e| {
+        DashExpandError::UrlRejected(format!("{}: {e}", rdlp_security::sanitize_for_logging(url)))
+    })
+}
+
 /// One DASH text AdaptationSet representation, projected to a sidecar subtitle.
 ///
 /// `language` is `None` when the source AdaptationSet has no `@lang` attribute.
@@ -117,6 +147,21 @@ pub fn expand_dash_representations(
                 ],
             );
 
+            // SSRF defence-in-depth: a malicious or attacker-influenced
+            // `<BaseURL>` chain in the MPD body can resolve to a private host
+            // (cloud metadata IP, RFC 1918, file://). Validate the resolved
+            // base before building any fragments. Drop the Representation on
+            // reject — other reps in the same MPD may still be safe.
+            if let Err(e) = validate_resolved_url(final_base.as_str()) {
+                log::warn!(
+                    "DASH: dropping Representation adapt={} repr={}: {}",
+                    adapt_idx,
+                    repr_idx,
+                    e
+                );
+                continue;
+            }
+
             let mime = repr
                 .mimeType
                 .as_deref()
@@ -169,6 +214,44 @@ pub fn expand_dash_representations(
             let fragments =
                 build_fragments(adapt, repr, &format_id, bandwidth, period_duration_seconds);
             if fragments.is_empty() {
+                continue;
+            }
+
+            // Validate each emitted fragment URL after resolution against the
+            // already-validated `final_base`. Catches cases where the
+            // `$RepresentationID$` template substitution (an MPD-controlled
+            // attribute) or an absolute URL embedded in a `<SegmentURL>` /
+            // SegmentTemplate `media` attribute injects a private-host target.
+            // Drop the whole Representation on any failure so the rest of the
+            // MPD remains usable.
+            let mut frag_rejected = false;
+            for frag in &fragments {
+                let resolved = match final_base.join(&frag.url) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        log::warn!(
+                            "DASH: dropping Representation adapt={} repr={}: \
+                             unresolvable fragment URL: {}",
+                            adapt_idx,
+                            repr_idx,
+                            e
+                        );
+                        frag_rejected = true;
+                        break;
+                    }
+                };
+                if let Err(e) = validate_resolved_url(resolved.as_str()) {
+                    log::warn!(
+                        "DASH: dropping Representation adapt={} repr={}: {}",
+                        adapt_idx,
+                        repr_idx,
+                        e
+                    );
+                    frag_rejected = true;
+                    break;
+                }
+            }
+            if frag_rejected {
                 continue;
             }
 
@@ -648,5 +731,176 @@ mod tests {
     #[test]
     fn mime_to_sub_ext_mp4_wvtt() {
         assert_eq!(mime_to_sub_ext("application/mp4", "wvtt"), "vtt");
+    }
+
+    // ─── SSRF gate (per-fragment URL validation) ──────────────────────────
+    //
+    // The cfg(test) loopback bypass at the top of this file lets mockito-
+    // driven tests use 127.0.0.1 URLs. These tests verify the gate rejects
+    // genuinely-private hosts (RFC 1918, link-local 169.254.0.0/16 metadata
+    // range) even under the bypass, and accepts public hosts in production.
+
+    #[test]
+    fn validate_resolved_url_accepts_public_https() {
+        validate_resolved_url("https://example.com/manifest.mpd")
+            .expect("public https URL must pass SSRF gate");
+    }
+
+    #[test]
+    fn validate_resolved_url_rejects_metadata_ip() {
+        let err = validate_resolved_url("http://169.254.169.254/latest/meta-data/")
+            .expect_err("AWS metadata IP must be rejected even under cfg(test) bypass");
+        assert!(
+            matches!(err, DashExpandError::UrlRejected(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_resolved_url_rejects_rfc1918_private() {
+        let err = validate_resolved_url("http://192.168.1.1/manifest.mpd")
+            .expect_err("RFC 1918 private host must be rejected");
+        assert!(
+            matches!(err, DashExpandError::UrlRejected(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_resolved_url_rejects_file_scheme() {
+        let err = validate_resolved_url("file:///etc/passwd")
+            .expect_err("file:// scheme must be rejected");
+        assert!(
+            matches!(err, DashExpandError::UrlRejected(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn expand_drops_representation_with_private_baseurl() {
+        // A malicious MPD whose <BaseURL> resolves the manifest into a private
+        // host. The whole Representation must be dropped (not the whole MPD —
+        // other Reps might still be safe).
+        let mpd = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet mimeType="video/mp4">
+      <BaseURL>http://192.168.1.1/private/</BaseURL>
+      <Representation id="v1" bandwidth="500000" codecs="avc1.42c01e" width="640" height="360">
+        <SegmentTemplate media="seg-$Number$.m4s" duration="6000" timescale="1000" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+        // Public manifest URL — the BaseURL inside the MPD is the attacker
+        // injection. expand should drop the Representation, leaving the MPD
+        // empty (so it errors NoUsableReps).
+        let base = url::Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
+        let err = expand_dash_representations(mpd, &base)
+            .expect_err("MPD with only-private-baseurl Repr must produce NoUsableReps");
+        assert!(matches!(err, DashExpandError::NoUsableReps), "got {err:?}");
+    }
+
+    #[test]
+    fn expand_drops_representation_with_private_segment_url() {
+        // The earlier two tests inject the private host via <BaseURL>, which
+        // trips the `final_base` gate BEFORE fragments are built. This one
+        // injects the private host via <SegmentURL media="…"/> (an absolute
+        // URL inside a SegmentList) so that the per-fragment validator inside
+        // the for-frag loop is the one that fires. Without this test the
+        // fragment-URL gate is dead code under the test set.
+        let mpd = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT12S">
+    <AdaptationSet mimeType="video/mp4">
+      <BaseURL>https://cdn.example.com/safe/</BaseURL>
+      <Representation id="v_with_private_seg" bandwidth="500000" codecs="avc1.42c01e" width="640" height="360">
+        <SegmentList duration="6000" timescale="1000">
+          <SegmentURL media="seg-1.m4s"/>
+          <SegmentURL media="http://169.254.169.254/seg-2.m4s"/>
+        </SegmentList>
+      </Representation>
+      <Representation id="v_clean" bandwidth="1000000" codecs="avc1.42c01e" width="1280" height="720">
+        <SegmentList duration="6000" timescale="1000">
+          <SegmentURL media="seg-a.m4s"/>
+          <SegmentURL media="seg-b.m4s"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+        let base = url::Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
+        let r = expand_dash_representations(mpd, &base)
+            .expect("clean Repr must survive while metadata-IP-injecting Repr is dropped");
+        assert_eq!(
+            r.formats.len(),
+            1,
+            "Repr with metadata-IP SegmentURL must be dropped"
+        );
+        assert_eq!(r.formats[0].format_id, "v_clean");
+    }
+
+    #[test]
+    fn expand_drops_representation_with_private_init_url() {
+        // SegmentTemplate `initialization` attribute resolving to a private
+        // host. The init URL flows through the same `final_base.join()` →
+        // `validate_resolved_url` path as media segments, so the Repr must
+        // be dropped on reject.
+        let mpd = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT12S">
+    <AdaptationSet mimeType="video/mp4">
+      <BaseURL>https://cdn.example.com/safe/</BaseURL>
+      <Representation id="v_with_private_init" bandwidth="500000" codecs="avc1.42c01e" width="640" height="360">
+        <SegmentTemplate
+          initialization="http://10.0.0.1/init.mp4"
+          media="seg-$Number$.m4s"
+          duration="6000"
+          timescale="1000"
+          startNumber="1"/>
+      </Representation>
+      <Representation id="v_clean" bandwidth="1000000" codecs="avc1.42c01e" width="1280" height="720">
+        <SegmentTemplate media="seg-$Number$.m4s" duration="6000" timescale="1000" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+        let base = url::Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
+        let r = expand_dash_representations(mpd, &base)
+            .expect("clean Repr must survive while Repr with private init URL is dropped");
+        assert_eq!(r.formats.len(), 1, "Repr with private init URL must drop");
+        assert_eq!(r.formats[0].format_id, "v_clean");
+    }
+
+    #[test]
+    fn expand_keeps_safe_representation_when_sibling_is_private() {
+        // Two video reps: one with a private BaseURL, one without. The safe
+        // one survives; the private one is dropped.
+        let mpd = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     type="static"
+     profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">
+  <Period duration="PT60S">
+    <AdaptationSet mimeType="video/mp4">
+      <Representation id="v_private" bandwidth="500000" codecs="avc1.42c01e" width="640" height="360">
+        <BaseURL>http://10.0.0.1/private/</BaseURL>
+        <SegmentTemplate media="seg-$Number$.m4s" duration="6000" timescale="1000" startNumber="1"/>
+      </Representation>
+      <Representation id="v_public" bandwidth="1000000" codecs="avc1.42c01e" width="1280" height="720">
+        <SegmentTemplate media="seg-$Number$.m4s" duration="6000" timescale="1000" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+        let base = url::Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
+        let r = expand_dash_representations(mpd, &base).expect("public Rep must survive");
+        assert_eq!(r.formats.len(), 1, "only public Rep should remain");
+        assert_eq!(r.formats[0].format_id, "v_public");
     }
 }

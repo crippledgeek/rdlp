@@ -20,4 +20,12 @@ pub enum DashExpandError {
     /// All Representations were filtered out (DRM, missing segment info, etc.).
     #[error("MPD has no usable representations after filtering")]
     NoUsableReps,
+
+    /// A resolved fragment URL or BaseURL chain pointed to a private/internal
+    /// host (SSRF defence-in-depth). The MPD body or its `<BaseURL>` chain
+    /// resolved against the manifest URL produces a target rejected by
+    /// `rdlp_security::validate_url_security` (file://, javascript:, RFC 1918
+    /// hosts, link-local 169.254.0.0/16 metadata range, etc.).
+    #[error("URL rejected by SSRF gate: {0}")]
+    UrlRejected(String),
 }
