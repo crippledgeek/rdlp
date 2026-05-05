@@ -12,11 +12,14 @@
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
+use futures::StreamExt as _;
 use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
 use rdlp_types::{Fragment, Progress};
 use tokio::io::AsyncWriteExt as _;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::http::HttpDownloader;
@@ -75,7 +78,6 @@ pub async fn download_pre_resolved_fragments(
         })?;
 
     let mut total_bytes: u64 = 0;
-    let mut current_init: Option<String> = None;
 
     const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
     let mut last_emit = Instant::now();
@@ -90,44 +92,97 @@ pub async fn download_pre_resolved_fragments(
         return Err(rdlp_core::RdlpError::Cancelled);
     }
 
-    for frag in fragments {
-        let resolved_url = resolve_fragment_url(&frag.url, base_url)?;
+    // Concurrency cap. Task 3 replaces this fixed semaphore with the AIMD
+    // controller's adjustable one. For Task 2 we use a plain Arc<Semaphore>
+    // sized to `concurrent_fragments` so behaviour is bisectable.
+    let concurrency = http.concurrent_fragments().max(1);
+    let sem = Arc::new(Semaphore::new(concurrency));
 
-        // NOTE: per-fragment SSRF validation is intentionally NOT performed
-        // here. It mirrors the legacy MPD-URL path, which also fetches
-        // segments without per-segment gating. The orchestrator validates
-        // `format.url` at the format-dispatch boundary
-        // (`crates/rdlp-api/src/orchestrator/download.rs`), and fragment
-        // URLs SHOULD be validated at extract time inside
-        // `expand_dash_representations` (TODO: track as a follow-up — the
-        // hardened defence-in-depth gate belongs at extraction, where the
-        // URLs are first introduced into the Format). HLS `merge.rs:184`
-        // is the outlier that inlines the gate; we don't replicate that
-        // pattern because it forces every test to use a public-routable
-        // mock host.
-
-        // Init transition: refetch only when the URI changes between consecutive fragments.
-        if frag.init_url.as_deref() != current_init.as_deref() {
-            if let Some(init_url) = &frag.init_url {
-                let resolved_init = resolve_fragment_url(init_url, base_url)?;
-                let init_bytes =
-                    fetch_with_optional_cancel(http, &resolved_init, frag.init_byte_range, cancel)
-                        .await?;
-                total_bytes += init_bytes.len() as u64;
-                out_file.write_all(&init_bytes).await.map_err(|e| {
-                    rdlp_core::RdlpError::Download {
-                        message: format!("write init fragment: {e}"),
-                        url: Some(output.display().to_string()),
-                    }
-                })?;
-                current_init = Some(init_url.clone());
-            } else {
-                current_init = None;
+    // Determine per-fragment init-fetch needs in a single linear pass over the
+    // source list (cheap clone of Option<String>). Only the first fragment of
+    // each new init-group fetches the init segment; consecutive fragments under
+    // the same init URL skip the fetch. This is the dedup logic that previously
+    // lived in the sequential loop's `current_init` variable — we must compute
+    // it eagerly because each parallel task cannot share mutable state.
+    //
+    // NOTE: per-fragment SSRF validation is intentionally NOT performed here.
+    // It mirrors the legacy MPD-URL path; see the original comment in the
+    // previous sequential loop for rationale and the follow-up tracker ref.
+    let mut last_init: Option<String> = None;
+    let tasks: Vec<(Fragment, bool)> = fragments
+        .iter()
+        .map(|frag| {
+            let needs_init = frag.init_url.is_some()
+                && frag.init_url.as_deref() != last_init.as_deref();
+            if needs_init {
+                last_init = frag.init_url.clone();
+            } else if frag.init_url.is_none() {
+                last_init = None;
             }
-        }
+            (frag.clone(), needs_init)
+        })
+        .collect();
 
-        let bytes =
-            fetch_with_optional_cancel(http, &resolved_url, frag.byte_range, cancel).await?;
+    // Build a stream of per-fragment fetch futures. `buffered(concurrency)`
+    // polls up to N concurrently AND yields results in source order, which is
+    // the load-bearing property: writes happen in the same order as `fragments`
+    // even though fetches overlap. Each task emits init-bytes (when needed)
+    // immediately preceding fragment-bytes in a single Vec<u8>, so RFC 8216
+    // §4.3.2.5 decode-ordering is preserved without a group-by-init pre-pass.
+    let stream = futures::stream::iter(tasks.into_iter().map(|(frag, needs_init)| {
+        let sem = Arc::clone(&sem);
+        let base = base_url.map(str::to_string);
+        let cancel = cancel.cloned();
+        async move {
+            let _permit = sem.acquire_owned().await.map_err(|_| {
+                rdlp_core::RdlpError::Download {
+                    message: "fragment semaphore closed".to_string(),
+                    url: None,
+                }
+            })?;
+
+            let fetch_start = Instant::now();
+            let mut out: Vec<u8> = Vec::new();
+
+            // Init bytes (if this fragment introduces a new init group).
+            if needs_init {
+                if let Some(init_url) = &frag.init_url {
+                    let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
+                    let init_bytes = fetch_with_optional_cancel(
+                        http,
+                        &resolved_init,
+                        frag.init_byte_range,
+                        cancel.as_ref(),
+                    )
+                    .await?;
+                    out.extend_from_slice(&init_bytes);
+                }
+            }
+
+            // Fragment bytes.
+            let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
+            let bytes = fetch_with_optional_cancel(
+                http,
+                &resolved_url,
+                frag.byte_range,
+                cancel.as_ref(),
+            )
+            .await?;
+            out.extend_from_slice(&bytes);
+
+            let fetch_elapsed = fetch_start.elapsed();
+            Ok::<(Vec<u8>, std::time::Duration, Option<f64>), rdlp_core::RdlpError>((
+                out,
+                fetch_elapsed,
+                frag.duration,
+            ))
+        }
+    }))
+    .buffered(concurrency);
+
+    tokio::pin!(stream);
+    while let Some(item) = stream.next().await {
+        let (bytes, _fetch_elapsed, _seg_dur) = item?;
 
         out_file
             .write_all(&bytes)
@@ -141,8 +196,8 @@ pub async fn download_pre_resolved_fragments(
 
         // Update progress accounting.
         let now = Instant::now();
-        let elapsed = now.duration_since(last_observed_at);
-        speed.observe(bytes.len() as u64, elapsed);
+        let elapsed_observe = now.duration_since(last_observed_at);
+        speed.observe(bytes.len() as u64, elapsed_observe);
         last_observed_at = now;
         frags_done += 1;
 
@@ -164,7 +219,9 @@ pub async fn download_pre_resolved_fragments(
             last_emit = now;
         }
 
-        // Cancellation check between fragments.
+        // Cancellation check between fragment writes. Per-fetch cancel is
+        // already wired inside fetch_with_optional_cancel; this catches
+        // cancels that fire after a fetch completes but before the next poll.
         if cancel.is_some_and(CancellationToken::is_cancelled) {
             out_file.flush().await.ok();
             return Err(rdlp_core::RdlpError::Cancelled);
@@ -867,6 +924,225 @@ mod tests {
         .await
         .expect("ok");
         assert_eq!(stats.bytes_downloaded, 100);
+    }
+
+    // ---- F1 parallel fragment-fetch tests ----
+
+    /// Build N fragments pointing at sequentially-numbered mockito mocks each
+    /// returning a unique 1-byte body so concatenation order is observable.
+    /// Returns (frags, expected concatenated bytes).
+    async fn build_ordered_frags(
+        server: &mut mockito::Server,
+        n: usize,
+    ) -> (Vec<Fragment>, Vec<u8>) {
+        let mut expected = Vec::with_capacity(n);
+        let mut frags = Vec::with_capacity(n);
+        for i in 0..n {
+            // 1-byte body per fragment; byte value = index (mod 256) so the
+            // concatenated output reads as 0,1,2,3,... in source order.
+            let body = vec![(i % 256) as u8];
+            expected.push(body[0]);
+            server
+                .mock("GET", format!("/seg-{i}").as_str())
+                .with_body(body.clone())
+                .expect_at_least(1)
+                .create_async()
+                .await;
+            frags.push(frag(format!("{}/seg-{i}", server.url())));
+        }
+        (frags, expected)
+    }
+
+    /// Timing/overlap test — the load-bearing failing-first guard for Task 2.
+    /// 4 fragments each delayed 200ms. Sequential wall-clock ~800ms; parallel
+    /// with N=4 should be ~200ms. We assert < 600ms — well below the sequential
+    /// floor and above the parallel floor. This FAILS against the current
+    /// sequential loop and passes once `buffered(N)` lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_fetch_proves_concurrency_via_overlap() {
+        let mut server = mockito::Server::new_async().await;
+        for i in 0..4_u8 {
+            server
+                .mock("GET", format!("/seg-{i}").as_str())
+                .with_chunked_body(move |w| {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    w.write_all(&[i])
+                })
+                .expect(1)
+                .create_async()
+                .await;
+        }
+        let frags: Vec<Fragment> = (0..4_u8)
+            .map(|i| frag(format!("{}/seg-{i}", server.url())))
+            .collect();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new())
+            .with_concurrent_fragments(4);
+        let started = std::time::Instant::now();
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+            .await
+            .expect("ok");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(600),
+            "parallel fetch must overlap; got {elapsed:?} (sequential floor ~800ms, parallel ~200ms)"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_fetch_writes_in_source_order_not_arrival_order() {
+        // 12 fragments, default N=8 in the new path. Each mock body = its index.
+        // If the implementation used buffer_unordered (arrival order) instead of
+        // buffered (source order), output bytes would be a permutation of 0..12,
+        // not the literal sequence 0,1,2,...,11.
+        let mut server = mockito::Server::new_async().await;
+        let (frags, expected) = build_ordered_frags(&mut server, 12).await;
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        assert_eq!(
+            written, expected,
+            "output must preserve fragment source order; arrival-order is a regression"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_fetch_byte_identical_to_sequential_for_six_frags() {
+        // 6 fragments, each with a distinct 1024-byte body. Output must be the
+        // exact source-order concatenation regardless of internal concurrency.
+        let mut server = mockito::Server::new_async().await;
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        let mut frags: Vec<Fragment> = Vec::new();
+        for i in 0..6_u8 {
+            let body = vec![i; 1024];
+            bodies.push(body.clone());
+            server
+                .mock("GET", format!("/seg-{i}").as_str())
+                .with_body(body)
+                .expect_at_least(1)
+                .create_async()
+                .await;
+            frags.push(frag(format!("{}/seg-{i}", server.url())));
+        }
+        let expected: Vec<u8> = bodies.into_iter().flatten().collect();
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let _stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        assert_eq!(written.len(), 6 * 1024);
+        assert_eq!(written, expected);
+    }
+
+    #[tokio::test]
+    async fn parallel_fetch_n_one_degenerates_to_sequential() {
+        // Construct a Config with concurrent_fragments=1 and verify byte-for-byte
+        // identical output to the multi-fragment case. This is the regression
+        // guard for the N=1 boundary — buffered(1) MUST still execute correctly.
+        let mut server = mockito::Server::new_async().await;
+        let (frags, expected) = build_ordered_frags(&mut server, 4).await;
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
+        let _stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        assert_eq!(written, expected, "N=1 must degenerate cleanly to sequential");
+    }
+
+    #[tokio::test]
+    async fn parallel_fetch_count_greater_than_concurrency_completes_all() {
+        // 12 fragments, N=4 — every fragment must download exactly once and
+        // appear in source order in the output.
+        let mut server = mockito::Server::new_async().await;
+        let (frags, expected) = build_ordered_frags(&mut server, 12).await;
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
+        let _stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("ok");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        assert_eq!(written.len(), 12);
+        assert_eq!(written, expected);
+    }
+
+    #[tokio::test]
+    async fn parallel_fetch_init_transition_preserves_decode_order() {
+        // 4 fragments under init A, then 4 under init B. With buffered(N>1),
+        // fragments may complete out of arrival order; the source-order write
+        // discipline must still place INITA before its 4 frags and INITB before
+        // its 4. Output: INITA + 4×A + INITB + 4×B = 18 bytes.
+        let mut server = mockito::Server::new_async().await;
+        let _init_a = server
+            .mock("GET", "/init-a.mp4")
+            .with_body(b"INITA")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _init_b = server
+            .mock("GET", "/init-b.mp4")
+            .with_body(b"INITB")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        for i in 1..=4_u32 {
+            server
+                .mock("GET", format!("/a-{i}.m4s").as_str())
+                .with_body(b"A")
+                .expect(1)
+                .create_async()
+                .await;
+            server
+                .mock("GET", format!("/b-{i}.m4s").as_str())
+                .with_body(b"B")
+                .expect(1)
+                .create_async()
+                .await;
+        }
+        let init_a = format!("{}/init-a.mp4", server.url());
+        let init_b = format!("{}/init-b.mp4", server.url());
+        let mut frags: Vec<Fragment> = Vec::new();
+        for i in 1..=4_u32 {
+            frags.push(Fragment {
+                url: format!("{}/a-{i}.m4s", server.url()),
+                byte_range: None,
+                init_url: Some(init_a.clone()),
+                init_byte_range: None,
+                duration: Some(6.0),
+                filesize: None,
+            });
+        }
+        for i in 1..=4_u32 {
+            frags.push(Fragment {
+                url: format!("{}/b-{i}.m4s", server.url()),
+                byte_range: None,
+                init_url: Some(init_b.clone()),
+                init_byte_range: None,
+                duration: Some(6.0),
+                filesize: None,
+            });
+        }
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        let http =
+            HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+            .await
+            .expect("init-transition under parallel must succeed");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        // INITA (5) + AAAA (4) + INITB (5) + BBBB (4) = 18 bytes.
+        assert_eq!(written.len(), 18, "got {written:?}");
+        assert_eq!(&written[0..5], b"INITA");
+        assert_eq!(&written[5..9], b"AAAA");
+        assert_eq!(&written[9..14], b"INITB");
+        assert_eq!(&written[14..18], b"BBBB");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -132,6 +132,15 @@ impl HttpDownloader {
         self
     }
 
+    /// Return the configured concurrent-fragments limit.
+    ///
+    /// Used by `download_pre_resolved_fragments` to size the `buffered(N)` parallel
+    /// fetch stream and, after Task 3, to set `AdaptiveConfig::max_connections`.
+    #[must_use]
+    pub fn concurrent_fragments(&self) -> usize {
+        self.config.concurrent_fragments
+    }
+
     /// Set chunk size strategy.
     ///
     /// When `Fixed` or `Legacy` is used, adaptive mode is forced off because
