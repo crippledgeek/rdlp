@@ -581,6 +581,15 @@ fn default_parallel_threshold_is_10_mib() {
     assert_eq!(downloader.config.parallel_threshold, 10 * 1024 * 1024);
 }
 
+#[test]
+fn with_parallel_threshold_clamps_zero_to_one() {
+    let downloader = HttpDownloader::new().with_parallel_threshold(0);
+    assert_eq!(
+        downloader.config.parallel_threshold, 1,
+        "threshold = 0 must be clamped to the validated floor of 1"
+    );
+}
+
 #[tokio::test]
 async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     use mockito::Server;
