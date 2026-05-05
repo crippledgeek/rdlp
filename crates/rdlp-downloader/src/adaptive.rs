@@ -241,6 +241,7 @@ impl AdaptiveController {
     ///
     /// Primarily used in tests to assert that a call site wired the correct
     /// mode (e.g. `HlsSegments` for the pre-resolved fragment path).
+    #[cfg(test)]
     pub const fn mode(&self) -> ControllerMode {
         self.mode
     }

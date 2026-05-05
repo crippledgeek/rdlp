@@ -107,7 +107,7 @@ mod tests {
         assert!(config.verbose);
         assert_eq!(config.format, Some("worst".to_string()));
         // Defaults should fill in the rest
-        assert_eq!(config.concurrent_fragments, 4);
+        assert_eq!(config.concurrent_fragments, 8);
         assert!(!config.quiet);
     }
 

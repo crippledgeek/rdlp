@@ -19,7 +19,6 @@ use futures::StreamExt as _;
 use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
 use rdlp_types::{Fragment, Progress};
 use tokio::io::AsyncWriteExt as _;
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
@@ -131,10 +130,10 @@ pub async fn download_pre_resolved_fragments(
     let tasks: Vec<(Fragment, bool)> = fragments
         .iter()
         .map(|frag| {
-            let needs_init = frag.init_url.is_some()
-                && frag.init_url.as_deref() != last_init.as_deref();
+            let needs_init =
+                frag.init_url.is_some() && frag.init_url.as_deref() != last_init.as_deref();
             if needs_init {
-                last_init = frag.init_url.clone();
+                last_init.clone_from(&frag.init_url);
             } else if frag.init_url.is_none() {
                 last_init = None;
             }
@@ -153,40 +152,35 @@ pub async fn download_pre_resolved_fragments(
         let base = base_url.map(str::to_string);
         let cancel = cancel.cloned();
         async move {
-            let _permit = sem.acquire_owned().await.map_err(|_| {
-                rdlp_core::RdlpError::Download {
-                    message: "fragment semaphore closed".to_string(),
-                    url: None,
-                }
-            })?;
+            let _permit =
+                sem.acquire_owned()
+                    .await
+                    .map_err(|_| rdlp_core::RdlpError::Download {
+                        message: "fragment semaphore closed".to_string(),
+                        url: None,
+                    })?;
 
             let fetch_start = Instant::now();
             let mut out: Vec<u8> = Vec::new();
 
             // Init bytes (if this fragment introduces a new init group).
-            if needs_init {
-                if let Some(init_url) = &frag.init_url {
-                    let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
-                    let init_bytes = fetch_with_optional_cancel(
-                        http,
-                        &resolved_init,
-                        frag.init_byte_range,
-                        cancel.as_ref(),
-                    )
-                    .await?;
-                    out.extend_from_slice(&init_bytes);
-                }
+            if needs_init && let Some(init_url) = &frag.init_url {
+                let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
+                let init_bytes = fetch_with_optional_cancel(
+                    http,
+                    &resolved_init,
+                    frag.init_byte_range,
+                    cancel.as_ref(),
+                )
+                .await?;
+                out.extend_from_slice(&init_bytes);
             }
 
             // Fragment bytes.
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes = fetch_with_optional_cancel(
-                http,
-                &resolved_url,
-                frag.byte_range,
-                cancel.as_ref(),
-            )
-            .await?;
+            let bytes =
+                fetch_with_optional_cancel(http, &resolved_url, frag.byte_range, cancel.as_ref())
+                    .await?;
             out.extend_from_slice(&bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
@@ -1003,8 +997,14 @@ mod tests {
                 .await
                 .expect("AIMD-wired download must complete");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
-        assert_eq!(written, expected, "AIMD wiring must not break source-order writes");
-        assert_eq!(stats.bytes_downloaded, 6, "all 6 bytes must be accounted for");
+        assert_eq!(
+            written, expected,
+            "AIMD wiring must not break source-order writes"
+        );
+        assert_eq!(
+            stats.bytes_downloaded, 6,
+            "all 6 bytes must be accounted for"
+        );
     }
 
     // ---- F1 parallel fragment-fetch tests ----
@@ -1057,8 +1057,7 @@ mod tests {
             .map(|i| frag(format!("{}/seg-{i}", server.url())))
             .collect();
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
-        let http = HttpDownloader::with_client(wreq::Client::new())
-            .with_concurrent_fragments(4);
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
         let started = std::time::Instant::now();
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
             .await
@@ -1135,7 +1134,10 @@ mod tests {
                 .await
                 .expect("ok");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
-        assert_eq!(written, expected, "N=1 must degenerate cleanly to sequential");
+        assert_eq!(
+            written, expected,
+            "N=1 must degenerate cleanly to sequential"
+        );
     }
 
     #[tokio::test]
@@ -1212,8 +1214,7 @@ mod tests {
             });
         }
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
-        let http =
-            HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
             .await
             .expect("init-transition under parallel must succeed");
