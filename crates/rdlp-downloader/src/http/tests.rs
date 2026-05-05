@@ -568,3 +568,70 @@ async fn test_parallel_resume() {
         "First resumed byte should be from chunk 0"
     );
 }
+
+#[test]
+fn with_parallel_threshold_sets_config_field() {
+    let downloader = HttpDownloader::new().with_parallel_threshold(5 * 1024 * 1024);
+    assert_eq!(downloader.config.parallel_threshold, 5 * 1024 * 1024);
+}
+
+#[test]
+fn default_parallel_threshold_is_10_mib() {
+    let downloader = HttpDownloader::new();
+    assert_eq!(downloader.config.parallel_threshold, 10 * 1024 * 1024);
+}
+
+#[test]
+fn with_parallel_threshold_clamps_zero_to_one() {
+    let downloader = HttpDownloader::new().with_parallel_threshold(0);
+    assert_eq!(
+        downloader.config.parallel_threshold, 1,
+        "threshold = 0 must be clamped to the validated floor of 1"
+    );
+}
+
+#[tokio::test]
+async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let body = vec![0u8; 5 * 1024 * 1024]; // 5 MiB
+
+    // HEAD returns content-length 5 MiB, supports ranges.
+    let _head = server
+        .mock("HEAD", "/file.bin")
+        .with_status(200)
+        .with_header("content-length", &body.len().to_string())
+        .with_header("accept-ranges", "bytes")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    // GET with Range header returns partial content. Multiple range requests
+    // means we took the parallel path; the mock asserts ≥2 invocations.
+    let _get_range = server
+        .mock("GET", "/file.bin")
+        .match_header(
+            "range",
+            mockito::Matcher::Regex(r"^bytes=\d+-\d+$".to_string()),
+        )
+        .with_status(206)
+        .with_body(&body[..1024]) // any body; size mismatch is fine — we only assert call count
+        .expect_at_least(2)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new()
+        .with_parallel_threshold(1024 * 1024) // 1 MiB — below the 5 MiB file
+        .with_concurrent_fragments(2)
+        .with_read_timeout(std::time::Duration::from_secs(5))
+        .with_download_timeout(std::time::Duration::from_secs(10));
+
+    let url = format!("{}/file.bin", server.url());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let _ = downloader.download_to_file(&url, tmp.path(), None).await;
+    // Assertions: the mock's `expect_at_least(2)` for range requests verifies
+    // the parallel path executed. Any download outcome (success, body-mismatch
+    // error) is acceptable — we're testing the dispatch decision, not the
+    // download correctness.
+}

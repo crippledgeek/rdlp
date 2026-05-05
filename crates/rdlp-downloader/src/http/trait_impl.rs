@@ -85,7 +85,7 @@ impl Downloader for HttpDownloader {
             };
 
             let parallel_size = match size {
-                Some(s) if s > super::config::PARALLEL_THRESHOLD => {
+                Some(s) if s > self.config.parallel_threshold => {
                     if self.config.concurrent_fragments > 1 && supports_ranges {
                         Some(s)
                     } else {
@@ -105,7 +105,7 @@ impl Downloader for HttpDownloader {
 
             let reason = match size {
                 None | Some(0) => "could not detect file size",
-                Some(s) if s <= super::config::PARALLEL_THRESHOLD => "file too small for parallel",
+                Some(s) if s <= self.config.parallel_threshold => "file too small for parallel",
                 Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
                 Some(_) if !supports_ranges => "server doesn't support ranges",
                 Some(_) => "unknown reason",
@@ -346,7 +346,7 @@ impl Downloader for HttpDownloader {
                     supports_ranges
                 );
 
-                let can_parallel = remaining_size > super::config::PARALLEL_THRESHOLD
+                let can_parallel = remaining_size > self.config.parallel_threshold
                     && self.config.concurrent_fragments > 1
                     && supports_ranges;
 
