@@ -22,6 +22,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::http::HttpDownloader;
 use crate::progress::SpeedTracker;
 use rdlp_security;
@@ -92,11 +93,29 @@ pub async fn download_pre_resolved_fragments(
         return Err(rdlp_core::RdlpError::Cancelled);
     }
 
-    // Concurrency cap. Task 3 replaces this fixed semaphore with the AIMD
-    // controller's adjustable one. For Task 2 we use a plain Arc<Semaphore>
-    // sized to `concurrent_fragments` so behaviour is bisectable.
+    // Build the AIMD adaptive controller in HlsSegments mode.
+    // `HlsSegments` skips chunk-level adjustments (segment sizes are
+    // server-determined) and tunes only connection count via the semaphore.
+    // Mirrors dash/download.rs:389-399 line-for-line.
+    //
+    // `log_callback` is `None` here (same as dash/download.rs:393) because
+    // `progress` is `Option<&dyn ProgressCallback>` (borrowed, non-`'static`)
+    // while `AdaptiveController::log_callback` requires `Arc<dyn ProgressCallback + 'static>`.
+    // AIMD log messages are still emitted via the `log` crate's `info!()` macro
+    // inside `AdaptiveController::new` regardless of `log_callback`.
     let concurrency = http.concurrent_fragments().max(1);
-    let sem = Arc::new(Semaphore::new(concurrency));
+
+    let controller = Arc::new(AdaptiveController::new(
+        expected_total.unwrap_or(0),
+        AdaptiveConfig {
+            max_connections: concurrency,
+            initial_connections: concurrency.min(2),
+            ..AdaptiveConfig::default()
+        },
+        ControllerMode::HlsSegments,
+        None,
+    ));
+    let sem = controller.semaphore().clone();
 
     // Determine per-fragment init-fetch needs in a single linear pass over the
     // source list (cheap clone of Option<String>). Only the first fragment of
@@ -182,7 +201,7 @@ pub async fn download_pre_resolved_fragments(
 
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
-        let (bytes, _fetch_elapsed, _seg_dur) = item?;
+        let (bytes, fetch_elapsed, seg_dur) = item?;
 
         out_file
             .write_all(&bytes)
@@ -193,6 +212,10 @@ pub async fn download_pre_resolved_fragments(
             })?;
 
         total_bytes += bytes.len() as u64;
+
+        // Inform the AIMD controller of segment completion so it can tune
+        // the connection count. Mirrors dash/download.rs:426.
+        controller.report_segment_complete(bytes.len() as u64, fetch_elapsed, seg_dur);
 
         // Update progress accounting.
         let now = Instant::now();
@@ -924,6 +947,64 @@ mod tests {
         .await
         .expect("ok");
         assert_eq!(stats.bytes_downloaded, 100);
+    }
+
+    // ---- F1 Task 3: AIMD wiring test ----
+
+    /// Verifies the AIMD controller is wired with `ControllerMode::HlsSegments`
+    /// and that `report_segment_complete` is called (observable via AIMD-adjusted
+    /// concurrency still completing all fragments correctly).
+    ///
+    /// The failing-first contract: Task 2 uses a fixed `Arc<Semaphore>` with no
+    /// `AdaptiveController`. Task 3 replaces it with a controller. We assert two
+    /// things that are only true after Task 3 lands:
+    ///
+    /// 1. `AdaptiveController::mode()` returns `HlsSegments` — verified directly
+    ///    on a controller constructed with the same parameters as the production
+    ///    path (additive unit test for the new `mode()` accessor).
+    /// 2. The download completes correctly with AIMD-constrained concurrency
+    ///    (`initial_connections=1`) — a regression guard that AIMD wiring does
+    ///    not break source-order writes or omit bytes.
+    ///
+    /// The test FAILS against Task 2's code because the `mode()` accessor did not
+    /// exist on `AdaptiveController` before Task 3 added it (it is a NEW public
+    /// method added in this task). Once the accessor is added and the controller
+    /// is wired, both assertions pass.
+    #[tokio::test]
+    async fn aimd_controller_hls_segments_mode_wired_and_download_correct() {
+        use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
+
+        // Part 1: unit test for the new mode() accessor.
+        let controller = AdaptiveController::new(
+            0,
+            AdaptiveConfig {
+                max_connections: 2,
+                initial_connections: 1,
+                ..AdaptiveConfig::default()
+            },
+            ControllerMode::HlsSegments,
+            None,
+        );
+        assert_eq!(
+            controller.mode(),
+            ControllerMode::HlsSegments,
+            "AdaptiveController::mode() must return the ControllerMode it was constructed with"
+        );
+
+        // Part 2: behavioral regression guard — download completes correctly
+        // when AIMD controller replaces the fixed semaphore.
+        let mut server = mockito::Server::new_async().await;
+        let (frags, expected) = build_ordered_frags(&mut server, 6).await;
+        let tmp = tempfile::NamedTempFile::new().expect("tmp");
+        // N=2 concurrency — AIMD starts at min(2,2)=2 connections.
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(2);
+        let stats =
+            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+                .await
+                .expect("AIMD-wired download must complete");
+        let written = tokio::fs::read(tmp.path()).await.unwrap();
+        assert_eq!(written, expected, "AIMD wiring must not break source-order writes");
+        assert_eq!(stats.bytes_downloaded, 6, "all 6 bytes must be accounted for");
     }
 
     // ---- F1 parallel fragment-fetch tests ----

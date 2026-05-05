@@ -237,6 +237,14 @@ impl AdaptiveController {
         &self.semaphore
     }
 
+    /// Returns the [`ControllerMode`] this controller was constructed with.
+    ///
+    /// Primarily used in tests to assert that a call site wired the correct
+    /// mode (e.g. `HlsSegments` for the pre-resolved fragment path).
+    pub const fn mode(&self) -> ControllerMode {
+        self.mode
+    }
+
     /// Lazily generate the next chunk request based on the current chunk level.
     ///
     /// # Returns
