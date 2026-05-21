@@ -154,6 +154,9 @@ must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 disallowed_methods = "deny"
+match_same_arms = "warn"
+redundant_clone = "warn"
+collapsible_match = "warn"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]
