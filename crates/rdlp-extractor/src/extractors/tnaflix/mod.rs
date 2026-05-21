@@ -246,7 +246,7 @@ impl TNAFlixSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -284,7 +284,7 @@ impl TNAFlixSearchExtractor {
 
         loop {
             let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
+                .fetch_search_page(query, page, ctx)
                 .await
             {
                 Ok(r) => r,
@@ -352,7 +352,7 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -396,7 +396,7 @@ impl EMPFlixSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -436,7 +436,7 @@ impl EMPFlixSearchExtractor {
 
         loop {
             let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
+                .fetch_search_page(query, page, ctx)
                 .await
             {
                 Ok(r) => r,
@@ -505,7 +505,7 @@ impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -532,7 +532,7 @@ impl MovieFapSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -572,7 +572,7 @@ impl MovieFapSearchExtractor {
 
         loop {
             let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
+                .fetch_search_page(query, page, ctx)
                 .await
             {
                 Ok(r) => r,
@@ -640,7 +640,7 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         moviefap_search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 

@@ -240,7 +240,7 @@ impl XHamsterExtractor {
     }
 
     /// Fetch a single search page, returning its results and the max page count.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -276,7 +276,7 @@ impl XHamsterExtractor {
 
         loop {
             let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
+                .fetch_search_page(query, page, ctx)
                 .await
             {
                 Ok(result) => result,
@@ -379,7 +379,7 @@ impl SearchExtractor for XHamsterExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
