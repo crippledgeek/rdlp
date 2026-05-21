@@ -591,6 +591,110 @@ fn with_parallel_threshold_clamps_zero_to_one() {
 }
 
 #[tokio::test]
+async fn probe_206_returns_size_from_content_range() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/1048576")
+        .with_body(vec![0u8; 262144])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let head_guard = server
+        .mock("HEAD", "/file")
+        .expect(0)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, Some(1048576));
+    assert!(result.supports_ranges);
+    mock.assert_async().await;
+    head_guard.assert_async().await;
+}
+
+#[tokio::test]
+async fn probe_200_returns_content_length_no_ranges() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let body = vec![0u8; 524288];
+    let mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(200)
+        .with_header("content-length", "524288")
+        .with_body(body)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, Some(524288));
+    assert!(!result.supports_ranges);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn probe_416_returns_none_falls_to_sequential() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(416)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, None);
+    assert!(!result.supports_ranges);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn probe_206_malformed_content_range_keeps_supports_ranges_true() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "invalid-garbage")
+        .with_body(vec![0u8; 262144])
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, None);
+    assert!(result.supports_ranges);
+}
+
+#[tokio::test]
 async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     use mockito::Server;
 

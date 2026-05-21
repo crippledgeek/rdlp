@@ -82,6 +82,18 @@ pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Op
         .and_then(|s| s.parse::<u64>().ok())
 }
 
+/// Result of the F3 single-GET probe in `HttpDownloader::probe`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeResult {
+    /// Total file size if the server reported it via Content-Range (206) or
+    /// Content-Length (200). `None` when neither header is parseable.
+    pub size: Option<u64>,
+    /// `true` if the server returned `206 Partial Content`, indicating it
+    /// honoured the Range request. RFC 7233 §4.1: 206 itself implies range
+    /// support; `Accept-Ranges` is not required.
+    pub supports_ranges: bool,
+}
+
 /// HTTP/HTTPS downloader
 ///
 /// **Clone performance:** O(1) - both client and config use Arc internally
@@ -231,6 +243,64 @@ impl HttpDownloader {
     #[must_use]
     pub fn headers(&self) -> HeaderMap {
         self.extra_headers.clone()
+    }
+
+    /// F3 single-GET probe: replaces the HEAD×2 + Range:bytes=0-0 sequence.
+    /// Sends `GET Range: bytes=0-{PROBE_WINDOW_BYTES-1}`, parses headers only,
+    /// discards body. Returns `ProbeResult` for the downstream parallel-vs-sequential
+    /// decision in `download_to_file`.
+    ///
+    /// Status handling:
+    /// - 206 → parse total from `Content-Range`, `supports_ranges = true`.
+    /// - 200 → server ignored Range; parse total from `Content-Length`,
+    ///   `supports_ranges = false`. The probe body is discarded (caller
+    ///   re-issues a plain GET via `download_sequential`).
+    /// - other (4xx/5xx after retry) → `ProbeResult { size: None,
+    ///   supports_ranges: false }`. Non-2xx is "no info", not an error;
+    ///   caller falls to sequential.
+    pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
+        use config::PROBE_WINDOW_BYTES;
+
+        let client = self.client.clone();
+        let url_string = url.to_string();
+        let hdrs = self.headers();
+        let range = format!("bytes=0-{}", PROBE_WINDOW_BYTES - 1);
+
+        let resp = match with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
+            let client = client.clone();
+            let url = url_string.clone();
+            let hdrs = hdrs.clone();
+            let range = range.clone();
+            async move {
+                client
+                    .get(&url)
+                    .headers(hdrs)
+                    .header("Range", range)
+                    .send()
+                    .await
+                    .map_err(|e| RdlpError::Network {
+                        message: format!("probe failed: {e}"),
+                        url: Some(url.clone()),
+                    })
+            }
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => return Ok(ProbeResult { size: None, supports_ranges: false }),
+        };
+
+        match resp.status().as_u16() {
+            206 => Ok(ProbeResult {
+                size: parse_content_range_total(resp.headers()),
+                supports_ranges: true,
+            }),
+            200 => Ok(ProbeResult {
+                size: resp.content_length(),
+                supports_ranges: false,
+            }),
+            _ => Ok(ProbeResult { size: None, supports_ranges: false }),
+        }
     }
 
     /// Check if server supports range requests
