@@ -64,7 +64,11 @@ pub async fn probe_size(
     window_bytes: u64,
     timeout: Duration,
 ) -> Result<ProbeResult, ProbeError> {
-    let range = format!("bytes=0-{}", window_bytes.saturating_sub(1));
+    // Clamp window_bytes to >= 1 (security-review LOW). Passing 0 would
+    // wrap saturating_sub to u64::MAX, producing `bytes=0-18446744073709551615`
+    // — effectively a full-body GET, defeating the probe's intent.
+    let window = window_bytes.max(1);
+    let range = format!("bytes=0-{}", window - 1);
     let mut req = client.get(url).timeout(timeout).header("Range", &range);
     if let Some(h) = headers {
         req = req.headers(h.clone());
