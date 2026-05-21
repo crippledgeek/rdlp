@@ -10,10 +10,12 @@ use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
 };
+use rdlp_types::Format;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
 use super::{HttpDownloader, with_retry};
@@ -23,6 +25,80 @@ use super::{HttpDownloader, with_retry};
 impl Downloader for HttpDownloader {
     fn protocol(&self) -> &'static str {
         "http"
+    }
+
+    /// F6: Override `download_format` to thread `cancel` into the download path.
+    ///
+    /// The trait's default impl discards `cancel`. This override re-implements
+    /// the `download_to_file` body inline — probe, then parallel-or-sequential
+    /// dispatch — and passes `cancel` to `download_sequential`. The probe itself
+    /// is wrapped in a `tokio::select!` so cancellation fires even before the
+    /// first byte arrives.
+    ///
+    /// Note: `download_parallel` does not yet take `cancel`; the outer
+    /// orchestrator `select!` provides cancellation for the parallel path.
+    async fn download_format(
+        &self,
+        format: &Format,
+        path: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        let url = &format.url;
+        let timeout = self.config.download_timeout;
+
+        let download_fut = async {
+            let probe = self.probe(url).await?;
+            let size = probe.size;
+            let supports_ranges = probe.supports_ranges;
+
+            debug!(
+                "Probe result: size={} MB, concurrent={}, ranges={}",
+                size.map_or(0, |s| s / 1024 / 1024),
+                self.config.concurrent_fragments,
+                supports_ranges
+            );
+
+            let parallel_size = match size {
+                Some(s) if s > self.config.parallel_threshold => {
+                    if self.config.concurrent_fragments > 1 && supports_ranges {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(ps) = parallel_size {
+                // Parallel-path cooperative cancel is pre-existing AIMD work,
+                // out of scope for F6; outer select! at the orchestrator covers it.
+                return self.download_parallel(url, path, ps, progress).await;
+            }
+
+            self.download_sequential(url, path, progress, cancel).await
+        };
+
+        let timed = tokio::time::timeout(timeout, download_fut);
+
+        match cancel {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => Err(RdlpError::Cancelled),
+                    result = timed => {
+                        result.map_err(|_| RdlpError::Download {
+                            message: format!("Download timed out after {}s", timeout.as_secs()),
+                            url: Some(url.clone()),
+                        })?
+                    }
+                }
+            }
+            None => timed.await.map_err(|_| RdlpError::Download {
+                message: format!("Download timed out after {}s", timeout.as_secs()),
+                url: Some(url.clone()),
+            })?,
+        }
     }
 
     async fn download_to_file(
@@ -78,7 +154,7 @@ impl Downloader for HttpDownloader {
                 self.config.concurrent_fragments
             );
 
-            self.download_sequential(url, path, progress).await
+            self.download_sequential(url, path, progress, None).await
         })
         .await
         .map_err(|_| RdlpError::Download {
@@ -217,6 +293,35 @@ impl Downloader for HttpDownloader {
         resume_from: u64,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        // Trait method discards cancel (outer select! covers it). For cooperative
+        // cancel, callers use `download_with_resume_with_cancel` directly.
+        // TODO(#287): trait method itself may take cancel in a future BC-break.
+        self.download_with_resume_with_cancel(url, path, resume_from, progress, None)
+            .await
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl HttpDownloader {
+    /// F6: cooperative-cancel-aware variant of `download_with_resume`.
+    /// The trait method `download_with_resume` delegates here with `cancel: None`.
+    /// Direct callers (e.g. tests) can pass a `CancellationToken` for mid-stream cancellation.
+    pub(crate) async fn download_with_resume_with_cancel(
+        &self,
+        url: &str,
+        path: &Path,
+        resume_from: u64,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        // F6: pre-cancel guard. Mirrors download_sequential — avoids issuing
+        // a network round-trip when the caller has already cancelled.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            return Err(RdlpError::Cancelled);
+        }
+
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
@@ -312,19 +417,32 @@ impl Downloader for HttpDownloader {
                 ))?;
             let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
-            let mut stream = response.bytes_stream();
+            let stream = response.bytes_stream();
+            tokio::pin!(stream);
             let mut downloaded = resume_from;
             let mut last_update = Instant::now();
             let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
 
-            while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
+            loop {
+                let next = match crate::http::next_with_cancel_and_timeout(
+                    stream.as_mut(),
+                    cancel,
+                    read_timeout,
+                    &url_string,
+                )
                 .await
-                .map_err(|_| RdlpError::Network {
-                    message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-                    url: Some(url_string.to_string()),
-                })?
-            {
+                {
+                    Ok(item) => item,
+                    Err(RdlpError::Cancelled) => {
+                        // Flush partial bytes already in BufWriter to disk.
+                        writer.flush().await.ok();
+                        return Err(RdlpError::Cancelled);
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                let Some(chunk_result) = next else { break };
                 let chunk = chunk_result
                     .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(url_string.to_string()) })?;
 

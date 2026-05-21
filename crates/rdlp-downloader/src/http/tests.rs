@@ -727,6 +727,206 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     // download correctness.
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_sequential_cancel_before_start_returns_cancelled() {
+    use tokio_util::sync::CancellationToken;
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/file")
+        .with_status(200)
+        .with_body(vec![0u8; 1024])
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let res = downloader
+        .download_sequential(&url, &out, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_sequential_cancel_mid_stream_returns_cancelled() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    // A server that sends HTTP 200 headers + chunked transfer-encoding preamble
+    // but never sends actual body chunks. This parks the wreq body stream at
+    // its next() poll, which is where the cancel arm races.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Read and discard the request.
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            // Send HTTP 200 with chunked encoding but no body chunks.
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Content-Type: application/octet-stream\r\n\
+                  \r\n",
+            );
+            let _ = stream.flush();
+            // Hold the connection open so wreq waits for the next chunk.
+            // `Duration::from_mins` (clippy suggestion) needs Rust 1.95;
+            // workspace MSRV is 1.85.
+            #[allow(clippy::duration_suboptimal_units)]
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/slow-body");
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_sequential(&url, &out, None, Some(&token))
+        .await;
+
+    assert!(
+        matches!(res, Err(RdlpError::Cancelled)),
+        "expected Cancelled, got: {res:?}"
+    );
+}
+
+#[tokio::test]
+async fn download_sequential_cancel_none_passes_existing_behavior() {
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xCC; 4096];
+    let _mock = server
+        .mock("GET", "/file")
+        .with_status(200)
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let stats = downloader
+        .download_sequential(&url, &out, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(stats.bytes_downloaded, 4096);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_format_propagates_cancel_to_sequential() {
+    use rdlp_types::{DownloadProtocol, Format};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+        // Hold connection open without sending any response — the probe
+        // will block waiting for a response, and the cancel fires first.
+        // `Duration::from_mins` needs Rust 1.95; workspace MSRV is 1.85.
+        #[allow(clippy::duration_suboptimal_units)]
+        std::thread::sleep(Duration::from_secs(60));
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/blackhole");
+    let format = Format::new("test", &url, "bin", DownloadProtocol::Https);
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_format(&format, &out, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_with_resume_with_cancel_aborts_on_cancel() {
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    // Blackhole that accepts a connection and sends a 206 header but then
+    // never sends body bytes. Forces the future to park at stream.next().
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Read request bytes (drop them)
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+
+            // Send 206 partial-content headers with a content-range that says total is 10MB
+            let _ = stream.write_all(
+                b"HTTP/1.1 206 Partial Content\r\n\
+                  Content-Range: bytes 0-10485759/10485760\r\n\
+                  Content-Length: 10485760\r\n\
+                  Content-Type: application/octet-stream\r\n\
+                  \r\n",
+            );
+            let _ = stream.flush();
+            // Hold the connection open so wreq waits for body data.
+            #[allow(clippy::duration_suboptimal_units)] // from_mins needs Rust 1.95; MSRV 1.85
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    // Pre-create a 0-byte file to satisfy resume preconditions if any.
+    tokio::fs::write(&out, b"").await.unwrap();
+
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/blackhole");
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_with_resume_with_cancel(&url, &out, 0, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
 #[tokio::test]
 async fn download_to_file_no_head_under_normal_flow() {
     use mockito::Matcher;
@@ -765,4 +965,60 @@ async fn download_to_file_no_head_under_normal_flow() {
 
     assert_eq!(stats.bytes_downloaded, 524288);
     head_guard.assert_async().await;
+}
+
+#[test]
+fn next_with_cancel_helper_uses_biased_select() {
+    // Static guard: the cancel select in next_with_cancel_and_timeout MUST
+    // include `biased;` so cancel-priority is deterministic. Without biased,
+    // tokio's PRNG branch selection can starve the cancel arm under load.
+    //
+    // Mirrors the static probe-order guard at
+    // crates/rdlp-extractor/src/hls/expand_in_place.rs:247
+    // (`test_extractor_call_order_expand_before_detect`).
+    let source = include_str!("mod.rs");
+
+    // Restrict to the helper's function body to avoid false positives from
+    // other select! invocations elsewhere in the file.
+    let start = source
+        .find("pub(crate) async fn next_with_cancel_and_timeout")
+        .expect("next_with_cancel_and_timeout not found in http/mod.rs");
+
+    // End at the next top-level `fn` definition or the `#[cfg(test)]` block,
+    // whichever comes first.
+    let after_start = &source[start..];
+    let cfg_test_end = after_start.find("\n#[cfg(test)]");
+    let next_fn_end = after_start[1..]
+        .find("\nfn ")
+        .or_else(|| after_start[1..].find("\nasync fn "))
+        .or_else(|| after_start[1..].find("\npub fn "))
+        .or_else(|| after_start[1..].find("\npub(crate) fn "))
+        .or_else(|| after_start[1..].find("\npub(crate) async fn "))
+        .map(|i| i + 1);
+    let end = match (cfg_test_end, next_fn_end) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => after_start.len(),
+    };
+    let body = &after_start[..end];
+
+    let select_idx = body
+        .find("tokio::select!")
+        .expect("next_with_cancel_and_timeout must contain a tokio::select!");
+    let after_select = &body[select_idx..];
+
+    // `biased;` must appear before the first arm (which uses `=>`).
+    let first_arm = after_select
+        .find("=>")
+        .expect("tokio::select! must have at least one arm");
+    let header = &after_select[..first_arm];
+
+    assert!(
+        header.contains("biased;"),
+        "tokio::select! in next_with_cancel_and_timeout MUST use `biased;` \
+         to deterministically prioritize the cancel arm. Without it, tokio's \
+         PRNG branch selection can starve cancel under load. \
+         Found header: {header:?}"
+    );
 }
