@@ -114,6 +114,21 @@ Authority chain: Rust API Guidelines (rust-lang/api-guidelines), Rust RFC 430, R
 
 Special-case exceptions are documented inline in code with a comment referencing this rule set (e.g. `codec_threading_info` returns `(i32, i32)` tuple, not a struct, but `_info` names the concept of "threading information"; `const fn` unsafe FFI helper, rename deferred).
 
+## Naming Standards — Parameters
+
+Authority chain: Robert C. Martin's *Clean Code* Ch. 3 (Function Arguments), Rust API Guidelines (C-CASE, C-GENERIC, C-WORD-ORDER), tokio + stdlib precedents (`tokio::process::Command::kill_on_drop`, `std::fs::copy/write`).
+
+| Rule | Statement | Example |
+|---|---|---|
+| P1 | No bare `bool` parameter in public non-builder API. Use a two-variant enum, split into named methods, or — for builder-style methods only — accept `bool` because the method name carries the semantics. | Split: `pub async fn download(url)` and `pub async fn download_interactive(url)`, not `download(url, interactive: bool)` |
+| P2 | Extract a params struct when a function reaches 5 args, especially with multiple positional `u64`s (swap-risk) or 2+ `bool`s. Threshold enforced by `clippy::too_many_arguments` at 5 (configured via `clippy.toml`). | `fn substitute(template: &str, rep_id: &str, vars: &DashTemplateVars) -> String`, not 5-positional-arg form |
+| P3 | Use `_name: T` (not bare `_: T`) for unused parameters on documented public trait impls. The name appears in rustdoc, rust-analyzer inlay hints, and compiler error messages. Test-only `#[cfg(test)]` mocks may keep bare `_:`. | `fn confirm(&self, _request: ConfirmRequest) -> ConfirmResponse`, not `fn confirm(&self, _: ConfirmRequest)` |
+| P4 | Spell out abbreviations (`cb` → `callback`, `forwarder`, or descriptive event-verb) on public methods. Internal short names (`buf`, `len`, `cx`, `f`, `n`) are acceptable where type and context make the role clear. | `pub fn set_log_forwarder(forwarder: Arc<dyn Fn(...)>)`, not `cb:` |
+| P5 | Use `impl AsRef<Path>` / `impl Into<String>` for public path/string params (C-GENERIC); use `&Path` / `&str` for private helpers. Avoid `impl AsRef<str>` (uncommon in ecosystem). | Public: `fn from_toml_file(path: impl AsRef<Path>)`. Private: `fn merge_stream_path(base: &Path, ...)`. |
+| P6 | Parameter ordering: source before destination (`from`/`to`); target before data (`path`/`contents`); callbacks and cancellation tokens last. | `fn download_format(format, path, progress, cancel)` — matches stdlib `fs::copy(from, to)` and `fs::write(path, contents)` |
+| P7 | Generic type parameters use single uppercase letters (`T`, `U`, `K`, `V`, `E`, `R`). Value parameters use descriptive snake_case names. | `fn first<T>(items: &[T]) -> Option<&T>` |
+| P8 | Builder-flag method signature: `fn with_<behavior>(self, <behavior>: bool) -> Self`. The method name supplies the semantics; the bare `bool` is acceptable. | `.with_adaptive(true)` — readable at the call site |
+
 ## Project Structure
 
 ```
