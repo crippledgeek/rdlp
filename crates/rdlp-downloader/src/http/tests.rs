@@ -727,6 +727,110 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     // download correctness.
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_sequential_cancel_before_start_returns_cancelled() {
+    use tokio_util::sync::CancellationToken;
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/file")
+        .with_status(200)
+        .with_body(vec![0u8; 1024])
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let res = downloader
+        .download_sequential(&url, &out, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_sequential_cancel_mid_stream_returns_cancelled() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    // A server that sends HTTP 200 headers + chunked transfer-encoding preamble
+    // but never sends actual body chunks. This parks the wreq body stream at
+    // its next() poll, which is where the cancel arm races.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Read and discard the request.
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            // Send HTTP 200 with chunked encoding but no body chunks.
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Content-Type: application/octet-stream\r\n\
+                  \r\n",
+            );
+            let _ = stream.flush();
+            // Hold the connection open so wreq waits for the next chunk.
+            std::thread::sleep(Duration::from_mins(1));
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/slow-body");
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_sequential(&url, &out, None, Some(&token))
+        .await;
+
+    assert!(
+        matches!(res, Err(RdlpError::Cancelled)),
+        "expected Cancelled, got: {res:?}"
+    );
+}
+
+#[tokio::test]
+async fn download_sequential_cancel_none_passes_existing_behavior() {
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xCC; 4096];
+    let _mock = server
+        .mock("GET", "/file")
+        .with_status(200)
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let stats = downloader
+        .download_sequential(&url, &out, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(stats.bytes_downloaded, 4096);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), body);
+}
+
 #[tokio::test]
 async fn download_to_file_no_head_under_normal_flow() {
     use mockito::Matcher;

@@ -78,7 +78,7 @@ impl Downloader for HttpDownloader {
                 self.config.concurrent_fragments
             );
 
-            self.download_sequential(url, path, progress).await
+            self.download_sequential(url, path, progress, None).await
         })
         .await
         .map_err(|_| RdlpError::Download {

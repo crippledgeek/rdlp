@@ -399,18 +399,31 @@ impl HttpDownloader {
         Ok(downloaded)
     }
 
-    /// Sequential download (original method)
-    async fn download_sequential(
+    /// Sequential download with optional cooperative cancellation.
+    ///
+    /// `cancel` — when `Some`, each chunk poll races the token; the first arm
+    /// that fires wins.  On cancellation the `BufWriter` is flushed before
+    /// returning `RdlpError::Cancelled` so partial bytes already buffered reach
+    /// disk.
+    pub(crate) async fn download_sequential(
         &self,
         url: &str,
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<DownloadStats> {
         let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
         let client = self.client.clone();
         let url_string: Arc<str> = Arc::from(url);
         let hdrs = self.headers();
+
+        // Check for pre-cancelled token before issuing the network request.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            return Err(RdlpError::Cancelled);
+        }
 
         let response = with_retry(&self.config.retry_config, "HTTP GET", || {
             let client = client.clone();
@@ -439,19 +452,32 @@ impl HttpDownloader {
         })?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
-        let mut stream = response.bytes_stream();
+        let stream = response.bytes_stream();
+        tokio::pin!(stream);
         let mut downloaded: u64 = 0;
         let mut last_update = Instant::now();
         let update_interval = PROGRESS_UPDATE_INTERVAL;
         let read_timeout = self.config.read_timeout;
 
-        while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
+        loop {
+            let next = match next_with_cancel_and_timeout(
+                stream.as_mut(),
+                cancel,
+                read_timeout,
+                &url_string,
+            )
             .await
-            .map_err(|_| RdlpError::Network {
-                message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-                url: Some(url_string.to_string()),
-            })?
-        {
+            {
+                Ok(item) => item,
+                Err(RdlpError::Cancelled) => {
+                    // Flush partial bytes already in BufWriter to disk.
+                    writer.flush().await.ok();
+                    return Err(RdlpError::Cancelled);
+                }
+                Err(e) => return Err(e),
+            };
+
+            let Some(chunk_result) = next else { break };
             let chunk = chunk_result.map_err(|e| RdlpError::Network {
                 message: format!("Failed to read response body from {url_string}: {e}"),
                 url: Some(url_string.to_string()),
@@ -526,7 +552,6 @@ impl Default for HttpDownloader {
 /// ready, otherwise tokio's PRNG branch selection can starve the cancel arm
 /// under load. A static test in `tests.rs` (Task 12) will assert the
 /// `biased;` keyword is present in this select.
-#[allow(dead_code)] // wired to callers in Task 8+
 pub(crate) async fn next_with_cancel_and_timeout<S, E>(
     mut stream: std::pin::Pin<&mut S>,
     cancel: Option<&tokio_util::sync::CancellationToken>,
