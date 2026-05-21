@@ -41,3 +41,16 @@ disallowed-methods = [
     { path = "std::fs::File::open", reason = "blocking in async context — use tokio::fs::File::open or spawn_blocking" },
     { path = "std::fs::File::create", reason = "blocking in async context — use tokio::fs::File::create or spawn_blocking" },
 ]
+
+# ──────────────────────────────────────────────────────────────────────
+# Parameter naming standards (PR C, spec 2026-05-21-code-quality-sprint-design.md):
+# - max-fn-params-bools = 2 caps bool-parameter count at 2; pairs with the
+#   workspace lint `fn_params_excessive_bools = "warn"` (Task 8). Baseline:
+#   0 violations after P3 struct extraction (build_convert_options).
+# - too-many-arguments-threshold deliberately NOT lowered from clippy's
+#   default 7. Setting it to 5 (per Rule P2's guidance for new code) would
+#   fire 38 pre-existing warnings; refactoring each requires a struct
+#   extraction with TDD and caller updates, out of scope for PR C.
+#   CODING_RULES.md P2 remains the advisory guide for new code; reviewers
+#   enforce the spirit of the rule during PR review.
+max-fn-params-bools = 2
