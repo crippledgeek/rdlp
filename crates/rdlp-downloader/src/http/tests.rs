@@ -834,6 +834,44 @@ async fn download_sequential_cancel_none_passes_existing_behavior() {
     assert_eq!(tokio::fs::read(&out).await.unwrap(), body);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_format_propagates_cancel_to_sequential() {
+    use rdlp_types::{DownloadProtocol, Format};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+        // Hold connection open without sending any response — the probe
+        // will block waiting for a response, and the cancel fires first.
+        // `Duration::from_mins` needs Rust 1.95; workspace MSRV is 1.85.
+        #[allow(clippy::duration_suboptimal_units)]
+        std::thread::sleep(Duration::from_secs(60));
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/blackhole");
+    let format = Format::new("test", &url, "bin", DownloadProtocol::Https);
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_format(&format, &out, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
 #[tokio::test]
 async fn download_to_file_no_head_under_normal_flow() {
     use mockito::Matcher;

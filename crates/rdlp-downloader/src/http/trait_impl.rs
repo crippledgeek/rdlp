@@ -10,10 +10,12 @@ use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
 };
+use rdlp_types::Format;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
 use super::{HttpDownloader, with_retry};
@@ -23,6 +25,80 @@ use super::{HttpDownloader, with_retry};
 impl Downloader for HttpDownloader {
     fn protocol(&self) -> &'static str {
         "http"
+    }
+
+    /// F6: Override `download_format` to thread `cancel` into the download path.
+    ///
+    /// The trait's default impl discards `cancel`. This override re-implements
+    /// the `download_to_file` body inline — probe, then parallel-or-sequential
+    /// dispatch — and passes `cancel` to `download_sequential`. The probe itself
+    /// is wrapped in a `tokio::select!` so cancellation fires even before the
+    /// first byte arrives.
+    ///
+    /// Note: `download_parallel` does not yet take `cancel`; the outer
+    /// orchestrator `select!` provides cancellation for the parallel path.
+    async fn download_format(
+        &self,
+        format: &Format,
+        path: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        let url = &format.url;
+        let timeout = self.config.download_timeout;
+
+        let download_fut = async {
+            let probe = self.probe(url).await?;
+            let size = probe.size;
+            let supports_ranges = probe.supports_ranges;
+
+            debug!(
+                "Probe result: size={} MB, concurrent={}, ranges={}",
+                size.map_or(0, |s| s / 1024 / 1024),
+                self.config.concurrent_fragments,
+                supports_ranges
+            );
+
+            let parallel_size = match size {
+                Some(s) if s > self.config.parallel_threshold => {
+                    if self.config.concurrent_fragments > 1 && supports_ranges {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(ps) = parallel_size {
+                // Parallel-path cooperative cancel is pre-existing AIMD work,
+                // out of scope for F6; outer select! at the orchestrator covers it.
+                return self.download_parallel(url, path, ps, progress).await;
+            }
+
+            self.download_sequential(url, path, progress, cancel).await
+        };
+
+        let timed = tokio::time::timeout(timeout, download_fut);
+
+        match cancel {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => Err(RdlpError::Cancelled),
+                    result = timed => {
+                        result.map_err(|_| RdlpError::Download {
+                            message: format!("Download timed out after {}s", timeout.as_secs()),
+                            url: Some(url.clone()),
+                        })?
+                    }
+                }
+            }
+            None => timed.await.map_err(|_| RdlpError::Download {
+                message: format!("Download timed out after {}s", timeout.as_secs()),
+                url: Some(url.clone()),
+            })?,
+        }
     }
 
     async fn download_to_file(
