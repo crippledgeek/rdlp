@@ -20,6 +20,18 @@ use std::time::Duration;
 /// `DownloaderConfig::default()` value.
 pub(super) const DEFAULT_PARALLEL_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Size of the F3 initial range probe used to detect `Content-Length` and range support.
+/// The body is discarded; only headers are consulted.
+///
+/// Rationale (per docs/superpowers/specs/2026-05-21-f3-f6-download-optimization-design.md):
+/// - Matches `MIN_CHUNK_LEVEL=2` (256 KB) in `adaptive.rs` so the probe looks like a real
+///   chunk to bot-detecting origins.
+/// - Fits TCP slow-start delivery within ~3-4 RTTs from cwnd=10 (RFC 6928).
+/// - 4× the H2 default connection window (RFC 7540 §6.9, 64 KiB) — requires a few
+///   WINDOW_UPDATE frames but does not catastrophically starve concurrent streams.
+///   1 MiB (16× the window) would actively block parallel chunks.
+pub(crate) const PROBE_WINDOW_BYTES: u64 = 256 * 1024;
+
 /// Progress callback update interval
 pub(super) const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -90,5 +102,22 @@ impl Default for DownloaderConfig {
             merge_timeout: DEFAULT_MERGE_TIMEOUT,
             adaptive: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_window_is_256_kib() {
+        assert_eq!(PROBE_WINDOW_BYTES, 256 * 1024);
+    }
+
+    #[test]
+    fn probe_window_under_one_mib() {
+        // 1 MiB would be 16x the RFC 7540 default H2 connection window (64 KiB)
+        // and would starve parallel streams.
+        assert!(PROBE_WINDOW_BYTES < 1024 * 1024);
     }
 }
