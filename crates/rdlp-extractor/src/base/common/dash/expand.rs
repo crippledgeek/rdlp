@@ -327,10 +327,8 @@ pub fn expand_dash_representations(
 /// Map a MIME type to a container file extension.
 fn mime_to_ext(mime: &str) -> &'static str {
     match mime {
-        "video/mp4" => "mp4",
-        "video/webm" => "webm",
+        "video/webm" | "audio/webm" => "webm",
         "audio/mp4" => "m4a",
-        "audio/webm" => "webm",
         _ => "mp4",
     }
 }
@@ -440,10 +438,8 @@ fn build_fragments(
 /// yt-dlp's convention.
 fn mime_to_sub_ext(mime: &str, codecs: &str) -> String {
     match mime {
-        "text/ttml" | "application/ttml+xml" => "ttml",
         "text/vtt" => "vtt",
         "application/mp4" => match codecs {
-            "stpp" | "ttml" | "dfxp" => "ttml",
             "wvtt" => "vtt",
             _ => "ttml",
         },
