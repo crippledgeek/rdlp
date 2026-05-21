@@ -43,10 +43,6 @@ echo "==> M1 ratchet: no new \`fn get_<name>(&self...)\` accessors"
 #     with a key parameter (M1 exception).
 #   - host/cookie_jar.rs::get_cookies: WIT-generated trait impl
 #     (cannot rename without breaking the WIT contract).
-#   - format/mod.rs::get_filesize: rename pending design decision
-#     (would collide with field `filesize`; method has fallback logic
-#     to filesize_approx — needs a new name like `resolved_filesize`).
-#     Tracked in a follow-up GitHub issue.
 #   - host/store_kv.rs::get_blocking: HashMap-style K/V lookup
 #     (CODING_RULES.md M1 exception, also referenced in rdlp-plugin
 #     module docs).
@@ -56,7 +52,6 @@ m1_violations=$(
     | grep -vF 'crates/rdlp-desktop/src-tauri/src/state/download_queue.rs' \
     | grep -vF 'crates/rdlp-plugin/src/host/cookie_jar.rs' \
     | grep -vF 'crates/rdlp-plugin/src/host/store_kv.rs' \
-    | grep -vF 'crates/rdlp-types/src/format/mod.rs:301' \
     || true
 )
 if [ -n "$m1_violations" ]; then

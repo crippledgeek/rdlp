@@ -297,8 +297,9 @@ impl Format {
         }
     }
 
-    /// Get file size (exact or approximate)
-    pub fn get_filesize(&self) -> Option<u64> {
+    /// Resolved file size: prefers the exact `filesize` when known, falls
+    /// back to `filesize_approx` otherwise.
+    pub fn resolved_filesize(&self) -> Option<u64> {
         self.filesize.or(self.filesize_approx)
     }
 
