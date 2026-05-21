@@ -28,8 +28,8 @@ describe("Vitest infrastructure", () => {
     });
 
     it("mockInvoke routes to registered handler", async () => {
-        setInvokeHandler("get_queue", () => []);
-        const result = await mockInvoke<unknown[]>("get_queue");
+        setInvokeHandler("queue", () => []);
+        const result = await mockInvoke<unknown[]>("queue");
         expect(result).toEqual([]);
     });
 

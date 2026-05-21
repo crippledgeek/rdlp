@@ -15,7 +15,7 @@ import type {
 export function providersQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.providers(),
-        queryFn: () => invokeTyped<SearchSiteInfo[]>("get_search_providers"),
+        queryFn: () => invokeTyped<SearchSiteInfo[]>("search_providers"),
         staleTime: Infinity, // Providers don't change at runtime
     });
 }
@@ -25,7 +25,7 @@ export function filtersQueryOptions(site: string) {
     return queryOptions({
         queryKey: queryKeys.filters(site),
         queryFn: () =>
-            invokeTyped<SearchFilterDescriptor[]>("get_search_filters", { site }),
+            invokeTyped<SearchFilterDescriptor[]>("search_filters", { site }),
         enabled: site !== "",
     });
 }

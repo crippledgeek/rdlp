@@ -11,7 +11,7 @@ export function formatsQueryOptions(url: string | null) {
         queryKey: queryKeys.formats(url ?? ""),
         queryFn: () => {
             if (!url) throw new Error("URL is required for format query");
-            return invokeTyped<FormatListResponse>("get_formats", { url });
+            return invokeTyped<FormatListResponse>("formats", { url });
         },
         enabled: url !== null && url !== "",
     });

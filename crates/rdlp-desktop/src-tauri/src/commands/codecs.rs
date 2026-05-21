@@ -12,7 +12,7 @@ use rdlp_types::ContainerFormat;
 /// linked `FFmpeg` build.
 #[tauri::command]
 #[must_use]
-pub fn get_available_codecs() -> Vec<VideoCodecInfo> {
+pub fn available_codecs() -> Vec<VideoCodecInfo> {
     rdlp_ffmpeg::ffmpeg::ensure_init().ok();
     list_available_codecs()
 }
@@ -24,7 +24,7 @@ pub fn get_available_codecs() -> Vec<VideoCodecInfo> {
 /// are returned.
 #[tauri::command]
 #[must_use]
-pub fn get_available_audio_codecs(container: Option<ContainerFormat>) -> Vec<AudioCodecInfo> {
+pub fn available_audio_codecs(container: Option<ContainerFormat>) -> Vec<AudioCodecInfo> {
     rdlp_ffmpeg::ffmpeg::ensure_init().ok();
     let all = list_available_audio_codecs();
     if let Some(c) = container {

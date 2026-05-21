@@ -10,7 +10,7 @@ import type { AppSettings } from "../types";
 export function settingsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.settings(),
-        queryFn: () => invokeTyped<AppSettings>("get_settings"),
+        queryFn: () => invokeTyped<AppSettings>("settings"),
         staleTime: 5 * 60_000,
     });
 }

@@ -99,7 +99,7 @@ export interface SubtitleInfo {
     formats: string[];
 }
 
-/** Complete response for the get_formats command. */
+/** Complete response for the formats command. */
 export interface FormatListResponse {
     title: string;
     formats: FormatInfo[];

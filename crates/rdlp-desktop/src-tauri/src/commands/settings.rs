@@ -38,7 +38,7 @@ use crate::state::{AppSettings, AppState, SettingsValidationError};
 /// This function does not currently return errors but returns
 /// `Result` for forward-compatible IPC signatures.
 #[tauri::command]
-pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, AppError> {
+pub async fn settings(state: State<'_, AppState>) -> Result<AppSettings, AppError> {
     let settings = state
         .settings
         .lock()
