@@ -166,6 +166,7 @@ missing_errors_doc = "warn"
 missing_panics_doc = "warn"
 wrong_self_convention = "warn"
 should_implement_trait = "warn"
+fn_params_excessive_bools = "warn"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]

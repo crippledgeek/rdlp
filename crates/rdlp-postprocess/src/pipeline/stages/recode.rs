@@ -16,6 +16,18 @@ use rdlp_types::{ContainerFormat, RecodeAudioMode};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
+/// Named parameters for [`RecodeStage::build_convert_options`].
+///
+/// Replaces 4 positional arguments so the compiler catches argument-swap bugs,
+/// especially the boolean `audio_copy` / `can_remux` pair.
+#[derive(Debug, Clone)]
+pub(super) struct RecodeParams {
+    pub target: ContainerFormat,
+    pub encoder_override: Option<String>,
+    pub audio_copy: bool,
+    pub audio_codec: Option<String>,
+}
+
 /// Transcodes video to a different container/codec.
 ///
 /// `should_run` triggers when `config.recode_video` is `Some`.
@@ -94,11 +106,8 @@ impl RecodeStage {
     /// available in this `FFmpeg` build. `audio_codec` is `None` for copy,
     /// `Some(name)` for re-encode.
     fn build_convert_options(
-        target: ContainerFormat,
+        params: &RecodeParams,
         can_remux: bool,
-        encoder_override: Option<&str>,
-        audio_copy: bool,
-        audio_codec: Option<String>,
     ) -> Option<VideoConvertOptions> {
         if can_remux {
             return Some(VideoConvertOptions {
@@ -108,7 +117,7 @@ impl RecodeStage {
             });
         }
 
-        if let Some(requested) = encoder_override {
+        if let Some(ref requested) = params.encoder_override {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
             let (preset, crf) = Self::default_preset_crf(encoder_name);
             return Some(VideoConvertOptions {
@@ -116,13 +125,13 @@ impl RecodeStage {
                 video_codec: Some(encoder_name.to_string()),
                 preset,
                 crf,
-                audio_copy,
-                audio_codec,
+                audio_copy: params.audio_copy,
+                audio_codec: params.audio_codec.clone(),
                 ..Default::default()
             });
         }
 
-        let target_codec = Self::default_codec_for(target);
+        let target_codec = Self::default_codec_for(params.target);
         let encoder = video_codecs::resolve_encoder(target_codec);
         let (preset, crf) = Self::default_preset_crf_for_codec(target_codec);
 
@@ -131,8 +140,8 @@ impl RecodeStage {
             video_codec: encoder.map(String::from),
             preset,
             crf,
-            audio_copy,
-            audio_codec,
+            audio_copy: params.audio_copy,
+            audio_codec: params.audio_codec.clone(),
             ..Default::default()
         })
     }
@@ -267,11 +276,13 @@ impl PipelineStage for RecodeStage {
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
 
         let Some(mut opts) = Self::build_convert_options(
-            target,
+            &RecodeParams {
+                target,
+                encoder_override: msg.config.video_encoder.clone(),
+                audio_copy,
+                audio_codec,
+            },
             can_remux,
-            msg.config.video_encoder.as_deref(),
-            audio_copy,
-            audio_codec,
         ) else {
             let requested = msg.config.video_encoder.as_deref().unwrap_or("");
             return Err(PostProcessError::UnsupportedFormat {
@@ -465,18 +476,53 @@ mod tests {
     }
 
     #[test]
+    fn build_convert_options_uses_recode_params_remux() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, true).unwrap();
+        assert!(opts.remux_only);
+        assert!(opts.audio_copy);
+    }
+
+    #[test]
+    fn build_convert_options_uses_recode_params_transcode() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: false,
+            audio_codec: Some("libopus".to_string()),
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).unwrap();
+        assert!(!opts.audio_copy);
+        assert_eq!(opts.audio_codec, Some("libopus".to_string()));
+    }
+
+    #[test]
     fn build_convert_options_remux() {
-        let opts = RecodeStage::build_convert_options(ContainerFormat::Mp4, true, None, true, None)
-            .unwrap();
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
     }
 
     #[test]
     fn build_convert_options_transcode_mp4() {
-        let opts =
-            RecodeStage::build_convert_options(ContainerFormat::Mp4, false, None, true, None)
-                .unwrap();
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.remux_only);
         assert!(opts.video_codec.is_some());
         assert_eq!(opts.preset, Some("medium".to_string()));
@@ -487,27 +533,26 @@ mod tests {
 
     #[test]
     fn build_convert_options_with_audio_codec() {
-        let opts = RecodeStage::build_convert_options(
-            ContainerFormat::Mp4,
-            false,
-            None,
-            false,
-            Some("libopus".to_string()),
-        )
-        .unwrap();
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: false,
+            audio_codec: Some("libopus".to_string()),
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
         assert_eq!(opts.audio_codec, Some("libopus".to_string()));
     }
 
     #[test]
     fn build_convert_options_unavailable_encoder_returns_none() {
-        let result = RecodeStage::build_convert_options(
-            ContainerFormat::Mp4,
-            false,
-            Some("nonexistent_enc_xyz"),
-            true,
-            None,
-        );
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: Some("nonexistent_enc_xyz".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+        };
+        let result = RecodeStage::build_convert_options(&params, false);
         assert!(result.is_none());
     }
 }

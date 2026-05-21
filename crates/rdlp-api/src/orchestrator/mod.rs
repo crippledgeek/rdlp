@@ -270,11 +270,22 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Download a video from URL using state machine pattern
+    /// Download non-interactively (no format-selection prompts).
+    pub async fn download(&self, url: &str) -> Result<Option<PathBuf>> {
+        self.download_inner(url, false).await
+    }
+
+    /// Download with interactive format selection callbacks.
+    pub async fn download_interactive(&self, url: &str) -> Result<Option<PathBuf>> {
+        self.download_inner(url, true).await
+    }
+
+    /// Download a video from URL using state machine pattern.
     ///
     /// # State Machine Workflow
     ///
     /// This method implements an explicit state machine for the download workflow:
+    ///
     /// 1. `Extracting` - Find extractor and extract video metadata
     /// 2. `SelectingFormat` - Choose format (interactive or automatic)
     /// 3. `SelectingSubtitles` - Choose subtitles (interactive or config-based)
@@ -282,11 +293,10 @@ impl Orchestrator {
     /// 5. `Downloading` - Execute download with progress tracking
     /// 6. `Complete` - Return downloaded file path
     ///
-    /// At any point, user can cancel via `CancellationToken` → `Cancelled` state
+    /// At any point, user can cancel via `CancellationToken` → `Cancelled` state.
     ///
-    /// **Note**: This method now auto-detects playlists! If the URL is a playlist,
-    /// it will automatically delegate to `download_playlist()` and return the first
-    /// video path (or None if playlist was empty/cancelled).
+    /// **Note**: This method auto-detects playlists. If the URL is a playlist,
+    /// it delegates to `download_playlist_internal()` and returns `None`.
     ///
     /// # Returns
     ///
@@ -294,7 +304,7 @@ impl Orchestrator {
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Error occurred during any phase
     #[instrument(skip(self), fields(url = %url))]
-    pub async fn download(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
+    async fn download_inner(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
         // Try playlist extraction first to check if this is a playlist
         let infos = self.extract_playlist(url).await?;
 
@@ -487,6 +497,30 @@ mod download_plan_tests {
         let s = format!("{plan}");
         assert!(s.contains("v1"));
         assert!(s.contains("a1"));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod download_split_tests {
+    use super::*;
+
+    // Compile-time signature checks: verify that `download` takes only `url` and
+    // `download_interactive` exists with the same signature. These fail to compile
+    // before the split (download requires 2 args; download_interactive is absent)
+    // and compile cleanly after.
+    #[allow(dead_code)]
+    fn _download_method_compiles(
+        o: &Orchestrator,
+    ) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>>> + '_ {
+        o.download("https://example.test")
+    }
+
+    #[allow(dead_code)]
+    fn _download_interactive_method_compiles(
+        o: &Orchestrator,
+    ) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>>> + '_ {
+        o.download_interactive("https://example.test")
     }
 }
 

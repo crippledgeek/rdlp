@@ -166,11 +166,11 @@ static LOG_FORWARDER: Mutex<Option<LogForwarder>> = Mutex::new(None);
 /// Install a real-time log forwarder.
 ///
 /// While active, each `FFmpeg` log message captured by `capture_callback` is also
-/// forwarded through `cb(level, message)`. The callback is called while the
+/// forwarded through `forwarder(level, message)`. The callback is called while the
 /// `LOG_FORWARDER` mutex is held — it must not block or panic.
-pub fn set_log_forwarder(cb: Arc<dyn Fn(i32, String) + Send + Sync>) {
+pub fn set_log_forwarder(forwarder: Arc<dyn Fn(i32, String) + Send + Sync>) {
     if let Ok(mut guard) = LOG_FORWARDER.lock() {
-        *guard = Some(cb);
+        *guard = Some(forwarder);
     }
 }
 
@@ -188,8 +188,8 @@ pub struct LogForwarderGuard {
 
 impl LogForwarderGuard {
     /// Create a new guard that installs the forwarder.
-    pub fn new(cb: Arc<dyn Fn(i32, String) + Send + Sync>) -> Self {
-        set_log_forwarder(cb);
+    pub fn new(forwarder: Arc<dyn Fn(i32, String) + Send + Sync>) -> Self {
+        set_log_forwarder(forwarder);
         Self { _private: () }
     }
 }

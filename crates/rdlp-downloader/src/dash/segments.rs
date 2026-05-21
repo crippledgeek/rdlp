@@ -142,9 +142,11 @@ fn template_urls(t: &SegmentTemplatePlan, base: &[Url]) -> Vec<Url> {
             let raw = substitute(
                 &t.media,
                 &t.representation_id,
-                n,
-                n.saturating_mul(t.segment_duration_ts),
-                t.bandwidth,
+                &DashTemplateVars {
+                    number: n,
+                    time: n.saturating_mul(t.segment_duration_ts),
+                    bandwidth: t.bandwidth,
+                },
             );
             join(base, &raw).ok()
         })
@@ -174,7 +176,15 @@ fn timeline_urls(t: &SegmentTimelinePlan, base: &[Url], period_duration_ts: u64)
             }
         };
         for _ in 0..=repeats {
-            let raw = substitute(&t.media, &t.representation_id, n, ts, t.bandwidth);
+            let raw = substitute(
+                &t.media,
+                &t.representation_id,
+                &DashTemplateVars {
+                    number: n,
+                    time: ts,
+                    bandwidth: t.bandwidth,
+                },
+            );
             if let Ok(u) = join(base, &raw) {
                 out.push(u);
             }
@@ -185,12 +195,23 @@ fn timeline_urls(t: &SegmentTimelinePlan, base: &[Url], period_duration_ts: u64)
     out
 }
 
-fn substitute(template: &str, rep_id: &str, number: u64, time: u64, bw: u64) -> String {
+/// Named variables for DASH `$SegmentTemplate$` substitution.
+///
+/// Replaces the previous 3-positional-`u64` signature so the compiler catches
+/// argument-swap bugs at the call site.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DashTemplateVars {
+    pub number: u64,
+    pub time: u64,
+    pub bandwidth: u64,
+}
+
+fn substitute(template: &str, rep_id: &str, vars: &DashTemplateVars) -> String {
     template
         .replace("$RepresentationID$", rep_id)
-        .replace("$Number$", &number.to_string())
-        .replace("$Time$", &time.to_string())
-        .replace("$Bandwidth$", &bw.to_string())
+        .replace("$Number$", &vars.number.to_string())
+        .replace("$Time$", &vars.time.to_string())
+        .replace("$Bandwidth$", &vars.bandwidth.to_string())
 }
 
 /// Resolve `rel` against the supplied BaseURL chain. The chain is walked in
@@ -205,4 +226,36 @@ fn join(base: &[Url], rel: &str) -> Result<Url, url::ParseError> {
         current = current.join(b.as_str())?;
     }
     current.join(rel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitute_uses_named_vars() {
+        let vars = DashTemplateVars {
+            number: 42,
+            time: 1000,
+            bandwidth: 500_000,
+        };
+        let result = substitute(
+            "seg_$RepresentationID$_$Number$_$Time$_$Bandwidth$.m4s",
+            "video_720p",
+            &vars,
+        );
+        assert_eq!(result, "seg_video_720p_42_1000_500000.m4s");
+    }
+
+    #[test]
+    fn substitute_missing_template_var_left_untouched() {
+        let vars = DashTemplateVars {
+            number: 1,
+            time: 0,
+            bandwidth: 0,
+        };
+        let result = substitute("$Unknown$_$Number$", "rep", &vars);
+        assert!(result.contains("$Unknown$"));
+        assert!(result.contains('1'));
+    }
 }
