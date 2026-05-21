@@ -142,7 +142,7 @@ impl InfoExtractor for XNXXExtractor {
         }
 
         // --- metadata (sync — no await inside this block) ---
-        let inline = WgczNetworkBase::extract_inline_meta(&webpage);
+        let inline = WgczNetworkBase::parse_inline_meta(&webpage);
         let ld = WgczNetworkBase::extract_json_ld(&webpage);
 
         let title = inline
@@ -200,7 +200,7 @@ mod tests {
         const FIXTURE: &str = include_str!("tests/xnxx_video_page.html");
 
         let format_urls = WgczNetworkBase::extract_format_urls(FIXTURE);
-        let inline = WgczNetworkBase::extract_inline_meta(FIXTURE);
+        let inline = WgczNetworkBase::parse_inline_meta(FIXTURE);
         let ld = WgczNetworkBase::extract_json_ld(FIXTURE);
 
         // At least one format URL must be present in the live fixture
@@ -241,7 +241,7 @@ mod tests {
         const FIXTURE: &str = include_str!("tests/xnxx_video_page.html");
 
         let format_urls = WgczNetworkBase::extract_format_urls(FIXTURE);
-        let inline = WgczNetworkBase::extract_inline_meta(FIXTURE);
+        let inline = WgczNetworkBase::parse_inline_meta(FIXTURE);
         let ld = WgczNetworkBase::extract_json_ld(FIXTURE);
 
         // Verify inline meta

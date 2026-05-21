@@ -9,14 +9,14 @@ use serde_json::Value;
 use super::patterns;
 
 /// Parse `window.initials` JSON from the search page HTML.
-pub fn extract_initials_json(html: &str) -> Result<Value> {
-    extract_initials_json_impl(html).map_err(|e| RdlpError::Extraction {
+pub fn parse_initials_json(html: &str) -> Result<Value> {
+    parse_initials_json_impl(html).map_err(|e| RdlpError::Extraction {
         message: format!("{e:#}"),
         url: None,
     })
 }
 
-fn extract_initials_json_impl(html: &str) -> anyhow::Result<Value> {
+fn parse_initials_json_impl(html: &str) -> anyhow::Result<Value> {
     let json_str = [
         &*patterns::INITIALS_PATTERN,
         &*patterns::INITIALS_FALLBACK_PATTERN,
@@ -224,9 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_initials_json_from_html() {
+    fn test_parse_initials_json_from_html() {
         let html = r#"<script>window.initials={"searchResult":{"videoThumbProps":[]},"pagination":{"maxPages":0}};</script>"#;
-        let json = extract_initials_json(html).unwrap();
+        let json = parse_initials_json(html).unwrap();
         assert!(json.get("searchResult").is_some());
     }
 

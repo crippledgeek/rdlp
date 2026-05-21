@@ -46,7 +46,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
     extend_deduped(
         &mut all_formats,
         &mut seen_urls,
-        extract_from_js_vars(webpage),
+        parse_js_vars(webpage),
     );
 
     // Strategy 3: Download buttons
@@ -204,7 +204,7 @@ fn parse_quality_from_url(url: &str) -> Option<u64> {
 }
 
 /// Extract formats from JavaScript variables
-fn extract_from_js_vars(webpage: &str) -> Vec<Format> {
+fn parse_js_vars(webpage: &str) -> Vec<Format> {
     let mut formats = Vec::new();
 
     // Strategy 1: qualityItems_* JSON arrays
@@ -279,13 +279,13 @@ mod tests {
     use rdlp_types::Codec;
 
     #[test]
-    fn test_extract_from_js_vars() {
+    fn test_parse_js_vars() {
         let webpage = r#"
             var quality_720 = "https://example.com/720.mp4";
             var media_1080 = "https://example.com/1080.mp4";
         "#;
 
-        let formats = extract_from_js_vars(webpage);
+        let formats = parse_js_vars(webpage);
         assert!(formats.len() >= 2);
         assert!(formats.iter().any(|f| f.url.contains("720")));
         assert!(formats.iter().any(|f| f.url.contains("1080")));

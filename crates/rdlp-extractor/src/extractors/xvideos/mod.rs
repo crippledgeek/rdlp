@@ -57,7 +57,7 @@ impl XVideosExtractor {
     pub(crate) fn build_info(html: &str, eid: &str, url: &str) -> Result<InfoDict> {
         // Extract format URLs from inline html5player calls
         let fmt_urls = WgczNetworkBase::extract_format_urls(html);
-        let inline_meta = WgczNetworkBase::extract_inline_meta(html);
+        let inline_meta = WgczNetworkBase::parse_inline_meta(html);
         let json_ld = WgczNetworkBase::extract_json_ld(html);
 
         // Title: prefer inline JS, fall back to JSON-LD name

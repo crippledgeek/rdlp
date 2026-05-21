@@ -72,7 +72,7 @@ impl WgczNetworkBase {
     ///
     /// The thumbnail URL is validated by `require_http_scheme` (L5 fix).
     #[must_use]
-    pub fn extract_inline_meta(html: &str) -> WgczInlineMeta {
+    pub fn parse_inline_meta(html: &str) -> WgczInlineMeta {
         WgczInlineMeta {
             title: patterns::VIDEO_TITLE
                 .captures(html)
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn extracts_title_and_uploader() {
-        let m = WgczNetworkBase::extract_inline_meta(FIXTURE);
+        let m = WgczNetworkBase::parse_inline_meta(FIXTURE);
         assert_eq!(m.title.as_deref(), Some("Example Video Title"));
         assert_eq!(m.uploader.as_deref(), Some("TestUploader"));
     }
