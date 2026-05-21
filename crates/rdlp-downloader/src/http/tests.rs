@@ -288,8 +288,17 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result =
-        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(progress),
+        0,
+        None,
+    )
+    .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 1024);
@@ -324,8 +333,17 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result =
-        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(progress),
+        0,
+        None,
+    )
+    .await;
 
     assert!(result.is_err());
 }
@@ -359,8 +377,17 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result =
-        download_chunk_with_retry(&downloader, &url, 0, 1023, &chunk_path, Some(progress), 0).await;
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(progress),
+        0,
+        None,
+    )
+    .await;
 
     assert!(result.is_err());
     // mockito's expect(1) will panic on Drop if more than 1 request was made
@@ -413,8 +440,17 @@ async fn test_chunk_retry_cleans_partial_file() {
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
 
-    let result =
-        download_chunk_with_retry(&downloader, &url, 0, 511, &chunk_path, Some(progress), 0).await;
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        511,
+        &chunk_path,
+        Some(progress),
+        0,
+        None,
+    )
+    .await;
 
     assert!(result.is_ok());
     // The file should contain the successful download, not the partial data
@@ -1126,6 +1162,105 @@ async fn download_to_writer_cancel_none_passes_existing_behavior() {
         .unwrap();
 
     assert_eq!(stats.bytes_downloaded, 4096);
+}
+
+// ── #317: per-chunk-body cancel static guard ───────────────────────────────
+
+#[test]
+fn download_chunk_with_retry_passes_cancel_to_range() {
+    // Static guard: download_chunk_with_retry MUST forward the cancel parameter
+    // to download_range_with_progress, not None. This asserts the call-site text
+    // contains `cancel` as the last argument (not a literal `None`).
+    // Integration-style slow-chunk mockito tests would require SERVER_SENT_EVENTS
+    // chunked encoding support in mockito, which is not available cleanly;
+    // the static check is cheaper and catches the most likely regression.
+    let source = include_str!("parallel.rs");
+
+    let start = source
+        .find("pub async fn download_chunk_with_retry")
+        .expect("download_chunk_with_retry not found in parallel.rs");
+
+    let after_start = &source[start..];
+    // End at the next blank-line-separated fn.
+    let end = after_start[1..]
+        .find("\npub async fn ")
+        .or_else(|| after_start[1..].find("\nasync fn "))
+        .map_or(after_start.len(), |i| i + 1);
+    let body = &after_start[..end];
+
+    // The call to download_range_with_progress must pass `cancel` (not `None`).
+    // Use balanced-paren matching so nested calls like `progress.clone()` don't
+    // truncate the call argument span.
+    let call_idx = body
+        .find("download_range_with_progress(")
+        .expect("download_chunk_with_retry must call download_range_with_progress");
+    let after_open = &body[call_idx + "download_range_with_progress(".len()..];
+    let mut depth: i32 = 1;
+    let mut end_offset = None;
+    for (i, ch) in after_open.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end_offset = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = end_offset.expect("call must have a balanced closing paren");
+    let call_args = &after_open[..close];
+
+    assert!(
+        call_args.contains("cancel"),
+        "download_chunk_with_retry must pass `cancel` to download_range_with_progress, \
+         not `None`. Found call args: {call_args:?}"
+    );
+    assert!(
+        !call_args.contains(", None)") && !call_args.ends_with("None"),
+        "download_chunk_with_retry must NOT pass literal `None` as the cancel arg. \
+         Found call args: {call_args:?}"
+    );
+}
+
+// ── #317: download_format biased-select static guard ───────────────────────
+
+#[test]
+fn download_format_uses_biased_select() {
+    // Static guard: Downloader::download_format's outer cancel select! MUST
+    // include `biased;` so cancel-priority is deterministic. Mirrors
+    // parallel_adaptive_cancel_uses_biased_select (issue #317).
+    let source = include_str!("trait_impl.rs");
+
+    let start = source
+        .find("async fn download_format")
+        .expect("download_format not found in trait_impl.rs");
+
+    let after_start = &source[start..];
+    // End at the next top-level `async fn` or `fn ` definition.
+    let end = after_start[1..]
+        .find("\n    async fn ")
+        .or_else(|| after_start[1..].find("\n    fn "))
+        .map_or(after_start.len(), |i| i + 1);
+    let body = &after_start[..end];
+
+    let select_idx = body
+        .find("tokio::select!")
+        .expect("download_format must contain a tokio::select! for cancel");
+    let after_select = &body[select_idx..];
+    let first_arm = after_select
+        .find("=>")
+        .expect("tokio::select! must have at least one arm");
+    let header = &after_select[..first_arm];
+
+    assert!(
+        header.contains("biased;"),
+        "tokio::select! in download_format MUST use `biased;` \
+         to deterministically prioritize the cancel arm. \
+         Found header: {header:?}"
+    );
 }
 
 // ── #308: AIMD parallel-path static biased-select guard ────────────────────
