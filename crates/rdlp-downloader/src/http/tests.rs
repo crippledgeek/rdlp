@@ -966,3 +966,59 @@ async fn download_to_file_no_head_under_normal_flow() {
     assert_eq!(stats.bytes_downloaded, 524288);
     head_guard.assert_async().await;
 }
+
+#[test]
+fn next_with_cancel_helper_uses_biased_select() {
+    // Static guard: the cancel select in next_with_cancel_and_timeout MUST
+    // include `biased;` so cancel-priority is deterministic. Without biased,
+    // tokio's PRNG branch selection can starve the cancel arm under load.
+    //
+    // Mirrors the static probe-order guard at
+    // crates/rdlp-extractor/src/hls/expand_in_place.rs:247
+    // (`test_extractor_call_order_expand_before_detect`).
+    let source = include_str!("mod.rs");
+
+    // Restrict to the helper's function body to avoid false positives from
+    // other select! invocations elsewhere in the file.
+    let start = source
+        .find("pub(crate) async fn next_with_cancel_and_timeout")
+        .expect("next_with_cancel_and_timeout not found in http/mod.rs");
+
+    // End at the next top-level `fn` definition or the `#[cfg(test)]` block,
+    // whichever comes first.
+    let after_start = &source[start..];
+    let cfg_test_end = after_start.find("\n#[cfg(test)]");
+    let next_fn_end = after_start[1..]
+        .find("\nfn ")
+        .or_else(|| after_start[1..].find("\nasync fn "))
+        .or_else(|| after_start[1..].find("\npub fn "))
+        .or_else(|| after_start[1..].find("\npub(crate) fn "))
+        .or_else(|| after_start[1..].find("\npub(crate) async fn "))
+        .map(|i| i + 1);
+    let end = match (cfg_test_end, next_fn_end) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => after_start.len(),
+    };
+    let body = &after_start[..end];
+
+    let select_idx = body
+        .find("tokio::select!")
+        .expect("next_with_cancel_and_timeout must contain a tokio::select!");
+    let after_select = &body[select_idx..];
+
+    // `biased;` must appear before the first arm (which uses `=>`).
+    let first_arm = after_select
+        .find("=>")
+        .expect("tokio::select! must have at least one arm");
+    let header = &after_select[..first_arm];
+
+    assert!(
+        header.contains("biased;"),
+        "tokio::select! in next_with_cancel_and_timeout MUST use `biased;` \
+         to deterministically prioritize the cancel arm. Without it, tokio's \
+         PRNG branch selection can starve cancel under load. \
+         Found header: {header:?}"
+    );
+}
