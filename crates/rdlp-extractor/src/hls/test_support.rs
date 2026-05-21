@@ -39,7 +39,7 @@ pub struct NoOpCookieJar;
 
 #[async_trait]
 impl CookieJar for NoOpCookieJar {
-    async fn get_cookies(&self, _url: &str) -> Result<Vec<String>> {
+    async fn cookies(&self, _url: &str) -> Result<Vec<String>> {
         Ok(vec![])
     }
     async fn add_cookie(&self, _url: &str, _cookie: &str) -> Result<()> {

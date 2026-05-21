@@ -365,7 +365,7 @@ pub trait CookieJar: Send + Sync {
     ///
     /// # Returns
     /// A vector of cookie strings in the format "name=value"
-    async fn get_cookies(&self, url: &str) -> Result<Vec<String>>;
+    async fn cookies(&self, url: &str) -> Result<Vec<String>>;
 
     /// Add a cookie
     ///

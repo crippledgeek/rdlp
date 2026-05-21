@@ -253,7 +253,7 @@ mod tests {
         struct NoOpCookies;
         #[async_trait]
         impl CookieJar for NoOpCookies {
-            async fn get_cookies(&self, _: &str) -> Result<Vec<String>> {
+            async fn cookies(&self, _: &str) -> Result<Vec<String>> {
                 Ok(vec![])
             }
             async fn add_cookie(&self, _: &str, _: &str) -> Result<()> {
