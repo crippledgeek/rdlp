@@ -83,6 +83,13 @@ pub async fn run(
 
     let parsed = manifest::parse_mpd(&body, &mpd_url_parsed).map_err(RdlpError::from)?;
 
+    // Same-origin gate seed (issue #319). The MPD URL IS the format URL for
+    // this legacy path, so its origin is the seed against which all segment
+    // URLs are compared. Cross-origin segments (CDN-redirected media) get
+    // operator-set headers stripped. Same gate pattern as PR #273 for the
+    // modern per-Repr path; gate applied inside `download_one`.
+    let mpd_origin = mpd_url_parsed.origin();
+
     let started = Instant::now();
     let bytes_total = Arc::new(AtomicU64::new(0));
 
@@ -146,6 +153,7 @@ pub async fn run(
         true,
         Arc::clone(&bytes_total),
         progress_arc.clone(),
+        &mpd_origin,
     )
     .await?;
 
@@ -178,6 +186,7 @@ pub async fn run(
             false,
             Arc::clone(&bytes_total),
             progress_arc.clone(),
+            &mpd_origin,
         )
         .await?
     } else {
@@ -304,6 +313,7 @@ async fn download_representation(
     is_video: bool,
     bytes_counter: Arc<AtomicU64>,
     log_callback: Option<Arc<dyn ProgressCallback>>,
+    mpd_origin: &url::Origin,
 ) -> Result<u64> {
     if let Some(parent) = final_path.parent()
         && !parent.as_os_str().is_empty()
@@ -335,7 +345,7 @@ async fn download_representation(
             total += len;
             debug!("DASH repr {repr_id}: init resumed ({len} bytes)");
         } else {
-            let bytes = download_one(http, retry, &u).await?;
+            let bytes = download_one(http, retry, &u, mpd_origin).await?;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
@@ -398,12 +408,14 @@ async fn download_representation(
     ));
     let sem = controller.semaphore().clone();
 
+    let mpd_origin_owned = mpd_origin.clone();
     let mut stream = futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
         let http = http.clone();
         let retry = Arc::clone(retry);
         let parts_dir = parts_dir.to_path_buf();
         let sem = sem.clone();
         let controller = Arc::clone(&controller);
+        let mpd_origin = mpd_origin_owned.clone();
         async move {
             // Acquire a semaphore permit so the adaptive controller governs
             // actual concurrency (mirrors the HLS pattern in merge.rs).
@@ -413,7 +425,7 @@ async fn download_representation(
             })?;
 
             let fetch_start = Instant::now();
-            let bytes = download_one(&http, &retry, &u).await?;
+            let bytes = download_one(&http, &retry, &u, &mpd_origin).await?;
             let len = bytes.len() as u64;
             let elapsed = fetch_start.elapsed();
 
@@ -580,9 +592,18 @@ async fn download_one(
     http: &HttpDownloader,
     retry: &Arc<RetryConfig>,
     url: &Url,
+    mpd_origin: &url::Origin,
 ) -> Result<Vec<u8>> {
     let client = http.client().clone();
-    let headers = http.headers();
+    // Same-origin header gate (issue #319). When the segment URL's origin
+    // differs from the MPD URL's origin (CDN-redirected media), strip the
+    // operator-set headers. `Origin::Opaque` compares not-equal — fails
+    // closed. Mirrors PR #273 for the modern per-Repr path.
+    let headers = if url.origin() == *mpd_origin {
+        http.headers()
+    } else {
+        wreq::header::HeaderMap::new()
+    };
     let backoff = retry.to_backoff();
     let url_str = url.to_string();
     (|| {
@@ -619,4 +640,139 @@ async fn download_one(
         warn!("DASH segment fetch retry after {dur:?}: {err}");
     })
     .await
+}
+
+#[cfg(test)]
+mod same_origin_gate_tests {
+    //! Same-origin header gate (issue #319). Mirrors PR #273's gate on the
+    //! modern per-Repr DASH path. When the segment URL's origin differs
+    //! from the MPD URL's origin, operator-set `Format.http_headers` are
+    //! stripped to prevent header exfiltration to a redirected CDN.
+    use super::*;
+    use rdlp_core::RetryConfig;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
+        let mut headers = HashMap::new();
+        headers.insert(name.to_string(), value.to_string());
+        HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
+    }
+
+    fn fast_retry() -> Arc<RetryConfig> {
+        // 0-retry config so failing tests fail immediately rather than
+        // exercising backoff loops.
+        Arc::new(RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
+        })
+    }
+
+    /// Positive: same-origin segment URL DOES receive `Format.http_headers`.
+    /// Companion to the negative tests below; prevents a defensive
+    /// over-correction (e.g. always-strip) from going unnoticed.
+    #[tokio::test]
+    async fn download_one_same_origin_forwards_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let referer = "https://operator.example.com/page";
+
+        let _mock = server
+            .mock("GET", "/seg.m4s")
+            .match_header("Referer", referer)
+            .with_body(&b"abcd"[..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        let http = make_downloader_with_header("Referer", referer);
+        let retry = fast_retry();
+        let mpd_url = format!("{}/manifest.mpd", server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
+
+        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin)
+            .await
+            .expect("same-origin segment fetch must succeed");
+        assert_eq!(&bytes[..], b"abcd");
+    }
+
+    /// Negative: cross-origin segment URL does NOT receive `Format.http_headers`.
+    /// Two mockito servers = different ports = different origins per RFC 6454.
+    /// Catch-all 501 on the cross-origin server fires if Referer leaks.
+    #[tokio::test]
+    async fn download_one_cross_origin_strips_headers() {
+        use mockito::Matcher;
+
+        let mpd_server = mockito::Server::new_async().await;
+        let mut cdn_server = mockito::Server::new_async().await;
+        let referer = "https://operator.example.com/page";
+
+        // Cross-origin segment: must NOT see Referer.
+        let _seg = cdn_server
+            .mock("GET", "/seg.m4s")
+            .match_header("Referer", Matcher::Missing)
+            .with_body(&b"abcd"[..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Catch-all on the cross-origin server: 501 if Referer DID arrive.
+        let _catchall = cdn_server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let http = make_downloader_with_header("Referer", referer);
+        let retry = fast_retry();
+        let mpd_url = format!("{}/manifest.mpd", mpd_server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", cdn_server.url())).unwrap();
+
+        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin)
+            .await
+            .expect("cross-origin segment fetch must succeed without leaking headers");
+        assert_eq!(&bytes[..], b"abcd");
+    }
+
+    /// Negative: `Origin::Opaque` mpd_origin (constructed via parse-of
+    /// opaque-scheme URL) compares not-equal to every Tuple origin → fails
+    /// closed (headers stripped). Verifies the type-level guarantee.
+    #[tokio::test]
+    async fn download_one_opaque_mpd_origin_strips_headers() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new_async().await;
+        let referer = "https://operator.example.com/page";
+
+        let _seg = server
+            .mock("GET", "/seg.m4s")
+            .match_header("Referer", Matcher::Missing)
+            .with_body(&b"abcd"[..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        let _catchall = server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let http = make_downloader_with_header("Referer", referer);
+        let retry = fast_retry();
+        // `data:` is an opaque-origin scheme per RFC 6454; any `Origin::Opaque`
+        // compares not-equal to every Tuple origin including itself.
+        let opaque_origin = url::Url::parse("data:text/plain,seed").unwrap().origin();
+        assert!(
+            !opaque_origin.is_tuple(),
+            "data: scheme must produce Origin::Opaque"
+        );
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
+
+        let bytes = download_one(&http, &retry, &seg_url, &opaque_origin)
+            .await
+            .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
+        assert_eq!(&bytes[..], b"abcd");
+    }
 }
