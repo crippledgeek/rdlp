@@ -510,6 +510,53 @@ impl Default for HttpDownloader {
     }
 }
 
+/// Race a `bytes_stream()` poll against (a) the per-read timeout and (b) an
+/// optional cancellation token.
+///
+/// Returns:
+/// - `Ok(Some(Ok(bytes)))` — chunk delivered.
+/// - `Ok(Some(Err(stream_err)))` — stream-level error from the body; caller
+///   decides how to surface it.
+/// - `Ok(None)` — stream ended cleanly.
+/// - `Err(RdlpError::Cancelled)` — cancel arm fired; caller MUST flush its
+///   writer before returning.
+/// - `Err(RdlpError::Network { .. })` — read timed out.
+///
+/// `biased;` is required: the cancel arm must take priority when both are
+/// ready, otherwise tokio's PRNG branch selection can starve the cancel arm
+/// under load. A static test in `tests.rs` (Task 12) will assert the
+/// `biased;` keyword is present in this select.
+#[allow(dead_code)] // wired to callers in Task 8+
+pub(crate) async fn next_with_cancel_and_timeout<S, E>(
+    mut stream: std::pin::Pin<&mut S>,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    read_timeout: std::time::Duration,
+    url: &str,
+) -> Result<Option<std::result::Result<bytes::Bytes, E>>>
+where
+    S: futures::Stream<Item = std::result::Result<bytes::Bytes, E>>,
+{
+    use futures::StreamExt;
+    let timeout_err = || RdlpError::Network {
+        message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
+        url: Some(url.to_string()),
+    };
+    match cancel {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => Err(RdlpError::Cancelled),
+                r = tokio::time::timeout(read_timeout, stream.next()) => {
+                    r.map_or_else(|_| Err(timeout_err()), Ok)
+                },
+            }
+        }
+        None => tokio::time::timeout(read_timeout, stream.next())
+            .await
+            .map_or_else(|_| Err(timeout_err()), Ok),
+    }
+}
+
 #[cfg(test)]
 mod content_range_tests {
     use super::*;
@@ -551,5 +598,70 @@ mod content_range_tests {
     fn returns_none_when_total_unparseable() {
         let h = make_headers(Some("bytes 0-262143/notanumber"));
         assert_eq!(parse_content_range_total(&h), None);
+    }
+}
+
+#[cfg(test)]
+mod cancel_helper_tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::stream;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn returns_item_when_stream_ready_no_cancel() {
+        let s = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from("hello"))]);
+        tokio::pin!(s);
+        let timeout = Duration::from_secs(1);
+
+        let res = next_with_cancel_and_timeout(s.as_mut(), None, timeout, "test").await;
+
+        let item = res.unwrap();
+        assert!(matches!(item, Some(Ok(b)) if b == "hello"));
+    }
+
+    #[tokio::test]
+    async fn returns_none_at_stream_end() {
+        let s = stream::iter::<Vec<std::result::Result<Bytes, std::io::Error>>>(vec![]);
+        tokio::pin!(s);
+        let timeout = Duration::from_secs(1);
+
+        let res = next_with_cancel_and_timeout(s.as_mut(), None, timeout, "test").await;
+
+        assert!(res.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_fires_returns_cancelled_error() {
+        let s = stream::pending::<std::result::Result<Bytes, std::io::Error>>();
+        tokio::pin!(s);
+        let timeout = Duration::from_secs(10);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let res = next_with_cancel_and_timeout(s.as_mut(), Some(&token), timeout, "test").await;
+
+        assert!(matches!(res, Err(RdlpError::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn read_timeout_fires_returns_network_error() {
+        let s = stream::pending::<std::result::Result<Bytes, std::io::Error>>();
+        tokio::pin!(s);
+        let timeout = Duration::from_millis(50);
+
+        let res = next_with_cancel_and_timeout(s.as_mut(), None, timeout, "http://test").await;
+
+        match res {
+            Err(RdlpError::Network { message, url }) => {
+                assert!(
+                    message.to_lowercase().contains("timed out"),
+                    "got: {message}"
+                );
+                assert_eq!(url.as_deref(), Some("http://test"));
+            }
+            other => panic!("expected Network timeout, got {other:?}"),
+        }
     }
 }
