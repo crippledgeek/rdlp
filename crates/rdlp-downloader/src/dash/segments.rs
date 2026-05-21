@@ -214,6 +214,20 @@ fn substitute(template: &str, rep_id: &str, vars: &DashTemplateVars) -> String {
         .replace("$Bandwidth$", &vars.bandwidth.to_string())
 }
 
+/// Resolve `rel` against the supplied BaseURL chain. The chain is walked in
+/// order: each successive entry resolves against the previous resolution.
+/// The chain is always non-empty (manifest::resolve_base_urls guarantees this).
+fn join(base: &[Url], rel: &str) -> Result<Url, url::ParseError> {
+    let mut current = base
+        .first()
+        .cloned()
+        .ok_or(url::ParseError::RelativeUrlWithoutBase)?;
+    for b in base.iter().skip(1) {
+        current = current.join(b.as_str())?;
+    }
+    current.join(rel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,18 +258,4 @@ mod tests {
         assert!(result.contains("$Unknown$"));
         assert!(result.contains('1'));
     }
-}
-
-/// Resolve `rel` against the supplied BaseURL chain. The chain is walked in
-/// order: each successive entry resolves against the previous resolution.
-/// The chain is always non-empty (manifest::resolve_base_urls guarantees this).
-fn join(base: &[Url], rel: &str) -> Result<Url, url::ParseError> {
-    let mut current = base
-        .first()
-        .cloned()
-        .ok_or(url::ParseError::RelativeUrlWithoutBase)?;
-    for b in base.iter().skip(1) {
-        current = current.join(b.as_str())?;
-    }
-    current.join(rel)
 }

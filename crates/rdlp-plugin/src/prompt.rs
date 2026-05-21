@@ -75,7 +75,7 @@ pub trait Prompter: Send + Sync {
 pub struct AlwaysApprove;
 
 impl Prompter for AlwaysApprove {
-    fn confirm(&self, _: ConfirmRequest) -> ConfirmResponse {
+    fn confirm(&self, _request: ConfirmRequest) -> ConfirmResponse {
         ConfirmResponse::ApprovePersist
     }
 }
@@ -85,7 +85,7 @@ impl Prompter for AlwaysApprove {
 pub struct AlwaysDeny;
 
 impl Prompter for AlwaysDeny {
-    fn confirm(&self, _: ConfirmRequest) -> ConfirmResponse {
+    fn confirm(&self, _request: ConfirmRequest) -> ConfirmResponse {
         ConfirmResponse::Deny
     }
 }
