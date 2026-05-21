@@ -848,7 +848,7 @@ pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Resu
 ///
 /// A vector of all [`DownloadJob`]s, cloned from the queue.
 #[tauri::command]
-pub async fn get_queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, AppError> {
+pub async fn queue(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, AppError> {
     let jobs = state
         .queue
         .lock()
@@ -937,7 +937,7 @@ pub async fn clear_completed_jobs(state: State<'_, AppState>) -> Result<usize, A
 ///
 /// Returns [`AppError::DownloadFailed`] if the job is not found.
 #[tauri::command]
-pub async fn get_job_options(
+pub async fn job_options(
     job_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<serde_json::Value>, AppError> {

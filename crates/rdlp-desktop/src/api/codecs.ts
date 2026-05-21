@@ -15,7 +15,7 @@ export function codecsQueryOptions(ready: boolean) {
     return queryOptions({
         queryKey: queryKeys.codecs(),
         queryFn: ready
-            ? () => invokeTyped<VideoCodecInfo[]>("get_available_codecs")
+            ? () => invokeTyped<VideoCodecInfo[]>("available_codecs")
             : skipToken,
         staleTime: Infinity, // Encoder availability doesn't change at runtime
     });

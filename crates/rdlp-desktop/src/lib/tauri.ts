@@ -38,21 +38,21 @@ export async function searchContent(
 
 /** List all sites that support search. */
 export async function getSearchProviders(): Promise<SearchSiteInfo[]> {
-    return invoke<SearchSiteInfo[]>("get_search_providers");
+    return invoke<SearchSiteInfo[]>("search_providers");
 }
 
 /** Retrieve available search filters for a given site. */
 export async function getSearchFilters(
     site: string,
 ): Promise<SearchFilterDescriptor[]> {
-    return invoke<SearchFilterDescriptor[]>("get_search_filters", { site });
+    return invoke<SearchFilterDescriptor[]>("search_filters", { site });
 }
 
 // ========== Formats ==========
 
 /** Retrieve available formats for a URL. */
 export async function getFormats(url: string): Promise<FormatListResponse> {
-    return invoke<FormatListResponse>("get_formats", { url });
+    return invoke<FormatListResponse>("formats", { url });
 }
 
 // ========== Download ==========
@@ -73,7 +73,7 @@ export async function cancelDownload(jobId: string): Promise<void> {
 
 /** Retrieve the current download queue. */
 export async function getQueue(): Promise<DownloadJob[]> {
-    return invoke<DownloadJob[]>("get_queue");
+    return invoke<DownloadJob[]>("queue");
 }
 
 /** Remove a completed, failed, or cancelled download from the queue. */
@@ -85,7 +85,7 @@ export async function removeJob(jobId: string): Promise<void> {
 
 /** Retrieve the current application settings. */
 export async function getSettings(): Promise<AppSettings> {
-    return invoke<AppSettings>("get_settings");
+    return invoke<AppSettings>("settings");
 }
 
 /** Update application settings with new values. */

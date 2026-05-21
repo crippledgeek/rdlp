@@ -19,7 +19,7 @@ export function audioCodecsQueryOptions(container: string | null, ready: boolean
         queryKey: queryKeys.audioCodecs.byContainer(container),
         queryFn: ready
             ? () =>
-                  invokeTyped<AudioCodecInfo[]>("get_available_audio_codecs", {
+                  invokeTyped<AudioCodecInfo[]>("available_audio_codecs", {
                       container,
                   })
             : skipToken,

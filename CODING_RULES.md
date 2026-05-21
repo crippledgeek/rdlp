@@ -97,6 +97,23 @@ out_file
 
 **Atomic writes** via `tokio::fs::write(path, body)` (single call) and `tokio::fs::write_all_buf` on a fully-collected buffer are exempt — they have no intermediate drop point. Sync `std::fs::File` is also exempt — `std::io::BufWriter::Drop` attempts a sync flush (silently swallows any error, but data isn't lost in normal cases).
 
+## Naming Standards — Methods
+
+Authority chain: Rust API Guidelines (rust-lang/api-guidelines), Rust RFC 430, Robert C. Martin's *Clean Code* Ch. 2-3 (where it doesn't conflict with idiomatic Rust). Validated against axum and bevy production codebases.
+
+| Rule | Statement | Example |
+|---|---|---|
+| M1 | No `get_` prefix on accessors. Use the bare noun: `filesize()` not `get_filesize()`. Exception: generic key-value lookups (`KvStore::get(key)`); also `StoreLimits::get_blocking` (K/V-store lookup in rdlp-plugin). | `Format::filesize()`, not `Format::get_filesize()` |
+| M2 | `fetch_*` for HTTP/network I/O; `load_*` for local I/O (file, browser profile, config disk); `read_*` for byte-level reads on open handles. | `fetch_webpage(url)`, `load_cookies(path)`, `read_capped(reader, n)` |
+| M3 | `extract_*` takes a parsed document (`Html`, `Value`, `&[u8]` with known structure); `parse_*` takes raw `&str` or `&[u8]`. | `extract_title(html: &Html)`, `parse_duration(s: &str)` |
+| M4 | `to_*` prefix only for pure value conversions. Use `write_*` or `save_*` for file-writing side-effectful operations. | `Config::write_to_file(path)`, not `Config::to_toml_file(path)` |
+| M5 | No `_async` suffix. `async fn` is the discriminator. Use `blocking_` prefix for blocking siblings (matches tokio convention). | `pub async fn fetch(url)`, `pub fn blocking_fetch(url)` |
+| M6 | `try_` prefix for fallible constructors and fallible operations with infallible siblings. Do not use `try_` when the function always returns `Result` and there is no infallible counterpart. | `try_new(args) -> Result<Self>`, but `parse(s) -> Result<Self>` (always fallible — no prefix) |
+| M7 | Search-page private helpers: `fetch_search_page()` for single-strategy extractors; `fetch_api_search_page()` / `fetch_html_search_page()` for dual-strategy. Drop vacuous `_single_` qualifier. | `tnaflix::fetch_search_page` (single strategy); `pornhub::fetch_api_search_page` + `pornhub::fetch_html_search_page` (dual) |
+| M8 | Drop `_info` suffix when the return type already names the concept (`extract_video() -> InfoDict`). Exception: `_info` is part of the returned struct name (`EpisodeInfo`, `HlsInfo`, `MediaInfo`). | `extract_video() -> InfoDict`, not `extract_video_info() -> InfoDict` |
+
+Special-case exceptions are documented inline in code with a comment referencing this rule set (e.g. `codec_threading_info` returns `(i32, i32)` tuple, not a struct, but `_info` names the concept of "threading information"; `const fn` unsafe FFI helper, rename deferred).
+
 ## Project Structure
 
 ```

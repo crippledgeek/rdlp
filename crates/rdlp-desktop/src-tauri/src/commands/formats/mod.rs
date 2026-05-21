@@ -39,7 +39,7 @@ use crate::state::AppState;
 /// * [`AppError::ExtractionFailed`] if no metadata is returned.
 /// * Other [`AppError`] variants mapped from [`rdlp_api::RdlpApiError`].
 #[tauri::command]
-pub async fn get_formats(
+pub async fn formats(
     url: String,
     state: State<'_, AppState>,
 ) -> Result<FormatListResponse, AppError> {

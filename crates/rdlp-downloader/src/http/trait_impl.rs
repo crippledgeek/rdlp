@@ -1,7 +1,7 @@
 //! `Downloader` trait implementation for [`HttpDownloader`].
 //!
 //! Implements the core download operations: `download_to_file`,
-//! `download_to_writer`, `supports`, `get_size`, and `download_with_resume`.
+//! `download_to_writer`, `supports`, `file_size`, and `download_with_resume`.
 
 use async_trait::async_trait;
 use futures::StreamExt;

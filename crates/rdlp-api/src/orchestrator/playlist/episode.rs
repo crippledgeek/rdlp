@@ -16,7 +16,7 @@ impl Orchestrator {
     ///
     /// Supports lazy format resolution: if `info.formats` is empty and
     /// `info.webpage_url` is set, formats are resolved on-the-fly via
-    /// `extract_video_info()`.
+    /// `extract_video()`.
     ///
     /// On CDN failure (invalid M3U8, 403/503), re-extracts fresh URLs up to
     /// `MAX_EXTRACT_RETRIES` times with a delay between attempts. This mirrors

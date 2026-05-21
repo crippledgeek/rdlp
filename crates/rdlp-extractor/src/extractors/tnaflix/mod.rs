@@ -246,7 +246,7 @@ impl TNAFlixSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -283,10 +283,7 @@ impl TNAFlixSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[TNAFlix] Failed to fetch search page, returning partial results: {e}");
@@ -352,7 +349,7 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -396,7 +393,7 @@ impl EMPFlixSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -435,10 +432,7 @@ impl EMPFlixSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[EMPFlix] Failed to fetch search page, returning partial results: {e}");
@@ -505,7 +499,7 @@ impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -532,7 +526,7 @@ impl MovieFapSearchExtractor {
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -571,10 +565,7 @@ impl MovieFapSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[MovieFap] Failed to fetch search page, returning partial results: {e}");
@@ -640,7 +631,7 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         moviefap_search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -993,7 +984,7 @@ mod async_tests {
 
     #[async_trait]
     impl CookieJar for NoOpCookieJar {
-        async fn get_cookies(&self, _url: &str) -> Result<Vec<String>> {
+        async fn cookies(&self, _url: &str) -> Result<Vec<String>> {
             Ok(vec![])
         }
         async fn add_cookie(&self, _url: &str, _cookie: &str) -> Result<()> {

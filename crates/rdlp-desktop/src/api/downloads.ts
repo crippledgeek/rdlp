@@ -10,7 +10,7 @@ import type { DownloadJob, DownloadOptions, PlaylistContext } from "../types";
 export function downloadsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.downloads.list(),
-        queryFn: () => invokeTyped<DownloadJob[]>("get_queue"),
+        queryFn: () => invokeTyped<DownloadJob[]>("queue"),
     });
 }
 

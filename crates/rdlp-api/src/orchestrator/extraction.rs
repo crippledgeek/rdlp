@@ -19,7 +19,7 @@ impl Orchestrator {
     /// - No extractor is found for the URL
     /// - Extraction fails
     #[instrument(skip(self), fields(url = %url))]
-    pub(super) async fn extract_video_info(&self, url: &str) -> Result<rdlp_types::InfoDict> {
+    pub(super) async fn extract_video(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
@@ -133,10 +133,7 @@ impl Orchestrator {
     /// - No extractor is found for the URL
     /// - Extraction fails
     #[instrument(skip(self), fields(url = %url))]
-    pub(super) async fn extract_playlist_info(
-        &self,
-        url: &str,
-    ) -> Result<Vec<rdlp_types::InfoDict>> {
+    pub(super) async fn extract_playlist(&self, url: &str) -> Result<Vec<rdlp_types::InfoDict>> {
         debug!("Finding extractor for URL...");
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {

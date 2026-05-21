@@ -170,7 +170,7 @@ async fn set_cookie_attributes_are_stored() {
     // Read back via get_cookies — the cookie should be visible for the /api path.
     let cookies = ctx
         .jar
-        .get_cookies("https://example.com/api/data")
+        .cookies("https://example.com/api/data")
         .await
         .expect("get_cookies should succeed");
 
@@ -210,7 +210,7 @@ async fn set_cookie_secure_attribute_in_set_cookie_string() {
     // Visible on HTTPS.
     let https_cookies = ctx
         .jar
-        .get_cookies("https://example.com/")
+        .cookies("https://example.com/")
         .await
         .expect("get_cookies should succeed");
     let visible_https = https_cookies.iter().any(|c| c.contains("tok=secret"));
@@ -248,7 +248,7 @@ async fn get_cookies_returns_previously_set_cookie() {
     // the data. The WIT Host impl on PluginStoreData wraps the same call.
     let raw = ctx
         .jar
-        .get_cookies("https://example.com/")
+        .cookies("https://example.com/")
         .await
         .expect("get_cookies should succeed");
 
@@ -284,7 +284,7 @@ async fn get_cookies_empty_when_out_of_scope() {
     // Reading via SimpleCookieJar for an out-of-scope URL returns nothing.
     let raw = ctx
         .jar
-        .get_cookies("https://pornhub.com/")
+        .cookies("https://pornhub.com/")
         .await
         .expect("get_cookies should succeed");
     assert!(

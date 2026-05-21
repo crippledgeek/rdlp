@@ -36,7 +36,7 @@ fn sanitize_query(input: &str) -> String {
 /// # Arguments
 ///
 /// * `query` - Raw search query from the frontend.
-/// * `site` - Site name as returned by [`get_search_providers`].
+/// * `site` - Site name as returned by [`search_providers`].
 /// * `filters` - Optional search filters for the chosen site.
 /// * `page` - Optional page number for paginated fetching.
 /// * `state` - Managed application state containing the API client.
@@ -119,7 +119,7 @@ pub async fn search_content(
 ///
 /// # Arguments
 ///
-/// * `site` - Site name (as returned by [`get_search_providers`]).
+/// * `site` - Site name (as returned by [`search_providers`]).
 /// * `preview` - The preview row to enrich.
 /// * `state` - Managed application state containing the API client.
 ///
@@ -157,9 +157,7 @@ pub async fn enrich_search_result(
 /// Returns [`AppError::Internal`] on unexpected failures (none expected
 /// from the synchronous underlying call).
 #[tauri::command]
-pub async fn get_search_providers(
-    state: State<'_, AppState>,
-) -> Result<Vec<SearchSiteInfo>, AppError> {
+pub async fn search_providers(state: State<'_, AppState>) -> Result<Vec<SearchSiteInfo>, AppError> {
     Ok(state.client.list_search_sites())
 }
 
@@ -167,7 +165,7 @@ pub async fn get_search_providers(
 ///
 /// # Arguments
 ///
-/// * `site` - Site name as returned by [`get_search_providers`].
+/// * `site` - Site name as returned by [`search_providers`].
 /// * `state` - Managed application state containing the API client.
 ///
 /// # Returns
@@ -179,7 +177,7 @@ pub async fn get_search_providers(
 ///
 /// * [`AppError::InvalidInput`] if the site name is unknown.
 #[tauri::command]
-pub async fn get_search_filters(
+pub async fn search_filters(
     site: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchFilterDescriptor>, AppError> {

@@ -70,7 +70,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Option<(Config, PathBuf)>> {
 ///
 /// Returns an error if the configuration cannot be serialized (`RdlpError::Config`)
 /// or the file cannot be written (`io::Error`).
-pub fn to_toml_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
+pub fn write_to_file(config: &Config, path: impl AsRef<Path>) -> Result<()> {
     let content = toml::to_string_pretty(config)
         .map_err(|e| RdlpError::Config(format!("Failed to serialize TOML: {e}")))?;
     // Safe: sync public API invoked from CLI startup / tests before any async runtime.
@@ -204,7 +204,7 @@ mod tests {
         };
 
         let file = NamedTempFile::new().unwrap();
-        to_toml_file(&config, file.path()).unwrap();
+        write_to_file(&config, file.path()).unwrap();
 
         let loaded = from_toml_file(file.path()).unwrap();
         assert_eq!(loaded.format, Some("worst".to_string()));

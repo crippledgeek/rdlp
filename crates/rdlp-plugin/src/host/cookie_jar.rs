@@ -168,7 +168,7 @@ impl crate::bindings::rdlp::plugin::host_cookie_jar::Host for PluginStoreData {
         }
 
         use rdlp_core::CookieJar as _;
-        let raw_cookies = match ctx.jar.get_cookies(&url).await {
+        let raw_cookies = match ctx.jar.cookies(&url).await {
             Ok(v) => v,
             Err(e) => {
                 log::warn!(

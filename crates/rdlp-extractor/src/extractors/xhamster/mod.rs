@@ -104,7 +104,7 @@ impl XHamsterExtractor {
             Some(val) => Some(val),
             None => {
                 debug!("[XHamster] Boa initials extraction failed, trying regex fallback");
-                extract_initials_json(&webpage)
+                parse_initials_json(&webpage)
             }
         };
 
@@ -240,7 +240,7 @@ impl XHamsterExtractor {
     }
 
     /// Fetch a single search page, returning its results and the max page count.
-    async fn fetch_single_search_page(
+    async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
         page: usize,
@@ -255,7 +255,7 @@ impl XHamsterExtractor {
         debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
 
         let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-        let initials = search::extract_initials_json(&webpage)?;
+        let initials = search::parse_initials_json(&webpage)?;
         let page_results = search::parse_search_results_json(&initials)?;
         let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
 
@@ -275,10 +275,7 @@ impl XHamsterExtractor {
         let mut page = 1_usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_single_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(result) => result,
                 Err(e) => {
                     debug!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
@@ -379,7 +376,7 @@ impl SearchExtractor for XHamsterExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_single_search_page(query, page, ctx).await?;
+        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
 
         let has_more = page < max_pages && !page_results.is_empty();
 
@@ -393,7 +390,7 @@ impl SearchExtractor for XHamsterExtractor {
 }
 
 /// Try to extract and parse `window.initials` JSON from the page source.
-fn extract_initials_json(webpage: &str) -> Option<serde_json::Value> {
+fn parse_initials_json(webpage: &str) -> Option<serde_json::Value> {
     // Try strict pattern first, then fallback
     let json_str = [
         &*patterns::INITIALS_PATTERN,
@@ -451,14 +448,14 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_initials_json() {
+    fn test_parse_initials_json() {
         let webpage = r#"
             <script>
             window.initials = {"videoModel": {"title": "Test", "sources": {}}};
             </script>
         "#;
 
-        let initials = extract_initials_json(webpage);
+        let initials = parse_initials_json(webpage);
         assert!(initials.is_some());
         let initials = initials.unwrap();
         assert_eq!(
@@ -468,9 +465,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_initials_json_not_found() {
+    fn test_parse_initials_json_not_found() {
         let webpage = "<html><body>No initials here</body></html>";
-        assert!(extract_initials_json(webpage).is_none());
+        assert!(parse_initials_json(webpage).is_none());
     }
 
     #[test]

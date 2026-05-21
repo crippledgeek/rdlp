@@ -296,7 +296,7 @@ impl Orchestrator {
     #[instrument(skip(self), fields(url = %url))]
     pub async fn download(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
         // Try playlist extraction first to check if this is a playlist
-        let infos = self.extract_playlist_info(url).await?;
+        let infos = self.extract_playlist(url).await?;
 
         // Load archive once at start
         let archive = self.load_archive_if_configured().await;
@@ -372,7 +372,7 @@ impl Orchestrator {
 
     /// Extract metadata without downloading (for --dump-json / --print / --simulate)
     pub async fn extract_info(&self, url: &str) -> Result<Vec<rdlp_types::InfoDict>> {
-        self.extract_playlist_info(url).await
+        self.extract_playlist(url).await
     }
 
     /// Download only subtitles (no video) for `--list-subs-only` mode.

@@ -56,7 +56,7 @@ impl Default for SimpleCookieJar {
 
 #[async_trait]
 impl CookieJar for SimpleCookieJar {
-    async fn get_cookies(&self, url: &str) -> Result<Vec<String>> {
+    async fn cookies(&self, url: &str) -> Result<Vec<String>> {
         // Validate as URL first (early-return on parse failure matches
         // historical reqwest behaviour), then hand the string to wreq
         // whose IntoUri is implemented for &str.
@@ -276,7 +276,7 @@ mod tests {
             .await
             .unwrap();
 
-        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        let cookies = jar.cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0], "session=abc123");
     }
@@ -287,7 +287,7 @@ mod tests {
         jar.add_cookie("https://example.com", "a=1").await.unwrap();
         jar.add_cookie("https://example.com", "b=2").await.unwrap();
 
-        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        let cookies = jar.cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 2);
         assert!(cookies.contains(&"a=1".to_string()));
         assert!(cookies.contains(&"b=2".to_string()));
@@ -299,7 +299,7 @@ mod tests {
         jar.add_cookie("https://example.com", "a=1").await.unwrap();
         jar.add_cookie("https://other.com", "b=2").await.unwrap();
 
-        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        let cookies = jar.cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0], "a=1");
     }
@@ -307,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_jar() {
         let jar = SimpleCookieJar::new();
-        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        let cookies = jar.cookies("https://example.com").await.unwrap();
         assert!(cookies.is_empty());
     }
 
@@ -315,7 +315,7 @@ mod tests {
     async fn test_invalid_url() {
         let jar = SimpleCookieJar::new();
         // Should not panic, just return empty
-        let cookies = jar.get_cookies("not-a-url").await.unwrap();
+        let cookies = jar.cookies("not-a-url").await.unwrap();
         assert!(cookies.is_empty());
     }
 
@@ -326,7 +326,7 @@ mod tests {
         // Verify it's the same jar by adding via inner and reading via trait
         inner.add("test=value", "https://example.com");
 
-        let cookies = jar.get_cookies("https://example.com").await.unwrap();
+        let cookies = jar.cookies("https://example.com").await.unwrap();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0], "test=value");
     }

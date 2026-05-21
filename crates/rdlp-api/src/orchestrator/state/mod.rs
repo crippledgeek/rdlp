@@ -154,7 +154,7 @@ impl DownloadPhase {
                     url: url.clone(),
                 });
 
-                let info = orchestrator.extract_video_info(&url).await?;
+                let info = orchestrator.extract_video(&url).await?;
 
                 orchestrator.emit(Event::MetadataReady {
                     id: orchestrator.download_id,

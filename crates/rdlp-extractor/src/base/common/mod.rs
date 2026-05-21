@@ -96,7 +96,7 @@ pub struct BaseExtractor;
 /// bytes exceed `MAX_WEBPAGE_BYTES`. The previous `response.text()` path
 /// buffered the entire response before any check, allowing an
 /// adversarial server to OOM the host with a 10 GB body.
-async fn read_capped_text(response: wreq::Response, url: &str) -> Result<String> {
+async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String> {
     use futures::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
@@ -175,7 +175,7 @@ impl BaseExtractor {
 
         check_http_response(&response)?;
 
-        let webpage = read_capped_text(response, url).await?;
+        let webpage = fetch_capped_text(response, url).await?;
 
         // Debug output if verbose
         if ctx.config.verbose {
@@ -229,7 +229,7 @@ impl BaseExtractor {
 
         check_http_response(&response)?;
 
-        let webpage = read_capped_text(response, url).await?;
+        let webpage = fetch_capped_text(response, url).await?;
 
         if ctx.config.verbose {
             crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);
