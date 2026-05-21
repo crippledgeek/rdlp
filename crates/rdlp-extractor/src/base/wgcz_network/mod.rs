@@ -173,4 +173,64 @@ mod tests {
         assert_eq!(ld.duration_iso.as_deref(), Some("PT00H05M00S"));
         assert_eq!(ld.view_count, Some(12345));
     }
+
+    /// Regression guard (issue #262): if any of the `html5player.setVideo*`
+    /// captures contains a non-http(s) URI (`javascript:`, `file://`, `data:`,
+    /// etc.), `extract_format_urls` MUST return `None` for that field. This
+    /// covers xnxx + xvideos in one place since both go through this base.
+    ///
+    /// Without this contract, a script-injected `setVideoHLS('file:///etc/passwd')`
+    /// would reach `Format` construction and the downloader would attempt to
+    /// fetch a local file as if it were a remote video.
+    #[test]
+    fn extract_format_urls_rejects_non_http_schemes() {
+        let html = r#"
+            html5player.setVideoHLS('file:///etc/passwd');
+            html5player.setVideoUrlLow('javascript:alert(1)');
+            html5player.setVideoUrlHigh('data:text/html,<h1>x</h1>');
+        "#;
+        let f = WgczNetworkBase::extract_format_urls(html);
+        assert!(
+            f.hls.is_none(),
+            "setVideoHLS file:// scheme must be rejected, got {:?}",
+            f.hls
+        );
+        assert!(
+            f.mp4_low.is_none(),
+            "setVideoUrlLow javascript: scheme must be rejected, got {:?}",
+            f.mp4_low
+        );
+        assert!(
+            f.mp4_high.is_none(),
+            "setVideoUrlHigh data: scheme must be rejected, got {:?}",
+            f.mp4_high
+        );
+    }
+
+    /// Regression guard companion: the http(s) happy path still produces
+    /// `Some(...)` for every captured field. Without this, a defensive
+    /// refactor that hardens scheme validation could silently drop ALL
+    /// captures (e.g. by inverting a match), and `extract_format_urls_rejects_non_http_schemes`
+    /// alone would still pass.
+    #[test]
+    fn extract_format_urls_keeps_http_and_https_schemes() {
+        let html = r#"
+            html5player.setVideoHLS('https://cdn.example.test/path/hls.m3u8');
+            html5player.setVideoUrlLow('http://cdn.example.test/path/low.mp4');
+            html5player.setVideoUrlHigh('https://cdn.example.test/path/high.mp4');
+        "#;
+        let f = WgczNetworkBase::extract_format_urls(html);
+        assert_eq!(
+            f.hls.as_deref(),
+            Some("https://cdn.example.test/path/hls.m3u8")
+        );
+        assert_eq!(
+            f.mp4_low.as_deref(),
+            Some("http://cdn.example.test/path/low.mp4")
+        );
+        assert_eq!(
+            f.mp4_high.as_deref(),
+            Some("https://cdn.example.test/path/high.mp4")
+        );
+    }
 }
