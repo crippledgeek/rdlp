@@ -1,0 +1,95 @@
+[[ignore]]
+fingerprint = "1f71fa7657f2f924"
+reason = "Acceptable test boilerplate; deduplication via test helper deferred (write_signed_plugin x3 in plugin golden tests)"
+
+[[ignore]]
+fingerprint = "8c6b8e22faf810b1"
+reason = "Acceptable test boilerplate (build_*_plugin x3 in plugin golden tests)"
+
+[[ignore]]
+fingerprint = "e79a123cf3c33161"
+reason = "Initiative #5: InfoExtractorExt — fetch_api/html_search_page shared across PornHub+RedTube (tracking issue)"
+
+[[ignore]]
+fingerprint = "0b7f365890f934cb"
+reason = "Initiative #5: InfoExtractorExt — XHamster+TNAFlix search_all_pages share pagination scaffold (tracking issue)"
+
+[[ignore]]
+fingerprint = "36dd26d02f5ee08b"
+reason = "Intentional single-call vs paginated twin (Orchestrator::search vs search_page; matches RdlpClient pair)"
+
+[[ignore]]
+fingerprint = "40ffb0ebfe965e24"
+reason = "Initiative #3: delegate_to_base! macro — EMPFlix+MovieFap search_all_pages clone the TNAFlix base (tracking issue)"
+
+[[ignore]]
+fingerprint = "43815788a5f74903"
+reason = "Intentional single-call vs paginated twin (RdlpClient::search vs search_page)"
+
+[[ignore]]
+fingerprint = "5f3484e2369caff5"
+reason = "Intentional domain separation; audio/video sample-format vs pixel-format helpers are incompatible (ffmpeg-the-third upstream split). Re-evaluate if a 3rd codec domain appears."
+
+[[ignore]]
+fingerprint = "611204904b3045f3"
+reason = "Intentional domain separation; preferred_audio_encoder vs preferred_video_encoder iterate distinct codec tables and availability checks (ffmpeg-the-third upstream split). Re-evaluate if a 3rd codec domain (subtitle codec preference) appears."
+
+[[ignore]]
+fingerprint = "6dbb2cbb33f171e5"
+reason = "Acceptable test redundancy; same 5xx-propagation assertion for API vs HTML fetch strategies"
+
+[[ignore]]
+fingerprint = "90a940b4af1cc624"
+reason = "Acceptable test redundancy; set_cookie attribute + Secure flag are deliberately separate assertions"
+
+[[ignore]]
+fingerprint = "c724f5103213d974"
+reason = "Same domain-separation rationale (resolve_audio_encoder vs resolve_encoder for video)"
+
+[[ignore]]
+fingerprint = "e12f9e5e11985162"
+reason = "Rule of Three pending: build_api_search_url is duplicated in PornHub+RedTube; extract when a 3rd extractor needs the same pattern (tracking issue)"
+
+[[ignore]]
+fingerprint = "f07ba850fd9c6f4d"
+reason = "Acceptable test redundancy; two distinct retry scenarios (exhausted vs non-retryable) share assertion shape"
+
+[[ignore]]
+fingerprint = "baa10f1d8b4a5471"
+reason = "False positive: download_to_file vs download_to_writer share timeout scaffold but diverge in probe+parallel dispatch vs sequential BrokenPipe handling"
+
+[[ignore]]
+fingerprint = "9b402eaf0837811d"
+reason = "False positive: HLS format-detection and DASH download closures share structural shape but operate on incompatible segment-type streams"
+
+[[ignore]]
+fingerprint = "c280dd2ab56d298f"
+reason = "Initiative #5: InfoExtractorExt — search_filter_descriptors duplicated across PornHub+RedTube (tracking issue)"
+
+[[ignore]]
+fingerprint = "3b98ca18011a1100"
+reason = "Same domain-separation rationale (list_available_audio_codecs vs list_available_codecs for video)"
+
+[[ignore]]
+fingerprint = "2171a47deb213f3b"
+reason = "Same domain-separation rationale (closures inside list_*_codecs helpers iterate distinct codec tables)"
+
+[[ignore]]
+fingerprint = "c779eff5aef82766"
+reason = "Initiative #5: InfoExtractorExt — XNXX+SpankBang SearchExtractor::search_page share pagination scaffold (tracking issue)"
+
+[[ignore]]
+fingerprint = "d1fae871b2e72790"
+reason = "Acceptable test redundancy; two related assertions on Orchestrator::select merge-selector behaviour (explicit vs derived merge selection)"
+
+[[ignore]]
+fingerprint = "9c27d6eddcbf2fa7"
+reason = "False positive: FFmpegRunner::merge and embed_thumbnail wrap the same FFmpeg session-spawn boilerplate but operate on disjoint stream maps (mux vs attached_pic remux)"
+
+[[ignore]]
+fingerprint = "40cd6e66253b577b"
+reason = "Acceptable test redundancy; round-trip pattern for two distinct serializable session-state shapes (playlist vs merge_plan)"
+
+[[ignore]]
+fingerprint = "b1f95f057f50ca9e"
+reason = "Initiative #5: InfoExtractorExt — category_values (PornHub) and tag_values (RedTube) share filter-value enumeration scaffold (tracking issue)"

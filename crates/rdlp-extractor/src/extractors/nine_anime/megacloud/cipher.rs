@@ -282,9 +282,9 @@ mod tests {
         let s2 = seed_shuffle(&chars, "test_key");
         assert_eq!(s1, s2);
         // Should be a permutation (same elements)
-        let mut sorted1 = s1.clone();
+        let mut sorted1 = s1;
         sorted1.sort();
-        let mut sorted_chars = chars.clone();
+        let mut sorted_chars = chars;
         sorted_chars.sort();
         assert_eq!(sorted1, sorted_chars);
     }

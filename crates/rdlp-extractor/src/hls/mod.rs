@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_detector_creation() {
         let client = Arc::new(wreq::Client::new());
-        let detector = HlsSizeDetector::new(client.clone(), false);
+        let detector = HlsSizeDetector::new(client, false);
 
         assert_eq!(detector.concurrent_requests, 8);
         assert!(!detector.verbose);

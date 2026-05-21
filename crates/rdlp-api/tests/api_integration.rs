@@ -141,11 +141,8 @@ async fn test_cancel_before_result() {
     // Either UserCancelled or extraction failure — both are acceptable
     // depending on race timing
     match &result {
-        Err(RdlpApiError::UserCancelled) => {
-            // Cancellation won the race — expected path
-        }
         Err(_) => {
-            // Extraction failure reached first — also acceptable
+            // Cancellation won the race or extraction failure reached first — both acceptable
         }
         Ok(_) => panic!("Should not succeed after cancel"),
     }

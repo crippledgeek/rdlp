@@ -114,7 +114,11 @@ fn pre_trusted_identities_denies_capability_creep_unconditionally() {
 }
 
 #[test]
+#[allow(
+    clippy::redundant_clone,
+    reason = "Intentional: exercises Clone impl as a compile-time check"
+)]
 fn confirm_request_is_clone() {
     let r = first_install("x");
-    let _r2 = r.clone(); // compile-time check
+    let _r2 = r.clone();
 }

@@ -20,29 +20,19 @@ serde_json = { workspace = true }
 scraper = { workspace = true }
 regex = { workspace = true }
 
-# Per-crate lint config — extends workspace lints (which cannot be composed
-# with workspace = true once per-crate tables are added).
-# Workspace lint baselines replicated here:
-#   clippy::must_use_candidate = warn
-#   clippy::await_holding_lock = deny
-#   clippy::await_holding_refcell_ref = deny
-#   clippy::disallowed_methods = deny
-
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
 
 [lints.clippy]
-# Workspace baseline (replicated — cannot use workspace = true alongside
-# per-crate tables).
 must_use_candidate = "warn"
-disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
-# Security-relevant lints applied to ALL targets.
+disallowed_methods = "deny"
+match_same_arms = "warn"
+redundant_clone = "warn"
+collapsible_match = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
-# `indexing_slicing`, `pedantic`, and `nursery` are binary-only via
-# `#![warn(...)]` in `src/main.rs`.

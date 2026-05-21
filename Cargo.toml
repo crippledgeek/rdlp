@@ -149,11 +149,21 @@ mockito = "1.5"
 temp-env = "0.3"
 tempfile = "3.14"
 
+[workspace.lints.rust]
+missing_docs = "warn"
+
 [workspace.lints.clippy]
 must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 disallowed_methods = "deny"
+match_same_arms = "warn"
+redundant_clone = "warn"
+collapsible_match = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]

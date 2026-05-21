@@ -65,7 +65,7 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         manifest,
         identity,
         component,
-        origin_dir: workspace_relative("tests/fixtures").to_path_buf(),
+        origin_dir: workspace_relative("tests/fixtures"),
     };
     Some(PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter"))
 }

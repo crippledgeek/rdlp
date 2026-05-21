@@ -158,16 +158,14 @@ fn mime_to_ext(mime: &str) -> Option<String> {
     let mime = mime.to_lowercase();
     match mime.as_str() {
         "video/mp4" => Some("mp4".to_string()),
-        "video/webm" => Some("webm".to_string()),
-        "video/ogg" => Some("ogg".to_string()),
+        "video/webm" | "audio/webm" => Some("webm".to_string()),
+        "video/ogg" | "audio/ogg" => Some("ogg".to_string()),
         "video/x-flv" => Some("flv".to_string()),
         "video/x-matroska" => Some("mkv".to_string()),
         "video/quicktime" => Some("mov".to_string()),
         "video/mp2t" | "video/MP2T" => Some("ts".to_string()),
         "audio/mpeg" => Some("mp3".to_string()),
         "audio/mp4" => Some("m4a".to_string()),
-        "audio/ogg" => Some("ogg".to_string()),
-        "audio/webm" => Some("webm".to_string()),
         "audio/wav" => Some("wav".to_string()),
         "audio/flac" => Some("flac".to_string()),
         "application/vnd.apple.mpegurl" | "application/x-mpegurl" => Some("m3u8".to_string()),

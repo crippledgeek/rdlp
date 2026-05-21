@@ -152,7 +152,7 @@ impl InfoExtractor for XNXXExtractor {
 
         let thumbnail = inline.thumbnail_url.or_else(|| ld.thumbnail_url.clone());
 
-        let uploader = inline.uploader.clone();
+        let uploader = inline.uploader;
 
         let description = ld.description.clone();
         let duration = ld
@@ -160,7 +160,7 @@ impl InfoExtractor for XNXXExtractor {
             .as_deref()
             .and_then(BaseExtractor::parse_iso8601_duration);
         let view_count = ld.view_count;
-        let upload_date = ld.upload_date.clone();
+        let upload_date = ld.upload_date;
 
         // --- build InfoDict ---
         let mut info = InfoDict::new(&video_id, &title, XNXX_NAME, url);

@@ -106,7 +106,7 @@ fn run_uninstall_rejects_path_traversal_name() {
         std::fs::create_dir_all(&plugin_dir).unwrap();
         let config = Config {
             progress: false,
-            plugin_directories: vec![plugin_dir.clone()],
+            plugin_directories: vec![plugin_dir],
             ..Default::default()
         };
 
