@@ -293,6 +293,27 @@ impl Downloader for HttpDownloader {
         resume_from: u64,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        // Trait method discards cancel (outer select! covers it). For cooperative
+        // cancel, callers use `download_with_resume_with_cancel` directly.
+        // TODO(#287): trait method itself may take cancel in a future BC-break.
+        self.download_with_resume_with_cancel(url, path, resume_from, progress, None)
+            .await
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl HttpDownloader {
+    /// F6: cooperative-cancel-aware variant of `download_with_resume`.
+    /// The trait method `download_with_resume` delegates here with `cancel: None`.
+    /// Direct callers (e.g. tests) can pass a `CancellationToken` for mid-stream cancellation.
+    pub(crate) async fn download_with_resume_with_cancel(
+        &self,
+        url: &str,
+        path: &Path,
+        resume_from: u64,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
@@ -388,19 +409,32 @@ impl Downloader for HttpDownloader {
                 ))?;
             let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
-            let mut stream = response.bytes_stream();
+            let stream = response.bytes_stream();
+            tokio::pin!(stream);
             let mut downloaded = resume_from;
             let mut last_update = Instant::now();
             let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
 
-            while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
+            loop {
+                let next = match crate::http::next_with_cancel_and_timeout(
+                    stream.as_mut(),
+                    cancel,
+                    read_timeout,
+                    &url_string,
+                )
                 .await
-                .map_err(|_| RdlpError::Network {
-                    message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-                    url: Some(url_string.to_string()),
-                })?
-            {
+                {
+                    Ok(item) => item,
+                    Err(RdlpError::Cancelled) => {
+                        // Flush partial bytes already in BufWriter to disk.
+                        writer.flush().await.ok();
+                        return Err(RdlpError::Cancelled);
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                let Some(chunk_result) = next else { break };
                 let chunk = chunk_result
                     .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(url_string.to_string()) })?;
 

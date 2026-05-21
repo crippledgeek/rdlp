@@ -872,6 +872,61 @@ async fn download_format_propagates_cancel_to_sequential() {
     assert!(matches!(res, Err(RdlpError::Cancelled)));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_with_resume_with_cancel_aborts_on_cancel() {
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    // Blackhole that accepts a connection and sends a 206 header but then
+    // never sends body bytes. Forces the future to park at stream.next().
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        if let Ok((mut stream, _)) = listener.accept() {
+            // Read request bytes (drop them)
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+
+            // Send 206 partial-content headers with a content-range that says total is 10MB
+            let _ = stream.write_all(
+                b"HTTP/1.1 206 Partial Content\r\n\
+                  Content-Range: bytes 0-10485759/10485760\r\n\
+                  Content-Length: 10485760\r\n\
+                  Content-Type: application/octet-stream\r\n\
+                  \r\n",
+            );
+            let _ = stream.flush();
+            // Hold the connection open so wreq waits for body data.
+            #[allow(clippy::duration_suboptimal_units)] // from_mins needs Rust 1.95; MSRV 1.85
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    // Pre-create a 0-byte file to satisfy resume preconditions if any.
+    tokio::fs::write(&out, b"").await.unwrap();
+
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/blackhole");
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_with_resume_with_cancel(&url, &out, 0, None, Some(&token))
+        .await;
+
+    assert!(matches!(res, Err(RdlpError::Cancelled)));
+}
+
 #[tokio::test]
 async fn download_to_file_no_head_under_normal_flow() {
     use mockito::Matcher;
