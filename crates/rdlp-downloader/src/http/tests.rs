@@ -1022,3 +1022,145 @@ fn next_with_cancel_helper_uses_biased_select() {
          Found header: {header:?}"
     );
 }
+
+// ── #307: download_to_writer cooperative cancellation ──────────────────────
+
+#[tokio::test]
+async fn download_to_writer_cancel_before_start_returns_cancelled() {
+    use tokio_util::sync::CancellationToken;
+
+    // Token cancelled before call — pre-cancel guard must short-circuit
+    // before any network activity.
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let downloader = HttpDownloader::new();
+    // URL is deliberately unreachable; no connection should be attempted.
+    let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::sink());
+
+    let res = downloader
+        .download_to_writer_with_cancel(
+            "http://127.0.0.1:1/unreachable",
+            writer,
+            None,
+            Some(&token),
+        )
+        .await;
+
+    assert!(
+        matches!(res, Err(RdlpError::Cancelled)),
+        "expected Cancelled before any network attempt, got: {res:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_to_writer_cancel_mid_stream_returns_cancelled() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    // Server sends headers + chunked encoding preamble but holds the
+    // connection open without delivering body chunks, parking wreq's body
+    // stream at its next() poll — same pattern as
+    // download_sequential_cancel_mid_stream_returns_cancelled.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Content-Type: application/octet-stream\r\n\
+                  \r\n",
+            );
+            let _ = stream.flush();
+            #[allow(clippy::duration_suboptimal_units)]
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    });
+
+    let downloader = HttpDownloader::new();
+    let url = format!("http://127.0.0.1:{port}/slow-body");
+    let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::sink());
+
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        token2.cancel();
+    });
+
+    let res = downloader
+        .download_to_writer_with_cancel(&url, writer, None, Some(&token))
+        .await;
+
+    assert!(
+        matches!(res, Err(RdlpError::Cancelled)),
+        "expected Cancelled mid-stream, got: {res:?}"
+    );
+}
+
+#[tokio::test]
+async fn download_to_writer_cancel_none_passes_existing_behavior() {
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xAB; 4096];
+    let _mock = server
+        .mock("GET", "/file")
+        .with_status(200)
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    // Use sink() to avoid the `'static` lifetime constraint on the boxed writer.
+    let writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(tokio::io::sink());
+
+    let stats = downloader
+        .download_to_writer_with_cancel(&url, writer, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(stats.bytes_downloaded, 4096);
+}
+
+// ── #308: AIMD parallel-path static biased-select guard ────────────────────
+
+#[test]
+fn parallel_adaptive_cancel_uses_biased_select() {
+    // Static guard: download_parallel_adaptive's semaphore-acquire select!
+    // MUST include `biased;` so cancel-priority is deterministic.
+    // Mirrors next_with_cancel_helper_uses_biased_select (Task 12, PR #303).
+    let source = include_str!("parallel.rs");
+
+    let start = source
+        .find("async fn download_parallel_adaptive")
+        .expect("download_parallel_adaptive not found in parallel.rs");
+
+    let after_start = &source[start..];
+    // End at the next top-level fn definition.
+    let end = after_start[1..]
+        .find("\n    async fn ")
+        .map_or(after_start.len(), |i| i + 1);
+    let body = &after_start[..end];
+
+    let select_idx = body
+        .find("tokio::select!")
+        .expect("download_parallel_adaptive must contain a tokio::select! for cancel");
+    let after_select = &body[select_idx..];
+    let first_arm = after_select
+        .find("=>")
+        .expect("tokio::select! must have at least one arm");
+    let header = &after_select[..first_arm];
+
+    assert!(
+        header.contains("biased;"),
+        "tokio::select! in download_parallel_adaptive MUST use `biased;` \
+         to deterministically prioritize the cancel arm. \
+         Found header: {header:?}"
+    );
+}

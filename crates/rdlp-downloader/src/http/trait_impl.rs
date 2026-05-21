@@ -4,7 +4,6 @@
 //! `download_to_writer`, `supports`, `file_size`, and `download_with_resume`.
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use log::debug;
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
@@ -168,12 +167,59 @@ impl Downloader for HttpDownloader {
     /// Unlike `download_to_file`, this always uses sequential I/O (no parallel
     /// chunks) because the destination is not seekable. On `BrokenPipe` the
     /// download stops gracefully and returns the bytes written so far.
+    ///
+    /// Delegates to `download_to_writer_with_cancel` with `cancel: None`.
+    /// For cooperative cancellation callers use that inherent method directly.
     async fn download_to_writer(
         &self,
         url: &str,
         writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        // Trait method discards cancel (outer select! covers it). For cooperative
+        // cancel, callers use `download_to_writer_with_cancel` directly.
+        self.download_to_writer_with_cancel(url, writer, progress, None)
+            .await
+    }
+
+    fn supports(&self, url: &str) -> bool {
+        url.starts_with("http://") || url.starts_with("https://")
+    }
+
+    async fn download_with_resume(
+        &self,
+        url: &str,
+        path: &Path,
+        resume_from: u64,
+        progress: Option<Box<dyn ProgressCallback>>,
+    ) -> Result<DownloadStats> {
+        // Trait method discards cancel (outer select! covers it). For cooperative
+        // cancel, callers use `download_with_resume_with_cancel` directly.
+        // TODO(#287): trait method itself may take cancel in a future BC-break.
+        self.download_with_resume_with_cancel(url, path, resume_from, progress, None)
+            .await
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+impl HttpDownloader {
+    /// F6 (#307): cooperative-cancel-aware variant of `download_to_writer`.
+    /// The trait method `download_to_writer` delegates here with `cancel: None`.
+    /// Direct callers can pass a `CancellationToken` for mid-stream cancellation.
+    pub(crate) async fn download_to_writer_with_cancel(
+        &self,
+        url: &str,
+        writer: Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        // F6: pre-cancel guard. Short-circuits before any network round-trip.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            return Err(RdlpError::Cancelled);
+        }
+
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
@@ -202,51 +248,61 @@ impl Downloader for HttpDownloader {
             let total_size = response.content_length();
             let mut buf_writer = BufWriter::with_capacity(self.config.buffer_size, writer);
 
-            let mut stream = response.bytes_stream();
+            let stream = response.bytes_stream();
+            tokio::pin!(stream);
             let mut downloaded: u64 = 0;
             let mut last_update = Instant::now();
             let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
 
-            while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
-                .await
-                .map_err(|_| RdlpError::Network {
-                message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-                url: Some(url_string.clone()),
-            })? {
-                let chunk = chunk_result.map_err(|e| RdlpError::Network {
-                    message: format!("Failed to read chunk: {e}"),
-                    url: Some(url_string.clone()),
-                })?;
-
-                match buf_writer.write_all(&chunk).await {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                        debug!("Broken pipe on stdout, stopping gracefully");
-                        break;
+            loop {
+                match super::next_with_cancel_and_timeout(
+                    stream.as_mut(),
+                    cancel,
+                    read_timeout,
+                    &url_string,
+                )
+                .await?
+                {
+                    None => break,
+                    Some(Err(e)) => {
+                        return Err(RdlpError::Network {
+                            message: format!("Failed to read chunk: {e}"),
+                            url: Some(url_string.clone()),
+                        });
                     }
-                    Err(e) => return Err(RdlpError::Io(e)),
-                }
-                downloaded += chunk.len() as u64;
+                    Some(Ok(chunk)) => {
+                        match buf_writer.write_all(&chunk).await {
+                            Ok(()) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                                debug!("Broken pipe on stdout, stopping gracefully");
+                                break;
+                            }
+                            Err(e) => return Err(RdlpError::Io(e)),
+                        }
+                        downloaded += chunk.len() as u64;
 
-                if let Some(ref callback) = progress {
-                    let now = Instant::now();
-                    if now.duration_since(last_update) >= update_interval {
-                        let elapsed = now.duration_since(start_time).as_secs_f64();
-                        let speed = if elapsed > 0.0 {
-                            downloaded as f64 / elapsed
-                        } else {
-                            0.0
-                        };
+                        if let Some(ref callback) = progress {
+                            let now = Instant::now();
+                            if now.duration_since(last_update) >= update_interval {
+                                let elapsed = now.duration_since(start_time).as_secs_f64();
+                                let speed = if elapsed > 0.0 {
+                                    downloaded as f64 / elapsed
+                                } else {
+                                    0.0
+                                };
 
-                        let progress_info = DownloadProgress::new(downloaded, total_size, speed);
-                        callback.on_progress(&progress_info);
-                        last_update = now;
+                                let progress_info =
+                                    DownloadProgress::new(downloaded, total_size, speed);
+                                callback.on_progress(&progress_info);
+                                last_update = now;
+                            }
+                        }
+
+                        if let Some(ref limiter) = self.rate_limiter {
+                            limiter.acquire(chunk.len()).await;
+                        }
                     }
-                }
-
-                if let Some(ref limiter) = self.rate_limiter {
-                    limiter.acquire(chunk.len()).await;
                 }
             }
 
@@ -282,27 +338,6 @@ impl Downloader for HttpDownloader {
         })?
     }
 
-    fn supports(&self, url: &str) -> bool {
-        url.starts_with("http://") || url.starts_with("https://")
-    }
-
-    async fn download_with_resume(
-        &self,
-        url: &str,
-        path: &Path,
-        resume_from: u64,
-        progress: Option<Box<dyn ProgressCallback>>,
-    ) -> Result<DownloadStats> {
-        // Trait method discards cancel (outer select! covers it). For cooperative
-        // cancel, callers use `download_with_resume_with_cancel` directly.
-        // TODO(#287): trait method itself may take cancel in a future BC-break.
-        self.download_with_resume_with_cancel(url, path, resume_from, progress, None)
-            .await
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-impl HttpDownloader {
     /// F6: cooperative-cancel-aware variant of `download_with_resume`.
     /// The trait method `download_with_resume` delegates here with `cancel: None`.
     /// Direct callers (e.g. tests) can pass a `CancellationToken` for mid-stream cancellation.
