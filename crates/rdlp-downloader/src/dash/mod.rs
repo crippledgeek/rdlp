@@ -172,8 +172,4 @@ impl Downloader for DashDownloader {
         )
         .await
     }
-
-    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
-        Ok(None)
-    }
 }

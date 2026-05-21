@@ -33,56 +33,18 @@ impl Downloader for HttpDownloader {
     ) -> Result<DownloadStats> {
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
-            let size = self.get_size(url).await.ok().flatten();
-            let supports_ranges = self.supports_ranges(url).await.unwrap_or(false);
+            // F3: single GET probe replaces HEAD x2 + Range:bytes=0-0 sequence.
+            // See docs/superpowers/specs/2026-05-21-f3-f6-download-optimization-design.md
+            let probe = self.probe(url).await?;
+            let size = probe.size;
+            let supports_ranges = probe.supports_ranges;
 
             debug!(
-                "Download analysis: size={} MB, concurrent={}, ranges={}",
+                "Probe result: size={} MB, concurrent={}, ranges={}",
                 size.map_or(0, |s| s / 1024 / 1024),
                 self.config.concurrent_fragments,
                 supports_ranges
             );
-
-            // Try Range request if HEAD didn't return size
-            let size = if (size.is_none() || size == Some(0)) && supports_ranges {
-                debug!("HEAD didn't return valid size, trying Range request...");
-                let client = self.client.clone();
-                let url_string = url.to_string();
-                let hdrs = self.headers();
-
-                match with_retry(&self.config.retry_config, "HTTP GET (size check)", || {
-                    let client = client.clone();
-                    let url = url_string.clone();
-                    let hdrs = hdrs.clone();
-                    async move {
-                        client
-                            .get(&url)
-                            .headers(hdrs)
-                            .header("Range", "bytes=0-0")
-                            .send()
-                            .await
-                            .map_err(|e| RdlpError::Network { message: format!("Size check failed: {e}"), url: Some(url.clone()) })
-                    }
-                })
-                .await
-                {
-                    Ok(response) => response
-                        .headers()
-                        .get("content-range")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.split('/').nth(1))
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .inspect(|size| {
-                            debug!(
-                                "Detected size from Range: {} MB",
-                                size / 1024 / 1024
-                            );
-                        }),
-                    Err(_) => None,
-                }
-            } else {
-                size
-            };
 
             let parallel_size = match size {
                 Some(s) if s > self.config.parallel_threshold => {
@@ -248,32 +210,6 @@ impl Downloader for HttpDownloader {
         url.starts_with("http://") || url.starts_with("https://")
     }
 
-    async fn get_size(&self, url: &str) -> Result<Option<u64>> {
-        let client = self.client.clone();
-        let url = url.to_string();
-        let hdrs = self.headers();
-
-        let response = with_retry(&self.config.retry_config, "HTTP HEAD", || {
-            let client = client.clone();
-            let url = url.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                client
-                    .head(&url)
-                    .headers(hdrs)
-                    .send()
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("HEAD request failed: {e}"),
-                        url: Some(url.clone()),
-                    })
-            }
-        })
-        .await?;
-
-        Ok(response.content_length())
-    }
-
     async fn download_with_resume(
         &self,
         url: &str,
@@ -318,12 +254,7 @@ impl Downloader for HttpDownloader {
             })
             .await?;
 
-            let total_size = response
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.split('/').nth(1))
-                .and_then(|s| s.parse::<u64>().ok())
+            let total_size = crate::http::parse_content_range_total(response.headers())
                 .or_else(|| response.content_length().map(|size| size + resume_from));
 
             // Check for parallel resume

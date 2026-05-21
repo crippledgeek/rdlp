@@ -157,10 +157,6 @@ impl Downloader for HlsDownloader {
             || url.contains(".m3u8?")
     }
 
-    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
-        Ok(None)
-    }
-
     async fn download_format(
         &self,
         format: &rdlp_types::Format,

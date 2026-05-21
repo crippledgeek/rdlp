@@ -69,6 +69,31 @@ where
         .await
 }
 
+/// Parse the `Content-Range` header's total-bytes field.
+///
+/// Accepts `bytes 0-N/TOTAL` (returns `Some(TOTAL)`) and returns `None` for
+/// `bytes 0-N/*` (server signalled unknown total per RFC 7233 §4.2), any
+/// missing header, or any unparseable total.
+pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split('/').nth(1))
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+/// Result of the F3 single-GET probe in `HttpDownloader::probe`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeResult {
+    /// Total file size if the server reported it via Content-Range (206) or
+    /// Content-Length (200). `None` when neither header is parseable.
+    pub size: Option<u64>,
+    /// `true` if the server returned `206 Partial Content`, indicating it
+    /// honoured the Range request. RFC 7233 §4.1: 206 itself implies range
+    /// support; `Accept-Ranges` is not required.
+    pub supports_ranges: bool,
+}
+
 /// HTTP/HTTPS downloader
 ///
 /// **Clone performance:** O(1) - both client and config use Arc internally
@@ -220,35 +245,67 @@ impl HttpDownloader {
         self.extra_headers.clone()
     }
 
-    /// Check if server supports range requests
-    async fn supports_ranges(&self, url: &str) -> Result<bool> {
-        let client = self.client.clone();
-        let url = url.to_string();
-        let hdrs = self.headers();
+    /// F3 single-GET probe: replaces the HEAD×2 + Range:bytes=0-0 sequence.
+    /// Sends `GET Range: bytes=0-{PROBE_WINDOW_BYTES-1}`, parses headers only,
+    /// discards body. Returns `ProbeResult` for the downstream parallel-vs-sequential
+    /// decision in `download_to_file`.
+    ///
+    /// Status handling:
+    /// - 206 → parse total from `Content-Range`, `supports_ranges = true`.
+    /// - 200 → server ignored Range; parse total from `Content-Length`,
+    ///   `supports_ranges = false`. The probe body is discarded (caller
+    ///   re-issues a plain GET via `download_sequential`).
+    /// - other (4xx/5xx after retry) → `ProbeResult { size: None,
+    ///   supports_ranges: false }`. Non-2xx is "no info", not an error;
+    ///   caller falls to sequential.
+    pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
+        use config::PROBE_WINDOW_BYTES;
 
-        let response = with_retry(&self.config.retry_config, "HTTP HEAD (range check)", || {
+        let client = self.client.clone();
+        let url_string = url.to_string();
+        let hdrs = self.headers();
+        let range = format!("bytes=0-{}", PROBE_WINDOW_BYTES - 1);
+
+        let Ok(resp) = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
             let client = client.clone();
-            let url = url.clone();
+            let url = url_string.clone();
             let hdrs = hdrs.clone();
+            let range = range.clone();
             async move {
                 client
-                    .head(&url)
+                    .get(&url)
                     .headers(hdrs)
+                    .header("Range", range)
                     .send()
                     .await
                     .map_err(|e| RdlpError::Network {
-                        message: format!("HEAD request failed: {e}"),
+                        message: format!("probe failed: {e}"),
                         url: Some(url.clone()),
                     })
             }
         })
-        .await?;
+        .await
+        else {
+            return Ok(ProbeResult {
+                size: None,
+                supports_ranges: false,
+            });
+        };
 
-        Ok(response
-            .headers()
-            .get("accept-ranges")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v != "none"))
+        match resp.status().as_u16() {
+            206 => Ok(ProbeResult {
+                size: parse_content_range_total(resp.headers()),
+                supports_ranges: true,
+            }),
+            200 => Ok(ProbeResult {
+                size: resp.content_length(),
+                supports_ranges: false,
+            }),
+            _ => Ok(ProbeResult {
+                size: None,
+                supports_ranges: false,
+            }),
+        }
     }
 
     /// Download a specific byte range with shared progress tracking
@@ -450,5 +507,49 @@ impl HttpDownloader {
 impl Default for HttpDownloader {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod content_range_tests {
+    use super::*;
+    use wreq::header::HeaderMap;
+
+    fn make_headers(content_range: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Some(cr) = content_range {
+            h.insert("content-range", cr.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn parses_total_from_content_range_206() {
+        let h = make_headers(Some("bytes 0-262143/1048576"));
+        assert_eq!(parse_content_range_total(&h), Some(1_048_576));
+    }
+
+    #[test]
+    fn returns_none_when_header_missing() {
+        let h = make_headers(None);
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_header_malformed_no_slash() {
+        let h = make_headers(Some("bytes 0-262143"));
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_total_is_star() {
+        let h = make_headers(Some("bytes 0-262143/*"));
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_total_unparseable() {
+        let h = make_headers(Some("bytes 0-262143/notanumber"));
+        assert_eq!(parse_content_range_total(&h), None);
     }
 }
