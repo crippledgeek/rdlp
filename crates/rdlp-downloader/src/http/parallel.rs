@@ -31,9 +31,17 @@ const MAX_CHUNK_RETRIES: u32 = 3;
 /// (1s, 2s, 3s). Partial files are cleaned up between attempts. Only
 /// retryable errors (5xx, 429, network, I/O) trigger retries.
 ///
+/// `cancel` — when `Some`, cancellation is checked at the top of every loop
+/// iteration and forwarded into `download_range_with_progress`. The backoff
+/// sleep is also raced against the token so cancellation fires immediately.
+///
 /// This is a different retry domain from the inner `with_retry` on
 /// `send()` — this handles failures that occur *during* body transfer,
 /// not connection-level failures.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Each argument carries a distinct semantic role (downloader, url, byte range, sink path, progress counter, chunk identifier, cancel token); extracting a params struct would obscure the call sites inside the AIMD unfold closure without removing complexity."
+)]
 pub async fn download_chunk_with_retry(
     downloader: &HttpDownloader,
     url: &str,
@@ -42,15 +50,28 @@ pub async fn download_chunk_with_retry(
     chunk_path: &Path,
     progress: Option<Arc<AtomicU64>>,
     chunk_id: u64,
+    cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
     let mut retries = 0u32;
 
     loop {
+        // Pre-iteration cancel guard.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            let _ = tokio::fs::remove_file(chunk_path).await;
+            return Err(RdlpError::Cancelled);
+        }
+
         match downloader
-            .download_range_with_progress(url, start, end, chunk_path, progress.clone())
+            .download_range_with_progress(url, start, end, chunk_path, progress.clone(), cancel)
             .await
         {
             Ok(bytes) => return Ok(bytes),
+            Err(RdlpError::Cancelled) => {
+                let _ = tokio::fs::remove_file(chunk_path).await;
+                return Err(RdlpError::Cancelled);
+            }
             Err(e) => {
                 if retries < MAX_CHUNK_RETRIES && is_retryable_error(&e) {
                     retries += 1;
@@ -61,7 +82,18 @@ pub async fn download_chunk_with_retry(
                     );
                     // Clean up partial file before retry
                     let _ = tokio::fs::remove_file(chunk_path).await;
-                    tokio::time::sleep(Duration::from_secs(u64::from(retries))).await;
+                    // Race the backoff sleep against cancel so we don't block.
+                    if let Some(token) = cancel {
+                        tokio::select! {
+                            biased;
+                            () = token.cancelled() => {
+                                return Err(RdlpError::Cancelled);
+                            }
+                            () = tokio::time::sleep(Duration::from_secs(u64::from(retries))) => {}
+                        }
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(u64::from(retries))).await;
+                    }
                 } else {
                     return Err(e);
                 }
@@ -414,6 +446,7 @@ impl HttpDownloader {
                             &chunk_path,
                             Some(progress),
                             chunk_id,
+                            cancel_for_chunk.as_ref(),
                         )
                         .await;
 
@@ -504,6 +537,7 @@ impl HttpDownloader {
                         &chunk_path,
                         progress,
                         chunk_id as u64,
+                        None,
                     )
                     .await;
                     if let Err(ref e) = result {

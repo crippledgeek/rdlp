@@ -14,7 +14,6 @@ mod tests;
 pub(crate) use parallel::download_chunk_with_retry;
 
 use backon::Retryable;
-use futures::StreamExt;
 use log::warn;
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
@@ -308,7 +307,12 @@ impl HttpDownloader {
         }
     }
 
-    /// Download a specific byte range with shared progress tracking
+    /// Download a specific byte range with shared progress tracking.
+    ///
+    /// `cancel` — when `Some`, each chunk poll races the token via
+    /// `next_with_cancel_and_timeout`. On cancellation the `BufWriter` is
+    /// flushed before returning `RdlpError::Cancelled` so partial bytes already
+    /// buffered reach disk.
     pub(crate) async fn download_range_with_progress(
         &self,
         url: &str,
@@ -316,7 +320,15 @@ impl HttpDownloader {
         end: u64,
         chunk_path: &Path,
         progress_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<u64> {
+        // Pre-cancel guard: bail before any network I/O if already cancelled.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            return Err(RdlpError::Cancelled);
+        }
+
         let client = self.client.clone();
         let url = url.to_string();
         let hdrs = self.headers();
@@ -354,39 +366,45 @@ impl HttpDownloader {
         })?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
-        let mut stream = response.bytes_stream();
+        let stream = response.bytes_stream();
+        tokio::pin!(stream);
         let mut downloaded = 0u64;
         let read_timeout = self.config.read_timeout;
 
-        while let Some(chunk_result) = tokio::time::timeout(read_timeout, stream.next())
-            .await
-            .map_err(|_| RdlpError::Network {
-                message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-                url: Some(url.clone()),
-            })?
-        {
-            let chunk = chunk_result.map_err(|e| RdlpError::Network {
-                message: format!("Failed to read chunk body from {url}: {e}"),
-                url: Some(url.clone()),
-            })?;
+        loop {
+            match next_with_cancel_and_timeout(stream.as_mut(), cancel, read_timeout, &url).await {
+                Ok(Some(Ok(chunk))) => {
+                    writer.write_all(&chunk).await.map_err(|e| {
+                        RdlpError::Io(std::io::Error::new(
+                            e.kind(),
+                            format!(
+                                "failed to write to chunk file '{}': {e}",
+                                chunk_path.display()
+                            ),
+                        ))
+                    })?;
+                    downloaded += chunk.len() as u64;
 
-            writer.write_all(&chunk).await.map_err(|e| {
-                RdlpError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!(
-                        "failed to write to chunk file '{}': {e}",
-                        chunk_path.display()
-                    ),
-                ))
-            })?;
-            downloaded += chunk.len() as u64;
+                    if let Some(ref counter) = progress_counter {
+                        counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
 
-            if let Some(ref counter) = progress_counter {
-                counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            }
-
-            if let Some(ref limiter) = self.rate_limiter {
-                limiter.acquire(chunk.len()).await;
+                    if let Some(ref limiter) = self.rate_limiter {
+                        limiter.acquire(chunk.len()).await;
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    return Err(RdlpError::Network {
+                        message: format!("Failed to read chunk body from {url}: {e}"),
+                        url: Some(url.clone()),
+                    });
+                }
+                Ok(None) => break,
+                Err(RdlpError::Cancelled) => {
+                    let _ = writer.flush().await;
+                    return Err(RdlpError::Cancelled);
+                }
+                Err(e) => return Err(e),
             }
         }
 
