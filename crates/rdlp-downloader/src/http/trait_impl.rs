@@ -314,6 +314,14 @@ impl HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
         cancel: Option<&CancellationToken>,
     ) -> Result<DownloadStats> {
+        // F6: pre-cancel guard. Mirrors download_sequential — avoids issuing
+        // a network round-trip when the caller has already cancelled.
+        if let Some(token) = cancel
+            && token.is_cancelled()
+        {
+            return Err(RdlpError::Cancelled);
+        }
+
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
