@@ -18,13 +18,13 @@ import "cypress-axe";
 type InvokeHandler = (args: Record<string, unknown>) => unknown;
 
 const defaultHandlers: Record<string, InvokeHandler> = {
-    get_search_providers: () => [
+    search_providers: () => [
         { name: "redtube", display_name: "RedTube" },
         { name: "xhamster", display_name: "xHamster" },
         { name: "tnaflix", display_name: "TNAFlix" },
     ],
 
-    get_search_filters: (_args) => [
+    search_filters: (_args) => [
         {
             key: "ordering",
             display_name: "Sort",
@@ -91,7 +91,7 @@ const defaultHandlers: Record<string, InvokeHandler> = {
         };
     },
 
-    get_settings: () => ({
+    settings: () => ({
         output_dir: "/home/user/Downloads",
         default_remux: null,
         default_extract_audio: null,
@@ -107,7 +107,7 @@ const defaultHandlers: Record<string, InvokeHandler> = {
 
     pick_directory: () => "/home/user/Videos",
 
-    get_formats: () => ({
+    formats: () => ({
         title: "Test Video",
         formats: [
             {
@@ -136,7 +136,7 @@ const defaultHandlers: Record<string, InvokeHandler> = {
 
     start_download: () => "job-test-123",
 
-    get_queue: () => [],
+    queue: () => [],
 
     get_history: () => [],
 };
