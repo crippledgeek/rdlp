@@ -210,32 +210,6 @@ impl Downloader for HttpDownloader {
         url.starts_with("http://") || url.starts_with("https://")
     }
 
-    async fn get_size(&self, url: &str) -> Result<Option<u64>> {
-        let client = self.client.clone();
-        let url = url.to_string();
-        let hdrs = self.headers();
-
-        let response = with_retry(&self.config.retry_config, "HTTP HEAD", || {
-            let client = client.clone();
-            let url = url.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                client
-                    .head(&url)
-                    .headers(hdrs)
-                    .send()
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("HEAD request failed: {e}"),
-                        url: Some(url.clone()),
-                    })
-            }
-        })
-        .await?;
-
-        Ok(response.content_length())
-    }
-
     async fn download_with_resume(
         &self,
         url: &str,

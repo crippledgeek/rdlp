@@ -109,23 +109,14 @@ async fn test_parallel_download_error_propagation() {
     let total_size = 20 * 1024 * 1024; // 20 MB total
     let test_content = vec![0u8; chunk_size];
 
-    // Mock HEAD request for size detection (allow multiple calls)
-    let mock_head = server
-        .mock("HEAD", "/test-video.mp4")
-        .with_status(200)
-        .with_header("Accept-Ranges", "bytes")
-        .with_header("Content-Length", &total_size.to_string())
-        .expect_at_least(1)
-        .create_async()
-        .await;
-
-    // Mock Range request for size fallback detection
-    let _mock_size_check = server
+    // Mock F3 probe: Range: bytes=0-262143 returns 206 with total size in Content-Range
+    let _probe = server
         .mock("GET", "/test-video.mp4")
-        .match_header("range", "bytes=0-0")
+        .match_header("range", "bytes=0-262143")
         .with_status(206)
-        .with_header("Content-Range", &format!("bytes 0-0/{total_size}"))
-        .expect_at_most(1)
+        .with_header("content-range", &format!("bytes 0-262143/{total_size}"))
+        .with_body(vec![0u8; 262144])
+        .expect(1)
         .create_async()
         .await;
 
@@ -199,9 +190,6 @@ async fn test_parallel_download_error_propagation() {
         matches!(err, RdlpError::Http { .. } | RdlpError::Network { .. }),
         "Should be an HTTP or network error, got: {err:?}"
     );
-
-    // Verify mocks were called appropriately
-    mock_head.assert_async().await;
 
     // Chunks 0 and 1 should have been called (they succeed)
     // Note: The exact order depends on async scheduling, but try_join_all
@@ -703,18 +691,19 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     let mut server = Server::new_async().await;
     let body = vec![0u8; 5 * 1024 * 1024]; // 5 MiB
 
-    // HEAD returns content-length 5 MiB, supports ranges.
-    let _head = server
-        .mock("HEAD", "/file.bin")
-        .with_status(200)
-        .with_header("content-length", &body.len().to_string())
-        .with_header("accept-ranges", "bytes")
-        .expect_at_least(1)
+    // F3 probe: Range: bytes=0-262143 returns total size via content-range.
+    let _probe = server
+        .mock("GET", "/file.bin")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-262143/{}", body.len()))
+        .with_body(vec![0u8; 262144])
+        .expect(1)
         .create_async()
         .await;
 
-    // GET with Range header returns partial content. Multiple range requests
-    // means we took the parallel path; the mock asserts ≥2 invocations.
+    // Parallel chunk requests: multiple range requests verify we took the parallel
+    // path. The mock asserts ≥2 invocations; any download outcome is acceptable.
     let _get_range = server
         .mock("GET", "/file.bin")
         .match_header(

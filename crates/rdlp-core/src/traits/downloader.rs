@@ -73,7 +73,9 @@ pub trait Downloader: Send + Sync {
     ///
     /// # Returns
     /// Size in bytes, or `None` if size cannot be determined
-    async fn get_size(&self, url: &str) -> Result<Option<u64>>;
+    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
+        Ok(None)
+    }
 
     /// Download a [`rdlp_types::Format`] to a single output file.
     ///
@@ -543,9 +545,6 @@ mod tests {
             }
             fn supports(&self, _url: &str) -> bool {
                 false
-            }
-            async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
-                Ok(None)
             }
         }
 

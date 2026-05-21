@@ -266,7 +266,7 @@ impl HttpDownloader {
         let hdrs = self.headers();
         let range = format!("bytes=0-{}", PROBE_WINDOW_BYTES - 1);
 
-        let resp = match with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
+        let Ok(resp) = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
             let client = client.clone();
             let url = url_string.clone();
             let hdrs = hdrs.clone();
@@ -285,9 +285,8 @@ impl HttpDownloader {
             }
         })
         .await
-        {
-            Ok(r) => r,
-            Err(_) => return Ok(ProbeResult { size: None, supports_ranges: false }),
+        else {
+            return Ok(ProbeResult { size: None, supports_ranges: false });
         };
 
         match resp.status().as_u16() {
@@ -301,37 +300,6 @@ impl HttpDownloader {
             }),
             _ => Ok(ProbeResult { size: None, supports_ranges: false }),
         }
-    }
-
-    /// Check if server supports range requests
-    async fn supports_ranges(&self, url: &str) -> Result<bool> {
-        let client = self.client.clone();
-        let url = url.to_string();
-        let hdrs = self.headers();
-
-        let response = with_retry(&self.config.retry_config, "HTTP HEAD (range check)", || {
-            let client = client.clone();
-            let url = url.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                client
-                    .head(&url)
-                    .headers(hdrs)
-                    .send()
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("HEAD request failed: {e}"),
-                        url: Some(url.clone()),
-                    })
-            }
-        })
-        .await?;
-
-        Ok(response
-            .headers()
-            .get("accept-ranges")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v != "none"))
     }
 
     /// Download a specific byte range with shared progress tracking
@@ -552,7 +520,7 @@ mod content_range_tests {
     #[test]
     fn parses_total_from_content_range_206() {
         let h = make_headers(Some("bytes 0-262143/1048576"));
-        assert_eq!(parse_content_range_total(&h), Some(1048576));
+        assert_eq!(parse_content_range_total(&h), Some(1_048_576));
     }
 
     #[test]

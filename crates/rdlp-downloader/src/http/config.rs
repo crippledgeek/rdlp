@@ -28,7 +28,7 @@ pub(super) const DEFAULT_PARALLEL_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
 ///   chunk to bot-detecting origins.
 /// - Fits TCP slow-start delivery within ~3-4 RTTs from cwnd=10 (RFC 6928).
 /// - 4× the H2 default connection window (RFC 7540 §6.9, 64 KiB) — requires a few
-///   WINDOW_UPDATE frames but does not catastrophically starve concurrent streams.
+///   `WINDOW_UPDATE` frames but does not catastrophically starve concurrent streams.
 ///   1 MiB (16× the window) would actively block parallel chunks.
 pub(crate) const PROBE_WINDOW_BYTES: u64 = 256 * 1024;
 
@@ -118,6 +118,6 @@ mod tests {
     fn probe_window_under_one_mib() {
         // 1 MiB would be 16x the RFC 7540 default H2 connection window (64 KiB)
         // and would starve parallel streams.
-        assert!(PROBE_WINDOW_BYTES < 1024 * 1024);
+        const { assert!(PROBE_WINDOW_BYTES < 1024 * 1024) };
     }
 }
