@@ -593,11 +593,7 @@ async fn probe_206_returns_size_from_content_range() {
         .create_async()
         .await;
 
-    let head_guard = server
-        .mock("HEAD", "/file")
-        .expect(0)
-        .create_async()
-        .await;
+    let head_guard = server.mock("HEAD", "/file").expect(0).create_async().await;
 
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
@@ -758,21 +754,14 @@ async fn download_to_file_no_head_under_normal_flow() {
         .await;
 
     // HEAD must NEVER be issued.
-    let head_guard = server
-        .mock("HEAD", "/file")
-        .expect(0)
-        .create_async()
-        .await;
+    let head_guard = server.mock("HEAD", "/file").expect(0).create_async().await;
 
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out.bin");
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
 
-    let stats = downloader
-        .download_to_file(&url, &out, None)
-        .await
-        .unwrap();
+    let stats = downloader.download_to_file(&url, &out, None).await.unwrap();
 
     assert_eq!(stats.bytes_downloaded, 524288);
     head_guard.assert_async().await;

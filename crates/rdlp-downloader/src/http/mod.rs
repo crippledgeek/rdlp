@@ -286,7 +286,10 @@ impl HttpDownloader {
         })
         .await
         else {
-            return Ok(ProbeResult { size: None, supports_ranges: false });
+            return Ok(ProbeResult {
+                size: None,
+                supports_ranges: false,
+            });
         };
 
         match resp.status().as_u16() {
@@ -298,7 +301,10 @@ impl HttpDownloader {
                 size: resp.content_length(),
                 supports_ranges: false,
             }),
-            _ => Ok(ProbeResult { size: None, supports_ranges: false }),
+            _ => Ok(ProbeResult {
+                size: None,
+                supports_ranges: false,
+            }),
         }
     }
 
