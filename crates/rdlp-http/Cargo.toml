@@ -12,6 +12,7 @@ wreq = { workspace = true }
 wreq-util = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 
 # `prefix-symbols` is documented Linux/Android-only by wreq upstream; on
 # macOS it emits a broken `build_script_main_*` mangling that breaks the
@@ -34,6 +35,7 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+mockito = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

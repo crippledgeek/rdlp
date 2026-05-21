@@ -11,6 +11,7 @@ rdlp-types = { path = "../rdlp-types" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-crypto = { path = "../rdlp-crypto" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
+rdlp-http = { path = "../rdlp-http" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 dash-mpd = { workspace = true, default-features = false }
@@ -34,7 +35,6 @@ urlencoding = "2"
 hex = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 mockito = { workspace = true }
-rdlp-http = { path = "../rdlp-http" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 
 # Documentation-completeness rationale only — do NOT lift extractor-

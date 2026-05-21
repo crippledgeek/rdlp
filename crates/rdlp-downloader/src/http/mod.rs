@@ -68,7 +68,17 @@ where
         .await
 }
 
+/// Re-export of the shared `ProbeResult` from `rdlp-http`. Single source of
+/// truth for probe-result shape, used by both `HttpDownloader::probe` and
+/// `BaseExtractor::detect_file_size`. Closes #306.
+pub(crate) use rdlp_http::ProbeResult;
+
 /// Parse the `Content-Range` header's total-bytes field.
+///
+/// Used by `trait_impl::download_with_resume_with_cancel` to discover the
+/// total resource size from a resume Range response. The probe path uses
+/// `rdlp_http::probe_size` (which has its own parser); this helper is kept
+/// for the resume path's standalone header inspection.
 ///
 /// Accepts `bytes 0-N/TOTAL` (returns `Some(TOTAL)`) and returns `None` for
 /// `bytes 0-N/*` (server signalled unknown total per RFC 7233 §4.2), any
@@ -79,18 +89,6 @@ pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Op
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split('/').nth(1))
         .and_then(|s| s.parse::<u64>().ok())
-}
-
-/// Result of the F3 single-GET probe in `HttpDownloader::probe`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ProbeResult {
-    /// Total file size if the server reported it via Content-Range (206) or
-    /// Content-Length (200). `None` when neither header is parseable.
-    pub size: Option<u64>,
-    /// `true` if the server returned `206 Partial Content`, indicating it
-    /// honoured the Range request. RFC 7233 §4.1: 206 itself implies range
-    /// support; `Accept-Ranges` is not required.
-    pub supports_ranges: bool,
 }
 
 /// HTTP/HTTPS downloader
@@ -260,22 +258,24 @@ impl HttpDownloader {
     pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
         use config::PROBE_WINDOW_BYTES;
 
+        // F3 probe delegates to the shared `rdlp_http::probe_size` helper
+        // (closes #306). Retry semantics preserved via the with_retry
+        // wrapper; the shared helper itself is leaf-level (no retry).
+        // Non-2xx and network errors after retry both produce the
+        // `ProbeResult { size: None, supports_ranges: false }` form so the
+        // caller falls back to sequential download.
         let client = self.client.clone();
         let url_string = url.to_string();
         let hdrs = self.headers();
-        let range = format!("bytes=0-{}", PROBE_WINDOW_BYTES - 1);
+        let window = PROBE_WINDOW_BYTES;
+        let timeout = self.config.read_timeout;
 
-        let Ok(resp) = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
+        let probed = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
             let client = client.clone();
             let url = url_string.clone();
             let hdrs = hdrs.clone();
-            let range = range.clone();
             async move {
-                client
-                    .get(&url)
-                    .headers(hdrs)
-                    .header("Range", range)
-                    .send()
+                rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
                     .await
                     .map_err(|e| RdlpError::Network {
                         message: format!("probe failed: {e}"),
@@ -283,28 +283,12 @@ impl HttpDownloader {
                     })
             }
         })
-        .await
-        else {
-            return Ok(ProbeResult {
-                size: None,
-                supports_ranges: false,
-            });
-        };
+        .await;
 
-        match resp.status().as_u16() {
-            206 => Ok(ProbeResult {
-                size: parse_content_range_total(resp.headers()),
-                supports_ranges: true,
-            }),
-            200 => Ok(ProbeResult {
-                size: resp.content_length(),
-                supports_ranges: false,
-            }),
-            _ => Ok(ProbeResult {
-                size: None,
-                supports_ranges: false,
-            }),
-        }
+        Ok(probed.unwrap_or(ProbeResult {
+            size: None,
+            supports_ranges: false,
+        }))
     }
 
     /// Download a specific byte range with shared progress tracking.
@@ -602,6 +586,10 @@ where
 
 #[cfg(test)]
 mod content_range_tests {
+    //! Tests for the local `parse_content_range_total` helper. The probe
+    //! path uses `rdlp_http::probe_size`'s internal parser; this helper
+    //! is the standalone version used by the resume path in
+    //! `trait_impl::download_with_resume_with_cancel`.
     use super::*;
     use wreq::header::HeaderMap;
 

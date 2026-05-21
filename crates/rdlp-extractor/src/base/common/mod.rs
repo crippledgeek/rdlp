@@ -383,46 +383,23 @@ impl BaseExtractor {
         log_prefix: Option<&str>,
         timeout: std::time::Duration,
     ) -> Option<u64> {
-        // Strategy 1: HEAD request
-        if let Ok(response) = http_client.head(url).timeout(timeout).send().await
-            && let Some(size) = response.content_length().filter(|&s| s > 0)
-        {
-            if let Some(prefix) = log_prefix {
-                debug!(size, method = "HEAD"; "[{prefix}] Detected Content-Length");
-            }
-            return Some(size);
-        }
-
-        // Strategy 2: Range request fallback
-        if let Ok(response) = http_client
-            .get(url)
-            .header("Range", "bytes=0-0")
-            .timeout(timeout)
-            .send()
+        // Delegate to the shared `rdlp_http::probe_size` helper (closes #306).
+        // Single Range GET — saves one RTT vs the previous HEAD-then-Range
+        // fallback. window_bytes=1 keeps bandwidth at "header-only" cost since
+        // the extractor only needs the size header, not body bytes.
+        let res = rdlp_http::probe_size(http_client, url, None, 1, timeout)
             .await
-            && let Some(size) = Self::parse_content_range_total(response.headers())
-        {
-            if let Some(prefix) = log_prefix {
-                debug!(size, method = "Range"; "[{prefix}] Detected Content-Range");
-            }
-            return Some(size);
+            .ok()?;
+        let size = res.size?;
+        if let Some(prefix) = log_prefix {
+            let method = if res.supports_ranges {
+                "Range"
+            } else {
+                "Content-Length"
+            };
+            debug!(size, method; "[{prefix}] Detected size via probe_size");
         }
-
-        None
-    }
-
-    /// Parse total file size from a Content-Range header.
-    ///
-    /// Parses the format `bytes 0-0/123456` and returns the total size.
-    fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
-        headers
-            .get("content-range")?
-            .to_str()
-            .ok()?
-            .split('/')
-            .nth(1)?
-            .parse()
-            .ok()
+        Some(size)
     }
 
     // ========================================================================
