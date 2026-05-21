@@ -187,6 +187,7 @@ impl Downloader for HlsDownloader {
             format.filesize,
             progress.as_deref(),
             output,
+            Some(&format.url),
             cancel,
         )
         .await

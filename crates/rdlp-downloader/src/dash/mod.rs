@@ -134,6 +134,7 @@ impl Downloader for DashDownloader {
                 format.filesize,
                 progress.as_deref(),
                 output,
+                Some(&format.url),
                 cancel,
             )
             .await
