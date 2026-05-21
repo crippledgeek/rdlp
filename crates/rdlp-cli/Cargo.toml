@@ -52,5 +52,8 @@ async-trait = { workspace = true }
 regex = { workspace = true }
 rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
 
+# `indexing_slicing`, `pedantic`, and `nursery` are applied binary-only
+# via `#![warn(...)]` in `src/main.rs` and `src/lib.rs` — do NOT lift
+# them to the workspace table.
 [lints]
 workspace = true

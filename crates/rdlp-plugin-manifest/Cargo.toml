@@ -6,14 +6,6 @@ authors.workspace = true
 license.workspace = true
 description = "Plugin manifest schema, parser, and canonical-bytes encoder for rdlp. Pure data; no wasmtime / sigstore / sled dependencies."
 
-# Per-crate lint config — extends workspace lints (which cannot be composed
-# with workspace = true once per-crate tables are added).
-# Workspace lint baselines replicated here:
-#   clippy::must_use_candidate = warn
-#   clippy::await_holding_lock = deny
-#   clippy::await_holding_refcell_ref = deny
-#   clippy::disallowed_methods = deny
-
 [lints]
 workspace = true
 # `indexing_slicing`, `pedantic`, and `nursery` are lib-only via

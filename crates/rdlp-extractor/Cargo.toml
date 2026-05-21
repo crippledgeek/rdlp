@@ -37,5 +37,7 @@ mockito = { workspace = true }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 
+# Documentation-completeness rationale only — do NOT lift extractor-
+# specific `#![warn(...)]` lints (declared in `src/lib.rs`) to workspace.
 [lints]
 workspace = true
