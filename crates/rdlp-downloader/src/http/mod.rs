@@ -69,6 +69,19 @@ where
         .await
 }
 
+/// Parse the `Content-Range` header's total-bytes field.
+///
+/// Accepts `bytes 0-N/TOTAL` (returns `Some(TOTAL)`) and returns `None` for
+/// `bytes 0-N/*` (server signalled unknown total per RFC 7233 §4.2), any
+/// missing header, or any unparseable total.
+pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split('/').nth(1))
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
 /// HTTP/HTTPS downloader
 ///
 /// **Clone performance:** O(1) - both client and config use Arc internally
@@ -450,5 +463,49 @@ impl HttpDownloader {
 impl Default for HttpDownloader {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod content_range_tests {
+    use super::*;
+    use wreq::header::HeaderMap;
+
+    fn make_headers(content_range: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Some(cr) = content_range {
+            h.insert("content-range", cr.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn parses_total_from_content_range_206() {
+        let h = make_headers(Some("bytes 0-262143/1048576"));
+        assert_eq!(parse_content_range_total(&h), Some(1048576));
+    }
+
+    #[test]
+    fn returns_none_when_header_missing() {
+        let h = make_headers(None);
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_header_malformed_no_slash() {
+        let h = make_headers(Some("bytes 0-262143"));
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_total_is_star() {
+        let h = make_headers(Some("bytes 0-262143/*"));
+        assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    #[test]
+    fn returns_none_when_total_unparseable() {
+        let h = make_headers(Some("bytes 0-262143/notanumber"));
+        assert_eq!(parse_content_range_total(&h), None);
     }
 }

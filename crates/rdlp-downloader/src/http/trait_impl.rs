@@ -66,12 +66,7 @@ impl Downloader for HttpDownloader {
                 })
                 .await
                 {
-                    Ok(response) => response
-                        .headers()
-                        .get("content-range")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.split('/').nth(1))
-                        .and_then(|s| s.parse::<u64>().ok())
+                    Ok(response) => crate::http::parse_content_range_total(response.headers())
                         .inspect(|size| {
                             debug!(
                                 "Detected size from Range: {} MB",
@@ -318,12 +313,7 @@ impl Downloader for HttpDownloader {
             })
             .await?;
 
-            let total_size = response
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.split('/').nth(1))
-                .and_then(|s| s.parse::<u64>().ok())
+            let total_size = crate::http::parse_content_range_total(response.headers())
                 .or_else(|| response.content_length().map(|size| size + resume_from));
 
             // Check for parallel resume
