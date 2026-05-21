@@ -22,6 +22,7 @@
     clippy::match_same_arms,  // future per-arm tuning
 )]
 
+mod av_packet_owned;
 mod mkv_raw_ffi;
 mod raw_ffi_helpers;
 

@@ -36,43 +36,8 @@ use log::{debug, info};
 use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
+use super::av_packet_owned::AvPacketOwned;
 use super::raw_ffi_helpers::{dts_in_us, read_next_raw, rescale_and_write_raw};
-
-/// RAII owner for a heap-allocated `AVPacket`.
-///
-/// Dropping frees the packet via `av_packet_free`, so any `?` early-return
-/// from the merge loop releases the allocation deterministically. This is
-/// the structural guarantee against the leak that existed when packets were
-/// freed only on the success path.
-struct AvPacketOwned(*mut ffi::AVPacket);
-
-impl AvPacketOwned {
-    fn alloc() -> Result<Self> {
-        // SAFETY: av_packet_alloc returns either a valid heap AVPacket or null.
-        // The null check below guarantees Drop always sees a valid pointer.
-        let p = unsafe { ffi::av_packet_alloc() };
-        if p.is_null() {
-            return Err(PostProcessError::FFmpegLibraryError {
-                message: "av_packet_alloc failed".into(),
-            });
-        }
-        Ok(Self(p))
-    }
-
-    const fn as_ptr(&self) -> *mut ffi::AVPacket {
-        self.0
-    }
-}
-
-impl Drop for AvPacketOwned {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: self.0 is a valid pointer from av_packet_alloc; av_packet_free
-            // both unrefs and frees it, then nulls our local copy via the &mut.
-            unsafe { ffi::av_packet_free(&mut self.0) };
-        }
-    }
-}
 
 impl FFmpegRunner {
     /// Merge video + audio into MKV using raw FFI with full stream property copying.
@@ -547,26 +512,6 @@ impl FFmpegRunner {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Allocating a packet succeeds and `as_ptr` returns a non-null handle.
-    /// Drop runs at end of scope; this test relies on miri / leak sanitizers
-    /// to catch missed frees, but at minimum exercises the alloc path.
-    #[test]
-    fn av_packet_owned_alloc_returns_non_null() {
-        let p = AvPacketOwned::alloc().expect("alloc must succeed");
-        assert!(!p.as_ptr().is_null());
-        // Drop here frees the packet via av_packet_free.
-    }
-
-    /// Two independent allocations are independent — dropping one must not
-    /// affect the other (regression guard against accidental aliasing).
-    #[test]
-    fn av_packet_owned_two_allocations_are_independent() {
-        let a = AvPacketOwned::alloc().expect("a");
-        let b = AvPacketOwned::alloc().expect("b");
-        assert_ne!(a.as_ptr(), b.as_ptr());
-    }
-}
+// `AvPacketOwned` lives in its own submodule (`av_packet_owned.rs`)
+// alongside its 2 unit tests; both this file and a future cross-cutting
+// merge path can share the RAII wrapper without either owning it.
