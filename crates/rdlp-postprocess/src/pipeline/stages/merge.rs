@@ -117,11 +117,9 @@ impl MergeStage {
     /// Sanitize a codec string per yt-dlp's normalisation.
     ///
     /// `avc1.640028` → `avc1`; `vp09.00.30.08` → `vp9`; `mp4a.40.2` → `mp4a`;
-    /// `vorbis` → `vrbis` (yt-dlp's `replace('0','')` happens to strip the
-    /// `o` in `vorbis` — but wait, no: `replace('0', '')` strips digit zeros,
-    /// not letters; `vorbis` stays `vorbis`. yt-dlp's `COMPATIBLE_CODECS`
-    /// uses `vrbs` which appears to be a typo'd alias for `vorbis`; we
-    /// match either form.)
+    /// `av01.0.04M.08` → `av1`. `vorbis` stays `vorbis` (`replace('0','')`
+    /// strips digit zeros only); yt-dlp's `COMPATIBLE_CODECS` uses `vrbs`
+    /// as an alias — we accept either form.
     fn sanitize_codec(codec: &str) -> String {
         let head = codec.split('.').next().unwrap_or(codec);
         let stripped: String = head.chars().filter(|c| *c != '0').collect();
@@ -431,6 +429,20 @@ mod tests {
         assert_eq!(MergeStage::sanitize_codec("mp4a.40.2"), "mp4a");
         assert_eq!(MergeStage::sanitize_codec("av01.0.04M.08"), "av1");
         assert_eq!(MergeStage::sanitize_codec("OPUS"), "opus");
+    }
+
+    #[test]
+    fn sanitize_codec_handles_empty_and_unknown() {
+        // Defensive: empty string and unrecognised codec strings must not
+        // panic; they fall through to the `None` branch in
+        // `compatible_ext_from_codecs` and the caller routes to mkv.
+        assert_eq!(MergeStage::sanitize_codec(""), "");
+        assert_eq!(MergeStage::sanitize_codec("xyzzy"), "xyzzy");
+        assert_eq!(
+            MergeStage::compatible_ext_from_codecs("", ""),
+            None,
+            "empty codec strings must not match any container"
+        );
     }
 
     #[test]
