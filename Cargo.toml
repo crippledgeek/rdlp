@@ -164,6 +164,8 @@ unwrap_used = "warn"
 expect_used = "warn"
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
+wrong_self_convention = "warn"
+should_implement_trait = "warn"
 
 # ── Dev profile: prioritize compile speed ──────────────────────────────
 [profile.dev]
