@@ -107,12 +107,19 @@ impl Orchestrator {
         };
 
         // Race between download and cancellation token. Belt-and-braces:
-        // the fragment-based downloaders (HLS, DASH per-Repr) check the
-        // token cooperatively between fragments and return
-        // RdlpError::Cancelled — that lands on the `result` arm. The
-        // streaming-HTTP path (download_to_file) has no in-loop cancel
-        // check yet, so the `cancelled()` arm covers it via future-drop.
-        // Both arms produce Ok(None); whichever fires is acceptable.
+        // - Fragment downloaders (HLS, DASH per-Repr) check the token
+        //   cooperatively between fragments and return RdlpError::Cancelled.
+        // - Streaming-HTTP (HttpDownloader::download_format → download_sequential)
+        //   honours the token per `bytes_stream().next()` via
+        //   next_with_cancel_and_timeout, flushing BufWriter before returning
+        //   RdlpError::Cancelled. (F6, PR #287 follow-up.)
+        // - DashDownloader::download_format non-fragment branch delegates to
+        //   HttpDownloader::download_format and inherits the same.
+        // The outer `cancelled()` arm remains as a fallback for pre-start
+        // cancellation, the cancel-less trait methods (download_to_writer,
+        // download_with_resume), and third-party Downloader impls that
+        // ignore the cancel parameter. Both arms produce Ok(None);
+        // whichever fires is acceptable.
         let stats = tokio::select! {
             result = download_future => {
                 result.map_err(OrchestratorError::DownloadFailed)?
