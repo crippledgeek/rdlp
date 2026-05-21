@@ -8,7 +8,7 @@ use super::{
     errors::{OrchestratorError, Result},
 };
 use log::{debug, info, warn};
-use rdlp_types::{Format, FormatSelector, InfoDict};
+use rdlp_types::{Format, FormatSelector, InfoDict, format::selector::sort::FormatSorter};
 
 #[cfg(test)]
 mod tests;
@@ -107,7 +107,14 @@ impl Orchestrator {
             let format_selector = FormatSelector::parse(&selector_str)
                 .map_err(|e| OrchestratorError::InvalidFormatSelector(e.to_string()))?;
 
-            let selected_formats = format_selector.select(formats);
+            // Route through the full yt-dlp default sort order (18-key tiebreaker
+            // chain in `FormatSorter::default_order`). The compact `rank_formats`
+            // heuristic in bare `select()` only orders by height/vbr/fps for
+            // video and abr/asr for audio — missing the codec / hdr / proto /
+            // ext tiebreakers users rely on for yt-dlp parity on sites with
+            // same-resolution variants in different codecs.
+            let sorter = FormatSorter::default_order();
+            let selected_formats = format_selector.select_with_sorter(formats, &sorter);
             if selected_formats.is_empty() {
                 return Err(OrchestratorError::NoFormat);
             }

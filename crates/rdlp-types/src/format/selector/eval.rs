@@ -11,7 +11,19 @@ use crate::format::Format;
 use regex::Regex;
 
 /// Evaluate a `FormatSpec` against the format list.
-pub(super) fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&'a Format> {
+///
+/// `sorter`: when `Some`, the provided `FormatSorter` is used for `best` /
+/// `worst` / nth-position ranking instead of the compact `rank_formats`
+/// heuristic. This is how `FormatSelector::select_with_sorter` (and the
+/// orchestrator's default path) gets yt-dlp's full 18-key tiebreaker chain
+/// applied — without it, formats that tie on `rank_formats`'s narrow set
+/// of keys (height/vbr/fps) would be picked non-deterministically (via
+/// `max_by` returning the last equally-ranked element).
+pub(super) fn select_spec<'a>(
+    spec: &FormatSpec,
+    formats: &'a [Format],
+    sorter: Option<&FormatSorter>,
+) -> Vec<&'a Format> {
     match spec {
         FormatSpec::Single(sel) => {
             // `all` and `mergeall` produce multi-format results; handle before
@@ -20,11 +32,11 @@ pub(super) fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&
                 FormatToken::All => return select_all_formats(formats),
                 FormatToken::MergeAll => return select_mergeall_formats(formats),
                 FormatToken::Group(inner_nodes) => {
-                    return select_group(inner_nodes, &sel.filters, formats);
+                    return select_group(inner_nodes, &sel.filters, formats, sorter);
                 }
                 _ => {}
             }
-            select_one(sel, formats).into_iter().collect()
+            select_one(sel, formats, sorter).into_iter().collect()
         }
         FormatSpec::Merge { video, audio } => {
             // A merge requires BOTH sides. If either side selects nothing,
@@ -32,7 +44,10 @@ pub(super) fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&
             // chain (`.../best`) takes over. This mirrors yt-dlp's default
             // `bestvideo*+bestaudio/best` semantics: on muxed-only sites the
             // merge fails cleanly and the scalar `best` branch wins.
-            match (select_one(video, formats), select_one(audio, formats)) {
+            match (
+                select_one(video, formats, sorter),
+                select_one(audio, formats, sorter),
+            ) {
                 (Some(v), Some(a)) => vec![v, a],
                 _ => Vec::new(),
             }
@@ -40,7 +55,7 @@ pub(super) fn select_spec<'a>(spec: &FormatSpec, formats: &'a [Format]) -> Vec<&
         FormatSpec::Group { inner, filters } => {
             // This variant is currently unused by the parser (groups are represented
             // as FormatSpec::Single with FormatToken::Group), but kept for completeness.
-            select_group(inner, filters, formats)
+            select_group(inner, filters, formats, sorter)
         }
     }
 }
@@ -82,9 +97,10 @@ fn select_group<'a>(
     inner: &[SelectorNode],
     filters: &[Filter],
     formats: &'a [Format],
+    sorter: Option<&FormatSorter>,
 ) -> Vec<&'a Format> {
     for node in inner {
-        let result = eval_node(node, formats);
+        let result = eval_node(node, formats, sorter);
         if !result.is_empty() {
             // Apply outer filters (if any) to each format in the group result.
             if filters.is_empty() {
@@ -103,7 +119,18 @@ fn select_group<'a>(
 }
 
 /// Select a single format matching a `Selector`.
-fn select_one<'a>(sel: &Selector, formats: &'a [Format]) -> Option<&'a Format> {
+///
+/// When `sorter` is `Some`, `best` / `worst` / nth-position picks use
+/// `sorter.compare(a, b)` — the yt-dlp 18-key default order — instead of
+/// the local `rank_formats` heuristic. This is the actual mechanism that
+/// makes `select_with_sorter` yield the yt-dlp-canonical pick on tied
+/// candidates (same height + same vbr + same fps), not just shuffle the
+/// pool order.
+fn select_one<'a>(
+    sel: &Selector,
+    formats: &'a [Format],
+    sorter: Option<&FormatSorter>,
+) -> Option<&'a Format> {
     // `All`, `MergeAll`, and `Group` are not meaningful as "pick one" selectors;
     // these are handled upstream in `select_spec`.
     match &sel.base {
@@ -143,23 +170,31 @@ fn select_one<'a>(sel: &Selector, formats: &'a [Format]) -> Option<&'a Format> {
     // Apply `.N` nth-best selection if specified.
     let nth = nth_of_token(&sel.base);
 
+    // Ranking comparator: when an external FormatSorter is provided
+    // (via `select_with_sorter`), defer to its `compare` method — the
+    // canonical yt-dlp 18-key chain. Otherwise use the local
+    // `rank_formats` heuristic. The two converge on identical results
+    // for the obvious cases (height, vbr, fps); the sorter wins on
+    // tied candidates where the heuristic would otherwise hand the pick
+    // to `max_by`'s "last equal element" behaviour, producing
+    // non-deterministic selections that diverge from yt-dlp.
+    let cmp = |a: &&'a Format, b: &&'a Format| {
+        sorter.map_or_else(|| rank_formats(&sel.base, a, b), |s| s.compare(a, b))
+    };
+
     match (sort_direction(&sel.base), nth) {
-        (SortDirection::Best, None) => candidates
-            .into_iter()
-            .max_by(|a, b| rank_formats(&sel.base, a, b)),
-        (SortDirection::Worst, None) => candidates
-            .into_iter()
-            .min_by(|a, b| rank_formats(&sel.base, a, b)),
+        (SortDirection::Best, None) => candidates.into_iter().max_by(cmp),
+        (SortDirection::Worst, None) => candidates.into_iter().min_by(cmp),
         (SortDirection::Best, Some(n)) => {
             // Collect all matching candidates sorted best-first, then pick index n-1 (1-based).
             let mut all = candidates;
-            all.sort_by(|a, b| rank_formats(&sel.base, b, a)); // best first = reverse of rank
+            all.sort_by(|a, b| cmp(b, a)); // best first = reverse of cmp
             all.into_iter().nth((n as usize).saturating_sub(1))
         }
         (SortDirection::Worst, Some(n)) => {
             // Collect worst-first, pick index n-1.
             let mut all = candidates;
-            all.sort_by(|a, b| rank_formats(&sel.base, a, b)); // worst first
+            all.sort_by(|a, b| cmp(a, b)); // worst first
             all.into_iter().nth((n as usize).saturating_sub(1))
         }
     }
