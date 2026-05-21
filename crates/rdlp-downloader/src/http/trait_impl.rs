@@ -256,14 +256,27 @@ impl HttpDownloader {
             let read_timeout = self.config.read_timeout;
 
             loop {
-                match super::next_with_cancel_and_timeout(
+                let next = super::next_with_cancel_and_timeout(
                     stream.as_mut(),
                     cancel,
                     read_timeout,
                     &url_string,
                 )
-                .await?
-                {
+                .await;
+                // F6 / #307 follow-up: on cancel, flush whatever bytes are
+                // already in the BufWriter so any accumulator-mode caller
+                // gets all bytes that crossed the loop's write_all boundary
+                // before the cancel arm fired. Pattern matches
+                // download_with_resume_with_cancel below. Flush errors are
+                // swallowed in favour of surfacing the original Cancelled.
+                let next = match next {
+                    Err(RdlpError::Cancelled) => {
+                        let _ = buf_writer.flush().await;
+                        return Err(RdlpError::Cancelled);
+                    }
+                    other => other?,
+                };
+                match next {
                     None => break,
                     Some(Err(e)) => {
                         return Err(RdlpError::Network {
