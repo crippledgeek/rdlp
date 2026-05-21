@@ -32,9 +32,11 @@
 
 mod client;
 mod config;
+pub mod probe;
 
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
+pub use probe::{DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, probe_size};
 
 /// Re-export `wreq` for downstream crates so they can consume the HTTP
 /// client library via a single facade (`rdlp_http::wreq::Client`, etc).
