@@ -14,21 +14,8 @@ description = "Plugin manifest schema, parser, and canonical-bytes encoder for r
 #   clippy::await_holding_refcell_ref = deny
 #   clippy::disallowed_methods = deny
 
-[lints.rust]
-missing_docs = "warn"
-
-[lints.clippy]
-# Workspace baseline (replicated — cannot use workspace = true alongside
-# per-crate tables).
-must_use_candidate = "warn"
-disallowed_methods = "deny"
-await_holding_lock = "deny"
-await_holding_refcell_ref = "deny"
-# Security-relevant lints applied to ALL targets.
-unwrap_used = "warn"
-expect_used = "warn"
-missing_errors_doc = "warn"
-missing_panics_doc = "warn"
+[lints]
+workspace = true
 # `indexing_slicing`, `pedantic`, and `nursery` are lib-only via
 # `#![warn(...)]` in `src/lib.rs`. See plugin crate Cargo.toml for the
 # full rationale (test indexing is a guarded assertion pattern).

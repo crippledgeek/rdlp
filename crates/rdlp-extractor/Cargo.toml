@@ -37,18 +37,5 @@ mockito = { workspace = true }
 rdlp-http = { path = "../rdlp-http" }
 rdlp-cookies = { path = "../rdlp-cookies" }
 
-[lints.rust]
-missing_docs = "warn"
-
-[lints.clippy]
-# Workspace baseline (replicated — cannot use workspace = true alongside
-# per-crate tables).
-must_use_candidate = "warn"
-disallowed_methods = "deny"
-await_holding_lock = "deny"
-await_holding_refcell_ref = "deny"
-# Documentation completeness (applies to all targets).
-missing_errors_doc = "warn"
-missing_panics_doc = "warn"
-unwrap_used = "warn"
-expect_used = "warn"
+[lints]
+workspace = true

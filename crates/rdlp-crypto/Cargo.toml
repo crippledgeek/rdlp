@@ -20,12 +20,13 @@ missing_docs = "warn"
 unsafe_code = "forbid"
 
 [lints.clippy]
-# Workspace baseline
 must_use_candidate = "warn"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 disallowed_methods = "deny"
-# Security lints
+match_same_arms = "warn"
+redundant_clone = "warn"
+collapsible_match = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 missing_errors_doc = "warn"
