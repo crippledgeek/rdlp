@@ -780,7 +780,10 @@ async fn download_sequential_cancel_mid_stream_returns_cancelled() {
             );
             let _ = stream.flush();
             // Hold the connection open so wreq waits for the next chunk.
-            std::thread::sleep(Duration::from_mins(1));
+            // `Duration::from_mins` (clippy suggestion) needs Rust 1.95;
+            // workspace MSRV is 1.85.
+            #[allow(clippy::duration_suboptimal_units)]
+            std::thread::sleep(Duration::from_secs(60));
         }
     });
 
