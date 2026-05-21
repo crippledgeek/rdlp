@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio_util::sync::CancellationToken;
 
 /// Maximum number of retry attempts for a single chunk download.
 ///
@@ -155,6 +156,7 @@ impl HttpDownloader {
                 0,
                 "part",
                 progress.clone(),
+                None,
             )
             .await?
         } else {
@@ -252,6 +254,7 @@ impl HttpDownloader {
                 resume_from,
                 "resume",
                 progress.clone(),
+                None,
             )
             .await
         } else {
@@ -307,6 +310,9 @@ impl HttpDownloader {
     ///
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
     /// `byte_offset` is added to every chunk's start position (for resume).
+    ///
+    /// `cancel` is `Option<CancellationToken>` (owned, not a reference) so it can be
+    /// cloned into the `try_unfold` closure. `CancellationToken` is cheaply cloneable.
     #[allow(clippy::too_many_arguments)]
     async fn download_parallel_adaptive(
         &self,
@@ -319,6 +325,7 @@ impl HttpDownloader {
         byte_offset: u64,
         suffix: &str,
         log_callback: Option<Arc<dyn ProgressCallback>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<(Vec<PathBuf>, u64)> {
         let controller = Arc::new(AdaptiveController::new(
             size_to_download,
@@ -347,6 +354,8 @@ impl HttpDownloader {
             let temp_dir_owned = temp_dir.to_path_buf();
             let filename_owned = filename.to_string();
             let suffix_owned = suffix.to_string();
+            // Clone once outside the closure; each iteration re-clones from this.
+            let cancel_outer = cancel.clone();
 
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
@@ -358,18 +367,40 @@ impl HttpDownloader {
                     "{filename_owned}.{download_id}.{suffix_owned}{chunk_id}"
                 ));
                 let ctrl_next = ctrl.clone();
+                let cancel_for_unfold = cancel_outer.clone();
 
                 async move {
                     let Some(chunk) = ctrl.next_chunk() else {
                         return Ok(None);
                     };
 
+                    // F6 (#308): pre-dispatch cancel guard before semaphore acquisition.
+                    if let Some(ref token) = cancel_for_unfold
+                        && token.is_cancelled()
+                    {
+                        return Err(RdlpError::Cancelled);
+                    }
+
+                    let cancel_for_chunk = cancel_for_unfold.clone();
+
                     let download_fut = async move {
-                        let _permit =
+                        // F6 (#308): race semaphore acquisition against cancel so
+                        // a pending permit-wait unblocks immediately on cancellation.
+                        let _permit = if let Some(ref token) = cancel_for_chunk {
+                            tokio::select! {
+                                biased;
+                                () = token.cancelled() => return Err(RdlpError::Cancelled),
+                                p = sem.acquire_owned() => p.map_err(|_| RdlpError::Download {
+                                    message: "Semaphore closed".to_string(),
+                                    url: Some(url.to_string()),
+                                })?,
+                            }
+                        } else {
                             sem.acquire_owned().await.map_err(|_| RdlpError::Download {
                                 message: "Semaphore closed".to_string(),
                                 url: Some(url.to_string()),
-                            })?;
+                            })?
+                        };
                         let start_time = Instant::now();
                         let abs_start = byte_offset + chunk.start;
                         // end is exclusive in ChunkRequest, but HTTP Range is inclusive
