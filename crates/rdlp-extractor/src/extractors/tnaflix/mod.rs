@@ -283,10 +283,7 @@ impl TNAFlixSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[TNAFlix] Failed to fetch search page, returning partial results: {e}");
@@ -435,10 +432,7 @@ impl EMPFlixSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[EMPFlix] Failed to fetch search page, returning partial results: {e}");
@@ -571,10 +565,7 @@ impl MovieFapSearchExtractor {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
                     debug!(page; "[MovieFap] Failed to fetch search page, returning partial results: {e}");

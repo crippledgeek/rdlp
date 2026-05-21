@@ -43,11 +43,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
     }
 
     // Strategy 2: JavaScript variables
-    extend_deduped(
-        &mut all_formats,
-        &mut seen_urls,
-        parse_js_vars(webpage),
-    );
+    extend_deduped(&mut all_formats, &mut seen_urls, parse_js_vars(webpage));
 
     // Strategy 3: Download buttons
     extend_deduped(

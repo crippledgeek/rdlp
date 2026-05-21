@@ -275,10 +275,7 @@ impl XHamsterExtractor {
         let mut page = 1_usize;
 
         loop {
-            let (page_results, max_pages) = match self
-                .fetch_search_page(query, page, ctx)
-                .await
-            {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(result) => result,
                 Err(e) => {
                     debug!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
