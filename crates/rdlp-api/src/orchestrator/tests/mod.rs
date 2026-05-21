@@ -9,6 +9,7 @@
 )]
 
 mod dash_e2e;
+mod hls_e2e;
 mod property_tests;
 mod resume_tests;
 mod template_tests;

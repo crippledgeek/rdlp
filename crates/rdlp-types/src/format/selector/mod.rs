@@ -293,7 +293,7 @@ impl FormatSelector {
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
         self.selectors
             .first()
-            .map_or_else(Vec::new, |node| eval_node(node, formats))
+            .map_or_else(Vec::new, |node| eval_node(node, formats, None))
     }
 
     /// Select formats for **all** comma-separated nodes.
@@ -314,7 +314,7 @@ impl FormatSelector {
     pub fn select_all<'a>(&self, formats: &'a [Format]) -> Vec<Vec<&'a Format>> {
         self.selectors
             .iter()
-            .map(|node| eval_node(node, formats))
+            .map(|node| eval_node(node, formats, None))
             .collect()
     }
 
@@ -333,21 +333,15 @@ impl FormatSelector {
         formats: &'a [Format],
         sorter: &sort::FormatSorter,
     ) -> Vec<&'a Format> {
-        // Build a sorted index of references, then clone into an owned Vec so
-        // eval_node can borrow a `&[Format]` with the desired order.
-        // The final step maps format_id back to the original slice's references
-        // so that the returned lifetime `'a` is valid.
-        let mut sorted_refs: Vec<&'a Format> = formats.iter().collect();
-        sorter.sort(&mut sorted_refs);
-
-        let sorted_owned: Vec<Format> = sorted_refs.iter().map(|f| (*f).clone()).collect();
-
-        self.selectors.first().map_or_else(Vec::new, |node| {
-            eval_node(node, &sorted_owned)
-                .into_iter()
-                .filter_map(|sf| formats.iter().find(|f| f.format_id == sf.format_id))
-                .collect()
-        })
+        // The sorter is plumbed through `eval_node` → `select_spec` → `select_one`,
+        // where it replaces the local `rank_formats` heuristic for `best` /
+        // `worst` / nth picks. No pre-sort + clone-into-owned dance is
+        // required: the sorter's `compare` directly drives `max_by` / `min_by`
+        // / `sort_by` inside the eval engine, so the returned references
+        // borrow the original input slice's lifetime.
+        self.selectors
+            .first()
+            .map_or_else(Vec::new, |node| eval_node(node, formats, Some(sorter)))
     }
 }
 
@@ -355,9 +349,13 @@ impl FormatSelector {
 ///
 /// Tries each fallback spec in order and returns the result of the first
 /// non-empty match (or an empty `Vec` if nothing matches).
-pub(super) fn eval_node<'a>(node: &SelectorNode, formats: &'a [Format]) -> Vec<&'a Format> {
+pub(super) fn eval_node<'a>(
+    node: &SelectorNode,
+    formats: &'a [Format],
+    sorter: Option<&sort::FormatSorter>,
+) -> Vec<&'a Format> {
     for spec in &node.fallbacks {
-        let result = eval::select_spec(spec, formats);
+        let result = eval::select_spec(spec, formats, sorter);
         if !result.is_empty() {
             return result;
         }
