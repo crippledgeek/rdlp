@@ -26,5 +26,7 @@ windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Wi
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 
+# unsafe_code: intentionally NOT set to forbid — Windows DPAPI
+# CryptUnprotectData FFI requires unsafe blocks on the Windows target.
 [lints]
 workspace = true
