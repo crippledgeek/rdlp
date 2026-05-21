@@ -138,9 +138,12 @@ impl Downloader for DashDownloader {
             )
             .await
         } else {
-            // Non-fragment branch: cancellation owned by outer select! today.
-            // TODO(#287): cooperative cancellation for download_to_file path.
-            self.download_to_file(&format.url, output, progress).await
+            // F6: cooperative cancellation via HttpDownloader's cancel-aware paths.
+            // The legacy MPD-URL branch delegates to the inner HTTP downloader which
+            // honours `cancel` via its `download_format` override. Closes #287.
+            self.http_downloader
+                .download_format(format, output, progress, cancel)
+                .await
         }
     }
 
