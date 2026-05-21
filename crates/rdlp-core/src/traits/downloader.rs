@@ -73,7 +73,7 @@ pub trait Downloader: Send + Sync {
     ///
     /// # Returns
     /// Size in bytes, or `None` if size cannot be determined
-    async fn get_size(&self, _url: &str) -> Result<Option<u64>> {
+    async fn file_size(&self, _url: &str) -> Result<Option<u64>> {
         Ok(None)
     }
 
