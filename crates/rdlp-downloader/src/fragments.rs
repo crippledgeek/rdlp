@@ -53,6 +53,17 @@ use rdlp_security;
 /// price of parallelism — sequential mode (`concurrent_fragments = 1`)
 /// preserves the strict "at most 1 extra fragment after cancel" semantic.
 ///
+/// # Same-origin header gate
+///
+/// `Format.http_headers` (Referer, Cookie, Authorization, Origin) are forwarded
+/// only when the target URL's origin (scheme + host + port, per RFC 6454) matches
+/// `format_url`'s origin. Cross-origin fetches receive no operator headers,
+/// preventing header exfiltration via a compromised or malicious manifest whose
+/// init / fragment URIs point to an attacker-controlled CDN.
+///
+/// When `format_url` is `None` or unparseable, ALL fetches are treated as
+/// cross-origin (fail-closed).
+///
 /// # Errors
 ///
 /// Returns `RdlpError::Download` if any fragment fetch fails, if a URL fails
@@ -61,6 +72,9 @@ use rdlp_security;
 // 102/100 lines after the cancellation wrapper additions; splitting would
 // obscure the loop's bookkeeping flow.
 #[allow(clippy::too_many_lines)]
+// 8 args: the extra `format_url` param for the same-origin header gate (#273)
+// pushes us one over clippy's default limit of 7.
+#[allow(clippy::too_many_arguments)]
 pub async fn download_pre_resolved_fragments(
     http: &HttpDownloader,
     fragments: &[Fragment],
@@ -68,9 +82,18 @@ pub async fn download_pre_resolved_fragments(
     expected_total: Option<u64>,
     progress: Option<&dyn ProgressCallback>,
     output: &Path,
+    format_url: Option<&str>,
     cancel: Option<&CancellationToken>,
 ) -> Result<DownloadStats> {
     let started = Instant::now();
+
+    // Parse the format origin once. Used by each fragment task to decide
+    // whether to forward `http.headers()` to that fetch. Fails closed:
+    // `None` (no format_url) or `Some(Opaque(...))` (non-tuple-origin scheme)
+    // both compare not-equal to any target origin, so headers are dropped.
+    let format_origin: Option<url::Origin> = format_url
+        .and_then(|u| url::Url::parse(u).ok())
+        .map(|u| u.origin());
 
     let mut out_file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -167,6 +190,9 @@ pub async fn download_pre_resolved_fragments(
         let sem = Arc::clone(&sem);
         let base = base_url.map(str::to_string);
         let cancel = cancel.cloned();
+        // Clone the parsed origin so each parallel task owns a copy.
+        // `url::Origin` is Clone (it is an enum of copyable fields).
+        let task_origin = format_origin.clone();
         async move {
             let _permit =
                 sem.acquire_owned()
@@ -186,6 +212,7 @@ pub async fn download_pre_resolved_fragments(
                     http,
                     &resolved_init,
                     frag.init_byte_range,
+                    task_origin.as_ref(),
                     cancel.as_ref(),
                 )
                 .await?;
@@ -194,9 +221,14 @@ pub async fn download_pre_resolved_fragments(
 
             // Fragment bytes.
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes =
-                fetch_with_optional_cancel(http, &resolved_url, frag.byte_range, cancel.as_ref())
-                    .await?;
+            let bytes = fetch_with_optional_cancel(
+                http,
+                &resolved_url,
+                frag.byte_range,
+                task_origin.as_ref(),
+                cancel.as_ref(),
+            )
+            .await?;
             out.extend_from_slice(&bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
@@ -335,19 +367,23 @@ pub(crate) fn resolve_fragment_url(fragment_url: &str, base_url: Option<&str>) -
 /// never arrives) would block indefinitely between cooperative cancel points
 /// — `fetch_with_optional_range` itself has no per-read timeout, and the
 /// helper's only `is_cancelled()` checks are between fragments.
+///
+/// `format_origin` is forwarded to `fetch_with_optional_range` for the
+/// same-origin header gate.
 async fn fetch_with_optional_cancel(
     http: &HttpDownloader,
     url: &str,
     byte_range: Option<(u64, u64)>,
+    format_origin: Option<&url::Origin>,
     cancel: Option<&CancellationToken>,
 ) -> Result<Vec<u8>> {
     match cancel {
         Some(token) => tokio::select! {
             biased;
             () = token.cancelled() => Err(rdlp_core::RdlpError::Cancelled),
-            res = fetch_with_optional_range(http, url, byte_range) => res,
+            res = fetch_with_optional_range(http, url, byte_range, format_origin) => res,
         },
-        None => fetch_with_optional_range(http, url, byte_range).await,
+        None => fetch_with_optional_range(http, url, byte_range, format_origin).await,
     }
 }
 
@@ -355,15 +391,31 @@ async fn fetch_with_optional_cancel(
 ///
 /// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 7233
 /// `Range: bytes=start-end_inclusive` (subtract 1 for HTTP's inclusive end).
+///
+/// `format_origin` enforces the same-origin header gate: `http.headers()` are
+/// forwarded only when `url`'s origin (scheme + host + port) matches `format_origin`.
+/// Fails closed — `None` `format_origin`, opaque origin, or parse failure all
+/// result in no operator headers being forwarded.
 async fn fetch_with_optional_range(
     http: &HttpDownloader,
     url: &str,
     byte_range: Option<(u64, u64)>,
+    format_origin: Option<&url::Origin>,
 ) -> Result<Vec<u8>> {
     use wreq::header::HeaderValue;
 
     let safe_url = rdlp_security::sanitize_for_logging(url);
-    let mut req = http.client().get(url).headers(http.headers());
+
+    // Same-origin gate: forward operator headers only when the target origin
+    // matches the format origin. Fails closed on any parse failure or opaque origin.
+    let same_origin = match (format_origin, url::Url::parse(url).ok()) {
+        (Some(seed), Some(target)) => *seed == target.origin(),
+        _ => false,
+    };
+    let mut req = http.client().get(url);
+    if same_origin {
+        req = req.headers(http.headers());
+    }
     if let Some((start, end_exclusive)) = byte_range {
         // Saturating_sub guards against any future caller passing end_exclusive == 0.
         // (Caller responsibility: end_exclusive > start, validated at expand time.)
@@ -438,7 +490,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await
             .expect("download must succeed with Range header");
     }
@@ -493,7 +545,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await
             .expect("multi-init download must succeed");
 
@@ -578,6 +630,7 @@ mod tests {
             Some(&cb),
             tmp.path(),
             None,
+            None,
         )
         .await
         .expect("ok");
@@ -600,10 +653,18 @@ mod tests {
         let frags = vec![frag(format!("{}/f1", server.url()))];
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(stats.bytes_downloaded, 100);
     }
 
@@ -619,10 +680,18 @@ mod tests {
         let cb = CaptureCallback::new();
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let _ =
-            download_pre_resolved_fragments(&http, &frags, None, None, Some(&cb), tmp.path(), None)
-                .await
-                .expect("ok");
+        let _ = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            Some(&cb),
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         let evs = cb.events();
         assert!(!evs.is_empty());
         assert!(
@@ -651,6 +720,7 @@ mod tests {
             Some(100),
             Some(&cb),
             tmp.path(),
+            None,
             None,
         )
         .await
@@ -684,6 +754,7 @@ mod tests {
             Some(&cb),
             tmp.path(),
             None,
+            None,
         )
         .await
         .expect("ok");
@@ -709,10 +780,18 @@ mod tests {
         let cb = CaptureCallback::new();
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, Some(&cb), tmp.path(), None)
-                .await
-                .expect("ok");
+        let stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            Some(&cb),
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(stats.bytes_downloaded, 0);
         assert_eq!(cb.events().len(), 0);
         assert!(tmp.path().exists());
@@ -737,6 +816,7 @@ mod tests {
             Some(100),
             Some(&cb),
             tmp.path(),
+            None,
             None,
         )
         .await
@@ -763,9 +843,17 @@ mod tests {
         ];
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let res =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await;
+        let res = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await;
         // Pin the typed error: a regression that reshapes the failure into
         // Cancelled / Network / Other would silently pass a bare is_err().
         let err = res.expect_err("must error on f2 500");
@@ -817,7 +905,7 @@ mod tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await
             .expect("single-init download must succeed");
 
@@ -869,6 +957,7 @@ mod tests {
             None,
             None,
             tmp.path(),
+            None,
             Some(&token),
         )
         .await;
@@ -915,6 +1004,7 @@ mod tests {
                 None,
                 None,
                 tmp.path(),
+                None,
                 Some(&token),
             ),
         )
@@ -942,10 +1032,18 @@ mod tests {
         let frags = vec![frag(format!("{}/f1", server.url()))];
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(stats.bytes_downloaded, 100);
     }
 
@@ -968,6 +1066,7 @@ mod tests {
             None,
             None,
             tmp.path(),
+            None,
             Some(&token),
         )
         .await
@@ -1024,10 +1123,18 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         // N=2 concurrency — AIMD starts at min(2,2)=2 connections.
         let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(2);
-        let stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("AIMD-wired download must complete");
+        let stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("AIMD-wired download must complete");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         assert_eq!(
             written, expected,
@@ -1153,10 +1260,18 @@ mod tests {
         let (frags, expected) = build_ordered_frags(&mut server, 12).await;
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let _stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let _stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         assert_eq!(
             written, expected,
@@ -1185,10 +1300,18 @@ mod tests {
         let expected: Vec<u8> = bodies.into_iter().flatten().collect();
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new());
-        let _stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let _stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         assert_eq!(written.len(), 6 * 1024);
         assert_eq!(written, expected);
@@ -1203,10 +1326,18 @@ mod tests {
         let (frags, expected) = build_ordered_frags(&mut server, 4).await;
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
-        let _stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let _stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         assert_eq!(
             written, expected,
@@ -1222,10 +1353,18 @@ mod tests {
         let (frags, expected) = build_ordered_frags(&mut server, 12).await;
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
-        let _stats =
-            download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
-                .await
-                .expect("ok");
+        let _stats = download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            None,
+            None,
+        )
+        .await
+        .expect("ok");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
         assert_eq!(written.len(), 12);
         assert_eq!(written, expected);
@@ -1289,7 +1428,7 @@ mod tests {
         }
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(4);
-        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None)
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await
             .expect("init-transition under parallel must succeed");
         let written = tokio::fs::read(tmp.path()).await.unwrap();
@@ -1336,6 +1475,7 @@ mod tests {
                 None,
                 None,
                 tmp.path(),
+                None,
                 Some(&token),
             ),
         )
@@ -1346,5 +1486,201 @@ mod tests {
         );
         let written = tokio::fs::metadata(tmp.path()).await.expect("exists").len();
         assert!(written > 0);
+    }
+
+    // ---- Same-origin header gate tests (issue #273) ----
+
+    /// Build an `HttpDownloader` with a single extra header baked in.
+    ///
+    /// Mirrors the pattern used in the HLS/DASH production paths where
+    /// `Format.http_headers` are loaded via `with_extra_headers`.
+    fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(name.to_string(), value.to_string());
+        HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
+    }
+
+    /// Negative test: cross-origin init URL must NOT receive `Format.http_headers`.
+    ///
+    /// Two mockito servers = two origins (same loopback address, different ports).
+    /// The fragment is served from `format_server` (same-origin) → must see Referer.
+    /// The init segment is served from `init_server` (cross-origin) → must NOT see
+    /// Referer. The catch-all 501 on `init_server` fires if the header leaks.
+    #[tokio::test]
+    async fn cross_origin_init_url_does_not_forward_seed_headers() {
+        let mut format_server = mockito::Server::new_async().await;
+        let mut init_server = mockito::Server::new_async().await;
+
+        // Fragment on format_server: must see Referer (same-origin).
+        let _frag_mock = format_server
+            .mock("GET", "/frag0.m4s")
+            .match_header("Referer", "https://operator.example.com/page")
+            .with_body(&[0u8; 8][..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Init on init_server: must NOT see Referer (cross-origin).
+        let _init_mock = init_server
+            .mock("GET", "/init.m4s")
+            .match_header("Referer", Matcher::Missing)
+            .with_body(&[0u8; 4][..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Catch-all on init_server: 501 if Referer arrived unexpectedly.
+        let _init_catchall = init_server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let init_abs_url = format!("{}/init.m4s", init_server.url());
+        let frag_abs_url = format!("{}/frag0.m4s", format_server.url());
+
+        let frags = vec![Fragment {
+            url: frag_abs_url.clone(),
+            duration: Some(2.0),
+            byte_range: None,
+            init_url: Some(init_abs_url),
+            init_byte_range: None,
+            filesize: None,
+        }];
+
+        let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let format_url = format!("{}/page", format_server.url());
+
+        download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            Some(&format_url),
+            None,
+        )
+        .await
+        .expect("same-origin fragment sees Referer, cross-origin init does not");
+    }
+
+    /// Positive companion: same-origin init URL DOES forward `Format.http_headers`.
+    ///
+    /// Both fragment and init are on `format_server` (same-origin as `format_url`).
+    /// Both must receive the Referer. The catch-all 501 fires if headers were
+    /// stripped due to an over-aggressive same-origin check (always-strip regression).
+    #[tokio::test]
+    async fn same_origin_init_url_forwards_seed_headers() {
+        let mut format_server = mockito::Server::new_async().await;
+
+        let _init_mock = format_server
+            .mock("GET", "/init.m4s")
+            .match_header("Referer", "https://operator.example.com/page")
+            .with_body(&[0u8; 4][..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        let _frag_mock = format_server
+            .mock("GET", "/frag0.m4s")
+            .match_header("Referer", "https://operator.example.com/page")
+            .with_body(&[0u8; 8][..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Catch-all: 501 if Referer was NOT present (headers were stripped).
+        let _catchall = format_server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        let init_abs_url = format!("{}/init.m4s", format_server.url());
+        let frag_abs_url = format!("{}/frag0.m4s", format_server.url());
+        let format_url = format!("{}/page", format_server.url());
+
+        let frags = vec![Fragment {
+            url: frag_abs_url,
+            duration: Some(2.0),
+            byte_range: None,
+            init_url: Some(init_abs_url),
+            init_byte_range: None,
+            filesize: None,
+        }];
+
+        let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            Some(&format_url),
+            None,
+        )
+        .await
+        .expect("same-origin init + fragment must both receive Referer");
+    }
+
+    /// Negative test: fragment URL on a different origin from `format_url` drops headers.
+    ///
+    /// `init_url` is `None`; only the fragment itself is cross-origin. The catch-all
+    /// 501 on `cross_server` fires if the Referer was forwarded.
+    #[tokio::test]
+    async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
+        let format_server = mockito::Server::new_async().await;
+        let mut cross_server = mockito::Server::new_async().await;
+
+        // Cross-origin fragment: must NOT see Referer.
+        let _frag_mock = cross_server
+            .mock("GET", "/frag0.m4s")
+            .match_header("Referer", Matcher::Missing)
+            .with_body(&[0u8; 8][..])
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Catch-all on cross_server: 501 if Referer arrived.
+        let _catchall = cross_server
+            .mock("GET", Matcher::Any)
+            .with_status(501)
+            .create_async()
+            .await;
+
+        // format_server provides a mock master url to establish format_url's origin,
+        // but we only need it for the URL — no actual fetch against it.
+        let format_url = format!("{}/master.m3u8", format_server.url());
+        let frag_abs_url = format!("{}/frag0.m4s", cross_server.url());
+
+        let frags = vec![Fragment {
+            url: frag_abs_url,
+            duration: Some(2.0),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
+            filesize: None,
+        }];
+
+        let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+
+        download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            tmp.path(),
+            Some(&format_url),
+            None,
+        )
+        .await
+        .expect("cross-origin fragment must not receive Referer");
     }
 }
