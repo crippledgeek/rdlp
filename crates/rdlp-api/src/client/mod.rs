@@ -224,7 +224,12 @@ impl RdlpClient {
                     tokio::time::sleep(Duration::from_secs(delay)).await;
                 }
 
-                match orchestrator.download(&url, interactive_flag).await {
+                let download_result = if interactive_flag {
+                    orchestrator.download_interactive(&url).await
+                } else {
+                    orchestrator.download(&url).await
+                };
+                match download_result {
                     Ok(Some(path)) => {
                         // Stdout mode returns "-" sentinel — don't
                         // expose it as a real file path to API consumers.
