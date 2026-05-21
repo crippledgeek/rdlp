@@ -676,12 +676,13 @@ async fn probe_206_malformed_content_range_keeps_supports_ranges_true() {
     use mockito::Server;
 
     let mut server = Server::new_async().await;
-    let _mock = server
+    let mock = server
         .mock("GET", "/file")
         .match_header("range", "bytes=0-262143")
         .with_status(206)
         .with_header("content-range", "invalid-garbage")
         .with_body(vec![0u8; 262144])
+        .expect(1)
         .create_async()
         .await;
 
@@ -692,6 +693,7 @@ async fn probe_206_malformed_content_range_keeps_supports_ranges_true() {
 
     assert_eq!(result.size, None);
     assert!(result.supports_ranges);
+    mock.assert_async().await;
 }
 
 #[tokio::test]
