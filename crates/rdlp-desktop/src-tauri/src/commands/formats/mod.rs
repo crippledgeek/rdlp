@@ -121,7 +121,7 @@ pub async fn formats(
             tbr: f.tbr,
             vcodec: f.vcodec.as_str().map(str::to_string),
             acodec: f.acodec.as_str().map(str::to_string),
-            filesize: f.get_filesize(),
+            filesize: f.resolved_filesize(),
             vbr: f.vbr,
             abr: f.abr,
             asr: f.asr,
