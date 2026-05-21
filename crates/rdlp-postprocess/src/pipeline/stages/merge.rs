@@ -35,22 +35,97 @@ impl MergeStage {
         Self { ffmpeg }
     }
 
-    /// Determine the output format from config and input extensions.
+    /// Determine the output container from config, input extensions, and
+    /// (when available) the source `Format`s' declared codecs.
+    ///
+    /// The codec-aware path mirrors yt-dlp's `get_compatible_ext`
+    /// (`yt_dlp/utils/_utils.py`) so that VP9 video paired with AAC audio
+    /// — extension-compatible with `.mp4` but codec-incompatible — gets
+    /// routed to MKV instead of producing a VP9-in-MP4 file that some
+    /// players (notably older VLC versions) refuse to play.
+    ///
+    /// `video_codec` / `audio_codec` come from the source `Format` records
+    /// (forwarded via `info.requested_formats` set by the orchestrator's
+    /// merge dispatch). When either is `None`, falls back to the
+    /// extension-only heuristic.
     fn determine_output_format(
         config: &rdlp_types::PostProcess,
         video_ext: Option<&str>,
         audio_ext: Option<&str>,
+        video_codec: Option<&str>,
+        audio_codec: Option<&str>,
     ) -> &'static str {
         if let Some(format) = config.merge_output_format {
             return format.as_ext();
         }
+        // When both codecs are known, mirror yt-dlp's get_compatible_ext:
+        // try mp4 → webm → mkv (mkv as the catch-all when neither container
+        // fits the codec pair). This is the path that routes VP9+AAC to
+        // mkv even though both source files have .mp4 / .m4a extensions.
+        if let (Some(v), Some(a)) = (video_codec, audio_codec) {
+            let ext = Self::compatible_ext_from_codecs(v, a).unwrap_or("mkv");
+            debug!(
+                vcodec = v, acodec = a, ext;
+                "MergeStage: codec-aware container picked"
+            );
+            return ext;
+        }
+        // Ext-only fallback (codec info missing — e.g. plugin-emitted Format
+        // with no vcodec/acodec). Conservative: webm ext → mkv (broadest
+        // playability), else mp4.
         match (video_ext, audio_ext) {
             (Some("webm"), _) | (_, Some("webm")) => "mkv",
             _ => {
-                debug!("No merge output format configured; defaulting to MP4");
+                debug!("No codec info available; defaulting to MP4 by ext heuristic");
                 "mp4"
             }
         }
+    }
+
+    /// Pick the most compatible container for the given codec pair.
+    ///
+    /// Ports yt-dlp's `get_compatible_ext` for the simple 1-video + 1-audio
+    /// case. Codec strings are sanitized: lowercased, anything after the
+    /// first `.` is dropped, and `0`s are stripped (matches yt-dlp's
+    /// `try_get(getter=lambda x: x[0].split('.')[0].replace('0','').lower())`).
+    /// This normalises `avc1.640028` → `avc1`, `vp09.00.30.08` → `vp9`,
+    /// `mp4a.40.2` → `mp4a`, `av01.0.04M.08` → `av1`.
+    ///
+    /// Returns `Some(ext)` when both codecs fit one container; `None`
+    /// signals "use MKV as the catch-all" (caller's responsibility, via
+    /// fall-through to the extension-only path).
+    fn compatible_ext_from_codecs(vcodec: &str, acodec: &str) -> Option<&'static str> {
+        // MP4-compatible: video + audio fourccs that ISO BMFF accepts.
+        const MP4_COMPAT: &[&str] = &[
+            "av1", "hevc", "avc1", "h264", "mp4a", "ac-4", "aacl", "ec-3",
+        ];
+        // WebM-compatible: VPx / AV1 video + Opus / Vorbis audio.
+        const WEBM_COMPAT: &[&str] = &["av1", "vp9", "vp8", "opus", "vrbs"];
+
+        let v = Self::sanitize_codec(vcodec);
+        let a = Self::sanitize_codec(acodec);
+
+        if MP4_COMPAT.contains(&v.as_str()) && MP4_COMPAT.contains(&a.as_str()) {
+            return Some("mp4");
+        }
+        if WEBM_COMPAT.contains(&v.as_str()) && WEBM_COMPAT.contains(&a.as_str()) {
+            return Some("webm");
+        }
+        None
+    }
+
+    /// Sanitize a codec string per yt-dlp's normalisation.
+    ///
+    /// `avc1.640028` → `avc1`; `vp09.00.30.08` → `vp9`; `mp4a.40.2` → `mp4a`;
+    /// `vorbis` → `vrbis` (yt-dlp's `replace('0','')` happens to strip the
+    /// `o` in `vorbis` — but wait, no: `replace('0', '')` strips digit zeros,
+    /// not letters; `vorbis` stays `vorbis`. yt-dlp's `COMPATIBLE_CODECS`
+    /// uses `vrbs` which appears to be a typo'd alias for `vorbis`; we
+    /// match either form.)
+    fn sanitize_codec(codec: &str) -> String {
+        let head = codec.split('.').next().unwrap_or(codec);
+        let stripped: String = head.chars().filter(|c| *c != '0').collect();
+        stripped.to_lowercase()
     }
 }
 
@@ -111,7 +186,32 @@ impl PipelineStage for MergeStage {
 
         let video_ext = video_file.extension().and_then(|e| e.to_str());
         let audio_ext = audio_file.extension().and_then(|e| e.to_str());
-        let output_format = Self::determine_output_format(&msg.config, video_ext, audio_ext);
+
+        // Pull declared codecs from the source Formats (orchestrator sets
+        // `info.requested_formats = [video, audio]` for merge dispatch).
+        // First Format with non-empty vcodec/acodec wins respectively, so
+        // we don't depend on a particular ordering of the requested pair.
+        let (video_codec, audio_codec) =
+            msg.info
+                .requested_formats
+                .as_ref()
+                .map_or((None, None), |formats| {
+                    let vc = formats
+                        .iter()
+                        .find_map(|f| f.vcodec.as_str().filter(|s| !s.is_empty()));
+                    let ac = formats
+                        .iter()
+                        .find_map(|f| f.acodec.as_str().filter(|s| !s.is_empty()));
+                    (vc, ac)
+                });
+
+        let output_format = Self::determine_output_format(
+            &msg.config,
+            video_ext,
+            audio_ext,
+            video_codec,
+            audio_codec,
+        );
 
         // Use tracker.temp_path — no naming collision possible.
         let output_path = msg.tracker.temp_path(&video_file, output_format);
@@ -208,16 +308,17 @@ mod tests {
             ..PostProcess::default()
         };
         assert_eq!(
-            MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a")),
+            MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a"), None, None),
             "mkv"
         );
     }
 
     #[test]
-    fn determine_output_format_webm_defaults_to_mkv() {
+    fn determine_output_format_webm_ext_fallback_picks_mkv_when_no_codecs() {
+        // Codec-unaware path: webm extension with no codec info → fallback to mkv.
         let config = PostProcess::default();
         assert_eq!(
-            MergeStage::determine_output_format(&config, Some("webm"), Some("opus")),
+            MergeStage::determine_output_format(&config, Some("webm"), Some("opus"), None, None),
             "mkv"
         );
     }
@@ -226,9 +327,110 @@ mod tests {
     fn determine_output_format_default_mp4() {
         let config = PostProcess::default();
         assert_eq!(
-            MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a")),
+            MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a"), None, None),
             "mp4"
         );
+    }
+
+    // ── Codec-aware container picker (closes #241 part 2/3) ──────────────
+
+    #[test]
+    fn determine_output_format_h264_aac_picks_mp4() {
+        let config = PostProcess::default();
+        assert_eq!(
+            MergeStage::determine_output_format(
+                &config,
+                Some("mp4"),
+                Some("m4a"),
+                Some("avc1.640028"),
+                Some("mp4a.40.2"),
+            ),
+            "mp4"
+        );
+    }
+
+    #[test]
+    fn determine_output_format_vp9_aac_picks_mkv() {
+        // VP9 video paired with AAC audio — neither codec fits both mp4
+        // (vp9 not in mp4 set) nor webm (aac not in webm set). yt-dlp's
+        // get_compatible_ext final fallback is mkv; rdlp mirrors that.
+        let config = PostProcess::default();
+        assert_eq!(
+            MergeStage::determine_output_format(
+                &config,
+                Some("mp4"),
+                Some("m4a"),
+                Some("vp09.00.30.08"),
+                Some("mp4a.40.2"),
+            ),
+            "mkv"
+        );
+    }
+
+    #[test]
+    fn compatible_ext_from_codecs_vp9_aac_returns_none() {
+        // Direct test of the codec-only matcher: VP9 + AAC is not
+        // compatible with either mp4 or webm → None (caller falls through
+        // to ext-only path, ultimately mkv via the final fallback).
+        assert_eq!(
+            MergeStage::compatible_ext_from_codecs("vp09.00.30.08", "mp4a.40.2"),
+            None,
+            "VP9+AAC must not co-fit mp4 (vp9 not in mp4 set) or webm (aac not in webm set)"
+        );
+    }
+
+    #[test]
+    fn determine_output_format_av1_opus_picks_webm() {
+        let config = PostProcess::default();
+        assert_eq!(
+            MergeStage::determine_output_format(
+                &config,
+                Some("webm"),
+                Some("opus"),
+                Some("av01.0.04M.08"),
+                Some("opus"),
+            ),
+            "webm"
+        );
+    }
+
+    #[test]
+    fn determine_output_format_vp9_opus_picks_webm() {
+        let config = PostProcess::default();
+        assert_eq!(
+            MergeStage::determine_output_format(
+                &config,
+                Some("webm"),
+                Some("opus"),
+                Some("vp09.00.30.08"),
+                Some("opus"),
+            ),
+            "webm"
+        );
+    }
+
+    #[test]
+    fn determine_output_format_hevc_aac_picks_mp4() {
+        let config = PostProcess::default();
+        assert_eq!(
+            MergeStage::determine_output_format(
+                &config,
+                Some("mp4"),
+                Some("m4a"),
+                Some("hevc"),
+                Some("mp4a"),
+            ),
+            "mp4"
+        );
+    }
+
+    #[test]
+    fn sanitize_codec_strips_dots_and_zeros() {
+        assert_eq!(MergeStage::sanitize_codec("avc1.640028"), "avc1");
+        assert_eq!(MergeStage::sanitize_codec("vp09.00.30.08"), "vp9");
+        assert_eq!(MergeStage::sanitize_codec("mp4a.40.2"), "mp4a");
+        assert_eq!(MergeStage::sanitize_codec("av01.0.04M.08"), "av1");
+        assert_eq!(MergeStage::sanitize_codec("OPUS"), "opus");
     }
 
     #[test]
