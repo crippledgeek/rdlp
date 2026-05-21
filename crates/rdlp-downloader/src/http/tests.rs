@@ -741,3 +741,50 @@ async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     // error) is acceptable — we're testing the dispatch decision, not the
     // download correctness.
 }
+
+#[tokio::test]
+async fn download_to_file_no_head_under_normal_flow() {
+    use mockito::Matcher;
+
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xAA; 524288];
+
+    // Probe responds with 206; total = 524288 (below 10 MiB threshold -> sequential).
+    let _probe = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/524288")
+        .with_body(vec![0u8; 262144])
+        .create_async()
+        .await;
+
+    // Sequential download re-fetches the full file (no Range header).
+    let _seq = server
+        .mock("GET", "/file")
+        .match_header("range", Matcher::Missing)
+        .with_status(200)
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    // HEAD must NEVER be issued.
+    let head_guard = server
+        .mock("HEAD", "/file")
+        .expect(0)
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new();
+    let url = format!("{}/file", server.url());
+
+    let stats = downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .unwrap();
+
+    assert_eq!(stats.bytes_downloaded, 524288);
+    head_guard.assert_async().await;
+}
