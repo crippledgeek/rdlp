@@ -44,7 +44,6 @@ type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 /// Passed by value into Phase 2 (`configure_video_encoder`), which uses
 /// these fields plus its own newly-created state to construct the full
 /// `VideoTranscodeContext`.
-#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
 struct Phase1Outputs {
     ictx: ffmpeg_the_third::format::context::Input,
     video_decoder: ffmpeg_the_third::decoder::Video,
@@ -59,7 +58,6 @@ struct Phase1Outputs {
 /// State carried across audio re-encode phases (Phase 3 setup, Phase 5 loop,
 /// Phase 6 finalize). Replaces the prior 6-tuple
 /// `Option<(decoder::Audio, encoder::audio::Encoder, Rational, usize, filter::Graph, i32)>`.
-#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
 struct AudioTranscodeState {
     decoder: ffmpeg_the_third::decoder::Audio,
     encoder: ffmpeg_the_third::encoder::audio::Encoder,
@@ -78,7 +76,6 @@ struct AudioTranscodeState {
 /// `audio_copy_ost_index` and `audio_transcode` are `Option<T>` because
 /// they're genuinely conditional (set by Phase 3 only when `audio_copy`
 /// or `audio_codec` is requested respectively).
-#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
 struct VideoTranscodeContext<'a> {
     // Phase 1 outputs (always present once ctx exists):
     ictx: ffmpeg_the_third::format::context::Input,
@@ -102,6 +99,10 @@ struct VideoTranscodeContext<'a> {
 
     // Phase 4 output (initialized empty at Phase 2, populated in Phase 4):
     filter_graph: ffmpeg_the_third::filter::Graph,
+
+    // Phase 5 / Phase 6 shared state: monotonic audio PTS counter (in sample units),
+    // initialized in Phase 5 entry and read during Phase 6 audio flush.
+    audio_sample_counter: i64,
 
     // Borrowed config:
     opts: &'a VideoConvertOptions,
@@ -197,7 +198,6 @@ impl FFmpegRunner {
     /// Decodes video frames, converts pixel format through a filter graph,
     /// and encodes with the target video codec. Audio is stream-copied if
     /// `opts.audio_copy` is true.
-    #[allow(clippy::too_many_lines)]
     fn convert_video_transcode_sync(
         input: &Path,
         output: &Path,
@@ -205,7 +205,18 @@ impl FFmpegRunner {
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
+        let phase1 = Self::open_input_and_decoder(input)?;
+        let mut ctx = Self::configure_video_encoder(phase1, opts, output)?;
+        Self::setup_audio_pipeline(&mut ctx)?;
+        Self::write_header_and_build_filter(&mut ctx)?;
+        Self::run_encode_loop(&mut ctx, progress_fn)?;
+        Self::finalize_transcode(ctx)
+    }
 
+    /// Phase 1: open the input container, find video/audio stream indices,
+    /// capture their time bases and the video stream's frame rate, and
+    /// create the video decoder.
+    fn open_input_and_decoder(input: &Path) -> anyhow::Result<Phase1Outputs> {
         // Open input
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
@@ -289,7 +300,39 @@ impl FFmpegRunner {
         })?;
         let video_dec_ctx =
             ffmpeg_the_third::codec::context::Context::from_parameters(video_ist.parameters())?;
-        let mut video_decoder = video_dec_ctx.decoder().video()?;
+        let video_decoder = video_dec_ctx.decoder().video()?;
+
+        Ok(Phase1Outputs {
+            ictx,
+            video_decoder,
+            video_ist_index,
+            audio_ist_index,
+            video_ist_time_base,
+            video_ist_frame_rate,
+            audio_ist_time_base,
+            input_duration_us,
+        })
+    }
+
+    /// Phase 2: open the output container, find and configure the video
+    /// encoder, copy encoder parameters to the output stream, and construct
+    /// the `VideoTranscodeContext` that flows through the remaining phases.
+    fn configure_video_encoder<'a>(
+        phase1: Phase1Outputs,
+        opts: &'a VideoConvertOptions,
+        output_path: &'a Path,
+    ) -> anyhow::Result<VideoTranscodeContext<'a>> {
+        let Phase1Outputs {
+            ictx,
+            video_decoder,
+            video_ist_index,
+            audio_ist_index,
+            video_ist_time_base,
+            video_ist_frame_rate,
+            audio_ist_time_base,
+            input_duration_us,
+        } = phase1;
+        let output = output_path;
 
         // Open output
         let mut octx = ffmpeg_the_third::format::output(output)
@@ -370,7 +413,7 @@ impl FFmpegRunner {
         if let Some(crf) = opts.crf {
             enc_opts.set("crf", &crf.to_string());
         }
-        let mut video_encoder = video_encoder
+        let video_encoder = video_encoder
             .open_as_with(video_enc_codec, enc_opts)
             .map_err(PostProcessError::from)
             .context("failed to open video encoder for transcode")?;
@@ -395,6 +438,37 @@ impl FFmpegRunner {
             };
         }
 
+        Ok(VideoTranscodeContext {
+            ictx,
+            video_decoder,
+            video_ist_index,
+            audio_ist_index,
+            video_ist_time_base,
+            audio_ist_time_base,
+            input_duration_us,
+            octx,
+            video_encoder,
+            video_ost_index,
+            video_enc_time_base,
+            needs_global_header,
+            audio_copy_ost_index: None,
+            audio_transcode: None,
+            filter_graph: ffmpeg_the_third::filter::Graph::default(),
+            audio_sample_counter: 0,
+            opts,
+            output_path,
+        })
+    }
+
+    /// Phase 3: configure audio handling — stream-copy, re-encode, or neither —
+    /// based on `opts.audio_copy` / `opts.audio_codec`. Mutates `ctx` to set
+    /// either `audio_copy_ost_index` or `audio_transcode`.
+    fn setup_audio_pipeline(ctx: &mut VideoTranscodeContext<'_>) -> anyhow::Result<()> {
+        let opts = ctx.opts;
+        let audio_ist_index = ctx.audio_ist_index;
+        let audio_ist_time_base = ctx.audio_ist_time_base;
+        let needs_global_header = ctx.needs_global_header;
+
         // Determine audio handling mode:
         // - audio_copy=true → stream copy (existing path)
         // - audio_codec=Some → re-encode with specified encoder
@@ -406,147 +480,145 @@ impl FFmpegRunner {
         };
 
         // Add audio output stream (stream copy) if audio exists and copy requested
-        let audio_ost_index = if opts.audio_copy {
-            if let Some(audio_idx) = audio_ist_index {
-                let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "audio input stream {audio_idx} not found"
-                    ))
-                })?;
-                let audio_ost_idx = Self::add_stream_copy(
-                    &mut octx,
-                    audio_ist.parameters(),
-                    "for video transcode audio copy",
-                )?;
-                octx.stream_mut(audio_ost_idx)
-                    .expect("just-added stream")
-                    .set_metadata(audio_ist.metadata().to_owned());
-                Some(audio_ost_idx)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        if opts.audio_copy
+            && let Some(audio_idx) = audio_ist_index
+        {
+            let audio_ist = ctx.ictx.stream(audio_idx).ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!("audio input stream {audio_idx} not found"))
+            })?;
+            let audio_ost_idx = Self::add_stream_copy(
+                &mut ctx.octx,
+                audio_ist.parameters(),
+                "for video transcode audio copy",
+            )?;
+            ctx.octx
+                .stream_mut(audio_ost_idx)
+                .expect("just-added stream")
+                .set_metadata(audio_ist.metadata().to_owned());
+            ctx.audio_copy_ost_index = Some(audio_ost_idx);
+        }
 
         // Audio transcode: open decoder + encoder + filter when audio_codec is specified
-        let audio_transcode_state: Option<(
-            ffmpeg_the_third::decoder::Audio,
-            ffmpeg_the_third::encoder::audio::Encoder,
-            ffmpeg_the_third::Rational,      // encoder time_base
-            usize,                           // audio_ost_index for transcode
-            ffmpeg_the_third::filter::Graph, // audio format conversion filter
-            i32,                             // input sample rate (for monotonic PTS)
-        )> = if let Some(enc_name) = audio_encode_codec {
-            if let Some(audio_idx) = audio_ist_index {
-                // Open audio decoder
-                let audio_ist = ictx.stream(audio_idx).ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "audio input stream {audio_idx} not found"
-                    ))
-                })?;
-                let audio_dec_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(
-                    audio_ist.parameters(),
-                )?;
-                let mut audio_decoder = audio_dec_ctx.decoder().audio()?;
-                // Set packet timebase for accurate audio timestamps
-                let pkt_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 44100));
-                unsafe {
-                    (*audio_decoder.as_mut_ptr()).pkt_timebase =
-                        ffmpeg_the_third::ffi::AVRational {
-                            num: pkt_tb.numerator(),
-                            den: pkt_tb.denominator(),
-                        };
-                }
+        if let Some(enc_name) = audio_encode_codec
+            && let Some(audio_idx) = audio_ist_index
+        {
+            // Open audio decoder
+            let audio_ist = ctx.ictx.stream(audio_idx).ok_or_else(|| {
+                PostProcessError::ffmpeg_failed(format!("audio input stream {audio_idx} not found"))
+            })?;
+            let audio_dec_ctx =
+                ffmpeg_the_third::codec::context::Context::from_parameters(audio_ist.parameters())?;
+            let mut audio_decoder = audio_dec_ctx.decoder().audio()?;
+            // Set packet timebase for accurate audio timestamps
+            let pkt_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 44100));
+            unsafe {
+                (*audio_decoder.as_mut_ptr()).pkt_timebase = ffmpeg_the_third::ffi::AVRational {
+                    num: pkt_tb.numerator(),
+                    den: pkt_tb.denominator(),
+                };
+            }
 
-                // Find and open audio encoder
-                let audio_enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name)
-                    .ok_or_else(|| PostProcessError::UnsupportedCodec {
+            // Find and open audio encoder
+            let audio_enc_codec =
+                ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
+                    PostProcessError::UnsupportedCodec {
                         codec: enc_name.to_string(),
                         operation: "audio re-encode during video recode".into(),
-                    })?;
+                    }
+                })?;
 
-                // Add audio output stream with encoder
-                let audio_enc_ost_idx;
-                {
-                    let ost = octx
-                        .add_stream(audio_enc_codec)
-                        .map_err(PostProcessError::from)
-                        .context("failed to add audio encode output stream for video transcode")?;
-                    audio_enc_ost_idx = ost.index();
-                }
-
-                // Configure audio encoder from decoder properties
-                let audio_enc_context = ffmpeg_the_third::codec::context::Context::from_parameters(
-                    octx.stream(audio_enc_ost_idx)
-                        .ok_or_else(|| {
-                            PostProcessError::ffmpeg_failed("audio encode ost not found")
-                        })?
-                        .parameters(),
-                )?;
-                let mut audio_encoder = audio_enc_context.encoder().audio()?;
-
-                // Pick sample rate compatible with encoder (prefer decoder rate)
-                let audio_input_sample_rate = audio_decoder.rate();
-                let target_rate =
-                    Self::pick_audio_sample_rate(&audio_enc_codec, audio_input_sample_rate);
-                let enc_time_base = ffmpeg_the_third::Rational(1, target_rate as i32);
-                audio_encoder.set_rate(target_rate as i32);
-                audio_encoder.set_time_base(enc_time_base);
-
-                // Set channel layout matching decoder channel count
-                let channels = audio_decoder.ch_layout().channels();
-                // SAFETY: audio_encoder is a valid pre-open encoder context.
-                Self::set_default_channel_layout(
-                    unsafe { audio_encoder.as_mut_ptr() },
-                    channels as i32,
-                );
-
-                // Pick sample format compatible with encoder (prefer decoder format)
-                let target_fmt =
-                    Self::pick_audio_sample_format(&audio_enc_codec, audio_decoder.format());
-                audio_encoder.set_format(target_fmt);
-
-                if needs_global_header {
-                    unsafe { Self::set_global_header_flag(audio_encoder.as_mut_ptr()) };
-                }
-
-                let audio_encoder = audio_encoder
-                    .open_as(audio_enc_codec)
+            // Add audio output stream with encoder
+            let audio_enc_ost_idx;
+            {
+                let ost = ctx
+                    .octx
+                    .add_stream(audio_enc_codec)
                     .map_err(PostProcessError::from)
-                    .with_context(|| {
-                        format!("failed to open audio encoder '{enc_name}' for video transcode")
-                    })?;
-
-                // Copy encoder parameters back to output stream
-                unsafe {
-                    Self::copy_encoder_params_to_stream(
-                        &mut octx,
-                        audio_enc_ost_idx,
-                        audio_encoder.as_ptr(),
-                    );
-                }
-
-                // Build audio filter graph for format/rate conversion + frame size buffering
-                let audio_filter = Self::build_audio_transcode_filter(
-                    &audio_decoder,
-                    &audio_encoder,
-                    audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 48000)),
-                )?;
-
-                Some((
-                    audio_decoder,
-                    audio_encoder,
-                    enc_time_base,
-                    audio_enc_ost_idx,
-                    audio_filter,
-                    audio_input_sample_rate as i32,
-                ))
-            } else {
-                None
+                    .context("failed to add audio encode output stream for video transcode")?;
+                audio_enc_ost_idx = ost.index();
             }
-        } else {
+
+            // Configure audio encoder from decoder properties
+            let audio_enc_context = ffmpeg_the_third::codec::context::Context::from_parameters(
+                ctx.octx
+                    .stream(audio_enc_ost_idx)
+                    .ok_or_else(|| PostProcessError::ffmpeg_failed("audio encode ost not found"))?
+                    .parameters(),
+            )?;
+            let mut audio_encoder = audio_enc_context.encoder().audio()?;
+
+            // Pick sample rate compatible with encoder (prefer decoder rate)
+            let audio_input_sample_rate = audio_decoder.rate();
+            let target_rate =
+                Self::pick_audio_sample_rate(&audio_enc_codec, audio_input_sample_rate);
+            let enc_time_base = ffmpeg_the_third::Rational(1, target_rate as i32);
+            audio_encoder.set_rate(target_rate as i32);
+            audio_encoder.set_time_base(enc_time_base);
+
+            // Set channel layout matching decoder channel count
+            let channels = audio_decoder.ch_layout().channels();
+            // SAFETY: audio_encoder is a valid pre-open encoder context.
+            Self::set_default_channel_layout(
+                unsafe { audio_encoder.as_mut_ptr() },
+                channels as i32,
+            );
+
+            // Pick sample format compatible with encoder (prefer decoder format)
+            let target_fmt =
+                Self::pick_audio_sample_format(&audio_enc_codec, audio_decoder.format());
+            audio_encoder.set_format(target_fmt);
+
+            if needs_global_header {
+                unsafe { Self::set_global_header_flag(audio_encoder.as_mut_ptr()) };
+            }
+
+            let audio_encoder = audio_encoder
+                .open_as(audio_enc_codec)
+                .map_err(PostProcessError::from)
+                .with_context(|| {
+                    format!("failed to open audio encoder '{enc_name}' for video transcode")
+                })?;
+
+            // Copy encoder parameters back to output stream
+            unsafe {
+                Self::copy_encoder_params_to_stream(
+                    &mut ctx.octx,
+                    audio_enc_ost_idx,
+                    audio_encoder.as_ptr(),
+                );
+            }
+
+            // Build audio filter graph for format/rate conversion + frame size buffering
+            let audio_filter = Self::build_audio_transcode_filter(
+                &audio_decoder,
+                &audio_encoder,
+                audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 48000)),
+            )?;
+
+            ctx.audio_transcode = Some(AudioTranscodeState {
+                decoder: audio_decoder,
+                encoder: audio_encoder,
+                enc_time_base,
+                ost_index: audio_enc_ost_idx,
+                filter: audio_filter,
+                input_sample_rate: audio_input_sample_rate as i32,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Phase 4: set muxer options dictionary, write `encoding_tool` and
+    /// per-stream `encoder` metadata, write the output header, and build
+    /// the video filter graph for pixel format conversion.
+    fn write_header_and_build_filter(ctx: &mut VideoTranscodeContext<'_>) -> anyhow::Result<()> {
+        let opts = ctx.opts;
+        let output = ctx.output_path;
+        let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
+        let audio_encode_codec: Option<&str> = if opts.audio_copy {
             None
+        } else {
+            opts.audio_codec.as_deref()
         };
 
         // Build muxer options dictionary
@@ -571,62 +643,71 @@ impl FFmpegRunner {
                 "none"
             };
             let tool_components = format!("{video_codec_name} + {audio_component}");
-            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, &tool_components);
+            crate::ffmpeg::encoding_tag::set_encoding_tool(&mut ctx.octx, &tool_components);
         }
 
         // Set per-stream encoder tag on video output stream
         crate::ffmpeg::encoding_tag::set_stream_encoder(
-            &mut octx,
-            video_ost_index,
+            &mut ctx.octx,
+            ctx.video_ost_index,
             video_codec_name,
         );
 
         // Set per-stream encoder tag on audio output stream (only if re-encoding)
-        if let Some((_, _, _, audio_enc_ost_idx, _, _)) = audio_transcode_state.as_ref()
+        if let Some(ref audio_transcode) = ctx.audio_transcode
             && let Some(enc_name) = audio_encode_codec
         {
             crate::ffmpeg::encoding_tag::set_stream_encoder(
-                &mut octx,
-                *audio_enc_ost_idx,
+                &mut ctx.octx,
+                audio_transcode.ost_index,
                 enc_name,
             );
         }
 
         // Write header with options
-        octx.write_header_with(dict)
+        ctx.octx
+            .write_header_with(dict)
             .map_err(PostProcessError::from)
             .context("failed to write output header for video transcode")?;
 
         // Build video filter graph for pixel format conversion
-        let mut filter_graph =
-            Self::build_video_filter(&video_decoder, &video_encoder, video_ist_time_base)?;
+        ctx.filter_graph = Self::build_video_filter(
+            &ctx.video_decoder,
+            &ctx.video_encoder,
+            ctx.video_ist_time_base,
+        )?;
+
+        Ok(())
+    }
+
+    /// Phase 5: main packet loop. Reads input packets, dispatches each to
+    /// video decode/filter/encode, audio stream-copy, or audio transcode.
+    /// Emits the final progress fraction `1.0` before returning.
+    fn run_encode_loop(
+        ctx: &mut VideoTranscodeContext<'_>,
+        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+    ) -> anyhow::Result<()> {
+        let VideoTranscodeContext {
+            ictx,
+            octx,
+            video_decoder,
+            video_encoder,
+            filter_graph,
+            video_ist_index,
+            video_ist_time_base,
+            video_ost_index,
+            video_enc_time_base,
+            audio_ist_index,
+            audio_ist_time_base,
+            audio_copy_ost_index,
+            audio_transcode,
+            audio_sample_counter,
+            input_duration_us,
+            ..
+        } = ctx;
 
         let mut last_progress = Instant::now();
         let progress_throttle = Duration::from_millis(100);
-
-        // Destructure transcode state to allow mutable borrows in loop
-        let (
-            mut audio_transcode_decoder,
-            mut audio_transcode_encoder,
-            audio_transcode_enc_tb,
-            audio_transcode_ost_idx,
-            mut audio_transcode_filter,
-            audio_transcode_input_rate,
-        ) = match audio_transcode_state {
-            Some((dec, enc, enc_tb, idx, filter, rate)) => (
-                Some(dec),
-                Some(enc),
-                Some(enc_tb),
-                Some(idx),
-                Some(filter),
-                Some(rate),
-            ),
-            None => (None, None, None, None, None, None),
-        };
-
-        // Monotonic audio PTS counter (in sample units, i.e. 1/sample_rate).
-        // Overrides source PTS to handle timestamp discontinuities.
-        let mut audio_sample_counter: i64 = 0;
 
         // Process packets: video -> decode/filter/encode, audio -> copy or transcode
         for result in ictx.packets() {
@@ -635,33 +716,33 @@ impl FFmpegRunner {
                 .context("failed to read packet during video transcode")?;
             let ist_index = stream.index();
 
-            if ist_index == video_ist_index {
+            if ist_index == *video_ist_index {
                 // PTS-based progress from video stream
-                if let Some(ref progress) = progress_fn
-                    && input_duration_us > 0
+                if let Some(progress) = progress_fn
+                    && *input_duration_us > 0
                     && last_progress.elapsed() >= progress_throttle
                     && let Some(pts) = packet.pts()
                 {
-                    let tb = video_ist_time_base;
+                    let tb = *video_ist_time_base;
                     let pts_us =
                         pts * i64::from(tb.numerator()) * 1_000_000 / i64::from(tb.denominator());
-                    let frac = (pts_us as f64 / input_duration_us as f64).clamp(0.0, 1.0);
+                    let frac = (pts_us as f64 / *input_duration_us as f64).clamp(0.0, 1.0);
                     progress(frac);
                     last_progress = Instant::now();
                 }
                 // Video: decode -> filter -> encode -> write
                 video_decoder.send_packet(&packet)?;
                 Self::receive_and_process_video(
-                    &mut video_decoder,
-                    &mut filter_graph,
-                    &mut video_encoder,
-                    &mut octx,
-                    video_ost_index,
-                    video_enc_time_base,
+                    video_decoder,
+                    filter_graph,
+                    video_encoder,
+                    octx,
+                    *video_ost_index,
+                    *video_enc_time_base,
                 )?;
-            } else if Some(ist_index) == audio_ist_index {
+            } else if Some(ist_index) == *audio_ist_index {
                 // Audio: stream copy or transcode
-                if let Some(audio_ost_idx) = audio_ost_index {
+                if let Some(audio_ost_idx) = *audio_copy_ost_index {
                     // Stream copy path
                     let ost_time_base = octx
                         .stream(audio_ost_idx)
@@ -678,36 +759,23 @@ impl FFmpegRunner {
                     packet.set_position(-1);
                     packet.set_stream(audio_ost_idx);
                     packet
-                        .write_interleaved(&mut octx)
+                        .write_interleaved(octx)
                         .map_err(PostProcessError::from)
                         .context("failed to write audio packet during video transcode")?;
-                } else if let (
-                    Some(ref mut audio_dec),
-                    Some(ref mut audio_enc),
-                    Some(enc_tb),
-                    Some(audio_ost_idx),
-                    Some(ref mut audio_filter),
-                    Some(input_rate),
-                ) = (
-                    audio_transcode_decoder.as_mut(),
-                    audio_transcode_encoder.as_mut(),
-                    audio_transcode_enc_tb,
-                    audio_transcode_ost_idx,
-                    audio_transcode_filter.as_mut(),
-                    audio_transcode_input_rate,
-                ) {
+                } else if let Some(at) = audio_transcode.as_mut() {
+                    let input_rate = at.input_sample_rate;
                     let input_tb =
                         audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
                     // Audio transcode path: decode → filter (format convert + frame size) → encode → write
-                    audio_dec.send_packet(&packet)?;
+                    at.decoder.send_packet(&packet)?;
                     Self::drain_audio_transcode_filtered(
-                        audio_dec,
-                        audio_filter,
-                        audio_enc,
-                        &mut octx,
-                        enc_tb,
-                        audio_ost_idx,
-                        &mut audio_sample_counter,
+                        &mut at.decoder,
+                        &mut at.filter,
+                        &mut at.encoder,
+                        octx,
+                        at.enc_time_base,
+                        at.ost_index,
+                        audio_sample_counter,
                         input_rate,
                         input_tb,
                     )?;
@@ -715,9 +783,29 @@ impl FFmpegRunner {
             }
         }
         // Emit final 1.0 on completion
-        if let Some(ref progress) = progress_fn {
+        if let Some(progress) = progress_fn {
             progress(1.0);
         }
+
+        Ok(())
+    }
+
+    /// Phase 6: flush video decoder, filter graph, and encoder; flush the
+    /// audio transcode pipeline if present; flush the interleave queue and
+    /// write the output trailer. Consumes `ctx`.
+    fn finalize_transcode(ctx: VideoTranscodeContext<'_>) -> anyhow::Result<()> {
+        let VideoTranscodeContext {
+            mut octx,
+            mut video_decoder,
+            mut video_encoder,
+            mut filter_graph,
+            mut audio_transcode,
+            video_ost_index,
+            video_enc_time_base,
+            audio_ist_time_base,
+            mut audio_sample_counter,
+            ..
+        } = ctx;
 
         // Flush video decoder
         video_decoder.send_eof()?;
@@ -754,51 +842,43 @@ impl FFmpegRunner {
         )?;
 
         // Flush audio encoder (transcode path)
-        if let (
-            Some(ref mut audio_dec),
-            Some(ref mut audio_enc),
-            Some(enc_tb),
-            Some(audio_ost_idx),
-            Some(ref mut audio_filter),
-            Some(input_rate),
-        ) = (
-            audio_transcode_decoder.as_mut(),
-            audio_transcode_encoder.as_mut(),
-            audio_transcode_enc_tb,
-            audio_transcode_ost_idx,
-            audio_transcode_filter.as_mut(),
-            audio_transcode_input_rate,
-        ) {
+        if let Some(at) = audio_transcode.as_mut() {
+            let input_rate = at.input_sample_rate;
             let input_tb = audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, input_rate));
             // Flush decoder
-            audio_dec.send_eof()?;
+            at.decoder.send_eof()?;
             Self::drain_audio_transcode_filtered(
-                audio_dec,
-                audio_filter,
-                audio_enc,
+                &mut at.decoder,
+                &mut at.filter,
+                &mut at.encoder,
                 &mut octx,
-                enc_tb,
-                audio_ost_idx,
+                at.enc_time_base,
+                at.ost_index,
                 &mut audio_sample_counter,
                 input_rate,
                 input_tb,
             )?;
             // Flush filter graph
-            audio_filter
+            at.filter
                 .get("in")
                 .ok_or_else(|| PostProcessError::ffmpeg_failed("audio filter 'in' not found"))?
                 .source()
                 .flush()?;
             Self::drain_audio_filter_to_encoder(
-                audio_filter,
-                audio_enc,
+                &mut at.filter,
+                &mut at.encoder,
                 &mut octx,
-                enc_tb,
-                audio_ost_idx,
+                at.enc_time_base,
+                at.ost_index,
             )?;
             // Flush encoder
-            audio_enc.send_eof()?;
-            Self::drain_audio_encoder_packets(audio_enc, &mut octx, enc_tb, audio_ost_idx)?;
+            at.encoder.send_eof()?;
+            Self::drain_audio_encoder_packets(
+                &mut at.encoder,
+                &mut octx,
+                at.enc_time_base,
+                at.ost_index,
+            )?;
         }
 
         // Flush interleave queue before trailer
