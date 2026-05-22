@@ -12,6 +12,8 @@ pub mod mux_timing;
 mod tests;
 mod video_convert;
 mod video_pipeline;
+mod video_transcode_context;
+mod video_transcode_phases;
 
 // Re-export public(crate) items used by normalize and other modules
 pub use mux_timing::MuxTimingState;
