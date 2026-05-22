@@ -96,8 +96,7 @@ fn classify_mime(mime: &str, codecs_str: &str) -> MimeClass {
         return MimeClass::Audio;
     }
     let is_text = mime.starts_with("text/")
-        || (mime == "application/mp4"
-            && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
+        || (mime == "application/mp4" && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
     if is_text {
         return MimeClass::Text;
     }
@@ -174,8 +173,13 @@ fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
     };
     let format_id = ctx.repr.id.clone().unwrap_or(synth_id);
 
-    let fragments =
-        build_fragments(ctx.adapt, ctx.repr, &format_id, bandwidth, ctx.period_duration_seconds);
+    let fragments = build_fragments(
+        ctx.adapt,
+        ctx.repr,
+        &format_id,
+        bandwidth,
+        ctx.period_duration_seconds,
+    );
     if fragments.is_empty() {
         return None;
     }
@@ -191,7 +195,8 @@ fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
         return None;
     }
 
-    let codecs = ctx.repr
+    let codecs = ctx
+        .repr
         .codecs
         .clone()
         .or_else(|| ctx.adapt.codecs.clone())
@@ -207,7 +212,8 @@ fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
     let container = format!("{ext}_dash");
 
     let fps = ctx.repr.frameRate.as_deref().and_then(parse_frame_rate);
-    let asr = ctx.repr
+    let asr = ctx
+        .repr
         .audioSamplingRate
         .as_deref()
         .or(ctx.adapt.audioSamplingRate.as_deref())
@@ -372,8 +378,7 @@ pub fn expand_dash_representations(
                     // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
                     // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
                     let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
-                    let frags =
-                        build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
+                    let frags = build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
                     if frags.is_empty() {
                         let ext = mime_to_sub_ext(mime, codecs_str);
                         subtitles.push(DashSubtitle {
