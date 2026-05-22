@@ -13,19 +13,10 @@
 //!
 //! # Lint allowances
 //!
-//! - `clippy::cast_*`: `FFmpeg` timestamp + sample-rate arithmetic uses
-//!   mixed C integer types. All casts are audited.
-//! - `clippy::similar_names`: `enc_ctx` / `dec_ctx` / `audio_enc` / `audio_dec`
-//!   are standard `FFmpeg` naming.
+//! - `clippy::cast_possible_truncation` / `clippy::cast_possible_wrap`:
+//!   `frame.samples() as i64` widens `usize` to `i64` for PTS accumulation.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless,
-    clippy::similar_names,
-)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 
 use crate::error::{PostProcessError, Result};
 
