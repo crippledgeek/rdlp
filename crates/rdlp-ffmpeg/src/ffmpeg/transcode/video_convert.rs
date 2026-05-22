@@ -39,6 +39,75 @@ use super::mux_timing::flush_interleave_queue;
 /// Callback type for forwarding `FFmpeg` log lines to the UI.
 type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Outputs of Phase 1 (`open_input_and_decoder`).
+///
+/// Passed by value into Phase 2 (`configure_video_encoder`), which uses
+/// these fields plus its own newly-created state to construct the full
+/// `VideoTranscodeContext`.
+#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
+struct Phase1Outputs {
+    ictx: ffmpeg_the_third::format::context::Input,
+    video_decoder: ffmpeg_the_third::decoder::Video,
+    video_ist_index: usize,
+    audio_ist_index: Option<usize>,
+    video_ist_time_base: ffmpeg_the_third::Rational,
+    video_ist_frame_rate: ffmpeg_the_third::Rational,
+    audio_ist_time_base: Option<ffmpeg_the_third::Rational>,
+    input_duration_us: i64,
+}
+
+/// State carried across audio re-encode phases (Phase 3 setup, Phase 5 loop,
+/// Phase 6 finalize). Replaces the prior 6-tuple
+/// `Option<(decoder::Audio, encoder::audio::Encoder, Rational, usize, filter::Graph, i32)>`.
+#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
+struct AudioTranscodeState {
+    decoder: ffmpeg_the_third::decoder::Audio,
+    encoder: ffmpeg_the_third::encoder::audio::Encoder,
+    enc_time_base: ffmpeg_the_third::Rational,
+    ost_index: usize,
+    filter: ffmpeg_the_third::filter::Graph,
+    input_sample_rate: i32,
+}
+
+/// Mutable state threaded across the six phases of video transcoding.
+/// Constructed at the end of Phase 2 (`configure_video_encoder`) and
+/// dropped at the end of Phase 6 (`finalize_transcode`).
+///
+/// `filter_graph` is initialized to `filter::Graph::default()` (empty)
+/// in Phase 2 and overwritten by Phase 4 (`write_header_and_build_filter`).
+/// `audio_copy_ost_index` and `audio_transcode` are `Option<T>` because
+/// they're genuinely conditional (set by Phase 3 only when `audio_copy`
+/// or `audio_codec` is requested respectively).
+#[allow(dead_code)] // TODO(B.2): wired into convert_video_transcode_sync in Task B.2
+struct VideoTranscodeContext<'a> {
+    // Phase 1 outputs (always present once ctx exists):
+    ictx: ffmpeg_the_third::format::context::Input,
+    video_decoder: ffmpeg_the_third::decoder::Video,
+    video_ist_index: usize,
+    audio_ist_index: Option<usize>,
+    video_ist_time_base: ffmpeg_the_third::Rational,
+    audio_ist_time_base: Option<ffmpeg_the_third::Rational>,
+    input_duration_us: i64,
+
+    // Phase 2 outputs (always present once ctx exists):
+    octx: ffmpeg_the_third::format::context::Output,
+    video_encoder: ffmpeg_the_third::encoder::video::Encoder,
+    video_ost_index: usize,
+    video_enc_time_base: ffmpeg_the_third::Rational,
+    needs_global_header: bool,
+
+    // Phase 3 outputs (mutually exclusive; one or both may be None):
+    audio_copy_ost_index: Option<usize>,
+    audio_transcode: Option<AudioTranscodeState>,
+
+    // Phase 4 output (initialized empty at Phase 2, populated in Phase 4):
+    filter_graph: ffmpeg_the_third::filter::Graph,
+
+    // Borrowed config:
+    opts: &'a VideoConvertOptions,
+    output_path: &'a Path,
+}
+
 impl FFmpegRunner {
     /// Convert a video file, either by remuxing or transcoding.
     ///
