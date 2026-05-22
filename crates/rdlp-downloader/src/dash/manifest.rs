@@ -512,6 +512,16 @@ mod range_tests {
         assert_eq!(parse_byte_range(&format!("0-{}", u64::MAX)), None);
     }
 
+    #[test]
+    fn rejects_whitespace_in_components() {
+        // RFC 7233 grammar disallows interior whitespace; Rust's u64 parser
+        // also rejects leading/trailing whitespace. Lock the contract so a
+        // future refactor doesn't silently add `trim()` and widen acceptance.
+        assert_eq!(parse_byte_range(" 0-739"), None);
+        assert_eq!(parse_byte_range("0-739 "), None);
+        assert_eq!(parse_byte_range("0 - 739"), None);
+    }
+
     fn segment_list_mpd_with_init(init_attrs: &str) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
