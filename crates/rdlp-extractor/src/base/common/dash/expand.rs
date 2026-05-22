@@ -166,23 +166,16 @@ struct ReprContext<'a> {
 /// `ctx.is_video` distinguishes codec assignment and synth-ID prefix.
 /// Returns `None` when no fragment list can be built (Repr is skipped).
 fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
-    let adapt = ctx.adapt;
-    let repr = ctx.repr;
-    let adapt_idx = ctx.adapt_idx;
-    let repr_idx = ctx.repr_idx;
-    let is_video = ctx.is_video;
-    let mime = ctx.mime;
-    let final_base = ctx.final_base;
-    let bandwidth = repr.bandwidth.unwrap_or(0);
-    let synth_id = if is_video {
-        format!("dash_v_{adapt_idx}_{repr_idx}")
+    let bandwidth = ctx.repr.bandwidth.unwrap_or(0);
+    let synth_id = if ctx.is_video {
+        format!("dash_v_{}_{}", ctx.adapt_idx, ctx.repr_idx)
     } else {
-        format!("dash_a_{adapt_idx}_{repr_idx}")
+        format!("dash_a_{}_{}", ctx.adapt_idx, ctx.repr_idx)
     };
-    let format_id = repr.id.clone().unwrap_or(synth_id);
+    let format_id = ctx.repr.id.clone().unwrap_or(synth_id);
 
     let fragments =
-        build_fragments(adapt, repr, &format_id, bandwidth, ctx.period_duration_seconds);
+        build_fragments(ctx.adapt, ctx.repr, &format_id, bandwidth, ctx.period_duration_seconds);
     if fragments.is_empty() {
         return None;
     }
@@ -194,30 +187,30 @@ fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
     // SegmentTemplate `media` attribute injects a private-host target.
     // Drop the whole Representation on any failure so the rest of the
     // MPD remains usable.
-    if !validate_fragment_urls(&fragments, final_base, adapt_idx, repr_idx) {
+    if !validate_fragment_urls(&fragments, ctx.final_base, ctx.adapt_idx, ctx.repr_idx) {
         return None;
     }
 
-    let codecs = repr
+    let codecs = ctx.repr
         .codecs
         .clone()
-        .or_else(|| adapt.codecs.clone())
+        .or_else(|| ctx.adapt.codecs.clone())
         .unwrap_or_default();
 
-    let (vcodec, acodec) = if is_video {
+    let (vcodec, acodec) = if ctx.is_video {
         (Codec::Present(codecs), Codec::Absent)
     } else {
         (Codec::Absent, Codec::Present(codecs))
     };
 
-    let ext = mime_to_ext(mime);
+    let ext = mime_to_ext(ctx.mime);
     let container = format!("{ext}_dash");
 
-    let fps = repr.frameRate.as_deref().and_then(parse_frame_rate);
-    let asr = repr
+    let fps = ctx.repr.frameRate.as_deref().and_then(parse_frame_rate);
+    let asr = ctx.repr
         .audioSamplingRate
         .as_deref()
-        .or(adapt.audioSamplingRate.as_deref())
+        .or(ctx.adapt.audioSamplingRate.as_deref())
         .and_then(parse_audio_sampling_rate);
 
     let mut f = Format::new(
@@ -234,13 +227,16 @@ fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
     } else {
         None
     };
-    f.width = repr.width.map(|w| w as u32);
-    f.height = repr.height.map(|h| h as u32);
+    f.width = ctx.repr.width.map(|w| w as u32);
+    f.height = ctx.repr.height.map(|h| h as u32);
     f.fps = fps;
-    f.asr = if !is_video { asr } else { None };
+    // safe: build_av_format is only called for Video|Audio (per the match arm
+    // in expand_dash_representations).
+    let is_audio = !ctx.is_video;
+    f.asr = if is_audio { asr } else { None };
     f.language = ctx.adapt_lang.clone();
     f.fragments = Some(fragments);
-    f.fragment_base_url = Some(final_base.to_string());
+    f.fragment_base_url = Some(ctx.final_base.to_string());
 
     Some(f)
 }
