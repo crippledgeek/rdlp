@@ -15,6 +15,7 @@ fn base() -> Vec<Url> {
 fn template_substitutes_number_and_bandwidth() {
     let plan = SegmentPlan::Template(SegmentTemplatePlan {
         init: Some("video/init.mp4".into()),
+        init_byte_range: None,
         media: "video/$RepresentationID$/$Number$-$Bandwidth$.m4s".into(),
         start_number: 1,
         timescale: 1000,
@@ -39,6 +40,7 @@ fn template_substitutes_number_and_bandwidth() {
 fn timeline_expands_positive_repeats() {
     let plan = SegmentPlan::Timeline(SegmentTimelinePlan {
         init: None,
+        init_byte_range: None,
         media: "seg-$Number$.m4s".into(),
         start_number: 1,
         timescale: 1000,
@@ -61,6 +63,7 @@ fn timeline_expands_negative_r_to_period_end() {
     // Period = 30s @ 1000 timescale = 30_000 ts. Each segment 6000 ts → 5 segments.
     let plan = SegmentPlan::Timeline(SegmentTimelinePlan {
         init: None,
+        init_byte_range: None,
         media: "seg-$Number$.m4s".into(),
         start_number: 1,
         timescale: 1000,
@@ -80,6 +83,7 @@ fn timeline_expands_negative_r_to_period_end() {
 fn timeline_no_repeat_emits_single_segment() {
     let plan = SegmentPlan::Timeline(SegmentTimelinePlan {
         init: None,
+        init_byte_range: None,
         media: "seg-$Number$.m4s".into(),
         start_number: 1,
         timescale: 1000,
@@ -98,6 +102,7 @@ fn timeline_no_repeat_emits_single_segment() {
 fn list_resolves_relative_urls() {
     let plan = SegmentPlan::List(SegmentListPlan {
         init: Some("init.mp4".into()),
+        init_byte_range: None,
         urls: vec!["s1.m4s".into(), "s2.m4s".into()],
     });
     let urls = plan.segment_urls(&base(), 0);
@@ -109,6 +114,7 @@ fn list_resolves_relative_urls() {
 fn init_url_resolves() {
     let plan = SegmentPlan::Template(SegmentTemplatePlan {
         init: Some("init.mp4".into()),
+        init_byte_range: None,
         media: "seg-$Number$.m4s".into(),
         start_number: 1,
         timescale: 1000,
