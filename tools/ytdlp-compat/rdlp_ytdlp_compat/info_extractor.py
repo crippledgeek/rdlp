@@ -547,6 +547,19 @@ def _mpd_fragment_to_dict(frag):
     out = {_location_key(frag.url): frag.url}
     if frag.duration is not None:
         out['duration'] = frag.duration
+    # WIT @0.4.0 (#274) — DASH byte-range fields. `(start, end_exclusive)`
+    # tuples flow through verbatim from rdlp's host-side MPD expansion;
+    # consumers in yt-dlp-port land use these to emit HTTP Range headers
+    # for ranged media segments and per-fragment init segments.
+    byte_range = getattr(frag, 'byte_range', None)
+    if byte_range is not None:
+        out['byte_range'] = byte_range
+    init_url = getattr(frag, 'init_url', None)
+    if init_url is not None:
+        out['init_url'] = init_url
+    init_byte_range = getattr(frag, 'init_byte_range', None)
+    if init_byte_range is not None:
+        out['init_byte_range'] = init_byte_range
     return out
 
 

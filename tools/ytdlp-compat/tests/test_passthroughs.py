@@ -179,6 +179,9 @@ def test_extract_m3u8_calls_host(monkeypatch, ie):
 class FakeMpdFragment:
     url: str
     duration: Optional[float] = None
+    byte_range: Optional[tuple] = None
+    init_url: Optional[str] = None
+    init_byte_range: Optional[tuple] = None
 
 
 @dataclass
@@ -384,6 +387,33 @@ def test_extract_mpd_fragment_duration_optional_passthrough(monkeypatch):
     fmts, _ = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
     assert fmts[0]["fragments"][0]["duration"] == 4.5
     assert "duration" not in fmts[0]["fragments"][1]
+
+
+def test_extract_mpd_fragment_byte_range_passthrough(monkeypatch):
+    """#274 — byte_range / init_url / init_byte_range surface in fragment dict."""
+    from rdlp_ytdlp_compat import _host
+    fake = FakeMpdExtraction(formats=[
+        FakeMpdFormat(fragments=[
+            FakeMpdFragment(
+                url="https://cdn.example.com/seg-0.m4s",
+                duration=4.0,
+                byte_range=(0, 1024),
+                init_url="https://cdn.example.com/init.m4s",
+                init_byte_range=(0, 740),
+            ),
+            FakeMpdFragment(url="seg-1.m4s", duration=4.0),
+        ]),
+    ])
+    monkeypatch.setattr(_host, "extract_mpd", lambda *a, **k: fake)
+    fmts, _ = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
+    frags = fmts[0]["fragments"]
+    assert frags[0]["byte_range"] == (0, 1024)
+    assert frags[0]["init_url"] == "https://cdn.example.com/init.m4s"
+    assert frags[0]["init_byte_range"] == (0, 740)
+    # Fragment without byte-range info must omit the keys (yt-dlp style).
+    assert "byte_range" not in frags[1]
+    assert "init_url" not in frags[1]
+    assert "init_byte_range" not in frags[1]
 
 
 def test_extract_mpd_subtitles_grouped_by_language(monkeypatch):

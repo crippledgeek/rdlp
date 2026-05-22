@@ -18,7 +18,7 @@ fn canonical_form_is_stable_across_key_order() {
     let a = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://x.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -32,7 +32,7 @@ signature = "ZA"
     let b = r#"
 priority = 150
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 name = "x"
 capabilities = ["log"]
 matches = ["https://x.com/*"]
@@ -58,7 +58,7 @@ fn canonical_form_excludes_signature_field() {
     let toml = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://x.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -87,7 +87,7 @@ fn canonical_form_sorts_list_contents() {
     let toml = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://b.com/*", "https://a.com/*"]
 priority = 150
 capabilities = ["log", "fetch"]
@@ -113,7 +113,7 @@ fn canonical_form_includes_optional_url_regex_when_present() {
     let with_regex = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://x.com/*"]
 url_regex = '^https://x\.com/(?P<id>\d+)'
 priority = 150
@@ -134,7 +134,7 @@ fn canonical_form_omits_url_regex_when_absent() {
     let without_regex = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://x.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -155,7 +155,7 @@ fn canonical_form_keys_are_sorted() {
     let toml = r#"
 name = "x"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://x.com/*"]
 priority = 150
 supports_search = true

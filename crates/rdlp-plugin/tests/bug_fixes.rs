@@ -67,7 +67,7 @@ fn claims_override_outside_matches_fails_validation() {
     let toml = r#"
 name = "youtube"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://www.youtube.com/watch*"]
 priority = 150
 claims_override = ["accounts.youtube.com"]
@@ -101,7 +101,7 @@ fn claims_override_matching_matches_host_passes_validation() {
     let toml = r#"
 name = "youtube"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://www.youtube.com/watch*", "https://youtu.be/*"]
 priority = 150
 claims_override = ["www.youtube.com"]
@@ -124,7 +124,7 @@ fn claims_override_ancestor_domain_of_match_host_passes_validation() {
     let toml = r#"
 name = "youtube"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://www.youtube.com/watch*"]
 priority = 150
 claims_override = ["youtube.com"]

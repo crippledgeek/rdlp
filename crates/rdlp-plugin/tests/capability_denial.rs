@@ -27,7 +27,7 @@ fn manifest_with_caps(caps: &[&str]) -> Manifest {
         r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = [{cap_list}]
