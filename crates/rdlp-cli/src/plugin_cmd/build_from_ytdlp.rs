@@ -375,8 +375,7 @@ fn stage_build_dir(
 const YT_DLP_INIT_PY: &str = include_str!("build_from_ytdlp_templates/yt_dlp_init.py");
 
 /// `yt_dlp/extractor/common.py` — see `build_from_ytdlp_templates/extractor_common.py`.
-const EXTRACTOR_COMMON_PY: &str =
-    include_str!("build_from_ytdlp_templates/extractor_common.py");
+const EXTRACTOR_COMMON_PY: &str = include_str!("build_from_ytdlp_templates/extractor_common.py");
 
 /// `yt_dlp/utils/__init__.py` — see `build_from_ytdlp_templates/utils_init.py`.
 const UTILS_INIT_PY: &str = include_str!("build_from_ytdlp_templates/utils_init.py");
@@ -388,8 +387,7 @@ const UTILS_HELPERS_PY: &str = include_str!("build_from_ytdlp_templates/utils_he
 
 /// `yt_dlp/utils/traversal.py` — re-exports traversal helpers.
 /// See `build_from_ytdlp_templates/utils_traversal.py` for the full module mapping.
-const UTILS_TRAVERSAL_PY: &str =
-    include_str!("build_from_ytdlp_templates/utils_traversal.py");
+const UTILS_TRAVERSAL_PY: &str = include_str!("build_from_ytdlp_templates/utils_traversal.py");
 
 /// `_entry.py` (auto-generated wrapper) — see `build_from_ytdlp_templates/entry.py`.
 /// `{{PLUGIN_MODULE}}` is substituted at stage time with the plugin's Python module name.
