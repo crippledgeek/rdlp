@@ -25,6 +25,12 @@ pub enum SegmentPlan {
 pub struct SegmentTemplatePlan {
     /// Initialisation segment URL template (relative to the BaseURL chain).
     pub init: Option<String>,
+    /// Optional byte-range on the initialisation segment, as
+    /// `(start, end_exclusive)` — populated from
+    /// `<Initialization @range="start-end">` (ISO/IEC 23009-1 §5.3.9.4.3).
+    /// When `init` is `None` and this is `Some`, the init segment is fetched
+    /// from the first BaseURL of the Representation.
+    pub init_byte_range: Option<(u64, u64)>,
     /// Media template string e.g. `"video/seg-$Number$.m4s"`.
     pub media: String,
     /// First segment number (DASH `@startNumber`, defaults to 1).
@@ -46,6 +52,9 @@ pub struct SegmentTemplatePlan {
 pub struct SegmentTimelinePlan {
     /// Initialisation segment URL template.
     pub init: Option<String>,
+    /// Optional byte-range on the initialisation segment — see
+    /// [`SegmentTemplatePlan::init_byte_range`] for semantics.
+    pub init_byte_range: Option<(u64, u64)>,
     /// Media template string.
     pub media: String,
     /// First segment number.
@@ -78,21 +87,47 @@ pub struct TimelineEntry {
 pub struct SegmentListPlan {
     /// Initialisation segment URL (relative).
     pub init: Option<String>,
+    /// Optional byte-range on the initialisation segment — see
+    /// [`SegmentTemplatePlan::init_byte_range`] for semantics.
+    pub init_byte_range: Option<(u64, u64)>,
     /// Per-segment relative URLs in playback order.
     pub urls: Vec<String>,
 }
 
 impl SegmentPlan {
     /// Resolve the initialisation segment URL against the supplied BaseURL chain.
-    /// Returns `None` when no init is declared.
+    ///
+    /// Returns `None` when no init is declared (neither `sourceURL` nor a
+    /// byte-range). When the plan carries only a byte-range
+    /// (`<Initialization range="…"/>` without `@sourceURL` — ISO/IEC 23009-1
+    /// §5.3.9.4.3), the init URL falls back to the first BaseURL of the
+    /// chain and the caller is expected to issue a ranged GET using
+    /// [`Self::init_byte_range`].
     #[must_use]
     pub fn init_url(&self, base: &[Url]) -> Option<Url> {
-        let init = match self {
-            Self::Template(t) => t.init.as_deref(),
-            Self::Timeline(t) => t.init.as_deref(),
-            Self::List(t) => t.init.as_deref(),
-        }?;
-        join(base, init).ok()
+        let (init, range) = match self {
+            Self::Template(t) => (t.init.as_deref(), t.init_byte_range),
+            Self::Timeline(t) => (t.init.as_deref(), t.init_byte_range),
+            Self::List(t) => (t.init.as_deref(), t.init_byte_range),
+        };
+        match (init, range) {
+            (Some(rel), _) => join(base, rel).ok(),
+            (None, Some(_)) => base.first().cloned(),
+            (None, None) => None,
+        }
+    }
+
+    /// The byte-range, if any, attached to the initialisation segment.
+    ///
+    /// `Some((start, end_exclusive))` matches the convention used by
+    /// `Fragment.byte_range` / `Fragment.init_byte_range` in `rdlp-types`.
+    #[must_use]
+    pub const fn init_byte_range(&self) -> Option<(u64, u64)> {
+        match self {
+            Self::Template(t) => t.init_byte_range,
+            Self::Timeline(t) => t.init_byte_range,
+            Self::List(t) => t.init_byte_range,
+        }
     }
 
     /// Enumerate every media-segment URL.
