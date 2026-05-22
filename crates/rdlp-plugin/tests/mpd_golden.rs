@@ -154,7 +154,7 @@ fn write_signed_plugin(
         r#"
 name = "{name}"
 version = "0.1.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = [{match_str}]
 priority = 150
 claims_override = []

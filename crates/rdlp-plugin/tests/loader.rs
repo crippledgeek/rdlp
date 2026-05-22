@@ -53,7 +53,7 @@ fn write_signed_plugin(
         r#"
 name = "{name}"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = {priority}
 claims_override = [{claims_str}]
@@ -204,7 +204,7 @@ fn bad_signature_logged_and_skipped() {
         r#"
 name = "bad"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -313,7 +313,7 @@ fn dir_without_wasm_is_skipped() {
         r#"
 name = "incomplete"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]

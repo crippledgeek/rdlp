@@ -49,7 +49,7 @@ fn make_extractor() -> Option<PluginExtractor> {
     let toml = r#"
 name = "trap-test"
 version = "0.0.1"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = []
