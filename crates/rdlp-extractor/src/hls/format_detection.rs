@@ -307,7 +307,11 @@ fn expand_hls_variant(
         expanded_format.quality = Some((h / 100) as i32);
     }
 
-    (expanded_format, Some(variant.is_live), Some(variant.has_encryption))
+    (
+        expanded_format,
+        Some(variant.is_live),
+        Some(variant.has_encryption),
+    )
 }
 
 /// Build the async future that probes a single `format`.
@@ -389,12 +393,7 @@ async fn build_format_detection_future(
         if ctx.detect_sizes {
             let result = timeout(
                 ctx.head_timeout,
-                BaseExtractor::detect_file_size(
-                    &url,
-                    &ctx.http_client,
-                    None,
-                    ctx.head_timeout,
-                ),
+                BaseExtractor::detect_file_size(&url, &ctx.http_client, None, ctx.head_timeout),
             )
             .await;
 
