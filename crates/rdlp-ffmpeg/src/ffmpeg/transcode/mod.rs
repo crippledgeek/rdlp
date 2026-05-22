@@ -6,6 +6,7 @@
 mod audio_extract;
 mod audio_pipeline;
 mod audio_pipeline_direct;
+mod audio_recode_pipeline;
 pub mod mux_timing;
 #[cfg(test)]
 mod tests;
