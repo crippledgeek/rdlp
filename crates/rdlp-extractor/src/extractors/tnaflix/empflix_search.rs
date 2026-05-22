@@ -1,29 +1,43 @@
-//! MovieFap search extractor.
-//!
-//! Parses MovieFap's distinct HTML search result structure.
-//! Uses `moviefap_search_helpers` and `moviefap_search_patterns` internally.
+//! EMPFlix search extractor.
 
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result};
 use std::time::Duration;
 
-use super::{moviefap_search_helpers, moviefap_search_patterns};
+use super::{search_patterns, tnaflix_search_helpers};
 
 /// Rate limit delay between search page fetches (500 ms)
 const PAGE_RATE_LIMIT_MS: u64 = 500;
 
-/// MovieFap search extractor
+/// EMPFlix search extractor
 ///
-/// Parses MovieFap's distinct HTML search result structure.
-/// Uses `moviefap_search` and `moviefap_search_patterns` internally.
-pub struct MovieFapSearchExtractor;
+/// EMPFlix shares the same HTML structure as TNAFlix.  This extractor reuses
+/// the same HTML parser (`tnaflix_search_helpers::parse_search_results` /
+/// `tnaflix_search_helpers::parse_pagination`) but targets `empflix.com` URLs.
+pub struct EMPFlixSearchExtractor;
 
-impl MovieFapSearchExtractor {
-    /// Create a new MovieFap search extractor.
+impl EMPFlixSearchExtractor {
+    /// Create a new EMPFlix search extractor.
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+
+    /// EMPFlix base URL.
+    const BASE_URL: &'static str = "https://www.empflix.com";
+
+    /// Build the URL for a given page, dispatching to browse or search URL builders.
+    pub(super) fn build_page_url(query: &rdlp_types::SearchQuery, page: usize) -> String {
+        if let Some(cat) = query.filters.iter().find(|f| f.key == "category") {
+            if page <= 1 {
+                search_patterns::build_browse_url_for(Self::BASE_URL, &cat.value)
+            } else {
+                search_patterns::build_browse_url_page_for(Self::BASE_URL, &cat.value, page)
+            }
+        } else {
+            search_patterns::build_search_url_page_for(Self::BASE_URL, query, page)
+        }
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
@@ -33,17 +47,17 @@ impl MovieFapSearchExtractor {
         page: usize,
         ctx: &ExtractionContext,
     ) -> Result<(Vec<rdlp_types::SearchResultPreview>, usize)> {
-        let page_url = moviefap_search_patterns::build_search_url(query, page);
-        debug!(page; "[MovieFap] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
+        let page_url = Self::build_page_url(query, page);
+        debug!(page; "[EMPFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-        let page_results = moviefap_search_helpers::parse_search_results(&webpage);
-        let max_pages = moviefap_search_helpers::parse_pagination(&webpage).unwrap_or(1);
+        let page_results = tnaflix_search_helpers::parse_search_results(&webpage);
+        let max_pages = tnaflix_search_helpers::parse_pagination(&webpage).unwrap_or(1);
 
         debug!(
             count = page_results.len(),
             max_pages;
-            "[MovieFap] Search page {page} returned {} results",
+            "[EMPFlix] Search page {page} returned {} results",
             page_results.len()
         );
 
@@ -56,7 +70,7 @@ impl MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        moviefap_search_helpers::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let max_results = query
             .max_results
@@ -69,13 +83,13 @@ impl MovieFapSearchExtractor {
             let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(r) => r,
                 Err(e) => {
-                    debug!(page; "[MovieFap] Failed to fetch search page, returning partial results: {e}");
+                    debug!(page; "[EMPFlix] Failed to fetch search page, returning partial results: {e}");
                     break;
                 }
             };
 
             if page_results.is_empty() {
-                debug!(page; "[MovieFap] No results on page, stopping pagination");
+                debug!(page; "[EMPFlix] No results on page, stopping pagination");
                 break;
             }
 
@@ -94,26 +108,27 @@ impl MovieFapSearchExtractor {
             tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
         }
 
-        debug!(count = all_results.len(), pages = page; "[MovieFap] Search complete");
+        debug!(count = all_results.len(), pages = page; "[EMPFlix] Search complete");
 
         Ok(all_results)
     }
 }
 
-impl Default for MovieFapSearchExtractor {
+impl Default for EMPFlixSearchExtractor {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
+impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
     fn name(&self) -> &str {
-        "MovieFap"
+        "EMPFlix"
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
-        moviefap_search_patterns::search_filter_descriptors()
+        // EMPFlix uses the same filter set as TNAFlix
+        search_patterns::search_filter_descriptors()
     }
 
     async fn search(
@@ -129,7 +144,7 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<rdlp_types::SearchPageResponse> {
-        moviefap_search_helpers::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
         let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
