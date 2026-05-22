@@ -143,22 +143,36 @@ fn validate_fragment_urls(
     true
 }
 
-/// Construct a [`Format`] for one video or audio Representation.
+/// Per-Representation context bundled for [`build_av_format`].
 ///
-/// `is_video` distinguishes codec assignment and synth-ID prefix.
-/// Returns `None` when no fragment list can be built (Repr is skipped).
-fn build_av_format(
-    adapt: &dash_mpd::AdaptationSet,
-    repr: &dash_mpd::Representation,
-    adapt_lang: Option<String>,
-    final_base: &Url,
-    base_url: &Url,
-    period_duration_seconds: f64,
+/// Carries all data that varies per Representation call: the MPD/AdaptationSet/
+/// Representation nodes, resolved indices, language, base URLs, timing, MIME
+/// type, and the pre-classified `is_video` flag.
+struct ReprContext<'a> {
+    adapt: &'a dash_mpd::AdaptationSet,
+    repr: &'a dash_mpd::Representation,
     adapt_idx: usize,
     repr_idx: usize,
+    adapt_lang: Option<String>,
+    final_base: &'a Url,
+    base_url: &'a Url,
+    period_duration_seconds: f64,
+    mime: &'a str,
     is_video: bool,
-    mime: &str,
-) -> Option<Format> {
+}
+
+/// Construct a [`Format`] for one video or audio Representation.
+///
+/// `ctx.is_video` distinguishes codec assignment and synth-ID prefix.
+/// Returns `None` when no fragment list can be built (Repr is skipped).
+fn build_av_format(ctx: &ReprContext<'_>) -> Option<Format> {
+    let adapt = ctx.adapt;
+    let repr = ctx.repr;
+    let adapt_idx = ctx.adapt_idx;
+    let repr_idx = ctx.repr_idx;
+    let is_video = ctx.is_video;
+    let mime = ctx.mime;
+    let final_base = ctx.final_base;
     let bandwidth = repr.bandwidth.unwrap_or(0);
     let synth_id = if is_video {
         format!("dash_v_{adapt_idx}_{repr_idx}")
@@ -168,7 +182,7 @@ fn build_av_format(
     let format_id = repr.id.clone().unwrap_or(synth_id);
 
     let fragments =
-        build_fragments(adapt, repr, &format_id, bandwidth, period_duration_seconds);
+        build_fragments(adapt, repr, &format_id, bandwidth, ctx.period_duration_seconds);
     if fragments.is_empty() {
         return None;
     }
@@ -208,7 +222,7 @@ fn build_av_format(
 
     let mut f = Format::new(
         &format_id,
-        base_url.as_str(),
+        ctx.base_url.as_str(),
         ext,
         DownloadProtocol::HttpDashSegments,
     );
@@ -224,7 +238,7 @@ fn build_av_format(
     f.height = repr.height.map(|h| h as u32);
     f.fps = fps;
     f.asr = if !is_video { asr } else { None };
-    f.language = adapt_lang;
+    f.language = ctx.adapt_lang.clone();
     f.fragments = Some(fragments);
     f.fragment_base_url = Some(final_base.to_string());
 
@@ -355,7 +369,8 @@ pub fn expand_dash_representations(
                 .or(adapt.codecs.as_deref())
                 .unwrap_or("");
 
-            match classify_mime(mime, codecs_str) {
+            let mime_class = classify_mime(mime, codecs_str);
+            match mime_class {
                 MimeClass::Unknown => continue,
                 MimeClass::Text => {
                     // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
@@ -379,19 +394,20 @@ pub fn expand_dash_representations(
                     }
                 }
                 MimeClass::Video | MimeClass::Audio => {
-                    let is_video = matches!(classify_mime(mime, codecs_str), MimeClass::Video);
-                    if let Some(f) = build_av_format(
+                    let is_video = matches!(mime_class, MimeClass::Video);
+                    let ctx = ReprContext {
                         adapt,
                         repr,
-                        adapt_lang.clone(),
-                        &final_base,
-                        base_url,
-                        period_duration_seconds,
                         adapt_idx,
                         repr_idx,
-                        is_video,
+                        adapt_lang: adapt_lang.clone(),
+                        final_base: &final_base,
+                        base_url,
+                        period_duration_seconds,
                         mime,
-                    ) {
+                        is_video,
+                    };
+                    if let Some(f) = build_av_format(&ctx) {
                         formats.push(f);
                     }
                 }
