@@ -407,9 +407,12 @@ def test_extract_mpd_fragment_byte_range_passthrough(monkeypatch):
     monkeypatch.setattr(_host, "extract_mpd", lambda *a, **k: fake)
     fmts, _ = _ie()._extract_mpd_formats_and_subtitles("https://x/m.mpd", "v")
     frags = fmts[0]["fragments"]
-    assert frags[0]["byte_range"] == (0, 1024)
+    # yt-dlp shape: dict `{'start', 'end'}` (end-exclusive) — see
+    # yt_dlp/downloader/fragment.py which emits `bytes=%d-%d` against
+    # `(start, end - 1)`. Plugin code does fragment['byte_range']['start'].
+    assert frags[0]["byte_range"] == {"start": 0, "end": 1024}
     assert frags[0]["init_url"] == "https://cdn.example.com/init.m4s"
-    assert frags[0]["init_byte_range"] == (0, 740)
+    assert frags[0]["init_byte_range"] == {"start": 0, "end": 740}
     # Fragment without byte-range info must omit the keys (yt-dlp style).
     assert "byte_range" not in frags[1]
     assert "init_url" not in frags[1]
