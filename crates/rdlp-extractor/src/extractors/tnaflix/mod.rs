@@ -13,10 +13,10 @@
 //! - `search_patterns` - Search URL builders and filter descriptors
 
 mod ajax;
-mod moviefap_search;
+mod moviefap_search_helpers;
 mod moviefap_search_patterns;
 mod patterns;
-mod search;
+mod tnaflix_search_helpers;
 mod search_patterns;
 
 use async_trait::async_trait;
@@ -256,8 +256,8 @@ impl TNAFlixSearchExtractor {
         debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-        let page_results = search::parse_search_results(&webpage);
-        let max_pages = search::parse_pagination(&webpage).unwrap_or(1);
+        let page_results = tnaflix_search_helpers::parse_search_results(&webpage);
+        let max_pages = tnaflix_search_helpers::parse_pagination(&webpage).unwrap_or(1);
 
         debug!(
             count = page_results.len(),
@@ -275,7 +275,7 @@ impl TNAFlixSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        search::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
 
@@ -346,7 +346,7 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        search::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
         let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
@@ -365,8 +365,8 @@ impl SearchExtractor for TNAFlixSearchExtractor {
 /// EMPFlix search extractor
 ///
 /// EMPFlix shares the same HTML structure as TNAFlix.  This extractor reuses
-/// the same HTML parser (`search::parse_search_results` /
-/// `search::parse_pagination`) but targets `empflix.com` URLs.
+/// the same HTML parser (`tnaflix_search_helpers::parse_search_results` /
+/// `tnaflix_search_helpers::parse_pagination`) but targets `empflix.com` URLs.
 pub struct EMPFlixSearchExtractor;
 
 impl EMPFlixSearchExtractor {
@@ -403,8 +403,8 @@ impl EMPFlixSearchExtractor {
         debug!(page; "[EMPFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-        let page_results = search::parse_search_results(&webpage);
-        let max_pages = search::parse_pagination(&webpage).unwrap_or(1);
+        let page_results = tnaflix_search_helpers::parse_search_results(&webpage);
+        let max_pages = tnaflix_search_helpers::parse_pagination(&webpage).unwrap_or(1);
 
         debug!(
             count = page_results.len(),
@@ -422,7 +422,7 @@ impl EMPFlixSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        search::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let max_results = query
             .max_results
@@ -496,7 +496,7 @@ impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<rdlp_types::SearchPageResponse> {
-        search::validate_search_filters(&query.filters)?;
+        tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
         let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
@@ -536,8 +536,8 @@ impl MovieFapSearchExtractor {
         debug!(page; "[MovieFap] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-        let page_results = moviefap_search::parse_search_results(&webpage);
-        let max_pages = moviefap_search::parse_pagination(&webpage).unwrap_or(1);
+        let page_results = moviefap_search_helpers::parse_search_results(&webpage);
+        let max_pages = moviefap_search_helpers::parse_pagination(&webpage).unwrap_or(1);
 
         debug!(
             count = page_results.len(),
@@ -555,7 +555,7 @@ impl MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        moviefap_search::validate_search_filters(&query.filters)?;
+        moviefap_search_helpers::validate_search_filters(&query.filters)?;
 
         let max_results = query
             .max_results
@@ -628,7 +628,7 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<rdlp_types::SearchPageResponse> {
-        moviefap_search::validate_search_filters(&query.filters)?;
+        moviefap_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
         let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
@@ -1105,7 +1105,7 @@ mod async_tests {
             .text()
             .await
             .unwrap();
-        let results = search::parse_search_results(&webpage);
+        let results = tnaflix_search_helpers::parse_search_results(&webpage);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test Video");
@@ -1171,7 +1171,7 @@ mod async_tests {
         let ctx = test_ctx(&server);
         let url = format!("{}/search?what=test&tab=&page=1", server.url());
         let webpage = BaseExtractor::fetch_webpage(&url, &ctx).await.unwrap();
-        let results = search::parse_search_results(&webpage);
+        let results = tnaflix_search_helpers::parse_search_results(&webpage);
 
         assert!(results.is_empty());
         mock.assert_async().await;
@@ -1191,7 +1191,7 @@ mod async_tests {
         let ctx = test_ctx(&server);
         let url = format!("{}/search?what=zzzzz&tab=&page=1", server.url());
         let webpage = BaseExtractor::fetch_webpage(&url, &ctx).await.unwrap();
-        let results = search::parse_search_results(&webpage);
+        let results = tnaflix_search_helpers::parse_search_results(&webpage);
 
         assert!(results.is_empty());
         mock.assert_async().await;
@@ -1219,8 +1219,8 @@ mod async_tests {
         let ctx = test_ctx(&server);
         let url = format!("{}/search/test/relevance/1", server.url());
         let webpage = BaseExtractor::fetch_webpage(&url, &ctx).await.unwrap();
-        let results = moviefap_search::parse_search_results(&webpage);
-        let max_pages = moviefap_search::parse_pagination(&webpage);
+        let results = moviefap_search_helpers::parse_search_results(&webpage);
+        let max_pages = moviefap_search_helpers::parse_pagination(&webpage);
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test");
@@ -1280,8 +1280,8 @@ mod async_tests {
         let ctx = test_ctx(&server);
         let url1 = format!("{}/search?what=test&tab=&page=1", server.url());
         let webpage1 = BaseExtractor::fetch_webpage(&url1, &ctx).await.unwrap();
-        let results1 = search::parse_search_results(&webpage1);
-        let max_pages1 = search::parse_pagination(&webpage1).unwrap_or(1);
+        let results1 = tnaflix_search_helpers::parse_search_results(&webpage1);
+        let max_pages1 = tnaflix_search_helpers::parse_pagination(&webpage1).unwrap_or(1);
 
         assert_eq!(results1.len(), 2);
         assert_eq!(max_pages1, 3);
@@ -1289,7 +1289,7 @@ mod async_tests {
         // Parse page 2 — empty results should signal stop
         let url2 = format!("{}/search?what=test&tab=&page=2", server.url());
         let webpage2 = BaseExtractor::fetch_webpage(&url2, &ctx).await.unwrap();
-        let results2 = search::parse_search_results(&webpage2);
+        let results2 = tnaflix_search_helpers::parse_search_results(&webpage2);
 
         assert!(results2.is_empty());
     }
