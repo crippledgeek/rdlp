@@ -15,7 +15,7 @@
 use crate::PluginError;
 use crate::manifest::{Manifest, Signature, canonical_bytes};
 use base64::Engine as _;
-use ed25519_dalek::{Signature as DalekSig, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature as DalekSig, VerifyingKey};
 
 /// Verify the Ed25519 signature on a manifest against the given wasm bytes.
 ///
@@ -79,8 +79,11 @@ pub fn verify_ed25519(manifest: &Manifest, wasm_bytes: &[u8]) -> Result<(), Plug
     let mut buf = canonical_bytes(manifest);
     buf.extend_from_slice(wasm_bytes);
 
+    // `verify_strict` (vs `verify`) rejects non-cofactor-reduced signatures,
+    // closing a malleability vector where two distinct byte sequences could
+    // verify against the same key+message pair. See ed25519_dalek docs.
     verifying_key
-        .verify(&buf, &sig)
+        .verify_strict(&buf, &sig)
         .map_err(|e| PluginError::SignatureInvalid {
             plugin: manifest.name.clone(),
             reason: format!("ed25519 signature verification failed: {e}"),

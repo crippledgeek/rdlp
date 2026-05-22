@@ -10,8 +10,57 @@ use super::{
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, RdlpError};
 use rdlp_security::validate_url_security;
-use rdlp_types::Format;
+use rdlp_types::{Format, Fragment};
 use std::path::Path;
+
+/// Validate every URL embedded in a fragment list against the SSRF allow-list.
+///
+/// Plugin-supplied formats can carry `Fragment.url` and `Fragment.init_url`
+/// pointing at arbitrary hosts. Without this gate, a malicious or compromised
+/// plugin could direct the downloader at private-network / link-local / loopback
+/// / cloud-metadata addresses. Mirrors the HLS variant-URI validation added in
+/// PR #257, extended to cover DASH per-fragment + per-fragment init segments
+/// introduced by the WIT v0.4.0 byte-range contract.
+///
+/// Returns `Ok(())` if every fragment passes; otherwise returns the first
+/// rejection wrapped in `OrchestratorError::DownloadFailed`, carrying the
+/// offending URL for diagnostics.
+fn validate_fragment_urls(fragments: &[Fragment]) -> Result<()> {
+    for frag in fragments {
+        validate_fragment_url_one(&frag.url, "fragment URL")?;
+        if let Some(init_url) = &frag.init_url {
+            validate_fragment_url_one(init_url, "fragment init_url")?;
+        }
+    }
+    Ok(())
+}
+
+/// Single-URL gate used by `validate_fragment_urls`. Wraps
+/// `rdlp_security::validate_url_security` with a `cfg(test)`-gated loopback
+/// allowance so mockito-driven orchestrator integration tests (which bind to
+/// `127.0.0.1`) can drive the fragment dispatch path. Mirrors the
+/// `validate_resolved_url` pattern in `rdlp-extractor/src/hls/expand.rs`.
+/// Production builds compile without any loopback exemption.
+fn validate_fragment_url_one(url: &str, kind: &str) -> Result<()> {
+    #[cfg(test)]
+    {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
+            let host_loopback = parsed.host_str().is_some_and(|h| {
+                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
+            });
+            if scheme_ok && host_loopback {
+                return Ok(());
+            }
+        }
+    }
+    validate_url_security(url).map_err(|e| {
+        OrchestratorError::DownloadFailed(RdlpError::Network {
+            message: format!("Security validation failed for {kind}: {e}"),
+            url: Some(url.to_string()),
+        })
+    })
+}
 
 /// Result of a successful download with CDN fallback.
 pub(super) struct DownloadOutcome {
@@ -67,6 +116,16 @@ impl Orchestrator {
                 url: Some(format.url.clone()),
             })
         })?;
+
+        // SSRF protection: validate every plugin-supplied fragment URL (and
+        // per-fragment init segment URL) before dispatch. Plugins can populate
+        // `Format.fragments` with arbitrary URLs via the WIT contract; without
+        // this gate they could direct the downloader at private-network,
+        // link-local, loopback, or cloud-metadata addresses. Mirrors the HLS
+        // variant-URI validation from PR #257.
+        if let Some(fragments) = &format.fragments {
+            validate_fragment_urls(fragments)?;
+        }
 
         // Find downloader (with extra HTTP headers if the format specifies them)
         let downloader = self
@@ -332,5 +391,65 @@ mod tests {
                 "Expected security pass for public URL: {url}"
             );
         }
+    }
+
+    /// Build a single fragment with the given `url` + optional `init_url` for tests.
+    fn frag(url: &str, init_url: Option<&str>) -> rdlp_types::Fragment {
+        rdlp_types::Fragment {
+            url: url.to_string(),
+            byte_range: None,
+            init_url: init_url.map(str::to_string),
+            init_byte_range: None,
+            duration: None,
+            filesize: None,
+        }
+    }
+
+    /// Plugin-supplied fragment whose `init_url` points at the AWS instance
+    /// metadata endpoint must be rejected before reaching the downloader.
+    #[test]
+    fn test_fragment_init_url_ssrf_rejected() {
+        let frags = vec![frag(
+            "https://cdn.example.com/seg1.m4s",
+            Some("http://169.254.169.254/latest/meta-data/"),
+        )];
+        let res = validate_fragment_urls(&frags);
+        assert!(
+            res.is_err(),
+            "Expected rejection of fragment with private-IP init_url"
+        );
+    }
+
+    /// Plugin-supplied fragment whose primary `url` points at an RFC-1918
+    /// address must be rejected before reaching the downloader.
+    #[test]
+    fn test_fragment_url_ssrf_rejected() {
+        let frags = vec![
+            frag("https://cdn.example.com/seg1.m4s", None),
+            frag("http://10.0.0.1/segment.m4s", None),
+        ];
+        let res = validate_fragment_urls(&frags);
+        assert!(
+            res.is_err(),
+            "Expected rejection of fragment with private-IP url"
+        );
+    }
+
+    /// Positive path: all-public-URL fragments validate successfully.
+    #[test]
+    fn test_fragment_all_public_urls_accepted() {
+        let frags = vec![
+            frag(
+                "https://cdn.example.com/seg1.m4s",
+                Some("https://cdn.example.com/init.mp4"),
+            ),
+            frag("https://cdn.example.com/seg2.m4s", None),
+            frag("https://media.example.com/seg3.m4s", None),
+        ];
+        let res = validate_fragment_urls(&frags);
+        assert!(
+            res.is_ok(),
+            "Expected all-public fragment set to pass, got {res:?}"
+        );
     }
 }
