@@ -100,8 +100,9 @@ struct VideoTranscodeContext<'a> {
     // Phase 4 output (initialized empty at Phase 2, populated in Phase 4):
     filter_graph: ffmpeg_the_third::filter::Graph,
 
-    // Phase 5 / Phase 6 shared state: monotonic audio PTS counter (in sample units),
-    // initialized in Phase 5 entry and read during Phase 6 audio flush.
+    // Phase 5 / Phase 6 shared state: monotonic audio PTS counter (in sample units).
+    // Initialized to 0 in Phase 2; incremented in Phase 5's encode loop; consumed
+    // by Phase 6's audio flush.
     audio_sample_counter: i64,
 
     // Borrowed config:
