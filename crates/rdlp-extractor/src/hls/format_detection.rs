@@ -184,6 +184,310 @@ pub async fn detect_format_sizes_lazy(
     detect_format_sizes_inner(formats, ctx, extractor_name, false).await
 }
 
+/// Captured environment for a single per-format detection future.
+///
+/// Bundles all closure-captured values to keep `build_format_detection_future`
+/// under the `too_many_arguments` threshold and to make the dependency set
+/// explicit at the call site.
+struct FormatDetectionCtx {
+    hls_detector: HlsSizeDetector,
+    http_client: std::sync::Arc<wreq::Client>,
+    extractor_name: String,
+    detect_sizes: bool,
+    head_timeout: std::time::Duration,
+    verbose: bool,
+}
+
+/// Expand a single HLS `variant` into a `Format`, inheriting metadata from
+/// `parent_format` (ext, protocol, headers, codec fallbacks, language).
+///
+/// Returns `(expanded_format, is_live, has_encryption)`.
+fn expand_hls_variant(
+    variant: &super::types::HlsVariantInfo,
+    parent_format: &rdlp_types::Format,
+) -> DetectionEntry {
+    let height = variant.resolution.map(|(_, h)| h as u32);
+    let width = variant.resolution.map(|(w, _)| w as u32);
+
+    let format_id = if variant.is_audio_only {
+        // Prefer LANGUAGE, then GROUP-ID, then NAME; fall back to a bare
+        // `audio` suffix. Keeps ids stable across re-extracts.
+        let tag = variant
+            .language
+            .as_deref()
+            .or(variant.audio_group_id.as_deref())
+            .or(variant.rendition_name.as_deref())
+            .map(slugify_tag);
+        match tag {
+            Some(t) if !t.is_empty() => format!("{}-audio-{t}", parent_format.format_id),
+            _ => format!("{}-audio", parent_format.format_id),
+        }
+    } else if let Some(h) = height {
+        format!("{}-{h}p", parent_format.format_id)
+    } else {
+        format!("{}-{}k", parent_format.format_id, variant.bandwidth / 1000)
+    };
+
+    let mut expanded_format = rdlp_types::Format::new(
+        &format_id,
+        &variant.media_playlist_url,
+        &parent_format.ext,
+        parent_format.protocol.clone(),
+    );
+    expanded_format.height = height;
+    expanded_format.width = width;
+
+    if variant.is_audio_only {
+        // Audio-only HLS rendition: video stream Absent;
+        // ba selector treats as audio-only (has_video() == false).
+        expanded_format.vcodec = Codec::Absent;
+        expanded_format.acodec = Codec::from(
+            variant
+                .audio_codec
+                .clone()
+                .or_else(|| Some("mp4a".to_string())),
+        );
+    } else {
+        expanded_format.vcodec = Codec::from(
+            variant
+                .video_codec
+                .clone()
+                .or_else(|| parent_format.vcodec.as_str().map(str::to_owned))
+                .or_else(|| detect_codec_from_id(&parent_format.format_id, true)),
+        );
+        expanded_format.acodec = Codec::from(
+            variant
+                .audio_codec
+                .clone()
+                .or_else(|| parent_format.acodec.as_str().map(str::to_owned))
+                .or_else(|| detect_codec_from_id(&parent_format.format_id, false)),
+        );
+    }
+
+    expanded_format.fps = variant.frame_rate;
+    // EXT-X-MEDIA renditions carry no BANDWIDTH: leave
+    // tbr/filesize_approx unset rather than write misleading zeros.
+    expanded_format.tbr = if variant.bandwidth > 0 {
+        Some(variant.bandwidth as f64 / 1000.0)
+    } else {
+        None
+    };
+    expanded_format.http_headers = parent_format.http_headers.clone();
+    // Surface the rendition language on the Format so the UI can label
+    // multi-language audio tracks. Fall back to the parent format's language
+    // for video variants.
+    expanded_format.language = variant
+        .language
+        .clone()
+        .or_else(|| parent_format.language.clone());
+    // Propagate the HLS audio-rendition group:
+    //   - video-only rows carry the AUDIO= reference (the group their paired
+    //     audio lives in)
+    //   - audio-only rows carry their own GROUP-ID.
+    // UIs use matching values to visually pair rows when a user hand-picks
+    // without the Best preset.
+    expanded_format.audio_group_id = variant.audio_group_id.clone();
+    expanded_format.duration = variant.total_duration;
+    // Estimate size from bitrate × duration (bytes = bps × s / 8)
+    expanded_format.filesize_approx = match (variant.bandwidth, variant.total_duration) {
+        (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
+        _ => None,
+    };
+    expanded_format.container = variant.segment_container.clone();
+    if variant.has_encryption {
+        expanded_format.has_drm = Some(true);
+    }
+    if variant.is_audio_only {
+        expanded_format.format_note = variant
+            .rendition_name
+            .clone()
+            .or_else(|| Some("audio".to_string()));
+    } else if let Some(h) = height {
+        expanded_format.format_note = Some(format!("{h}p"));
+        expanded_format.quality = Some((h / 100) as i32);
+    }
+
+    (expanded_format, Some(variant.is_live), Some(variant.has_encryption))
+}
+
+/// Build the async future that probes a single `format`.
+///
+/// HLS formats are expanded into per-variant entries (or enriched as a single
+/// format when the URL is a media playlist). Non-HLS formats receive a HEAD
+/// probe for file size when `ctx.detect_sizes` is `true`.
+///
+/// Returns a `Vec` so that one input format can expand into many (HLS master
+/// with multiple variants).
+async fn build_format_detection_future(
+    format: rdlp_types::Format,
+    ctx: FormatDetectionCtx,
+) -> Vec<DetectionEntry> {
+    use tokio::time::timeout;
+
+    let url = format.url.clone();
+    let is_hls = format.ext == "hls"
+        || url::Url::parse(&url)
+            .map(|u| {
+                matches!(
+                    crate::base::common::protocol_for_url(&u),
+                    rdlp_types::DownloadProtocol::M3u8,
+                )
+            })
+            .unwrap_or(false);
+
+    if is_hls {
+        // Try to expand master playlist into per-variant formats
+        let variants_res = ctx.hls_detector.detect_hls_variants(&url).await;
+
+        let variants = match variants_res {
+            // Expand when the master produced multiple variants,
+            // OR when any audio-only rendition is present (even
+            // if there's only one video-only variant paired with
+            // it — the XHamster AV1 case).
+            Ok(v) if v.len() > 1 || v.iter().any(|x| x.is_audio_only) => v,
+            _ => {
+                // Not a master playlist or detection failed — fall back to
+                // single-format enrichment via detect_hls_metadata
+                let mut format = format;
+                let (is_live, has_enc) = enrich_single_hls_format(
+                    &mut format,
+                    &ctx.hls_detector,
+                    &url,
+                    &ctx.extractor_name,
+                    ctx.verbose,
+                )
+                .await;
+                return vec![(format, is_live, has_enc)];
+            }
+        };
+
+        // Expand master playlist into one format per variant.
+        // Video/muxed entries use the resolution-based naming and inherit
+        // codec fallbacks from the parent `format`. Audio-only entries
+        // (derived from EXT-X-MEDIA TYPE=AUDIO rendition groups) are tagged
+        // with vcodec=`"none"` and named from the rendition
+        // (e.g. `hls-audio-en`), so the format selector can pair them with a
+        // video-only variant via `bv+ba`.
+        let mut expanded = Vec::with_capacity(variants.len());
+        for variant in &variants {
+            expanded.push(expand_hls_variant(variant, &format));
+        }
+
+        if ctx.verbose {
+            debug!(
+                extractor:? = ctx.extractor_name,
+                parent:? = format.format_id,
+                variants = expanded.len();
+                "HLS master expanded into per-quality formats"
+            );
+        }
+
+        expanded
+    } else {
+        // Non-HLS: HEAD request for file size (skipped when lazy)
+        let mut format = format;
+        if ctx.detect_sizes {
+            let result = timeout(
+                ctx.head_timeout,
+                BaseExtractor::detect_file_size(
+                    &url,
+                    &ctx.http_client,
+                    None,
+                    ctx.head_timeout,
+                ),
+            )
+            .await;
+
+            if let Ok(Some(size)) = result {
+                format.filesize = Some(size);
+            }
+        }
+
+        vec![(format, None, None)]
+    }
+}
+
+/// Single per-format detection result: enriched format plus optional stream flags.
+///
+/// `(format, is_live, has_encryption)` — flags are `None` for non-HLS formats.
+type DetectionEntry = (rdlp_types::Format, Option<bool>, Option<bool>);
+
+/// Flatten per-format detection results, deduplicate HLS CDN mirrors, and
+/// aggregate stream-level flags.
+///
+/// Each inner `Vec` is the result of one `build_format_detection_future` call.
+/// HLS formats with identical `(height, vcodec, acodec, language)` keys are
+/// merged: the entry with the largest estimated size is kept as the primary
+/// URL; others are appended to `fallback_urls`.
+fn aggregate_results(
+    results: Vec<Vec<DetectionEntry>>,
+) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
+    let mut formats: Vec<rdlp_types::Format> = Vec::new();
+    let mut flags = HlsStreamFlags::default();
+    // Key: (height, vcodec, acodec, language) — language prevents merging
+    // different audio tracks (e.g. SUB/DUB) at the same resolution.
+    type HlsDedup = (Option<u32>, Codec, Codec, Option<String>);
+    let mut seen_hls: std::collections::HashSet<HlsDedup> = std::collections::HashSet::new();
+
+    for format_group in results {
+        for (format, is_live, has_encryption) in format_group {
+            if is_live.unwrap_or(false) {
+                flags.is_live = true;
+            }
+            if has_encryption.unwrap_or(false) {
+                flags.has_any_drm = true;
+            }
+
+            // Deduplicate expanded HLS formats: keep format with largest estimated
+            // size per (height, vcodec, acodec, language), collect other URLs as
+            // fallbacks. Language is included so SUB/DUB tracks at the same
+            // resolution aren't merged.
+            if format.is_hls() {
+                let key = (
+                    format.height,
+                    format.vcodec.clone(),
+                    format.acodec.clone(),
+                    format.language.clone(),
+                );
+                if !seen_hls.insert(key) {
+                    // Find existing format with same key
+                    if let Some(existing) = formats.iter_mut().find(|f| {
+                        f.is_hls()
+                            && f.height == format.height
+                            && f.vcodec == format.vcodec
+                            && f.acodec == format.acodec
+                            && f.language == format.language
+                    }) {
+                        // Keep the one with larger estimated size (more complete playlist)
+                        let existing_size = existing.filesize_approx.unwrap_or(0);
+                        let new_size = format.filesize_approx.unwrap_or(0);
+
+                        if new_size > existing_size {
+                            // New format has larger estimate — swap: make existing the fallback
+                            let old_url = std::mem::replace(&mut existing.url, format.url.clone());
+                            existing.filesize_approx = format.filesize_approx;
+                            existing.duration = format.duration;
+                            existing.filesize = format.filesize;
+                            existing.fallback_urls.get_or_insert_default().push(old_url);
+                        } else {
+                            // Existing has equal or more segments — keep it, add new as fallback
+                            existing
+                                .fallback_urls
+                                .get_or_insert_default()
+                                .push(format.url.clone());
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            formats.push(format);
+        }
+    }
+
+    (formats, flags)
+}
+
 async fn detect_format_sizes_inner(
     formats: Vec<rdlp_types::Format>,
     ctx: &rdlp_core::ExtractionContext,
@@ -191,7 +495,6 @@ async fn detect_format_sizes_inner(
     detect_sizes: bool,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     use futures::future::join_all;
-    use tokio::time::timeout;
 
     let verbose = ctx.config.verbose;
     let head_timeout = resolve_hls_head_probe_timeout(&ctx.config);
@@ -220,261 +523,20 @@ async fn detect_format_sizes_inner(
     let detection_futures: Vec<_> = formats
         .into_iter()
         .map(|format| {
-            let hls_detector = hls_detector.clone();
-            let http_client = http_client.clone();
-            let extractor_name = extractor_name.clone();
-
-            async move {
-                let url = format.url.clone();
-                let is_hls = format.ext == "hls"
-                    || url::Url::parse(&url)
-                        .map(|u| {
-                            matches!(
-                                crate::base::common::protocol_for_url(&u),
-                                rdlp_types::DownloadProtocol::M3u8,
-                            )
-                        })
-                        .unwrap_or(false);
-
-                if is_hls {
-                    // Try to expand master playlist into per-variant formats
-                    let variants_res = hls_detector.detect_hls_variants(&url).await;
-
-                    let variants = match variants_res {
-                        // Expand when the master produced multiple variants,
-                        // OR when any audio-only rendition is present (even
-                        // if there's only one video-only variant paired with
-                        // it — the XHamster AV1 case).
-                        Ok(v) if v.len() > 1 || v.iter().any(|x| x.is_audio_only) => v,
-                        _ => {
-                            // Not a master playlist or detection failed — fall back to
-                            // single-format enrichment via detect_hls_metadata
-                            let mut format = format;
-                            let (is_live, has_enc) = enrich_single_hls_format(
-                                &mut format,
-                                &hls_detector,
-                                &url,
-                                &extractor_name,
-                                verbose,
-                            )
-                            .await;
-                            return vec![(format, is_live, has_enc)];
-                        }
-                    };
-
-                    // Expand master playlist into one format per variant.
-                    // Video/muxed entries use the resolution-based naming and
-                    // inherit codec fallbacks from the parent `format`. Audio-
-                    // only entries (derived from EXT-X-MEDIA TYPE=AUDIO
-                    // rendition groups) are tagged with vcodec=`"none"` and
-                    // named from the rendition (e.g. `hls-audio-en`), so the
-                    // format selector can pair them with a video-only variant
-                    // via `bv+ba`.
-                    let mut expanded = Vec::with_capacity(variants.len());
-                    for variant in &variants {
-                        let height = variant.resolution.map(|(_, h)| h as u32);
-                        let width = variant.resolution.map(|(w, _)| w as u32);
-                        let format_id = if variant.is_audio_only {
-                            // Prefer LANGUAGE, then GROUP-ID, then NAME; fall
-                            // back to a bare `audio` suffix. Keeps ids stable
-                            // across re-extracts.
-                            let tag = variant
-                                .language
-                                .as_deref()
-                                .or(variant.audio_group_id.as_deref())
-                                .or(variant.rendition_name.as_deref())
-                                .map(slugify_tag);
-                            match tag {
-                                Some(t) if !t.is_empty() => {
-                                    format!("{}-audio-{t}", format.format_id)
-                                }
-                                _ => format!("{}-audio", format.format_id),
-                            }
-                        } else if let Some(h) = height {
-                            format!("{}-{h}p", format.format_id)
-                        } else {
-                            format!("{}-{}k", format.format_id, variant.bandwidth / 1000)
-                        };
-
-                        let mut expanded_format = rdlp_types::Format::new(
-                            &format_id,
-                            &variant.media_playlist_url,
-                            &format.ext,
-                            format.protocol.clone(),
-                        );
-                        expanded_format.height = height;
-                        expanded_format.width = width;
-                        if variant.is_audio_only {
-                            // Audio-only HLS rendition: video stream Absent;
-                            // ba selector treats as audio-only (has_video() == false).
-                            expanded_format.vcodec = Codec::Absent;
-                            expanded_format.acodec = Codec::from(
-                                variant
-                                    .audio_codec
-                                    .clone()
-                                    .or_else(|| Some("mp4a".to_string())),
-                            );
-                        } else {
-                            expanded_format.vcodec = Codec::from(
-                                variant
-                                    .video_codec
-                                    .clone()
-                                    .or_else(|| format.vcodec.as_str().map(str::to_owned))
-                                    .or_else(|| detect_codec_from_id(&format.format_id, true)),
-                            );
-                            expanded_format.acodec = Codec::from(
-                                variant
-                                    .audio_codec
-                                    .clone()
-                                    .or_else(|| format.acodec.as_str().map(str::to_owned))
-                                    .or_else(|| detect_codec_from_id(&format.format_id, false)),
-                            );
-                        }
-                        expanded_format.fps = variant.frame_rate;
-                        // EXT-X-MEDIA renditions carry no BANDWIDTH: leave
-                        // tbr/filesize_approx unset rather than write misleading
-                        // zeros.
-                        expanded_format.tbr = if variant.bandwidth > 0 {
-                            Some(variant.bandwidth as f64 / 1000.0)
-                        } else {
-                            None
-                        };
-                        expanded_format.http_headers = format.http_headers.clone();
-                        // Surface the rendition language on the Format so the
-                        // UI can label multi-language audio tracks. Fall back
-                        // to the parent format's language for video variants.
-                        expanded_format.language =
-                            variant.language.clone().or_else(|| format.language.clone());
-                        // Propagate the HLS audio-rendition group:
-                        //   - video-only rows carry the AUDIO= reference (the
-                        //     group their paired audio lives in)
-                        //   - audio-only rows carry their own GROUP-ID.
-                        // UIs use matching values to visually pair rows when
-                        // a user hand-picks without the Best preset.
-                        expanded_format.audio_group_id = variant.audio_group_id.clone();
-                        expanded_format.duration = variant.total_duration;
-                        // Estimate size from bitrate × duration (bytes = bps × s / 8)
-                        expanded_format.filesize_approx =
-                            match (variant.bandwidth, variant.total_duration) {
-                                (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
-                                _ => None,
-                            };
-                        expanded_format.container = variant.segment_container.clone();
-                        if variant.has_encryption {
-                            expanded_format.has_drm = Some(true);
-                        }
-                        if variant.is_audio_only {
-                            expanded_format.format_note = variant
-                                .rendition_name
-                                .clone()
-                                .or_else(|| Some("audio".to_string()));
-                        } else if let Some(h) = height {
-                            expanded_format.format_note = Some(format!("{h}p"));
-                            expanded_format.quality = Some((h / 100) as i32);
-                        }
-
-                        let is_live = Some(variant.is_live);
-                        let has_enc = Some(variant.has_encryption);
-                        expanded.push((expanded_format, is_live, has_enc));
-                    }
-
-                    if verbose {
-                        debug!(
-                            extractor:? = extractor_name,
-                            parent:? = format.format_id,
-                            variants = expanded.len();
-                            "HLS master expanded into per-quality formats"
-                        );
-                    }
-
-                    expanded
-                } else {
-                    // Non-HLS: HEAD request for file size (skipped when lazy)
-                    let mut format = format;
-                    if detect_sizes {
-                        let result = timeout(
-                            head_timeout,
-                            BaseExtractor::detect_file_size(&url, &http_client, None, head_timeout),
-                        )
-                        .await;
-
-                        if let Ok(Some(size)) = result {
-                            format.filesize = Some(size);
-                        }
-                    }
-
-                    vec![(format, None, None)]
-                }
-            }
+            let detection_ctx = FormatDetectionCtx {
+                hls_detector: hls_detector.clone(),
+                http_client: http_client.clone(),
+                extractor_name: extractor_name.clone(),
+                detect_sizes,
+                head_timeout,
+                verbose,
+            };
+            build_format_detection_future(format, detection_ctx)
         })
         .collect();
 
     let results = join_all(detection_futures).await;
-
-    // Flatten expanded formats, deduplicate HLS CDN mirrors, aggregate flags
-    let mut formats: Vec<rdlp_types::Format> = Vec::new();
-    let mut flags = HlsStreamFlags::default();
-    // Key: (height, vcodec, acodec, language) — language prevents merging
-    // different audio tracks (e.g. SUB/DUB) at the same resolution.
-    type HlsDedup = (Option<u32>, Codec, Codec, Option<String>);
-    let mut seen_hls: std::collections::HashSet<HlsDedup> = std::collections::HashSet::new();
-
-    for format_group in results {
-        for (format, is_live, has_encryption) in format_group {
-            if is_live.unwrap_or(false) {
-                flags.is_live = true;
-            }
-            if has_encryption.unwrap_or(false) {
-                flags.has_any_drm = true;
-            }
-
-            // Deduplicate expanded HLS formats: keep format with largest estimated size
-            // per (height, vcodec, acodec, language), collect other URLs as fallbacks.
-            // Language is included so SUB/DUB tracks at the same resolution aren't merged.
-            if format.is_hls() {
-                let key = (
-                    format.height,
-                    format.vcodec.clone(),
-                    format.acodec.clone(),
-                    format.language.clone(),
-                );
-                if !seen_hls.insert(key) {
-                    // Find existing format with same key
-                    if let Some(existing) = formats.iter_mut().find(|f| {
-                        f.is_hls()
-                            && f.height == format.height
-                            && f.vcodec == format.vcodec
-                            && f.acodec == format.acodec
-                            && f.language == format.language
-                    }) {
-                        // Keep the one with larger estimated size (more complete playlist)
-                        let existing_size = existing.filesize_approx.unwrap_or(0);
-                        let new_size = format.filesize_approx.unwrap_or(0);
-
-                        if new_size > existing_size {
-                            // New format has larger estimate - swap: make existing the fallback
-                            let old_url = std::mem::replace(&mut existing.url, format.url.clone());
-                            existing.filesize_approx = format.filesize_approx;
-                            existing.duration = format.duration;
-                            existing.filesize = format.filesize;
-                            existing.fallback_urls.get_or_insert_default().push(old_url);
-                        } else {
-                            // Existing has equal or more segments - keep it, add new as fallback
-                            existing
-                                .fallback_urls
-                                .get_or_insert_default()
-                                .push(format.url.clone());
-                        }
-                    }
-                    continue;
-                }
-            }
-
-            formats.push(format);
-        }
-    }
-
-    (formats, flags)
+    aggregate_results(results)
 }
 
 #[cfg(test)]
