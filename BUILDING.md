@@ -35,26 +35,48 @@ sudo pacman -S --needed ffmpeg clang cmake perl webkit2gtk-4.1
 
 ### Custom FFmpeg build (e.g. mediaforge)
 
-If you have a custom FFmpeg build with extra codecs (e.g. via [mediaforge](https://github.com/crippledgeek/mediaforge)), point `PKG_CONFIG_PATH` at its pkgconfig directory. Create `.cargo/config.toml` (gitignored) from the provided example:
+If you have a custom FFmpeg build with extra codecs (e.g. via [mediaforge](https://github.com/crippledgeek/mediaforge)), install it to **its own isolated prefix** — not into a shared location like `~/.local`. Conventional choices:
+
+- `~/.local/mediaforge` (or `~/.local/<build-name>`)
+- `~/opt/mediaforge`
+- `/opt/mediaforge`
+
+Custom FFmpeg builds typically bundle their own copies of transitive system libraries (fontconfig, harfbuzz, freetype, etc.) as static archives. If those libraries' `.pc` files land directly under `~/.local/lib/pkgconfig/`, they shadow system versions when pkg-config walks dep chains for unrelated crates — breaking GTK/GDK-dependent builds (`gdk-sys`, `glib-sys`) with version-mismatch errors like:
+
+```
+Package 'fontconfig' has version '2.15.0', required version is '>= 2.17.0'
+```
+
+Installing to an isolated prefix scopes the shadowing risk to consumers that explicitly opt in via `PKG_CONFIG_PATH`. Create `.cargo/config.toml` (gitignored) from the provided example:
 
 ```bash
 cp .cargo/config.toml.example .cargo/config.toml
 ```
 
-If your custom build bundles its own copies of system libraries (fontconfig, harfbuzz, freetype, etc.), isolate the FFmpeg `.pc` files into a separate directory to avoid conflicts with system GTK/GDK packages:
-
-```bash
-mkdir -p /path/to/ffmpeg-build/lib/pkgconfig-ffmpeg
-ln -s /path/to/ffmpeg-build/lib/pkgconfig/libav*.pc /path/to/ffmpeg-build/lib/pkgconfig-ffmpeg/
-ln -s /path/to/ffmpeg-build/lib/pkgconfig/libsw*.pc /path/to/ffmpeg-build/lib/pkgconfig-ffmpeg/
-```
-
-Then in `.cargo/config.toml`:
+Then point at your isolated prefix:
 
 ```toml
 [env]
-PKG_CONFIG_PATH = { value = "/path/to/ffmpeg-build/lib/pkgconfig-ffmpeg:/usr/lib/pkgconfig:/usr/share/pkgconfig", force = true }
+PKG_CONFIG_PATH = { value = "/home/youruser/.local/mediaforge/lib/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig", force = true }
 ```
+
+`rdlp-ffmpeg`'s `build.rs` verifies the first path actually contains `libavcodec.pc` and emits a `cargo:warning=` on every build if it doesn't — so a stale prefix path or a vanished install surfaces loudly instead of silently falling back to the distro FFmpeg.
+
+#### Troubleshooting: GTK-dependent crates fail to compile
+
+If `cargo build --workspace` (or anything that pulls `gdk-sys`/`glib-sys` via `rdlp-desktop`) fails with `fontconfig` / `harfbuzz` version-mismatch errors even with the isolated prefix above, your custom FFmpeg's pkgconfig dir is still shipping transitive .pc files that conflict with the system. The cleanest fix is upstream (have the custom FFmpeg build install only FFmpeg-ecosystem .pc files: `libav*.pc`, `libsw*.pc`, codec-specific files like `libfdk-aac.pc` / `libx264.pc` / `libopus.pc`). As a local workaround, manually remove the shadowers from the prefix's pkgconfig dir:
+
+```bash
+PKGDIR=/home/youruser/.local/mediaforge/lib/pkgconfig
+for pc in fontconfig harfbuzz harfbuzz-subset freetype2 expat gnutls libpng libpng16 \
+          libxml-2.0 fribidi gmp hogweed nettle bzip2 liblzma libbrotli{common,dec,enc}; do
+  rm -f "$PKGDIR/$pc.pc"
+done
+```
+
+The static `.a` archives must remain — `libavcodec.a` etc. still need them at link time. Only the `.pc` files (which leak shadowing into pkg-config's dep walk) should be removed.
+
+#### TLS coexistence
 
 If your custom FFmpeg links against OpenSSL (most do by default), the in-tree `wreq` build needs `prefix-symbols` to coexist — this is enabled automatically on Linux via `crates/rdlp-http/Cargo.toml`. If your custom FFmpeg links against GnuTLS instead (mediaforge's preferred recipe), you can drop the `openssl-sys` linker dep, but the workspace currently keeps it on Linux for the gyan.dev / distro FFmpeg case.
 
