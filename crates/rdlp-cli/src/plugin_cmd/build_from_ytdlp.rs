@@ -455,7 +455,7 @@ fn write_manifest(path: &Path, name: &str, matches: &[String]) -> Result<()> {
     let body = format!(
         "name = \"{name}\"\n\
          version = \"0.1.0\"\n\
-         wit_version = \"0.1.0\"\n\
+         wit_version = \"0.3.0\"\n\
          matches = [{matches_toml}]\n\
          priority = 150\n\
          claims_override = []\n\

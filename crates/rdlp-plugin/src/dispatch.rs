@@ -287,7 +287,7 @@ mod claims_url_tests {
             r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = [{matches_toml}]
 priority = 150
 capabilities = ["log"]

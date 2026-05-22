@@ -37,7 +37,7 @@ fn manifest_for_test(priority: u32, claims_override: &[&str]) -> Manifest {
         r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = [{matches_str}]
 priority = {priority}
 claims_override = [{claims_str}]

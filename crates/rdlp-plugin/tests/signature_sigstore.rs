@@ -18,7 +18,7 @@ fn manifest_with_sigstore_bundle(bundle_b64: &str) -> String {
         r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -37,7 +37,7 @@ fn rejects_non_sigstore_variant() {
     let toml = r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.3.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]
