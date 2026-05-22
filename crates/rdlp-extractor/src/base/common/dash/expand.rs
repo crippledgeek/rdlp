@@ -76,6 +76,188 @@ pub struct DashExpansion {
     pub subtitles: Vec<DashSubtitle>,
 }
 
+/// Typed MIME classification for a single Representation.
+enum MimeClass {
+    Video,
+    Audio,
+    Text,
+    Unknown,
+}
+
+/// Classify an MPD Representation's effective MIME type into a [`MimeClass`].
+///
+/// `mime` is the resolved MIME type (Repr-level falling back to AdaptationSet-level).
+/// `codecs_str` is used only to distinguish `application/mp4` text sub-types.
+fn classify_mime(mime: &str, codecs_str: &str) -> MimeClass {
+    if mime.starts_with("video/") {
+        return MimeClass::Video;
+    }
+    if mime.starts_with("audio/") {
+        return MimeClass::Audio;
+    }
+    let is_text = mime.starts_with("text/")
+        || (mime == "application/mp4"
+            && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
+    if is_text {
+        return MimeClass::Text;
+    }
+    MimeClass::Unknown
+}
+
+/// Validate all resolved fragment URLs against the SSRF gate.
+///
+/// Returns `true` when every fragment passes. Returns `false` and logs a
+/// warning on the first fragment whose resolved URL is invalid or unparseable.
+/// Drops the whole Representation on any failure so the rest of the MPD is
+/// unaffected.
+fn validate_fragment_urls(
+    fragments: &[Fragment],
+    final_base: &Url,
+    adapt_idx: usize,
+    repr_idx: usize,
+) -> bool {
+    for frag in fragments {
+        let resolved = match final_base.join(&frag.url) {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!(
+                    "DASH: dropping Representation adapt={} repr={}: \
+                     unresolvable fragment URL: {}",
+                    adapt_idx,
+                    repr_idx,
+                    e
+                );
+                return false;
+            }
+        };
+        if let Err(e) = validate_resolved_url(resolved.as_str()) {
+            log::warn!(
+                "DASH: dropping Representation adapt={} repr={}: {}",
+                adapt_idx,
+                repr_idx,
+                e
+            );
+            return false;
+        }
+    }
+    true
+}
+
+/// Construct a [`Format`] for one video or audio Representation.
+///
+/// `is_video` distinguishes codec assignment and synth-ID prefix.
+/// Returns `None` when no fragment list can be built (Repr is skipped).
+fn build_av_format(
+    adapt: &dash_mpd::AdaptationSet,
+    repr: &dash_mpd::Representation,
+    adapt_lang: Option<String>,
+    final_base: &Url,
+    base_url: &Url,
+    period_duration_seconds: f64,
+    adapt_idx: usize,
+    repr_idx: usize,
+    is_video: bool,
+    mime: &str,
+) -> Option<Format> {
+    let bandwidth = repr.bandwidth.unwrap_or(0);
+    let synth_id = if is_video {
+        format!("dash_v_{adapt_idx}_{repr_idx}")
+    } else {
+        format!("dash_a_{adapt_idx}_{repr_idx}")
+    };
+    let format_id = repr.id.clone().unwrap_or(synth_id);
+
+    let fragments =
+        build_fragments(adapt, repr, &format_id, bandwidth, period_duration_seconds);
+    if fragments.is_empty() {
+        return None;
+    }
+
+    // Validate each emitted fragment URL after resolution against the
+    // already-validated `final_base`. Catches cases where the
+    // `$RepresentationID$` template substitution (an MPD-controlled
+    // attribute) or an absolute URL embedded in a `<SegmentURL>` /
+    // SegmentTemplate `media` attribute injects a private-host target.
+    // Drop the whole Representation on any failure so the rest of the
+    // MPD remains usable.
+    if !validate_fragment_urls(&fragments, final_base, adapt_idx, repr_idx) {
+        return None;
+    }
+
+    let codecs = repr
+        .codecs
+        .clone()
+        .or_else(|| adapt.codecs.clone())
+        .unwrap_or_default();
+
+    let (vcodec, acodec) = if is_video {
+        (Codec::Present(codecs), Codec::Absent)
+    } else {
+        (Codec::Absent, Codec::Present(codecs))
+    };
+
+    let ext = mime_to_ext(mime);
+    let container = format!("{ext}_dash");
+
+    let fps = repr.frameRate.as_deref().and_then(parse_frame_rate);
+    let asr = repr
+        .audioSamplingRate
+        .as_deref()
+        .or(adapt.audioSamplingRate.as_deref())
+        .and_then(parse_audio_sampling_rate);
+
+    let mut f = Format::new(
+        &format_id,
+        base_url.as_str(),
+        ext,
+        DownloadProtocol::HttpDashSegments,
+    );
+    f.vcodec = vcodec;
+    f.acodec = acodec;
+    f.container = Some(container);
+    f.tbr = if bandwidth > 0 {
+        Some(bandwidth as f64 / 1000.0)
+    } else {
+        None
+    };
+    f.width = repr.width.map(|w| w as u32);
+    f.height = repr.height.map(|h| h as u32);
+    f.fps = fps;
+    f.asr = if !is_video { asr } else { None };
+    f.language = adapt_lang;
+    f.fragments = Some(fragments);
+    f.fragment_base_url = Some(final_base.to_string());
+
+    Some(f)
+}
+
+/// Finalize the format list: log DRM drops, cap at [`MAX_REPS_PER_MPD`], check emptiness.
+fn finalize_formats(
+    formats: &mut Vec<Format>,
+    subtitles: &[DashSubtitle],
+    drm_dropped: usize,
+) -> Result<(), DashExpandError> {
+    if drm_dropped > 0 {
+        log::warn!("DASH: dropped {drm_dropped} DRM-protected representation(s)");
+    }
+
+    if formats.len() > MAX_REPS_PER_MPD {
+        formats.sort_by(|a, b| {
+            b.tbr
+                .partial_cmp(&a.tbr)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let dropped = formats.len() - MAX_REPS_PER_MPD;
+        formats.truncate(MAX_REPS_PER_MPD);
+        log::warn!("DASH: capped representations at {MAX_REPS_PER_MPD} (dropped {dropped})");
+    }
+
+    if formats.is_empty() && subtitles.is_empty() {
+        return Err(DashExpandError::NoUsableReps);
+    }
+    Ok(())
+}
+
 /// Parse the MPD body and project each Representation to a [`Format`].
 ///
 /// `mpd_xml` is the response body. `base_url` is the URL the MPD was fetched
@@ -172,155 +354,52 @@ pub fn expand_dash_representations(
                 .as_deref()
                 .or(adapt.codecs.as_deref())
                 .unwrap_or("");
-            let is_video = mime.starts_with("video/");
-            let is_audio = mime.starts_with("audio/");
-            let is_text = mime.starts_with("text/")
-                || (mime == "application/mp4"
-                    && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
-            if !is_video && !is_audio && !is_text {
-                continue;
-            }
 
-            if is_text {
-                // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
-                // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
-                let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
-                let plan = build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
-                if plan.is_empty() {
-                    let ext = mime_to_sub_ext(mime, codecs_str);
-                    subtitles.push(DashSubtitle {
-                        language: adapt_lang.clone(),
-                        url: final_base.to_string(),
-                        ext,
-                    });
-                } else {
-                    log::warn!(
-                        "DASH: skipping fragmented text track at adapt={} repr={} (SegmentTemplate subs not yet supported)",
-                        adapt_idx,
-                        repr_idx,
-                    );
-                }
-                continue;
-            }
-
-            let bandwidth = repr.bandwidth.unwrap_or(0);
-            let synth_id = if is_video {
-                format!("dash_v_{adapt_idx}_{repr_idx}")
-            } else {
-                format!("dash_a_{adapt_idx}_{repr_idx}")
-            };
-            let format_id = repr.id.clone().unwrap_or(synth_id);
-
-            let fragments =
-                build_fragments(adapt, repr, &format_id, bandwidth, period_duration_seconds);
-            if fragments.is_empty() {
-                continue;
-            }
-
-            // Validate each emitted fragment URL after resolution against the
-            // already-validated `final_base`. Catches cases where the
-            // `$RepresentationID$` template substitution (an MPD-controlled
-            // attribute) or an absolute URL embedded in a `<SegmentURL>` /
-            // SegmentTemplate `media` attribute injects a private-host target.
-            // Drop the whole Representation on any failure so the rest of the
-            // MPD remains usable.
-            let mut frag_rejected = false;
-            for frag in &fragments {
-                let resolved = match final_base.join(&frag.url) {
-                    Ok(u) => u,
-                    Err(e) => {
+            match classify_mime(mime, codecs_str) {
+                MimeClass::Unknown => continue,
+                MimeClass::Text => {
+                    // Sidecar VoD: BaseURL chain resolves to a single .ttml / .vtt file.
+                    // Fragmented text tracks (SegmentTemplate) are deferred — log-warn + skip.
+                    let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
+                    let frags =
+                        build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
+                    if frags.is_empty() {
+                        let ext = mime_to_sub_ext(mime, codecs_str);
+                        subtitles.push(DashSubtitle {
+                            language: adapt_lang.clone(),
+                            url: final_base.to_string(),
+                            ext,
+                        });
+                    } else {
                         log::warn!(
-                            "DASH: dropping Representation adapt={} repr={}: \
-                             unresolvable fragment URL: {}",
+                            "DASH: skipping fragmented text track at adapt={} repr={} (SegmentTemplate subs not yet supported)",
                             adapt_idx,
                             repr_idx,
-                            e
                         );
-                        frag_rejected = true;
-                        break;
                     }
-                };
-                if let Err(e) = validate_resolved_url(resolved.as_str()) {
-                    log::warn!(
-                        "DASH: dropping Representation adapt={} repr={}: {}",
+                }
+                MimeClass::Video | MimeClass::Audio => {
+                    let is_video = matches!(classify_mime(mime, codecs_str), MimeClass::Video);
+                    if let Some(f) = build_av_format(
+                        adapt,
+                        repr,
+                        adapt_lang.clone(),
+                        &final_base,
+                        base_url,
+                        period_duration_seconds,
                         adapt_idx,
                         repr_idx,
-                        e
-                    );
-                    frag_rejected = true;
-                    break;
+                        is_video,
+                        mime,
+                    ) {
+                        formats.push(f);
+                    }
                 }
             }
-            if frag_rejected {
-                continue;
-            }
-
-            let codecs = repr
-                .codecs
-                .clone()
-                .or_else(|| adapt.codecs.clone())
-                .unwrap_or_default();
-
-            let (vcodec, acodec) = if is_video {
-                (Codec::Present(codecs), Codec::Absent)
-            } else {
-                (Codec::Absent, Codec::Present(codecs))
-            };
-
-            let ext = mime_to_ext(mime);
-            let container = format!("{ext}_dash");
-
-            let fps = repr.frameRate.as_deref().and_then(parse_frame_rate);
-            let asr = repr
-                .audioSamplingRate
-                .as_deref()
-                .or(adapt.audioSamplingRate.as_deref())
-                .and_then(parse_audio_sampling_rate);
-
-            let mut f = Format::new(
-                &format_id,
-                base_url.as_str(),
-                ext,
-                DownloadProtocol::HttpDashSegments,
-            );
-            f.vcodec = vcodec;
-            f.acodec = acodec;
-            f.container = Some(container);
-            f.tbr = if bandwidth > 0 {
-                Some(bandwidth as f64 / 1000.0)
-            } else {
-                None
-            };
-            f.width = repr.width.map(|w| w as u32);
-            f.height = repr.height.map(|h| h as u32);
-            f.fps = fps;
-            f.asr = if is_audio { asr } else { None };
-            f.language = adapt_lang.clone();
-            f.fragments = Some(fragments);
-            f.fragment_base_url = Some(final_base.to_string());
-
-            formats.push(f);
         }
     }
 
-    if drm_dropped > 0 {
-        log::warn!("DASH: dropped {drm_dropped} DRM-protected representation(s)");
-    }
-
-    if formats.len() > MAX_REPS_PER_MPD {
-        formats.sort_by(|a, b| {
-            b.tbr
-                .partial_cmp(&a.tbr)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let dropped = formats.len() - MAX_REPS_PER_MPD;
-        formats.truncate(MAX_REPS_PER_MPD);
-        log::warn!("DASH: capped representations at {MAX_REPS_PER_MPD} (dropped {dropped})");
-    }
-
-    if formats.is_empty() && subtitles.is_empty() {
-        return Err(DashExpandError::NoUsableReps);
-    }
+    finalize_formats(&mut formats, &subtitles, drm_dropped)?;
     Ok(DashExpansion { formats, subtitles })
 }
 
