@@ -26,7 +26,7 @@ use std::sync::Arc;
 /// loading rejects any plugin whose `major.minor` differs from this constant
 /// (patch differences are considered backward-compatible within the same
 /// minor).
-// TODO(#XXX): derive from WIT file at build time
+// TODO(#327): derive from WIT file at build time
 pub const HOST_WIT_VERSION: &str = "0.4.0";
 
 /// Compare a plugin's declared WIT version against the host's `HOST_WIT_VERSION`.
