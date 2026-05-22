@@ -54,3 +54,12 @@ disallowed-methods = [
 #   CODING_RULES.md P2 remains the advisory guide for new code; reviewers
 #   enforce the spirit of the rule during PR review.
 max-fn-params-bools = 2
+
+# ──────────────────────────────────────────────────────────────────────
+# Function-length policy (spec 2026-05-22-file-cohesion-policy-design.md).
+# Threshold 150 is tighter than community norm (200) but looser than
+# the default 100; chosen because Rust's denser syntax makes 100 too
+# tight for legitimate setup-call-cleanup patterns. Per-function
+# `#[allow(clippy::too_many_lines)]` is permitted with a `// reason:`
+# comment naming the structural justification.
+too-many-lines-threshold = 150
