@@ -27,7 +27,7 @@ fn build_signed_manifest(wasm_bytes: &[u8]) -> (Manifest, SigningKey) {
         r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]
@@ -121,7 +121,7 @@ fn rejects_sigstore_signature_variant() {
     let toml = r#"
 name = "test"
 version = "1.0.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]

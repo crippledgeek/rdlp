@@ -16,7 +16,7 @@ use rdlp_plugin::manifest::{Signature, parse_manifest_str};
 const VALID_TOML: &str = r#"
 name = "youtube"
 version = "1.4.2"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://*.youtube.com/*"]
 url_regex = '^https?://(?:www\.)?youtube\.com/watch\?v=(?P<id>[A-Za-z0-9_-]{11})'
 priority = 150
@@ -35,7 +35,7 @@ fn parse_valid_manifest() {
     let m = parse_manifest_str(VALID_TOML).expect("parse should succeed");
     assert_eq!(m.name, "youtube");
     assert_eq!(m.version, "1.4.2");
-    assert_eq!(m.wit_version, "0.3.0");
+    assert_eq!(m.wit_version, "0.4.0");
     assert_eq!(m.matches, vec!["https://*.youtube.com/*"]);
     assert!(m.url_regex.is_some());
     assert_eq!(m.priority, 150);

@@ -76,7 +76,7 @@ fn list_extractors_includes_loaded_plugin() {
             let template = format!(
                 r#"name = "example"
 version = "0.1.0"
-wit_version = "0.3.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/video/*"]
 url_regex = "^https://example\\.com/video/(?P<id>\\d+)"
 priority = 150

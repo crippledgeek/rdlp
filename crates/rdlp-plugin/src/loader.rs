@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// (patch differences are considered backward-compatible within the same
 /// minor).
 // TODO(#XXX): derive from WIT file at build time
-pub const HOST_WIT_VERSION: &str = "0.3.0";
+pub const HOST_WIT_VERSION: &str = "0.4.0";
 
 /// Compare a plugin's declared WIT version against the host's `HOST_WIT_VERSION`.
 /// Thin 2-arg wrapper around [`check_wit_version_against`] that bakes the host
@@ -294,7 +294,7 @@ mod tests {
         // surfaces the drift loudly.
         assert_eq!(
             (parsed.major, parsed.minor, parsed.patch),
-            (0, 3, 0),
+            (0, 4, 0),
             "HOST_WIT_VERSION must track `package rdlp:plugin@X.Y.Z` in crates/rdlp-plugin/wit/*.wit"
         );
     }

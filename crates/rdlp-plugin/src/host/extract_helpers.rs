@@ -381,6 +381,15 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                         .map(|fr| MpdFragment {
                             url: fr.url,
                             duration: fr.duration,
+                            // `(start, end_exclusive)` convention mirrors
+                            // `rdlp_types::Fragment.byte_range` exactly — both
+                            // tuples are passed through verbatim. Plugins see
+                            // the same end-exclusive semantics as the host's
+                            // downloader (see WIT doc-comments on
+                            // `mpd-fragment.byte-range` / `.init-byte-range`).
+                            byte_range: fr.byte_range,
+                            init_url: fr.init_url,
+                            init_byte_range: fr.init_byte_range,
                         })
                         .collect(),
                 })
