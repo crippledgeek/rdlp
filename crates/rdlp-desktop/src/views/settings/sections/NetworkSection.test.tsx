@@ -23,6 +23,8 @@ const baseDraft: AppSettings = {
     socket_timeout: null,
     read_timeout: null,
     pool_idle_timeout: null,
+    download_timeout: null,
+    merge_timeout: null,
     normalize_audio: false,
     audio_gain_target: null,
     loudnorm: false,
