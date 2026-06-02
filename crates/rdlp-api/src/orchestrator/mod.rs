@@ -154,7 +154,15 @@ impl Orchestrator {
         let cookie_jar = Arc::new(SimpleCookieJar::new());
         let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
         let http_client =
-            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar.clone());
+            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar);
+        // Reuse the extraction client's connection pool for downloads instead of
+        // building a second client/pool per download. `wreq::Client` is
+        // Arc-internal, so this clone shares the pooled keep-alive TCP/TLS
+        // connections the extractor opened to the CDN host — avoiding a
+        // redundant BoringSSL handshake on the download phase. The shared
+        // `raw_jar` is already baked into this client, so extraction cookies
+        // still reach the downloader. (PRD 2026-06-02, item 1.)
+        let downloader_client = (*http_client).clone();
         let js_engine = Arc::new(BoaJsEngine::new());
 
         let extraction_context = Arc::new(ExtractionContext::new(
@@ -186,8 +194,9 @@ impl Orchestrator {
 
         Self {
             extractor_registry,
-            downloader_registry: Arc::new(DownloaderRegistry::with_config_and_cookies(
-                &config, raw_jar,
+            downloader_registry: Arc::new(DownloaderRegistry::with_config_and_client(
+                &config,
+                downloader_client,
             )),
             pipeline,
             extraction_context,
