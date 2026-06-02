@@ -18,6 +18,8 @@ const intInRange = (min: number, max: number, label: string) =>
 
 export const socketTimeoutSchema = intInRange(1, 300, "Connection timeout");
 export const readTimeoutSchema = intInRange(1, 600, "Read timeout");
+export const downloadTimeoutSchema = intInRange(1, 86400, "Download timeout");
+export const mergeTimeoutSchema = intInRange(1, 86400, "Merge timeout");
 
 // Numeric input alone — the 0-sentinel is owned by the checkbox.
 // Reject 0 explicitly so users who type 0 see a hint to use the checkbox.

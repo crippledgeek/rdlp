@@ -302,6 +302,8 @@ pub async fn start_download(
             timeout_secs: settings.socket_timeout,
             read_timeout_secs: settings.read_timeout,
             pool_idle_timeout_secs: settings.pool_idle_timeout,
+            download_timeout_secs: settings.download_timeout,
+            merge_timeout_secs: settings.merge_timeout,
             ..NetworkOptions::default()
         },
         verbose: if options.verbose.unwrap_or(settings.verbose) {
@@ -755,19 +757,22 @@ mod tests {
             timeout_secs: settings.socket_timeout,
             read_timeout_secs: settings.read_timeout,
             pool_idle_timeout_secs: settings.pool_idle_timeout,
+            download_timeout_secs: settings.download_timeout,
+            merge_timeout_secs: settings.merge_timeout,
             ..NetworkOptions::default()
         }
     }
 
-    /// When `AppSettings` carries the three timeout fields, they MUST
-    /// propagate into the `NetworkOptions` literal that backs the
-    /// `DownloadRequest`.
+    /// When `AppSettings` carries the timeout fields, they MUST propagate
+    /// into the `NetworkOptions` literal that backs the `DownloadRequest`.
     #[test]
     fn test_settings_timeouts_propagate_to_network_options() {
         let settings = AppSettings {
             socket_timeout: Some(45),
             read_timeout: Some(120),
             pool_idle_timeout: Some(0),
+            download_timeout: Some(7200),
+            merge_timeout: Some(600),
             ..AppSettings::default()
         };
         let options = default_download_options();
@@ -775,11 +780,13 @@ mod tests {
         assert_eq!(net.timeout_secs, Some(45));
         assert_eq!(net.read_timeout_secs, Some(120));
         assert_eq!(net.pool_idle_timeout_secs, Some(0));
+        assert_eq!(net.download_timeout_secs, Some(7200));
+        assert_eq!(net.merge_timeout_secs, Some(600));
     }
 
-    /// Default `AppSettings` MUST leave all three timeout fields unset
-    /// in the resulting `NetworkOptions` so the HTTP client falls back
-    /// to its baked-in defaults.
+    /// Default `AppSettings` MUST leave all timeout fields unset in the
+    /// resulting `NetworkOptions` so the HTTP client falls back to its
+    /// baked-in defaults.
     #[test]
     fn test_default_settings_leave_timeouts_unset_in_network_options() {
         let settings = AppSettings::default();
@@ -788,6 +795,8 @@ mod tests {
         assert!(net.timeout_secs.is_none());
         assert!(net.read_timeout_secs.is_none());
         assert!(net.pool_idle_timeout_secs.is_none());
+        assert!(net.download_timeout_secs.is_none());
+        assert!(net.merge_timeout_secs.is_none());
     }
 }
 
