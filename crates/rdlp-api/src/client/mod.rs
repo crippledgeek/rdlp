@@ -51,6 +51,25 @@ const REEXTRACT_DELAYS_SECS: [u64; 2] = [5, 15];
 #[cfg(test)]
 mod tests;
 
+/// Returns `true` when `net` overrides a field that
+/// `rdlp_http::HttpClientConfig::from_rdlp_config` bakes into the wreq `Client`
+/// at build time. Such a request cannot reuse the `RdlpClient`-level shared
+/// client and must get its own (PRD 2026-06-02 item 2).
+///
+/// MUST stay in sync with the client-level fields in `rdlp_http::HttpClientConfig::from_rdlp_config`:
+/// proxy, connect timeout (`socket_timeout`), read timeout, pool idle timeout, and
+/// cookie source. Registry/downloader-level fields (`rate_limit`,
+/// `concurrent_fragments`, `retries`, format/output/postprocess) are applied
+/// per-download by the registry and do NOT force a dedicated client.
+pub(crate) const fn request_needs_dedicated_client(net: &crate::request::NetworkOptions) -> bool {
+    net.proxy.is_some()
+        || net.timeout_secs.is_some()
+        || net.read_timeout_secs.is_some()
+        || net.pool_idle_timeout_secs.is_some()
+        || net.cookies_from_browser.is_some()
+        || net.cookies_file.is_some()
+}
+
 /// Primary entry point for the rdlp download engine.
 ///
 /// Created via [`RdlpClient::builder()`] or [`RdlpClient::new()`].
@@ -766,5 +785,65 @@ impl RdlpClientBuilder {
 impl Default for RdlpClientBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod shared_client_tests {
+    use super::*;
+    use crate::request::NetworkOptions;
+    use rdlp_types::BrowserType;
+    use std::path::PathBuf;
+
+    #[test]
+    fn empty_network_options_do_not_need_dedicated_client() {
+        assert!(!request_needs_dedicated_client(&NetworkOptions::default()));
+    }
+
+    #[test]
+    fn registry_level_overrides_stay_on_shared_client() {
+        let net = NetworkOptions {
+            rate_limit: Some(1_000_000),
+            concurrent_fragments: Some(8),
+            retries: Some(5),
+            ..NetworkOptions::default()
+        };
+        assert!(!request_needs_dedicated_client(&net));
+    }
+
+    #[test]
+    fn each_client_level_override_forces_dedicated_client() {
+        let cases = [
+            NetworkOptions {
+                proxy: Some("http://p:3128".into()),
+                ..Default::default()
+            },
+            NetworkOptions {
+                timeout_secs: Some(15),
+                ..Default::default()
+            },
+            NetworkOptions {
+                read_timeout_secs: Some(45),
+                ..Default::default()
+            },
+            NetworkOptions {
+                pool_idle_timeout_secs: Some(30),
+                ..Default::default()
+            },
+            NetworkOptions {
+                cookies_from_browser: Some(BrowserType::Chrome),
+                ..Default::default()
+            },
+            NetworkOptions {
+                cookies_file: Some(PathBuf::from("c.txt")),
+                ..Default::default()
+            },
+        ];
+        for net in cases {
+            assert!(
+                request_needs_dedicated_client(&net),
+                "client-level override must force a dedicated client: {net:?}"
+            );
+        }
     }
 }
