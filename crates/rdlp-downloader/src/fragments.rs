@@ -140,7 +140,6 @@ pub async fn download_pre_resolved_fragments(
         0,
         AdaptiveConfig {
             max_connections: concurrency,
-            initial_connections: concurrency.min(2),
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
