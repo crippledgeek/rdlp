@@ -19,8 +19,14 @@
 //! valid scenario for contributors without a custom FFmpeg installed.
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
+
+// Pure path-intent helper, shared verbatim with `tests/pkgconfig_intent.rs`.
+// Brings `std::path::Path` and `std::ffi::OsStr` into scope (used below).
+// `cargo test` never runs build scripts, so the branch logic lives in an
+// `include!`d std-only file that a real test target can also compile.
+include!("build_support/pkgconfig_intent.rs");
 
 fn main() {
     // Re-run when the user's pkg-config configuration changes.
@@ -41,14 +47,8 @@ fn main() {
         // fall-through to distro FFmpeg still happens (intentional), but the
         // build output makes the regression visible.
         let separator = if cfg!(windows) { ';' } else { ':' };
-        let value_str = value.to_string_lossy();
-        let first_path = value_str
-            .split(separator)
-            .map(str::trim)
-            .find(|s| !s.is_empty());
-        if let Some(first) = first_path
-            && !Path::new(first).join("libavcodec.pc").is_file()
-        {
+        let broken = first_broken_prefix(value, separator, |p| p.join("libavcodec.pc").is_file());
+        if let Some(first) = broken {
             println!(
                 "cargo:warning=PKG_CONFIG_PATH/PKG_CONFIG_LIBDIR's first \
                  entry ({first}) does not contain libavcodec.pc — your \
