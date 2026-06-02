@@ -9,6 +9,31 @@ use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 
+/// Validate an HLS playlist/segment URL before fetching.
+///
+/// Test behavior: allow http/https on `127.0.0.1` / `localhost` so mockito
+/// servers (which bind to loopback) can drive `detect_hls_variants` /
+/// `detect_hls_metadata` in tests — without this exemption the SSRF gate
+/// rejects every loopback URL, so those probes silently no-op (the gap the
+/// research flagged in `test_helper_pair_contract_shape`). Mirrors
+/// `expand::validate_resolved_url`. Production builds compile without any
+/// loopback exemption — every URL goes through `validate_url_security`.
+fn validate_hls_url(url: &str) -> Result<()> {
+    #[cfg(test)]
+    {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
+            let host_loopback = parsed.host_str().is_some_and(|h| {
+                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
+            });
+            if scheme_ok && host_loopback {
+                return Ok(());
+            }
+        }
+    }
+    BaseExtractor::validate_url_security(url)
+}
+
 /// Expand a parsed HLS master playlist into per-variant `HlsVariantInfo`
 /// entries. Pure function — does no I/O; safe to unit-test against any
 /// `base_url` (including loopback) without hitting the SSRF gate.
@@ -165,7 +190,7 @@ impl HlsSizeDetector {
     /// Panics if a master playlist has variants but none can be selected
     /// (programmer error — the filter + `or_else` fallback should always find one).
     pub async fn detect_hls_metadata(&self, m3u8_url: &str) -> Result<Option<HlsInfo>> {
-        BaseExtractor::validate_url_security(m3u8_url)?;
+        validate_hls_url(m3u8_url)?;
 
         if self.verbose {
             debug!(url:? = m3u8_url; "HLS detecting metadata");
@@ -247,7 +272,7 @@ impl HlsSizeDetector {
                     })?
                     .to_string();
 
-                BaseExtractor::validate_url_security(&media_url)?;
+                validate_hls_url(&media_url)?;
 
                 let media_info = match self.fetch_and_extract_media_info(&media_url).await {
                     Ok(Some(info)) => info,
@@ -337,7 +362,7 @@ impl HlsSizeDetector {
     /// Panics if a master playlist has non-I-frame variants but none can be selected
     /// (programmer error — the filter + `or_else` fallback should always find one).
     pub async fn detect_hls_variants(&self, m3u8_url: &str) -> Result<Vec<HlsVariantInfo>> {
-        BaseExtractor::validate_url_security(m3u8_url)?;
+        validate_hls_url(m3u8_url)?;
 
         let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
             Ok(text) => text,

@@ -10,8 +10,9 @@ use super::{
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, RdlpError};
 use rdlp_security::validate_url_security;
-use rdlp_types::{Format, Fragment};
+use rdlp_types::{DownloadProtocol, Format, Fragment};
 use std::path::Path;
+use std::sync::Arc;
 
 /// Validate every URL embedded in a fragment list against the SSRF allow-list.
 ///
@@ -60,6 +61,26 @@ fn validate_fragment_url_one(url: &str, kind: &str) -> Result<()> {
             url: Some(url.to_string()),
         })
     })
+}
+
+/// Whether a format's CDN-fallback URLs require HLS re-expansion rather than a
+/// minimal URL-swap rebuild.
+///
+/// A fragment-based HLS row's `fragments` are absolute segment URLs bound to
+/// the *primary* CDN host; a fallback playlist on a different CDN cannot reuse
+/// them. Swapping just the playlist URL (via `Format::new`) yields a row with
+/// `protocol = M3u8Native` but `fragments = None`, which trips
+/// `HlsDownloader`'s "pre-resolved fragments required" guard. Such fallbacks
+/// must instead be re-expanded against the fallback URL.
+///
+/// Progressive HTTP fallbacks are plain URL redirects (no fragments) and DASH
+/// never carries `fallback_urls`, so both keep the minimal-rebuild path.
+const fn fallback_needs_hls_reexpansion(format: &Format) -> bool {
+    format.fragments.is_some()
+        && matches!(
+            format.protocol,
+            DownloadProtocol::M3u8 | DownloadProtocol::M3u8Native
+        )
 }
 
 /// Result of a successful download with CDN fallback.
@@ -158,19 +179,69 @@ impl Orchestrator {
                 }
                 warn!(
                     fallback = i,
-                    url:? = download_url;
+                    // Sanitize: fallback URLs may carry CDN tokens/credentials.
+                    url:? = rdlp_security::sanitize_for_logging(download_url);
                     "Primary CDN failed, trying fallback"
                 );
             }
 
-            // For the primary URL we pass the full `format` so that
-            // `download_format` can use pre-resolved fragments (DASH) or other
-            // Format fields. For fallback URLs we create a minimal Format with
-            // only the fallback URL — fallback CDN entries never carry fragment
-            // lists, they are plain HTTP/HLS redirects.
+            // For the primary URL we pass the full `format` so `download_format`
+            // can use its pre-resolved fragments (HLS/DASH) and other fields.
+            //
+            // For fallback URLs the handling depends on the protocol:
+            //
+            // * Progressive HTTP — the fallback is a plain URL redirect, so a
+            //   minimal `Format::new` carrying only the fallback URL is correct.
+            //
+            // * Fragment-based HLS — the primary `fragments` are absolute
+            //   segment URLs bound to the primary CDN and cannot be reused on a
+            //   different host. Re-expand the fallback playlist to obtain fresh,
+            //   CDN-specific fragments. If re-expansion fails (network,
+            //   encrypted, live, SSRF rejection, no segments), skip this
+            //   fallback gracefully — never hand a fragments-less HLS Format to
+            //   `HlsDownloader`, which would surface an internal-error message
+            //   instead of an honest network failure.
             let fallback_format;
             let effective_format: &Format = if i == 0 {
                 format
+            } else if fallback_needs_hls_reexpansion(format) {
+                // Sanitize for any log/message use — fallback URLs may carry
+                // CDN credentials or signed tokens in userinfo/query.
+                let safe_url = rdlp_security::sanitize_for_logging(download_url);
+                if let Some(f) = self.reexpand_hls_fallback(format, download_url).await {
+                    // Re-validate the re-expanded fragment URLs at the
+                    // orchestrator trust boundary, mirroring the primary path's
+                    // `validate_fragment_urls` gate. `expand_hls_in_place`
+                    // already validates each URI internally, but routing the
+                    // re-expanded list back through the boundary check keeps the
+                    // invariant explicit and immune to future validator drift.
+                    if let Some(frags) = &f.fragments
+                        && let Err(e) = validate_fragment_urls(frags)
+                    {
+                        warn!(
+                            fallback = i,
+                            url:? = safe_url;
+                            "Re-expanded HLS fallback fragment failed security validation; skipping"
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
+                    fallback_format = f;
+                    &fallback_format
+                } else {
+                    warn!(
+                        fallback = i,
+                        url:? = safe_url;
+                        "HLS fallback playlist could not be re-expanded; skipping"
+                    );
+                    last_err = Some(OrchestratorError::DownloadFailed(RdlpError::Network {
+                        message: format!(
+                            "HLS fallback playlist could not be re-expanded: {safe_url}"
+                        ),
+                        url: Some((*download_url).to_string()),
+                    }));
+                    continue;
+                }
             } else {
                 fallback_format = Format::new(
                     &format.format_id,
@@ -214,6 +285,33 @@ impl Orchestrator {
         debug!("   Stats: {stats:?}");
 
         Ok(Some(DownloadOutcome { is_hls }))
+    }
+
+    /// Re-expand an HLS fallback playlist into a `Format` with fresh,
+    /// CDN-specific pre-resolved fragments.
+    ///
+    /// Seeds a single-row `Format` at `fallback_url`, preserving the operator
+    /// headers (e.g. `Referer`) the CDN requires for playlist + segment fetches,
+    /// then runs the same `expand_hls_in_place` helper the extractors use.
+    ///
+    /// Returns `None` when expansion produces no usable row — network failure,
+    /// encrypted/live stream, empty variants/segments, or SSRF rejection of the
+    /// fallback or its variant/segment URIs — so the caller can fall through to
+    /// the next fallback or an honest network error. `expand_hls_in_place` drops
+    /// rows it cannot expand, so any surviving row is guaranteed to carry
+    /// `fragments`.
+    async fn reexpand_hls_fallback(&self, primary: &Format, fallback_url: &str) -> Option<Format> {
+        let mut seed = Format::new(
+            &primary.format_id,
+            fallback_url,
+            &primary.ext,
+            primary.protocol.clone(),
+        );
+        seed.http_headers = primary.http_headers.clone();
+
+        let http = Arc::clone(&self.extraction_context.http_client);
+        let expanded = rdlp_extractor::hls::expand_hls_in_place(vec![seed], http).await;
+        expanded.into_iter().find(|f| f.fragments.is_some())
     }
 
     /// Execute a download to stdout with token validation (no CDN fallback).
@@ -433,6 +531,67 @@ mod tests {
             res.is_err(),
             "Expected rejection of fragment with private-IP url"
         );
+    }
+
+    /// Build a format with the given protocol and optional fragments for the
+    /// `fallback_needs_hls_reexpansion` decision tests.
+    fn fmt_with(protocol: DownloadProtocol, with_fragments: bool) -> Format {
+        let mut f = Format::new("id", "https://cdn.example.com/v", "mp4", protocol);
+        if with_fragments {
+            f.fragments = Some(vec![frag("https://cdn.example.com/seg0.ts", None)]);
+        }
+        f
+    }
+
+    /// Positive: a fragment-based HLS format (`M3u8` or `M3u8Native`) must be flagged
+    /// for re-expansion — a minimal URL-swap would drop its CDN-specific
+    /// fragments and trip the downloader's "pre-resolved fragments required" guard.
+    #[test]
+    fn test_fallback_reexpansion_needed_for_hls_with_fragments() {
+        assert!(fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::M3u8Native,
+            true
+        )));
+        assert!(fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::M3u8,
+            true
+        )));
+    }
+
+    /// Negative: progressive HTTP fallbacks are plain URL redirects with no
+    /// fragments — the minimal-rebuild path is correct, no re-expansion.
+    #[test]
+    fn test_fallback_reexpansion_not_needed_for_progressive_http() {
+        assert!(!fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::Https,
+            false
+        )));
+        assert!(!fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::Http,
+            false
+        )));
+    }
+
+    /// Negative: an HLS-protocol row WITHOUT fragments cannot be re-expanded as
+    /// a fallback (nothing to re-resolve against), so it must not be flagged —
+    /// guards against an infinite/no-op re-expansion attempt.
+    #[test]
+    fn test_fallback_reexpansion_not_needed_for_hls_without_fragments() {
+        assert!(!fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::M3u8Native,
+            false
+        )));
+    }
+
+    /// Negative: DASH (`HttpDashSegments`) never carries `fallback_urls`, and its
+    /// re-expansion is body-based (not URL-based), so even a fragment-bearing
+    /// DASH row must not take the HLS re-expansion path.
+    #[test]
+    fn test_fallback_reexpansion_not_needed_for_dash() {
+        assert!(!fallback_needs_hls_reexpansion(&fmt_with(
+            DownloadProtocol::HttpDashSegments,
+            true
+        )));
     }
 
     /// Positive path: all-public-URL fragments validate successfully.

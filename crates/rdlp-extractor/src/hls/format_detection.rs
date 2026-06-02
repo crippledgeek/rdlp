@@ -198,18 +198,27 @@ struct FormatDetectionCtx {
     verbose: bool,
 }
 
-/// Expand a single HLS `variant` into a `Format`, inheriting metadata from
-/// `parent_format` (ext, protocol, headers, codec fallbacks, language).
+/// Write per-variant HLS labels from `variant` onto `format`, inheriting codec
+/// and language fallbacks from `parent_format`.
 ///
-/// Returns `(expanded_format, is_live, has_encryption)`.
-fn expand_hls_variant(
+/// Sets `format_id` (resolution-suffixed `…-720p` for video, `…-audio-{tag}`
+/// for renditions), `height`/`width`, `vcodec`/`acodec`, `fps`, `tbr`,
+/// `http_headers`, `language`, `audio_group_id`, `duration`, `filesize_approx`,
+/// `container`, `has_drm`, `format_note`, and `quality`.
+///
+/// Does NOT touch `url` or `fragments` — the caller owns those. This is the
+/// single labeling source shared by [`expand_hls_variant`] (the detect/size
+/// path) and `expand::expand_hls_url` (the pre-resolved-fragments path), so the
+/// two HLS expansion entry points produce identically-labeled rows.
+pub(crate) fn apply_variant_labels(
+    format: &mut rdlp_types::Format,
     variant: &super::types::HlsVariantInfo,
     parent_format: &rdlp_types::Format,
-) -> DetectionEntry {
+) {
     let height = variant.resolution.map(|(_, h)| h as u32);
     let width = variant.resolution.map(|(w, _)| w as u32);
 
-    let format_id = if variant.is_audio_only {
+    format.format_id = if variant.is_audio_only {
         // Prefer LANGUAGE, then GROUP-ID, then NAME; fall back to a bare
         // `audio` suffix. Keeps ids stable across re-extracts.
         let tag = variant
@@ -228,34 +237,28 @@ fn expand_hls_variant(
         format!("{}-{}k", parent_format.format_id, variant.bandwidth / 1000)
     };
 
-    let mut expanded_format = rdlp_types::Format::new(
-        &format_id,
-        &variant.media_playlist_url,
-        &parent_format.ext,
-        parent_format.protocol.clone(),
-    );
-    expanded_format.height = height;
-    expanded_format.width = width;
+    format.height = height;
+    format.width = width;
 
     if variant.is_audio_only {
         // Audio-only HLS rendition: video stream Absent;
         // ba selector treats as audio-only (has_video() == false).
-        expanded_format.vcodec = Codec::Absent;
-        expanded_format.acodec = Codec::from(
+        format.vcodec = Codec::Absent;
+        format.acodec = Codec::from(
             variant
                 .audio_codec
                 .clone()
                 .or_else(|| Some("mp4a".to_string())),
         );
     } else {
-        expanded_format.vcodec = Codec::from(
+        format.vcodec = Codec::from(
             variant
                 .video_codec
                 .clone()
                 .or_else(|| parent_format.vcodec.as_str().map(str::to_owned))
                 .or_else(|| detect_codec_from_id(&parent_format.format_id, true)),
         );
-        expanded_format.acodec = Codec::from(
+        format.acodec = Codec::from(
             variant
                 .audio_codec
                 .clone()
@@ -264,19 +267,19 @@ fn expand_hls_variant(
         );
     }
 
-    expanded_format.fps = variant.frame_rate;
+    format.fps = variant.frame_rate;
     // EXT-X-MEDIA renditions carry no BANDWIDTH: leave
     // tbr/filesize_approx unset rather than write misleading zeros.
-    expanded_format.tbr = if variant.bandwidth > 0 {
+    format.tbr = if variant.bandwidth > 0 {
         Some(variant.bandwidth as f64 / 1000.0)
     } else {
         None
     };
-    expanded_format.http_headers = parent_format.http_headers.clone();
+    format.http_headers = parent_format.http_headers.clone();
     // Surface the rendition language on the Format so the UI can label
     // multi-language audio tracks. Fall back to the parent format's language
     // for video variants.
-    expanded_format.language = variant
+    format.language = variant
         .language
         .clone()
         .or_else(|| parent_format.language.clone());
@@ -286,26 +289,51 @@ fn expand_hls_variant(
     //   - audio-only rows carry their own GROUP-ID.
     // UIs use matching values to visually pair rows when a user hand-picks
     // without the Best preset.
-    expanded_format.audio_group_id = variant.audio_group_id.clone();
-    expanded_format.duration = variant.total_duration;
-    // Estimate size from bitrate × duration (bytes = bps × s / 8)
-    expanded_format.filesize_approx = match (variant.bandwidth, variant.total_duration) {
-        (bw, Some(dur)) if bw > 0 => Some((bw as f64 * dur / 8.0) as u64),
-        _ => None,
-    };
-    expanded_format.container = variant.segment_container.clone();
+    format.audio_group_id = variant.audio_group_id.clone();
+    // Only overwrite duration when the variant carries one (the pure
+    // master-parse path leaves it None and the caller may have computed
+    // duration from the fragment list).
+    if let Some(dur) = variant.total_duration {
+        format.duration = Some(dur);
+    }
+    // Estimate size from bitrate × duration (bytes = bps × s / 8). Falls back
+    // to any duration already on the format (e.g. summed from fragments).
+    let dur_for_size = variant.total_duration.or(format.duration);
+    if let Some(dur) = dur_for_size
+        && variant.bandwidth > 0
+    {
+        format.filesize_approx = Some((variant.bandwidth as f64 * dur / 8.0) as u64);
+    }
+    format.container = variant.segment_container.clone();
     if variant.has_encryption {
-        expanded_format.has_drm = Some(true);
+        format.has_drm = Some(true);
     }
     if variant.is_audio_only {
-        expanded_format.format_note = variant
+        format.format_note = variant
             .rendition_name
             .clone()
             .or_else(|| Some("audio".to_string()));
     } else if let Some(h) = height {
-        expanded_format.format_note = Some(format!("{h}p"));
-        expanded_format.quality = Some((h / 100) as i32);
+        format.format_note = Some(format!("{h}p"));
+        format.quality = Some((h / 100) as i32);
     }
+}
+
+/// Expand a single HLS `variant` into a `Format`, inheriting metadata from
+/// `parent_format` (ext, protocol, headers, codec fallbacks, language).
+///
+/// Returns `(expanded_format, is_live, has_encryption)`.
+fn expand_hls_variant(
+    variant: &super::types::HlsVariantInfo,
+    parent_format: &rdlp_types::Format,
+) -> DetectionEntry {
+    let mut expanded_format = rdlp_types::Format::new(
+        &parent_format.format_id,
+        &variant.media_playlist_url,
+        &parent_format.ext,
+        parent_format.protocol.clone(),
+    );
+    apply_variant_labels(&mut expanded_format, variant, parent_format);
 
     (
         expanded_format,
@@ -340,6 +368,15 @@ async fn build_format_detection_future(
             .unwrap_or(false);
 
     if is_hls {
+        // Already pre-resolved by `expand_hls_in_place`: the row is complete
+        // (per-variant `url`, labels, and `fragments`). Re-expanding here would
+        // re-fetch the playlist and produce fragment-less rows that clobber the
+        // pre-resolved ones — the xhamster `hls-h264-url-2160p` bug. Pass
+        // through untouched (it already carries duration/size from expansion).
+        if format.fragments.is_some() {
+            return vec![(format, None, None)];
+        }
+
         // Try to expand master playlist into per-variant formats
         let variants_res = ctx.hls_detector.detect_hls_variants(&url).await;
 

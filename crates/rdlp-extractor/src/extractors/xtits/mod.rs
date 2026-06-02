@@ -219,6 +219,12 @@ impl InfoExtractor for XTitsExtractor {
         // Parse flashvars for metadata
         let flashvars = formats::parse_flashvars_public(&flashvars_content);
 
+        // Pre-resolve HLS variant playlists into per-variant Format rows with
+        // fragments populated, so the downloader's pre-resolved-fragments path
+        // is taken. MUST run before `detect_format_sizes_lazy` (issue #269/#279).
+        let video_formats =
+            crate::hls::expand_hls_in_place(video_formats, ctx.http_client.clone()).await;
+
         // Detect file sizes for all formats
         let (formats_with_size, _hls_flags) =
             crate::hls::detect_format_sizes_lazy(video_formats, ctx, self.name()).await;
