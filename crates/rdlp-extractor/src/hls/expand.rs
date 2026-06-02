@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use futures::stream::{self, StreamExt};
 use rdlp_types::{Format, Fragment};
 
 /// Refusal/failure modes for [`expand_hls_url`].
@@ -72,6 +73,13 @@ pub enum HlsExpandError {
 
 /// Cap on master playlist variant count.
 const MAX_VARIANTS: usize = 50;
+/// Max concurrent variant media-playlist fetches during master expansion.
+///
+/// The N per-variant media playlists are fetched in parallel (was sequential)
+/// but bounded so a 50-variant master cannot open 50 simultaneous connections.
+/// 4 matches the project's existing per-host extraction concurrency defaults
+/// (e.g. `CONCURRENT_EXTRACTIONS` in the pornhub/xhamster playlist modules).
+const MAX_CONCURRENT_VARIANT_FETCHES: usize = 4;
 /// Cap on distinct EXT-X-MAP URIs in a single media playlist.
 /// Mitigates interleaved-init-URI fetch amplification (`A,B,A,B,...`).
 const MAX_INIT_SEGMENTS: usize = 50;
@@ -162,43 +170,63 @@ pub async fn expand_hls_url(
                     max: MAX_VARIANTS,
                 });
             }
-            let mut out = Vec::with_capacity(variant_infos.len());
-            for vinfo in &variant_infos {
-                let media_url = vinfo.media_playlist_url.clone();
-                validate_resolved_url(&media_url)?;
-                // Cross-origin header forwarding is suppressed: a malicious or
-                // compromised master playlist whose variant URI points to an
-                // attacker-controlled CDN must NOT receive Referer / Cookie /
-                // Authorization or any other operator-set header. Only forward
-                // when the variant's origin (scheme+host+port) matches the
-                // seed's origin.
-                let same_origin = match (&seed_origin, url::Url::parse(&media_url).ok()) {
-                    (Some(a), Some(b)) => *a == b.origin(),
-                    _ => false,
-                };
-                let variant_headers = if same_origin { headers } else { None };
-                let media_bytes = fetch_playlist_bytes(&http, &media_url, variant_headers).await?;
-                let mut f = expand_media_playlist(seed, &media_url, &media_bytes)?;
-                // Point the row at its OWN media playlist (not the master) and
-                // stamp per-variant labels (height/codecs/resolution-suffixed
-                // format_id) so the downstream `detect_format_sizes_lazy` pass
-                // enriches the complete row instead of re-fetching the master
-                // and re-expanding into fragment-less rows (the xhamster
-                // `hls-h264-url-2160p` bug).
-                f.url = media_url;
-                crate::hls::format_detection::apply_variant_labels(&mut f, vinfo, seed);
-                // `apply_variant_labels` copies the seed's operator headers onto
-                // the row (used by the downloader for SEGMENT fetches). For a
-                // cross-origin variant, drop them — the same-origin gate above
-                // already withheld them from the playlist fetch, and forwarding
-                // Referer/Cookie/Auth to a cross-origin segment CDN is the same
-                // leak (review LOW-1).
-                if !same_origin {
-                    f.http_headers = None;
-                }
-                out.push(f);
-            }
-            Ok(out)
+            // Fetch each variant's media playlist concurrently (bounded by
+            // MAX_CONCURRENT_VARIANT_FETCHES), then build the complete per-variant
+            // row. `try_buffered` preserves variant order (deterministic format
+            // list) and short-circuits on the first error — matching the prior
+            // sequential `?`. Each future owns its captures (an `Arc<Format>`
+            // seed and an owned `HlsVariantInfo`); capturing borrowed `&seed` /
+            // `&headers` here trips the HRTB "FnOnce is not general enough" bound
+            // that the stream combinators impose.
+            let seed = Arc::new(seed.clone());
+            let rows: Vec<Result<Format, HlsExpandError>> = stream::iter(variant_infos)
+                .map(|vinfo| {
+                    let http = Arc::clone(&http);
+                    let seed = Arc::clone(&seed);
+                    let seed_origin = seed_origin.clone();
+                    async move {
+                        let media_url = vinfo.media_playlist_url.clone();
+                        validate_resolved_url(&media_url)?;
+                        // Cross-origin header forwarding is suppressed: a malicious
+                        // or compromised master playlist whose variant URI points to
+                        // an attacker-controlled CDN must NOT receive Referer /
+                        // Cookie / Authorization. Only forward when the variant's
+                        // origin (scheme+host+port) matches the seed's origin.
+                        let same_origin = match (&seed_origin, url::Url::parse(&media_url).ok()) {
+                            (Some(a), Some(b)) => *a == b.origin(),
+                            _ => false,
+                        };
+                        let variant_headers = if same_origin {
+                            seed.http_headers.as_ref()
+                        } else {
+                            None
+                        };
+                        let media_bytes =
+                            fetch_playlist_bytes(&http, &media_url, variant_headers).await?;
+                        let mut f = expand_media_playlist(&seed, &media_url, &media_bytes)?;
+                        // Point the row at its OWN media playlist (not the master)
+                        // and stamp per-variant labels (height/codecs/resolution-
+                        // suffixed format_id) so the downstream
+                        // `detect_format_sizes_lazy` pass enriches the complete row
+                        // instead of re-fetching the master and re-expanding into
+                        // fragment-less rows (the xhamster `hls-h264-url-2160p` bug).
+                        f.url = media_url;
+                        crate::hls::format_detection::apply_variant_labels(&mut f, &vinfo, &seed);
+                        // Drop operator headers for cross-origin segment CDNs: the
+                        // same-origin gate above withheld them from the playlist
+                        // fetch; forwarding them to a cross-origin segment CDN is the
+                        // same leak (review LOW-1).
+                        if !same_origin {
+                            f.http_headers = None;
+                        }
+                        Ok::<Format, HlsExpandError>(f)
+                    }
+                })
+                .buffered(MAX_CONCURRENT_VARIANT_FETCHES)
+                .collect()
+                .await;
+            // Propagate the first failure (matches the prior sequential `?`).
+            rows.into_iter().collect::<Result<Vec<_>, _>>()
         }
     }
 }
