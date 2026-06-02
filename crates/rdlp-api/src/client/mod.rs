@@ -28,13 +28,15 @@ use crate::errors::RdlpApiError;
 use crate::events::Event;
 use crate::handle::{DownloadHandle, DownloadId};
 use crate::merge::MergeOverrides;
-use crate::orchestrator::{InteractiveCallback, Orchestrator};
+use crate::orchestrator::{InteractiveCallback, Orchestrator, SharedHttpClient};
 use crate::plugin_bootstrap::build_registry_with_plugins;
 use crate::request::DownloadRequest;
 use crate::result::DownloadResult;
 use log::{error, warn};
+use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::DownloadStats;
 use rdlp_extractor::ExtractorRegistry;
+use rdlp_http::HttpClientFactory;
 use rdlp_postprocess::TempRegistry;
 use rdlp_types::{Config, InfoDict};
 use std::sync::Arc;
@@ -50,6 +52,25 @@ const REEXTRACT_DELAYS_SECS: [u64; 2] = [5, 15];
 
 #[cfg(test)]
 mod tests;
+
+/// Returns `true` when `net` overrides a field that
+/// `rdlp_http::HttpClientConfig::from_rdlp_config` bakes into the wreq `Client`
+/// at build time. Such a request cannot reuse the `RdlpClient`-level shared
+/// client and must get its own (PRD 2026-06-02 item 2).
+///
+/// MUST stay in sync with the client-level fields in `rdlp_http::HttpClientConfig::from_rdlp_config`:
+/// proxy, connect timeout (`socket_timeout`), read timeout, pool idle timeout, and
+/// cookie source. Registry/downloader-level fields (`rate_limit`,
+/// `concurrent_fragments`, `retries`, format/output/postprocess) are applied
+/// per-download by the registry and do NOT force a dedicated client.
+pub(crate) const fn request_needs_dedicated_client(net: &crate::request::NetworkOptions) -> bool {
+    net.proxy.is_some()
+        || net.timeout_secs.is_some()
+        || net.read_timeout_secs.is_some()
+        || net.pool_idle_timeout_secs.is_some()
+        || net.cookies_from_browser.is_some()
+        || net.cookies_file.is_some()
+}
 
 /// Primary entry point for the rdlp download engine.
 ///
@@ -75,6 +96,11 @@ pub struct RdlpClient {
     /// per-config customization), so this field is for the listing API
     /// surface only.
     downloader_registry: Arc<rdlp_downloader::DownloaderRegistry>,
+    /// One shared HTTP client reused across `download()` calls whose requests
+    /// don't override a client-level network field (PRD 2026-06-02 item 2).
+    shared_client: Arc<wreq::Client>,
+    /// Cookie jar baked into `shared_client`.
+    shared_cookie_jar: Arc<SimpleCookieJar>,
 }
 
 // The Debug impl intentionally omits `temp_registry`, `extractor_registry`, and
@@ -133,6 +159,7 @@ impl RdlpClient {
         let (tx, rx) = mpsc::channel::<Event>(256);
         let cancel_token = CancellationToken::new();
 
+        let shared_http = self.shared_http_for(&request);
         let config = Arc::new(self.build_config(&request));
         let interactive_flag = request.format.interactive;
         let url = request.url;
@@ -147,7 +174,7 @@ impl RdlpClient {
             config.cookies_from_browser.is_some() || config.cookies_file.is_some();
 
         let join_handle = tokio::spawn(async move {
-            let orchestrator = Orchestrator::new_with_registry(
+            let orchestrator = Orchestrator::new_with_shared(
                 config,
                 tx.clone(),
                 id,
@@ -155,6 +182,7 @@ impl RdlpClient {
                 interactive_cb,
                 Some(registry),
                 Some(extractor_registry),
+                shared_http,
             );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
@@ -666,6 +694,19 @@ impl RdlpClient {
         DownloadHandle::new(id, rx, cancel_token, join_handle)
     }
 
+    /// Returns the shared client+jar to reuse for `request`, or `None` if it
+    /// overrides a client-level network field and needs its own client.
+    fn shared_http_for(&self, request: &DownloadRequest) -> Option<SharedHttpClient> {
+        if request_needs_dedicated_client(&request.network) {
+            None
+        } else {
+            Some(SharedHttpClient {
+                client: Arc::clone(&self.shared_client),
+                cookie_jar: Arc::clone(&self.shared_cookie_jar),
+            })
+        }
+    }
+
     /// Merge request options into a Config, applying overrides from the request.
     fn build_config(&self, request: &DownloadRequest) -> Config {
         let mut config = (*self.config).clone();
@@ -753,12 +794,25 @@ impl RdlpClientBuilder {
         // Listing-only registry — see field doc on RdlpClient.
         let downloader_registry = Arc::new(rdlp_downloader::DownloaderRegistry::new());
 
+        // One client + jar reused across download() calls that don't override a
+        // client-level network field (see `request_needs_dedicated_client`). The
+        // jar starts empty; each shared-path download calls `load_cookies()` into
+        // it. When the base config carries a cookie source it is therefore
+        // re-read per download (idempotent — cookies are domain-scoped and wreq's
+        // Jar is Sync); loading base cookies once is a deferred optimization
+        // (PRD 2026-06-02 item 2 follow-up).
+        let shared_cookie_jar = Arc::new(SimpleCookieJar::new());
+        let shared_client = HttpClientFactory::from_rdlp_config(&config)
+            .build_arc_with_cookies(shared_cookie_jar.jar());
+
         Ok(RdlpClient {
             config: Arc::new(config),
             interactive: self.interactive,
             temp_registry,
             extractor_registry,
             downloader_registry,
+            shared_client,
+            shared_cookie_jar,
         })
     }
 }
@@ -766,5 +820,114 @@ impl RdlpClientBuilder {
 impl Default for RdlpClientBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod shared_client_tests {
+    use super::*;
+    use crate::request::{DownloadRequest, NetworkOptions};
+    use rdlp_types::BrowserType;
+    use std::path::PathBuf;
+
+    #[test]
+    fn empty_network_options_do_not_need_dedicated_client() {
+        assert!(!request_needs_dedicated_client(&NetworkOptions::default()));
+    }
+
+    #[test]
+    fn registry_level_overrides_stay_on_shared_client() {
+        let net = NetworkOptions {
+            rate_limit: Some(1_000_000),
+            concurrent_fragments: Some(8),
+            retries: Some(5),
+            ..NetworkOptions::default()
+        };
+        assert!(!request_needs_dedicated_client(&net));
+    }
+
+    #[test]
+    fn each_client_level_override_forces_dedicated_client() {
+        let cases = [
+            NetworkOptions {
+                proxy: Some("http://p:3128".into()),
+                ..Default::default()
+            },
+            NetworkOptions {
+                timeout_secs: Some(15),
+                ..Default::default()
+            },
+            NetworkOptions {
+                read_timeout_secs: Some(45),
+                ..Default::default()
+            },
+            NetworkOptions {
+                pool_idle_timeout_secs: Some(30),
+                ..Default::default()
+            },
+            NetworkOptions {
+                cookies_from_browser: Some(BrowserType::Chrome),
+                ..Default::default()
+            },
+            NetworkOptions {
+                cookies_file: Some(PathBuf::from("c.txt")),
+                ..Default::default()
+            },
+        ];
+        for net in cases {
+            assert!(
+                request_needs_dedicated_client(&net),
+                "client-level override must force a dedicated client: {net:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_options_fields_are_classified_for_client_sharing() {
+        // Compile-time tripwire keeping `request_needs_dedicated_client` in sync
+        // with the per-request override surface. `NetworkOptions` is the ONLY way
+        // a download() request can diverge from the base config, so a field that
+        // is not here cannot be overridden per-request. If a field is added to
+        // `NetworkOptions`, this exhaustive destructure stops compiling — forcing
+        // a decision: is the new field client-build-only (add it to
+        // `request_needs_dedicated_client`) or registry/downloader-level (leave
+        // it out)? See also the doc-note coupling the predicate to
+        // `rdlp_http::HttpClientConfig::from_rdlp_config`.
+        let NetworkOptions {
+            // client-build-only — MUST appear in request_needs_dedicated_client:
+            proxy: _,
+            timeout_secs: _,
+            read_timeout_secs: _,
+            pool_idle_timeout_secs: _,
+            cookies_from_browser: _,
+            cookies_file: _,
+            // registry/downloader-level — intentionally NOT in the predicate:
+            retries: _,
+            concurrent_fragments: _,
+            rate_limit: _,
+        } = NetworkOptions::default();
+    }
+
+    #[test]
+    fn default_requests_reuse_one_shared_client() {
+        let client = crate::RdlpClient::new(rdlp_types::Config::default()).unwrap();
+        // Any two distinct URLs with default network options — `shared_http_for`
+        // never fetches, so the host is irrelevant; only the (empty) NetworkOptions matter.
+        let a = client
+            .shared_http_for(&DownloadRequest::new("https://example.com/a"))
+            .expect("shared");
+        let b = client
+            .shared_http_for(&DownloadRequest::new("https://example.org/b"))
+            .expect("shared");
+        assert!(std::sync::Arc::ptr_eq(&a.client, &b.client));
+        assert!(std::sync::Arc::ptr_eq(&a.client, &client.shared_client));
+    }
+
+    #[test]
+    fn client_level_override_takes_dedicated_path() {
+        let client = crate::RdlpClient::new(rdlp_types::Config::default()).unwrap();
+        let mut req = DownloadRequest::new("https://example.com/a");
+        req.network.proxy = Some("http://p:3128".into());
+        assert!(client.shared_http_for(&req).is_none());
     }
 }
