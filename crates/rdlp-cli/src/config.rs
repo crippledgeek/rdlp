@@ -288,6 +288,12 @@ pub fn merge_config(
     if let Some(secs) = args.pool_idle_timeout {
         config.pool_idle_timeout = Some(secs);
     }
+    if let Some(secs) = args.download_timeout {
+        config.download_timeout = Some(secs);
+    }
+    if let Some(secs) = args.merge_timeout {
+        config.merge_timeout = Some(secs);
+    }
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);

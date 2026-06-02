@@ -617,6 +617,27 @@ fn cli_read_timeout_flag_sets_field() {
 }
 
 #[test]
+fn cli_download_timeout_flag_sets_field() {
+    use clap::Parser;
+    let args = Args::try_parse_from([
+        "rdlp",
+        "--download-timeout",
+        "7200",
+        "https://example.com/x",
+    ])
+    .expect("parse should succeed");
+    assert_eq!(args.download_timeout, Some(7200));
+}
+
+#[test]
+fn cli_merge_timeout_flag_sets_field() {
+    use clap::Parser;
+    let args = Args::try_parse_from(["rdlp", "--merge-timeout", "600", "https://example.com/x"])
+        .expect("parse should succeed");
+    assert_eq!(args.merge_timeout, Some(600));
+}
+
+#[test]
 fn cli_pool_idle_timeout_flag_accepts_zero_sentinel() {
     use clap::Parser;
     let args = Args::try_parse_from(["rdlp", "--pool-idle-timeout", "0", "https://example.com/x"])

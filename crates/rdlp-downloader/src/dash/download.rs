@@ -63,7 +63,10 @@ pub async fn run(
     let response = client
         .get(mpd_url)
         .headers(http_downloader.headers())
-        .timeout(Duration::from_secs(30))
+        // Item 8/9: the MPD manifest fetch uses the operator-tunable read
+        // (idle) timeout, same as DASH segments and HTTP chunks — no hardcoded
+        // DASH-specific timeout remains.
+        .timeout(http_downloader.config.read_timeout)
         .send()
         .await
         .map_err(|e| RdlpError::Network {
@@ -614,7 +617,9 @@ async fn download_one(
             let resp = client
                 .get(&url_str)
                 .headers(headers)
-                .timeout(Duration::from_secs(60))
+                // Item 8: was a hardcoded 60s; now uses the operator-tunable
+                // read (idle) timeout (DownloaderConfig default is also 60s).
+                .timeout(http.config.read_timeout)
                 .send()
                 .await
                 .map_err(|e| RdlpError::Network {

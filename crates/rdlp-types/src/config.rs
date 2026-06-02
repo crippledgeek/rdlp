@@ -180,6 +180,18 @@ pub struct Config {
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
 
+    /// Total download timeout in seconds — the entire download of one
+    /// file/format must complete within this. Default: 3600 (1 hour).
+    /// Range: 1..=86400. Unset keeps the downloader default.
+    #[serde(default)]
+    pub download_timeout: Option<u64>,
+
+    /// Merge (mux/concat) operation timeout in seconds — the chunk/segment
+    /// merge must complete within this. Default: 1800 (30 min).
+    /// Range: 1..=86400. Unset keeps the downloader default.
+    #[serde(default)]
+    pub merge_timeout: Option<u64>,
+
     /// Wall-clock cap on a single HEAD probe used to detect content-length on
     /// non-HLS formats. The operation is a single HEAD request with a
     /// Range-GET fallback.
@@ -382,6 +394,8 @@ impl Default for Config {
             socket_timeout: Some(30),
             read_timeout: None,
             pool_idle_timeout: None,
+            download_timeout: None,
+            merge_timeout: None,
             hls_head_probe_timeout: Some(5),
             parallel_threshold: Some(10 * 1024 * 1024),
             source_address: None,
@@ -575,6 +589,22 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "pool_idle_timeout",
                 reason: "must be 0..=3600 seconds (0 = disabled)",
+            });
+        }
+        if let Some(t) = self.download_timeout
+            && !(1..=86400).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "download_timeout",
+                reason: "must be 1..=86400 seconds",
+            });
+        }
+        if let Some(t) = self.merge_timeout
+            && !(1..=86400).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "merge_timeout",
+                reason: "must be 1..=86400 seconds",
             });
         }
         if let Some(t) = self.hls_head_probe_timeout

@@ -901,10 +901,13 @@ mod shared_client_tests {
             pool_idle_timeout_secs: _,
             cookies_from_browser: _,
             cookies_file: _,
-            // registry/downloader-level — intentionally NOT in the predicate:
+            // registry/downloader-level — intentionally NOT in the predicate
+            // (operation timeouts + downloader knobs, not baked into the client):
             retries: _,
             concurrent_fragments: _,
             rate_limit: _,
+            download_timeout_secs: _,
+            merge_timeout_secs: _,
         } = NetworkOptions::default();
     }
 
