@@ -412,6 +412,57 @@ fn pool_idle_timeout_rejects_above_3600() {
 }
 
 #[test]
+fn download_timeout_accepts_valid_range_and_rejects_out_of_range() {
+    for v in [1u64, 3600, 86400] {
+        let cfg = Config {
+            download_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(
+            cfg.validate().is_ok(),
+            "download_timeout={v} should be valid"
+        );
+    }
+    for v in [0u64, 86401] {
+        let cfg = Config {
+            download_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigValidationError::OutOfRange {
+                field: "download_timeout",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn merge_timeout_accepts_valid_range_and_rejects_out_of_range() {
+    for v in [1u64, 1800, 86400] {
+        let cfg = Config {
+            merge_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(cfg.validate().is_ok(), "merge_timeout={v} should be valid");
+    }
+    for v in [0u64, 86401] {
+        let cfg = Config {
+            merge_timeout: Some(v),
+            ..Config::default()
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigValidationError::OutOfRange {
+                field: "merge_timeout",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn socket_timeout_accepts_valid_range() {
     for v in [1u64, 30, 300] {
         let cfg = Config {

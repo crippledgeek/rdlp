@@ -295,6 +295,17 @@ pub struct Args {
     #[arg(long, value_name = "SECS")]
     pub pool_idle_timeout: Option<u64>,
 
+    /// Total download timeout in seconds (the entire file must complete within
+    /// this). Default 3600.
+    /// Validated post-parse by `Config::validate()`: must be 1..=86400.
+    #[arg(long, value_name = "SECS")]
+    pub download_timeout: Option<u64>,
+
+    /// Merge (mux/concat) operation timeout in seconds. Default 1800.
+    /// Validated post-parse by `Config::validate()`: must be 1..=86400.
+    #[arg(long, value_name = "SECS")]
+    pub merge_timeout: Option<u64>,
+
     /// Browser emulation profile for the TLS / HTTP stack
     /// (chrome-latest, firefox-latest, safari-latest, or a pinned
     /// identifier like chrome-137). Controls JA4 / JA4H fingerprint.
