@@ -5,9 +5,18 @@
 
 [env]
 # --- Linux ---
-# Point pkg-config at a custom FFmpeg build (lib/pkgconfig/ must contain libav*.pc files).
+# Point pkg-config at a custom FFmpeg build installed to ITS OWN isolated
+# prefix (e.g. ~/.local/mediaforge, ~/opt/ffmpeg-custom, /opt/mediaforge).
+# Do NOT install the custom build directly to ~/.local — its transitive
+# pkgconfig files (fontconfig.pc, harfbuzz.pc, etc.) will shadow system
+# versions and break GTK-dependent crates (gdk-sys, glib-sys).
+#
+# rdlp-ffmpeg's build.rs emits a `cargo:warning=` if the first path here
+# doesn't contain libavcodec.pc — so a stale or misconfigured prefix
+# surfaces loudly instead of silently falling back to distro FFmpeg.
+#
 # Uncomment and adjust the path below:
-#PKG_CONFIG_PATH = { value = "/path/to/ffmpeg/lib/pkgconfig", force = true }
+#PKG_CONFIG_PATH = { value = "/home/youruser/.local/mediaforge/lib/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig", force = true }
 
 # --- Windows ---
 # Path to FFmpeg shared build with include/ and lib/ subdirectories.
