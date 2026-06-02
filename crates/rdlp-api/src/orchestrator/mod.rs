@@ -85,6 +85,16 @@ impl std::fmt::Display for DownloadPlan {
     }
 }
 
+/// A pre-built HTTP client and its cookie jar, shared from `RdlpClient` so
+/// multiple `download()` calls reuse one connection pool instead of building a
+/// fresh client/pool each time (PRD 2026-06-02 item 2). `wreq::Client` is
+/// Arc-internal; cloning shares the pool.
+#[derive(Clone)]
+pub struct SharedHttpClient {
+    pub(crate) client: Arc<wreq::Client>,
+    pub(crate) cookie_jar: Arc<SimpleCookieJar>,
+}
+
 /// Main orchestrator coordinating extraction, download, and post-processing
 pub struct Orchestrator {
     pub(super) extractor_registry: Arc<dyn ExtractorRegistryTrait>,
@@ -151,10 +161,48 @@ impl Orchestrator {
         temp_registry: Option<Arc<TempRegistry>>,
         extractor_registry: Option<Arc<ExtractorRegistry>>,
     ) -> Self {
-        let cookie_jar = Arc::new(SimpleCookieJar::new());
-        let raw_jar = cookie_jar.jar(); // Capture before cookie_jar moves into ExtractionContext
-        let http_client =
-            HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar);
+        Self::new_with_shared(
+            config,
+            event_tx,
+            download_id,
+            cancel_token,
+            interactive,
+            temp_registry,
+            extractor_registry,
+            None,
+        )
+    }
+
+    /// Create a new orchestrator, optionally accepting a caller-provided HTTP
+    /// client and cookie jar.
+    ///
+    /// When `shared_http` is `Some`, the supplied client and jar are reused
+    /// (enabling connection-pool sharing across multiple downloads from
+    /// [`crate::client::RdlpClient`] — PRD 2026-06-02 item 2).
+    ///
+    /// When `shared_http` is `None` a fresh client and jar are built, giving
+    /// the same behaviour as the old `new_with_registry` body.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_shared(
+        config: Arc<Config>,
+        event_tx: mpsc::Sender<Event>,
+        download_id: DownloadId,
+        cancel_token: CancellationToken,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
+        temp_registry: Option<Arc<TempRegistry>>,
+        extractor_registry: Option<Arc<ExtractorRegistry>>,
+        shared_http: Option<SharedHttpClient>,
+    ) -> Self {
+        let (http_client, cookie_jar) = if let Some(shared) = shared_http {
+            (shared.client, shared.cookie_jar)
+        } else {
+            let cookie_jar = Arc::new(SimpleCookieJar::new());
+            let raw_jar = cookie_jar.jar();
+            let client =
+                HttpClientFactory::from_rdlp_config(&config).build_arc_with_cookies(raw_jar);
+            (client, cookie_jar)
+        };
         // Reuse the extraction client's connection pool for downloads instead of
         // building a second client/pool per download. `wreq::Client` is
         // Arc-internal, so this clone shares the pooled keep-alive TCP/TLS
