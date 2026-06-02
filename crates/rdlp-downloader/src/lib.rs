@@ -347,14 +347,21 @@ impl DownloaderRegistry {
         Self::build_registry(config, client)
     }
 
-    /// Create a new registry with custom configuration and shared cookie jar
+    /// Create a registry that **reuses an already-built HTTP client**.
     ///
-    /// The cookie jar is shared with the extraction HTTP client so that
-    /// cookies obtained during extraction (including Cloudflare clearance
-    /// and session cookies) are automatically sent during downloads.
+    /// `wreq::Client` is internally `Arc`-wrapped, so the passed client shares
+    /// its connection pool with every other clone. Passing the extraction-phase
+    /// client here lets downloads reuse the pooled keep-alive TCP/TLS connection
+    /// the extractor already opened to the same CDN host — avoiding a redundant
+    /// `BoringSSL` handshake per download. The caller is responsible for having
+    /// built the client with the desired emulation/cookie configuration
+    /// (including any shared cookie jar so extraction cookies reach downloads);
+    /// this constructor performs no client construction of its own.
+    ///
+    /// This is the orchestrator's path: it hands its single emulating client
+    /// here so a second connection pool is not created per download.
     #[must_use]
-    pub fn with_config_and_cookies(config: &Config, cookie_jar: Arc<wreq::cookie::Jar>) -> Self {
-        let client = HttpClientFactory::from_rdlp_config(config).build_with_cookies(cookie_jar);
+    pub fn with_config_and_client(config: &Config, client: wreq::Client) -> Self {
         Self::build_registry(config, client)
     }
 
