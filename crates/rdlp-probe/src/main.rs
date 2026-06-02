@@ -42,6 +42,8 @@ enum Command {
     Extract(commands::extract::Args),
     /// Fetch a URL and save the (request, response) pair as a JSON cassette.
     Record(commands::record::Args),
+    /// Report the HTTP version (ALPN) a host negotiates with the emulating client.
+    Protocol(commands::protocol::Args),
 }
 
 #[tokio::main]
@@ -52,5 +54,6 @@ async fn main() -> Result<()> {
         Command::Eval(a) => commands::eval::run(a).await,
         Command::Extract(a) => commands::extract::run(a).await,
         Command::Record(a) => commands::record::run(a).await,
+        Command::Protocol(a) => commands::protocol::run(a).await,
     }
 }

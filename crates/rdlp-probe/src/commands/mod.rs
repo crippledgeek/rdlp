@@ -1,6 +1,7 @@
 pub mod eval;
 pub mod extract;
 pub mod fetch;
+pub mod protocol;
 pub mod record;
 
 use anyhow::{Context, Result};
