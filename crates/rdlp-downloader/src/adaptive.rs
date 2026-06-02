@@ -1,22 +1,28 @@
-//! Adaptive chunk sizing and connection tuning for downloads.
+//! Adaptive chunk sizing for downloads.
 //!
 //! This module implements an AIMD (Additive Increase / Multiplicative Decrease)
-//! controller that dynamically adjusts chunk sizes and parallel connection counts
-//! based on observed throughput. Both HTTP chunked downloads and HLS segment
-//! downloads are supported via the [`ControllerMode`] enum.
+//! controller that dynamically adjusts the chunk *size* based on observed
+//! throughput. Both HTTP chunked downloads and HLS segment downloads are
+//! supported via the [`ControllerMode`] enum.
+//!
+//! The parallel **connection count is fixed** for a download's lifetime (PRD
+//! 2026-06-02 item 7): all target CDNs serve over HTTP/2, so concurrent range
+//! requests multiplex as streams over one TCP connection sharing one congestion
+//! window — adapting the stream count does not change bulk throughput. The
+//! semaphore is sized to [`AdaptiveConfig::max_connections`] and never mutated.
 //!
 //! # Algorithm Overview
 //!
-//! The controller operates in two phases:
+//! The controller operates in two phases (chunk-size only):
 //!
-//! - **SlowStart**: Aggressively increases chunk level (+2) and adds a connection
-//!   each adjustment interval while throughput is growing. Exits to Steady on a
-//!   throughput drop or after 3 consecutive plateaus.
-//! - **Steady**: Uses classic AIMD — +1 level on stable throughput, halve
-//!   connections and −2 levels on a >30% drop, hold on 10–30% drops.
+//! - **SlowStart**: Aggressively increases chunk level (+2) each adjustment
+//!   interval while throughput is growing. Exits to Steady on a throughput drop
+//!   or after 3 consecutive plateaus.
+//! - **Steady**: Uses classic AIMD — +1 level on stable throughput, −2 levels on
+//!   a >30% drop, hold on 10–30% drops.
 //!
-//! HLS mode skips chunk-level adjustments (segments have fixed server-determined
-//! sizes) and only tunes the connection count.
+//! HLS mode skips chunk-level adjustments too (segments have fixed
+//! server-determined sizes), leaving it a pure fixed-concurrency gate.
 
 use log::info;
 use rdlp_core::ProgressCallback;
@@ -69,7 +75,7 @@ const SLOW_START_PLATEAU_LIMIT: usize = 3;
 pub enum Phase {
     /// Aggressive ramp-up: chunk level grows by 2 each interval.
     SlowStart,
-    /// AIMD steady state: +1 on stability, halve on congestion.
+    /// AIMD steady state: chunk +1 level on stability, −2 levels on congestion.
     Steady,
 }
 
@@ -78,8 +84,8 @@ pub enum Phase {
 /// Operating mode of the adaptive controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControllerMode {
-    /// HTTP range-request chunked downloads. Both chunk level and connection
-    /// count are adjusted.
+    /// HTTP range-request chunked downloads. Chunk *level* is adjusted; the
+    /// connection count is fixed (PRD item 7).
     HttpChunked,
     /// HLS segment downloads. Chunk-level adjustments are skipped because
     /// segment sizes are determined by the server playlist.
@@ -102,12 +108,17 @@ pub struct ChunkRequest {
 /// Configuration for [`AdaptiveController`].
 #[derive(Debug, Clone)]
 pub struct AdaptiveConfig {
-    /// Maximum number of parallel connections permitted.
+    /// Number of parallel connections (FIXED for the download's lifetime).
+    ///
+    /// Connection-count AIMD was removed (PRD 2026-06-02 item 7): all target
+    /// CDNs serve over HTTP/2, so the parallel range requests multiplex as
+    /// streams over ONE TCP connection sharing one congestion window — adapting
+    /// the stream count does not change bulk throughput (RFC 9113 flow control;
+    /// curl/Stenberg). The controller still adapts chunk *size*. The semaphore
+    /// is sized to this value and never mutated.
     pub max_connections: usize,
     /// How many completed chunks/segments to wait between AIMD adjustments.
     pub decision_interval: usize,
-    /// Number of connections to start with.
-    pub initial_connections: usize,
     /// Index into [`CHUNK_LEVELS`] to use at startup.
     pub initial_chunk_level: u8,
 }
@@ -117,7 +128,6 @@ impl Default for AdaptiveConfig {
         Self {
             max_connections: 8,
             decision_interval: 4,
-            initial_connections: 2,
             initial_chunk_level: MIN_CHUNK_LEVEL,
         }
     }
@@ -128,7 +138,6 @@ impl Default for AdaptiveConfig {
 /// Mutable runtime state guarded by [`AdaptiveController`]'s mutex.
 struct AdaptiveState {
     current_chunk_level: u8,
-    current_connections: usize,
     throughput_history: VecDeque<f64>,
     chunks_since_last_adjust: usize,
     bytes_assigned: u64,
@@ -142,10 +151,9 @@ struct AdaptiveState {
 }
 
 impl AdaptiveState {
-    fn new(initial_connections: usize, initial_chunk_level: u8) -> Self {
+    fn new(initial_chunk_level: u8) -> Self {
         Self {
             current_chunk_level: initial_chunk_level.clamp(MIN_CHUNK_LEVEL, 7),
-            current_connections: initial_connections.max(1),
             throughput_history: VecDeque::with_capacity(MAX_HISTORY),
             chunks_since_last_adjust: 0,
             bytes_assigned: 0,
@@ -159,7 +167,8 @@ impl AdaptiveState {
 
 // ─── AdaptiveController ───────────────────────────────────────────────────────
 
-/// AIMD-based adaptive controller for chunk sizes and connection counts.
+/// AIMD-based adaptive controller for chunk *sizes*. The connection count is
+/// fixed (see [`AdaptiveConfig::max_connections`]).
 ///
 /// Callers interact with this controller as follows:
 ///
@@ -198,15 +207,15 @@ impl AdaptiveController {
     ) -> Self {
         let msg = format!(
             "Adaptive controller: mode={mode:?}, size={:.1} MB, \
-             connections={}, chunk_level={} ({}KB)",
+             connections={} (fixed), chunk_level={} ({}KB)",
             total_size as f64 / 1024.0 / 1024.0,
-            config.initial_connections,
+            config.max_connections,
             config.initial_chunk_level,
             CHUNK_LEVELS[config.initial_chunk_level as usize] / 1024,
         );
         info!("{msg}");
-        let semaphore = Arc::new(Semaphore::new(config.initial_connections));
-        let state = AdaptiveState::new(config.initial_connections, config.initial_chunk_level);
+        let semaphore = Arc::new(Semaphore::new(config.max_connections.max(1)));
+        let state = AdaptiveState::new(config.initial_chunk_level);
         let ctrl = Self {
             state: Mutex::new(state),
             semaphore,
@@ -373,24 +382,21 @@ impl AdaptiveController {
         prev_ewma: Option<f64>,
     ) {
         let Some(prev) = prev_ewma else {
-            // No previous measurement — stay in SlowStart and ramp up.
+            // No previous measurement — stay in SlowStart and ramp chunk size up.
             let msg = format!(
-                "Adaptive [SlowStart]: initial ramp — chunk +2, +1 connection \
-                 (ewma={:.1} MB/s)",
+                "Adaptive [SlowStart]: initial ramp — chunk +2 (ewma={:.1} MB/s)",
                 current_ewma / 1024.0 / 1024.0,
             );
             info!("{msg}");
             self.log(&msg);
             self.bump_chunk_level(state, 2);
-            self.increase_connections(state);
             return;
         };
 
         if current_ewma > prev {
-            // Throughput is increasing — stay aggressive.
+            // Throughput is increasing — stay aggressive on chunk size.
             let msg = format!(
-                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s — \
-                 chunk +2, +1 connection",
+                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s — chunk +2",
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
@@ -398,7 +404,6 @@ impl AdaptiveController {
             self.log(&msg);
             state.slow_start_plateaus = 0;
             self.bump_chunk_level(state, 2);
-            self.increase_connections(state);
         } else if current_ewma < prev {
             // Throughput dropped — transition to Steady and apply one MD.
             let msg = format!(
@@ -471,17 +476,17 @@ impl AdaptiveController {
         }
     }
 
-    /// Apply multiplicative decrease: halve connections, chunk level −2.
+    /// Apply multiplicative decrease: chunk level −2.
+    ///
+    /// The connection count is fixed (PRD item 7) — under universal HTTP/2 the
+    /// parallel requests share one TCP congestion window, so reducing the stream
+    /// count does not relieve congestion (and would double-penalize a link whose
+    /// TCP CWND has already halved). Chunk-size reduction is the correct response.
     fn apply_md(&self, state: &mut AdaptiveState) {
-        let before_conns = state.current_connections;
         let before_level = state.current_chunk_level;
-        let target = (state.current_connections / 2).max(1);
-        self.decrease_connections(state, target);
         self.bump_chunk_level(state, -(2i8));
         let msg = format!(
-            "Adaptive MD: connections {} → {}, chunk level {} → {} ({}KB)",
-            before_conns,
-            state.current_connections,
+            "Adaptive MD: chunk level {} → {} ({}KB)",
             before_level,
             state.current_chunk_level,
             CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
@@ -511,40 +516,6 @@ impl AdaptiveController {
             );
             info!("{msg}");
             self.log(&msg);
-        }
-    }
-
-    /// Increase connections by 1, up to `max_connections`.
-    ///
-    /// Adds a permit to the semaphore so an additional worker can be dispatched.
-    fn increase_connections(&self, state: &mut AdaptiveState) {
-        if state.current_connections < self.config.max_connections {
-            state.current_connections += 1;
-            self.semaphore.add_permits(1);
-            let msg = format!(
-                "Adaptive: connections → {} (max {})",
-                state.current_connections, self.config.max_connections,
-            );
-            info!("{msg}");
-            self.log(&msg);
-        }
-    }
-
-    /// Reduce connections to `target` (minimum 1).
-    ///
-    /// For each permit to remove, attempts a `try_acquire` and forgets the
-    /// permit so it is permanently removed from the semaphore budget.
-    fn decrease_connections(&self, state: &mut AdaptiveState, target: usize) {
-        let target = target.max(1);
-        while state.current_connections > target {
-            // try_acquire is non-blocking; if no permit is immediately
-            // available the semaphore is already under pressure — stop.
-            if let Ok(permit) = self.semaphore.try_acquire() {
-                permit.forget();
-                state.current_connections -= 1;
-            } else {
-                break;
-            }
         }
     }
 }

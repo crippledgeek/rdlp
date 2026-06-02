@@ -403,7 +403,6 @@ async fn download_representation(
         0, // total_size not meaningful for segment-based downloads
         AdaptiveConfig {
             max_connections: concurrent,
-            initial_connections: concurrent.min(2),
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,

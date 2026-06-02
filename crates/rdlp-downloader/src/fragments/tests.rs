@@ -605,8 +605,8 @@ async fn fragment_cancel_never_fired_runs_to_completion() {
 /// 1. `AdaptiveController::mode()` returns `HlsSegments` — verified directly
 ///    on a controller constructed with the same parameters as the production
 ///    path (additive unit test for the new `mode()` accessor).
-/// 2. The download completes correctly with AIMD-constrained concurrency
-///    (`initial_connections=1`) — a regression guard that AIMD wiring does
+/// 2. The download completes correctly with the fixed concurrency
+///    (`max_connections=2`) — a regression guard that AIMD wiring does
 ///    not break source-order writes or omit bytes.
 ///
 /// The test FAILS against Task 2's code because the `mode()` accessor did not
@@ -622,7 +622,6 @@ async fn aimd_controller_hls_segments_mode_wired_and_download_correct() {
         0,
         AdaptiveConfig {
             max_connections: 2,
-            initial_connections: 1,
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
