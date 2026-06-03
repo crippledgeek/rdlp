@@ -1,10 +1,11 @@
-//! Regression test: MKV thumbnail embed emits "Timestamps are unset" warning
-//! when the source MKV has streams with `AV_NOPTS_VALUE` DTS (e.g. B-frame
-//! content muxed through a `setts=dts=NOPTS` bitstream filter).
+//! Regression test: MKV thumbnail embed must NOT emit a "Timestamps are unset"
+//! warning even when the source MKV has streams with `AV_NOPTS_VALUE` DTS (e.g.
+//! B-frame content muxed through a `setts=dts=NOPTS` bitstream filter).
 //!
-//! This test documents the bug **before** the fix is applied (failing-first
-//! discipline).  It asserts that the warning IS present today so that the
-//! fix task can prove the warning disappears.
+//! The raw-FFI thumbnail-attach path synthesizes a monotonic dts <= pts for
+//! every packet whose dts the demuxer left unset (see `dts_synth.rs`). This
+//! test proves the synthesizer is wired in: with the fix applied, the captured
+//! FFmpeg logs contain no "timestamps are unset" warning.
 //!
 //! # Self-skip contract
 //!
@@ -154,15 +155,11 @@ impl rdlp_core::PostProcessCallback for LogCollector {
 
 // ── The test ───────────────────────────────────────────────────────────────
 
-/// Reproduces the "Timestamps are unset" warning that our MKV raw-FFI
-/// thumbnail-embed path emits when the source file contains packets whose
-/// DTS is `AV_NOPTS_VALUE`.
-///
-/// This test is expected to **pass** (the warning IS present) until the
-/// fix in the companion task synthesises DTS from PTS — at which point it
-/// will fail and must be updated or removed as part of the fix PR.
+/// Verifies the MKV raw-FFI thumbnail-embed path emits NO "Timestamps are
+/// unset" warning when the source file contains packets whose DTS is
+/// `AV_NOPTS_VALUE` — the synthesizer fills in a monotonic dts <= pts.
 #[tokio::test]
-async fn repro_thumbnail_embed_emits_unset_timestamp_warning_today() {
+async fn thumbnail_embed_emits_no_unset_timestamp_warning() {
     // ── environment guard ──────────────────────────────────────────────────
     if !ffmpeg_available() {
         return; // self-skip
@@ -202,7 +199,7 @@ async fn repro_thumbnail_embed_emits_unset_timestamp_warning_today() {
         "embed_thumbnail should not fail on unset-DTS input; got: {result:?}"
     );
 
-    // ── assert the bug is present ──────────────────────────────────────────
+    // ── assert the warning is gone ─────────────────────────────────────────
     let logs = collector.collected();
     eprintln!("Captured FFmpeg log lines ({}):", logs.len());
     for line in &logs {
@@ -214,19 +211,18 @@ async fn repro_thumbnail_embed_emits_unset_timestamp_warning_today() {
         .any(|l| l.to_ascii_lowercase().contains("timestamps are unset"));
 
     assert!(
-        has_unset_warning,
-        "Expected to capture a 'Timestamps are unset' warning from FFmpeg \
-         while embedding a thumbnail into an MKV with NOPTS DTS, but no such \
-         warning was found.\n\
+        !has_unset_warning,
+        "Expected NO 'Timestamps are unset' warning from FFmpeg while embedding \
+         a thumbnail into an MKV with NOPTS DTS (the dts synthesizer should fill \
+         in a monotonic dts <= pts), but the warning WAS captured.\n\
          Captured lines: {logs:#?}\n\
          \n\
-         If this assertion fails, either:\n\
-         (a) the fix has already been applied (update/remove this test), or\n\
-         (b) the fixture does not actually produce NOPTS DTS (check setts BSF)."
+         If this assertion fails, the DtsSynthesizer is not wired into the MKV \
+         raw-FFI thumbnail-attach write loop (see mkv_raw_ffi.rs)."
     );
 
     println!(
-        "BUG REPRODUCED: 'Timestamps are unset' warning captured — \
-         the fix task should make this assertion FAIL."
+        "FIX VERIFIED: no 'Timestamps are unset' warning captured — \
+         the dts synthesizer is wired into the MKV thumbnail-attach path."
     );
 }

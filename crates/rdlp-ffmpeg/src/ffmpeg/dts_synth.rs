@@ -17,13 +17,12 @@
 /// Reorder window cap, matching libavformat's `MAX_REORDER_DELAY`
 /// (`libavformat/internal.h`). Streams reporting a larger `video_delay` are
 /// treated as `MAX_REORDER_DELAY` for warmup spacing.
-// wired into write loops in the following tasks
-#[allow(dead_code)]
 const MAX_REORDER_DELAY: i64 = 16;
 
 /// Per-output-stream DTS synthesizer. `None` == `AV_NOPTS_VALUE`.
-// wired into write loops in the following tasks
-#[allow(dead_code, clippy::redundant_pub_crate)]
+// `pub(crate)` is intentional (crate-internal API); clippy::redundant_pub_crate
+// fires because the module is private, but widening to `pub` would leak it.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) struct DtsSynthesizer {
     /// B-frame reorder depth (`codecpar->video_delay`), clamped to `0..=MAX`.
     delay: i64,
@@ -35,7 +34,6 @@ pub(crate) struct DtsSynthesizer {
     last_dts: Option<i64>,
 }
 
-#[allow(dead_code, clippy::redundant_pub_crate)]
 impl DtsSynthesizer {
     /// `video_delay` is `codecpar->video_delay` (0 for audio/subtitle/no-B-frame).
     pub(crate) fn new(video_delay: i32) -> Self {
