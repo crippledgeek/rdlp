@@ -37,7 +37,9 @@ use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
 use super::av_packet_owned::AvPacketOwned;
-use super::raw_ffi_helpers::{dts_in_us, read_next_raw, rescale_and_write_raw};
+use super::raw_ffi_helpers::{
+    dts_in_us, out_codecpar_video_delay, read_next_raw, rescale_and_write_raw,
+};
 
 impl FFmpegRunner {
     /// Merge video + audio into MKV using raw FFI with full stream property copying.
@@ -415,6 +417,17 @@ impl FFmpegRunner {
                 let vpkt = vpkt_owned.as_ptr();
                 let apkt = apkt_owned.as_ptr();
 
+                // One DTS synthesizer per OUTPUT stream, seeded from the
+                // stream's video_delay (B-frame reorder depth). Used to fill in
+                // dts that the demuxer left unset (av_write_frame is direct, so
+                // matroskaenc rejects packets with AV_NOPTS_VALUE dts).
+                let mut video_dts = crate::ffmpeg::DtsSynthesizer::new(out_codecpar_video_delay(
+                    ofmt_ctx,
+                    video_out_idx,
+                ));
+                // video_delay == 0 for all audio codecs (no B-frame reorder delay).
+                let mut audio_dts = crate::ffmpeg::DtsSynthesizer::new(0);
+
                 let mut have_video = read_next_raw(ifmt_video, video_stream_idx, vpkt);
                 let mut have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);
 
@@ -423,13 +436,25 @@ impl FFmpegRunner {
                         (false, false) => break,
                         (true, false) => {
                             bytes_written += (*vpkt).size as u64;
-                            rescale_and_write_raw(vpkt, in_video_stream, ofmt_ctx, video_out_idx)?;
+                            rescale_and_write_raw(
+                                vpkt,
+                                in_video_stream,
+                                ofmt_ctx,
+                                video_out_idx,
+                                &mut video_dts,
+                            )?;
                             ffi::av_packet_unref(vpkt);
                             have_video = read_next_raw(ifmt_video, video_stream_idx, vpkt);
                         }
                         (false, true) => {
                             bytes_written += (*apkt).size as u64;
-                            rescale_and_write_raw(apkt, in_audio_stream, ofmt_ctx, audio_out_idx)?;
+                            rescale_and_write_raw(
+                                apkt,
+                                in_audio_stream,
+                                ofmt_ctx,
+                                audio_out_idx,
+                                &mut audio_dts,
+                            )?;
                             ffi::av_packet_unref(apkt);
                             have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);
                         }
@@ -451,6 +476,7 @@ impl FFmpegRunner {
                                     in_video_stream,
                                     ofmt_ctx,
                                     video_out_idx,
+                                    &mut video_dts,
                                 )?;
                                 ffi::av_packet_unref(vpkt);
                                 have_video = read_next_raw(ifmt_video, video_stream_idx, vpkt);
@@ -461,6 +487,7 @@ impl FFmpegRunner {
                                     in_audio_stream,
                                     ofmt_ctx,
                                     audio_out_idx,
+                                    &mut audio_dts,
                                 )?;
                                 ffi::av_packet_unref(apkt);
                                 have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);

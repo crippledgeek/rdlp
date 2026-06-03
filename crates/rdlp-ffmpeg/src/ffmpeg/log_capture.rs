@@ -190,6 +190,40 @@ pub struct FfmpegLogBridge {
     _forwarder: LogForwarderGuard,
 }
 
+/// Known-cosmetic `FFmpeg` log lines that are emitted at ERROR level but are
+/// actually swallowed by the decoder and have no effect on output. The webp
+/// decoder logs this when an embedded EXIF chunk has a bad TIFF header, then
+/// skips the chunk and decodes the image normally (libavcodec/webp.c) — which
+/// is exactly why `webp.c` itself demotes it to a warning internally. We
+/// downgrade the line from `[ERROR]` to `[WARN]`: the message is NEVER dropped
+/// or hidden (every `FFmpeg` line stays visible), only its severity is lowered
+/// so it no longer reads as a failure.
+fn is_cosmetic_decoder_noise(msg: &str) -> bool {
+    // Require the `[webp @` module prefix as well as the text, so a genuine
+    // error from another module (e.g. a real `[tiff @ ...]` demuxer failure)
+    // carrying the same phrase is NOT demoted.
+    // NOTE: add further known-cosmetic patterns here as additional `||` clauses.
+    msg.contains("[webp @") && msg.contains("invalid TIFF header in Exif data")
+}
+
+/// Map an `FFmpeg` `(level, message)` to the user-facing prefixed log line.
+///
+/// `AV_LOG_ERROR`/`FATAL` (and more severe) → `[ERROR]`; `AV_LOG_WARNING` →
+/// `[WARN]`; everything else (e.g. `AV_LOG_INFO`) is emitted without a prefix.
+/// Known-cosmetic decoder noise is downgraded from `[ERROR]` to `[WARN]` — it
+/// stays visible, only its severity is lowered. No line is ever filtered out.
+fn format_ffmpeg_log_line(level: i32, trimmed: &str) -> String {
+    use ffmpeg_the_third::ffi::{AV_LOG_ERROR, AV_LOG_WARNING};
+    if is_cosmetic_decoder_noise(trimmed) {
+        return format!("[WARN] {trimmed}"); // downgrade ERROR -> WARN, never drop
+    }
+    match level {
+        l if l <= AV_LOG_ERROR => format!("[ERROR] {trimmed}"),
+        AV_LOG_WARNING => format!("[WARN] {trimmed}"),
+        _ => trimmed.to_string(),
+    }
+}
+
 /// Activate `FFmpeg` real-time log forwarding to a `PostProcessCallback`.
 ///
 /// Returns an opaque `FfmpegLogBridge` — hold it until the `FFmpeg` operation
@@ -216,11 +250,7 @@ pub fn bridge_ffmpeg_logs(
         if trimmed.is_empty() {
             return;
         }
-        let prefixed = match level {
-            l if l <= 16 => format!("[ERROR] {trimmed}"),
-            24 => format!("[WARN] {trimmed}"),
-            _ => trimmed.to_string(),
-        };
+        let prefixed = format_ffmpeg_log_line(level, trimmed);
         cb.on_log(&prefixed);
     }));
     Ok(FfmpegLogBridge {
@@ -407,6 +437,60 @@ mod tests {
     /// prevents test-level interference (e.g. stale `LOG_FORWARDER`
     /// from a prior test leaking into the next).
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn cosmetic_webp_exif_line_is_downgraded_to_warn_not_dropped() {
+        // webp.c logs this at AV_LOG_ERROR then swallows it and decodes the
+        // image anyway. It must NOT surface as [ERROR], but it must STILL be
+        // emitted (never filtered) — downgraded to [WARN], carrying the text.
+        let out = format_ffmpeg_log_line(
+            ffmpeg_the_third::ffi::AV_LOG_ERROR,
+            "[webp @ 0x1] invalid TIFF header in Exif data",
+        );
+        assert!(
+            out.starts_with("[WARN]"),
+            "cosmetic webp Exif line should be downgraded to [WARN], got: {out}"
+        );
+        assert!(
+            out.contains("invalid TIFF header in Exif data"),
+            "the line must still be emitted in full, not dropped, got: {out}"
+        );
+    }
+
+    #[test]
+    fn genuine_error_still_prefixed() {
+        let out = format_ffmpeg_log_line(
+            ffmpeg_the_third::ffi::AV_LOG_ERROR,
+            "[matroska @ 0x1] some real failure",
+        );
+        assert!(
+            out.starts_with("[ERROR]"),
+            "genuine error should be prefixed [ERROR], got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_webp_tiff_error_is_not_downgraded() {
+        // A real error from another module carrying the same phrase must keep
+        // its [ERROR] severity — the cosmetic downgrade is webp-only.
+        let out = format_ffmpeg_log_line(
+            ffmpeg_the_third::ffi::AV_LOG_ERROR,
+            "[tiff @ 0x1] invalid TIFF header in Exif data",
+        );
+        assert!(
+            out.starts_with("[ERROR]"),
+            "non-webp TIFF error must stay [ERROR], got: {out}"
+        );
+    }
+
+    #[test]
+    fn warning_level_maps_to_warn() {
+        let out = format_ffmpeg_log_line(ffmpeg_the_third::ffi::AV_LOG_WARNING, "x");
+        assert!(
+            out.starts_with("[WARN]"),
+            "warning level should map to [WARN], got: {out}"
+        );
+    }
 
     #[test]
     fn test_log_forwarder_receives_messages() {

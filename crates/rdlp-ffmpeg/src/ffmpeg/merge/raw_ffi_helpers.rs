@@ -69,10 +69,15 @@ pub(super) unsafe fn rescale_and_write_raw(
     in_stream: *const ffmpeg_the_third::ffi::AVStream,
     ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
     out_stream_idx: i32,
+    dts_synth: &mut crate::ffmpeg::DtsSynthesizer,
 ) -> Result<()> {
     unsafe {
         (*pkt).stream_index = out_stream_idx;
 
+        // Hard assert (survives release): out_stream_idx feeds raw FFI pointer
+        // arithmetic, where a negative cast-to-usize would be UB. Callers pass a
+        // mapped output index that is always >= 0, but enforce it unconditionally.
+        assert!(out_stream_idx >= 0, "out_stream_idx must be non-negative");
         let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
         if (*pkt).pts != ffmpeg_the_third::ffi::AV_NOPTS_VALUE {
             (*pkt).pts = ffmpeg_the_third::ffi::av_rescale_q_rnd(
@@ -97,6 +102,13 @@ pub(super) unsafe fn rescale_and_write_raw(
                 (*out_stream).time_base,
             );
         }
+        // Synthesize a monotonic dts <= pts when the source left it unset (MKV
+        // demuxer B-frame warmup, or raw sources). Mirrors libavformat's own
+        // reconstruction so matroskaenc neither warns ("Timestamps are unset")
+        // nor hard-fails ("unknown timestamp"). See dts_synth.rs.
+        let nopts = ffmpeg_the_third::ffi::AV_NOPTS_VALUE;
+        let opt = |v: i64| (v != nopts).then_some(v);
+        (*pkt).dts = dts_synth.next_dts(opt((*pkt).pts), opt((*pkt).dts), (*pkt).duration);
         (*pkt).pos = -1;
 
         let ret = ffmpeg_the_third::ffi::av_write_frame(ofmt_ctx, pkt);
@@ -106,6 +118,30 @@ pub(super) unsafe fn rescale_and_write_raw(
             });
         }
         Ok(())
+    }
+}
+
+/// Read the `video_delay` (B-frame reorder depth) from an output stream's
+/// codec parameters, used to seed a `DtsSynthesizer`.
+///
+/// Returns 0 if the stream or its codecpar is null.
+///
+/// # Safety
+///
+/// `ofmt_ctx` must point to a valid `AVFormatContext`.
+/// `idx` must be >= 0 and a valid stream index in `ofmt_ctx`.
+pub(super) unsafe fn out_codecpar_video_delay(
+    ofmt_ctx: *mut ffmpeg_the_third::ffi::AVFormatContext,
+    idx: i32,
+) -> i32 {
+    unsafe {
+        debug_assert!(idx >= 0, "stream index must be non-negative");
+        let st = *(*ofmt_ctx).streams.add(idx as usize);
+        if st.is_null() || (*st).codecpar.is_null() {
+            0
+        } else {
+            (*(*st).codecpar).video_delay
+        }
     }
 }
 

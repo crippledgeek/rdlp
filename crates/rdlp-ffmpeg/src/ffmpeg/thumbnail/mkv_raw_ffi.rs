@@ -344,6 +344,22 @@ impl FFmpegRunner {
 
             // 9. Thumbnail data is in attachment extradata — no packets to write
 
+            // One DTS synthesizer per OUTPUT stream, seeded from its
+            // codecpar.video_delay (B-frame reorder depth). Used in the write
+            // loop below to fill in dts that the demuxer left unset.
+            let nb_out = (*ofmt_ctx).nb_streams as usize;
+            let mut dts_synths: Vec<crate::ffmpeg::DtsSynthesizer> = (0..nb_out)
+                .map(|i| {
+                    let st = *(*ofmt_ctx).streams.add(i);
+                    let delay = if st.is_null() || (*st).codecpar.is_null() {
+                        0
+                    } else {
+                        (*(*st).codecpar).video_delay
+                    };
+                    crate::ffmpeg::DtsSynthesizer::new(delay)
+                })
+                .collect();
+
             // 10. Copy media packets
             // Errors are captured and propagated after cleanup.
             let copy_result: Result<()> = (|| {
@@ -409,6 +425,18 @@ impl FFmpegRunner {
                         );
                     }
                     pkt.pos = -1;
+
+                    // Synthesize a monotonic dts <= pts when the source left it unset (MKV
+                    // demuxer B-frame warmup, or raw sources). Mirrors libavformat's own
+                    // reconstruction so matroskaenc neither warns ("Timestamps are unset")
+                    // nor hard-fails ("unknown timestamp"). See dts_synth.rs.
+                    let opt = |v: i64| (v != ffi::AV_NOPTS_VALUE).then_some(v);
+                    // Checked index (survives release; a negative idx casts to a
+                    // huge usize -> None -> a clean panic, never out-of-bounds UB).
+                    let synth = dts_synths
+                        .get_mut(out_stream_idx as usize)
+                        .expect("out_stream_idx within output stream count");
+                    pkt.dts = synth.next_dts(opt(pkt.pts), opt(pkt.dts), pkt.duration);
 
                     let ret = ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
                     ffi::av_packet_unref(&mut pkt);
