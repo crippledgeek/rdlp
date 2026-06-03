@@ -190,6 +190,34 @@ pub struct FfmpegLogBridge {
     _forwarder: LogForwarderGuard,
 }
 
+/// Known-cosmetic `FFmpeg` log lines that are emitted at ERROR level but are
+/// actually swallowed by the decoder and have no effect on output. The webp
+/// decoder logs this when an embedded EXIF chunk has a bad TIFF header, then
+/// skips the chunk and decodes the image normally (libavcodec/webp.c). We
+/// strip the alarming `[ERROR]` prefix so it surfaces as plain informational
+/// text.
+fn is_cosmetic_decoder_noise(msg: &str) -> bool {
+    // NOTE: add further known-cosmetic patterns here as `|| msg.contains(...)`.
+    msg.contains("invalid TIFF header in Exif data")
+}
+
+/// Map an `FFmpeg` `(level, message)` to the user-facing prefixed log line.
+///
+/// `AV_LOG_ERROR`/`FATAL` (and more severe) → `[ERROR]`; `AV_LOG_WARNING` →
+/// `[WARN]`; everything else (e.g. `AV_LOG_INFO`) is emitted without a prefix.
+/// Known-cosmetic decoder noise is demoted to plain text.
+fn format_ffmpeg_log_line(level: i32, trimmed: &str) -> String {
+    use ffmpeg_the_third::ffi::{AV_LOG_ERROR, AV_LOG_WARNING};
+    if is_cosmetic_decoder_noise(trimmed) {
+        return trimmed.to_string(); // no [ERROR] prefix — cosmetic
+    }
+    match level {
+        l if l <= AV_LOG_ERROR => format!("[ERROR] {trimmed}"),
+        AV_LOG_WARNING => format!("[WARN] {trimmed}"),
+        _ => trimmed.to_string(),
+    }
+}
+
 /// Activate `FFmpeg` real-time log forwarding to a `PostProcessCallback`.
 ///
 /// Returns an opaque `FfmpegLogBridge` — hold it until the `FFmpeg` operation
@@ -216,11 +244,7 @@ pub fn bridge_ffmpeg_logs(
         if trimmed.is_empty() {
             return;
         }
-        let prefixed = match level {
-            l if l <= 16 => format!("[ERROR] {trimmed}"),
-            24 => format!("[WARN] {trimmed}"),
-            _ => trimmed.to_string(),
-        };
+        let prefixed = format_ffmpeg_log_line(level, trimmed);
         cb.on_log(&prefixed);
     }));
     Ok(FfmpegLogBridge {
@@ -407,6 +431,41 @@ mod tests {
     /// prevents test-level interference (e.g. stale `LOG_FORWARDER`
     /// from a prior test leaking into the next).
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn cosmetic_webp_exif_line_is_not_prefixed_error() {
+        // webp.c logs this at AV_LOG_ERROR then swallows it and decodes the
+        // image anyway, so it must NOT surface as an [ERROR].
+        let out = format_ffmpeg_log_line(
+            ffmpeg_the_third::ffi::AV_LOG_ERROR,
+            "[webp @ 0x1] invalid TIFF header in Exif data",
+        );
+        assert!(
+            !out.starts_with("[ERROR]"),
+            "cosmetic webp Exif line should not be prefixed [ERROR], got: {out}"
+        );
+    }
+
+    #[test]
+    fn genuine_error_still_prefixed() {
+        let out = format_ffmpeg_log_line(
+            ffmpeg_the_third::ffi::AV_LOG_ERROR,
+            "[matroska @ 0x1] some real failure",
+        );
+        assert!(
+            out.starts_with("[ERROR]"),
+            "genuine error should be prefixed [ERROR], got: {out}"
+        );
+    }
+
+    #[test]
+    fn warning_level_maps_to_warn() {
+        let out = format_ffmpeg_log_line(ffmpeg_the_third::ffi::AV_LOG_WARNING, "x");
+        assert!(
+            out.starts_with("[WARN]"),
+            "warning level should map to [WARN], got: {out}"
+        );
+    }
 
     #[test]
     fn test_log_forwarder_receives_messages() {
