@@ -196,6 +196,34 @@ impl FFmpegRunner {
             Self::pick_video_pixel_format(&video_enc_codec, video_decoder.format());
         video_encoder.set_format(target_pix_fmt);
 
+        // Propagate color/signal metadata decoder -> encoder so recode preserves the
+        // source's color_range / primaries / transfer / matrix (else the output gets
+        // the encoder's unspecified defaults: washed-out levels on full-range sources,
+        // wrong matrix on SD/BT.601). Matches the FFmpeg CLI's color-preserving
+        // behaviour (the CLI reaches the same outcome via filtergraph-negotiated
+        // frame props rather than a direct field poke).
+        //
+        // The decoder context is the correct source ONLY because our filtergraph is
+        // pixel-format-only (`buffer -> format -> buffersink`), which leaves color
+        // metadata unchanged. INVARIANT: if a color-converting filter (scale/zscale/
+        // colorspace) is ever added, this source MUST switch to the buffersink output
+        // (av_buffersink_get_color_*), or the output would be mistagged.
+        //
+        // `field_order` is intentionally NOT copied: recode output through this
+        // progressive pipeline is progressive, so copying an interlaced source's
+        // field_order would mislabel the output.
+        // SAFETY: both contexts are valid pre-open codec contexts.
+        unsafe {
+            let dec = video_decoder.as_ptr();
+            let enc = video_encoder.as_mut_ptr();
+            (*enc).color_range = (*dec).color_range;
+            (*enc).color_primaries = (*dec).color_primaries;
+            (*enc).color_trc = (*dec).color_trc;
+            (*enc).colorspace = (*dec).colorspace;
+            (*enc).chroma_sample_location = (*dec).chroma_sample_location;
+            (*enc).sample_aspect_ratio = (*dec).sample_aspect_ratio;
+        }
+
         // Set time base from frame rate (inverse of fps)
         if video_ist_frame_rate.numerator() > 0 && video_ist_frame_rate.denominator() > 0 {
             video_encoder.set_time_base(ffmpeg_the_third::Rational(
