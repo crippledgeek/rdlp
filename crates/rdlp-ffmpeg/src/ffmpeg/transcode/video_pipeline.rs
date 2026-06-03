@@ -77,11 +77,18 @@ impl FFmpegRunner {
         let sar_num = sar.numerator().max(1);
         let sar_den = sar.denominator().max(1);
 
+        // pixel-format NAME, not `as i32` — ffmpeg-the-third's Pixel discriminant
+        // != C AVPixelFormat value (YUV420P is 1 in Rust, 0 in C).
+        let in_pix_fmt_name = decoder
+            .format()
+            .descriptor()
+            .map_or_else(|| "yuv420p".to_string(), |d| d.name().to_string());
+
         let args = format!(
             "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
             decoder.width(),
             decoder.height(),
-            decoder.format() as i32,
+            in_pix_fmt_name,
             ist_time_base.numerator(),
             ist_time_base.denominator(),
             sar_num,
