@@ -38,7 +38,7 @@ use crate::error::{PostProcessError, Result};
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
-use raw_ffi_helpers::{dts_in_us, read_next_raw, rescale_and_write_raw};
+use raw_ffi_helpers::{dts_in_us, out_codecpar_video_delay, read_next_raw, rescale_and_write_raw};
 
 impl FFmpegRunner {
     /// Merge separate video and audio files into a single container (stream copy).
@@ -242,6 +242,17 @@ impl FFmpegRunner {
                 .into());
             }
 
+            // One DTS synthesizer per OUTPUT stream, seeded from the stream's
+            // video_delay (B-frame reorder depth). av_write_frame is direct
+            // (non-buffered), so matroskaenc/mp4 reject packets with an unset
+            // dts; the synthesizer fills in a monotonic dts <= pts.
+            let mut video_dts = crate::ffmpeg::DtsSynthesizer::new(out_codecpar_video_delay(
+                out_ctx,
+                video_ost_index as i32,
+            ));
+            // video_delay == 0 for all audio codecs (no B-frame reorder delay).
+            let mut audio_dts = crate::ffmpeg::DtsSynthesizer::new(0);
+
             let mut have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
             let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
 
@@ -255,6 +266,7 @@ impl FFmpegRunner {
                             in_video_stream,
                             out_ctx,
                             video_ost_index as i32,
+                            &mut video_dts,
                         )?;
                         ffi::av_packet_unref(vpkt);
                         have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
@@ -266,6 +278,7 @@ impl FFmpegRunner {
                             in_audio_stream,
                             out_ctx,
                             audio_ost_index as i32,
+                            &mut audio_dts,
                         )?;
                         ffi::av_packet_unref(apkt);
                         have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
@@ -292,6 +305,7 @@ impl FFmpegRunner {
                                 in_video_stream,
                                 out_ctx,
                                 video_ost_index as i32,
+                                &mut video_dts,
                             )?;
                             ffi::av_packet_unref(vpkt);
                             have_video = read_next_raw(video_ctx, video_ist_index, vpkt);
@@ -302,6 +316,7 @@ impl FFmpegRunner {
                                 in_audio_stream,
                                 out_ctx,
                                 audio_ost_index as i32,
+                                &mut audio_dts,
                             )?;
                             ffi::av_packet_unref(apkt);
                             have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
