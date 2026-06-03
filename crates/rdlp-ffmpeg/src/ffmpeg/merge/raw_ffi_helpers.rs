@@ -74,7 +74,10 @@ pub(super) unsafe fn rescale_and_write_raw(
     unsafe {
         (*pkt).stream_index = out_stream_idx;
 
-        debug_assert!(out_stream_idx >= 0, "out_stream_idx must be non-negative");
+        // Hard assert (survives release): out_stream_idx feeds raw FFI pointer
+        // arithmetic, where a negative cast-to-usize would be UB. Callers pass a
+        // mapped output index that is always >= 0, but enforce it unconditionally.
+        assert!(out_stream_idx >= 0, "out_stream_idx must be non-negative");
         let out_stream = *(*ofmt_ctx).streams.add(out_stream_idx as usize);
         if (*pkt).pts != ffmpeg_the_third::ffi::AV_NOPTS_VALUE {
             (*pkt).pts = ffmpeg_the_third::ffi::av_rescale_q_rnd(

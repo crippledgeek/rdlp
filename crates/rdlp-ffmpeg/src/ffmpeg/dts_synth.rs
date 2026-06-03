@@ -67,7 +67,7 @@ impl DtsSynthesizer {
             // (attacker-influenced); a crafted pts/duration must not overflow.
             let anchor = self.first_pts.unwrap_or(p);
             let est = anchor
-                .saturating_add((i - self.delay).saturating_mul(step))
+                .saturating_add(i.saturating_sub(self.delay).saturating_mul(step))
                 .min(p);
             return self.bump(est);
         }

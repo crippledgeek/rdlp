@@ -431,11 +431,12 @@ impl FFmpegRunner {
                     // reconstruction so matroskaenc neither warns ("Timestamps are unset")
                     // nor hard-fails ("unknown timestamp"). See dts_synth.rs.
                     let opt = |v: i64| (v != ffi::AV_NOPTS_VALUE).then_some(v);
-                    pkt.dts = dts_synths[out_stream_idx as usize].next_dts(
-                        opt(pkt.pts),
-                        opt(pkt.dts),
-                        pkt.duration,
-                    );
+                    // Checked index (survives release; a negative idx casts to a
+                    // huge usize -> None -> a clean panic, never out-of-bounds UB).
+                    let synth = dts_synths
+                        .get_mut(out_stream_idx as usize)
+                        .expect("out_stream_idx within output stream count");
+                    pkt.dts = synth.next_dts(opt(pkt.pts), opt(pkt.dts), pkt.duration);
 
                     let ret = ffi::av_interleaved_write_frame(ofmt_ctx, &mut pkt);
                     ffi::av_packet_unref(&mut pkt);
