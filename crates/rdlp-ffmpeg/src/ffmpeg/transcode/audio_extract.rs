@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use log::{debug, info};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{PostProcessError, Result};
 
@@ -52,6 +53,7 @@ impl FFmpegRunner {
         output: impl AsRef<Path>,
         opts: &AudioExtractOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -59,8 +61,13 @@ impl FFmpegRunner {
         Self::spawn_blocking("extract_audio", move || {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, true)?;
 
-            let result =
-                Self::extract_audio_sync(&effective_input, &output, &opts, progress_fn.as_deref());
+            let result = Self::extract_audio_sync(
+                &effective_input,
+                &output,
+                &opts,
+                progress_fn.as_deref(),
+                cancel.as_ref(),
+            );
 
             if let Some(ref temp) = salvage_temp {
                 // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
@@ -79,11 +86,13 @@ impl FFmpegRunner {
         output: &Path,
         opts: &AudioExtractOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         if opts.copy {
+            // Copy path is a fast stream-copy; not gated for cancellation.
             Self::extract_audio_copy_sync(input, output, progress_fn)
         } else {
-            Self::extract_audio_transcode_sync(input, output, opts, progress_fn)
+            Self::extract_audio_transcode_sync(input, output, opts, progress_fn, cancel)
         }
     }
 
@@ -211,6 +220,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &AudioExtractOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
 
@@ -419,6 +429,7 @@ impl FFmpegRunner {
 
         // Transcode loop: read -> decode -> filter -> encode -> write
         for result in ictx.packets() {
+            crate::ffmpeg::transcode::check_cancelled(cancel)?;
             let (stream, packet) = result
                 .map_err(PostProcessError::from)
                 .context("failed to read packet during audio transcode")?;

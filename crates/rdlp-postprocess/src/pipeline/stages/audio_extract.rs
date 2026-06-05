@@ -143,7 +143,13 @@ impl PipelineStage for AudioExtractStage {
         });
 
         self.ffmpeg
-            .extract_audio(&input_file, &output_path, &opts, callback)
+            .extract_audio(
+                &input_file,
+                &output_path,
+                &opts,
+                callback,
+                Some(msg.cancel.clone()),
+            )
             .await
             .context("audio extract stage failed")?;
 
