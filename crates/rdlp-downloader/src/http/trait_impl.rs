@@ -192,11 +192,12 @@ impl Downloader for HttpDownloader {
         path: &Path,
         resume_from: u64,
         progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<DownloadStats> {
-        // Trait method discards cancel (outer select! covers it). For cooperative
-        // cancel, callers use `download_with_resume_with_cancel` directly.
-        // TODO(#287): trait method itself may take cancel in a future BC-break.
-        self.download_with_resume_with_cancel(url, path, resume_from, progress, None)
+        // #347: the trait method now threads `cancel` into the cooperative-cancel
+        // variant so the resume path stops mid-stream rather than relying solely
+        // on the orchestrator's outer select!.
+        self.download_with_resume_with_cancel(url, path, resume_from, progress, cancel)
             .await
     }
 }
@@ -352,8 +353,9 @@ impl HttpDownloader {
     }
 
     /// F6: cooperative-cancel-aware variant of `download_with_resume`.
-    /// The trait method `download_with_resume` delegates here with `cancel: None`.
-    /// Direct callers (e.g. tests) can pass a `CancellationToken` for mid-stream cancellation.
+    /// The trait method `download_with_resume` delegates here, threading its
+    /// `cancel` argument through (#347). Direct callers can also pass a
+    /// `CancellationToken` for mid-stream cancellation.
     pub(crate) async fn download_with_resume_with_cancel(
         &self,
         url: &str,

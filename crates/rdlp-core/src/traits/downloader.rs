@@ -111,6 +111,10 @@ pub trait Downloader: Send + Sync {
     /// * `path` - Local file path to save to
     /// * `resume_from` - Byte offset to resume from
     /// * `progress` - Optional progress callback
+    /// * `cancel` - Optional cooperative-cancellation token. Downloaders with
+    ///   long-running blocking work (segment loops, `FFmpeg` mux) must honour it;
+    ///   the default impl ignores it (the orchestrator's outer `select!` covers
+    ///   the non-cooperative case). Mirrors [`Self::download_format`].
     ///
     /// # Returns
     /// Download statistics
@@ -120,7 +124,9 @@ pub trait Downloader: Send + Sync {
         path: &Path,
         _resume_from: u64,
         progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
     ) -> Result<DownloadStats> {
+        let _ = cancel; // default impl: outer select! handles cancellation
         // Default implementation doesn't support resume, just downloads normally
         self.download_to_file(url, path, progress).await
     }

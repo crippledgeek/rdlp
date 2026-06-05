@@ -96,6 +96,7 @@ impl Orchestrator {
                 output_path,
                 resume_from,
                 progress_callback,
+                Some(&self.cancel_token),
             )
         } else {
             downloader.download_format(
