@@ -229,7 +229,14 @@ impl PipelineStage for MergeStage {
         });
 
         self.ffmpeg
-            .merge(&video_file, &audio_file, &output_path, &opts, callback)
+            .merge(
+                &video_file,
+                &audio_file,
+                &output_path,
+                &opts,
+                callback,
+                Some(msg.cancel.clone()),
+            )
             .await
             .context("merge stage failed")?;
 

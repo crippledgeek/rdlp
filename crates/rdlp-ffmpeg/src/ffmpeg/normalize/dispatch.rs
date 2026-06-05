@@ -208,6 +208,10 @@ impl FFmpegRunner {
                 output,
                 &super::super::RemuxOptions::default(),
                 progress_fn,
+                // The cancel-gated encode loops run before this final stream-copy
+                // merge (see normalize encode helpers); this `dispatch_normalize_sync`
+                // does not receive a cancel token. None is correct.
+                None,
             );
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
             #[allow(clippy::disallowed_methods)]

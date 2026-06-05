@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use log::info;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{PostProcessError, Result};
 
@@ -58,6 +59,7 @@ impl FFmpegRunner {
         output: impl AsRef<Path>,
         opts: &RemuxOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<()> {
         let video_input = video_input.as_ref().to_path_buf();
         let audio_input = audio_input.as_ref().to_path_buf();
@@ -70,6 +72,7 @@ impl FFmpegRunner {
                 &output,
                 &opts,
                 progress_fn.as_deref(),
+                cancel.as_ref(),
             )?)
         })
         .await
@@ -83,6 +86,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &RemuxOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
 
@@ -102,6 +106,7 @@ impl FFmpegRunner {
                 output,
                 progress_fn,
                 opts.encoding_tool_override.as_deref(),
+                cancel,
             )?);
         }
 
@@ -211,6 +216,10 @@ impl FFmpegRunner {
         // and write them in DTS order to avoid ENOMEM from buffering an entire
         // stream while waiting for the other.
         //
+        // Set by the loop on cooperative cancel; checked after the unsafe block's
+        // manual packet cleanup runs, so the bare packets are freed before bail.
+        let mut cancelled = false;
+
         // SAFETY: ictx_video/ictx_audio own valid AVFormatContext instances.
         // octx owns a valid, header-written output context.
         unsafe {
@@ -257,6 +266,14 @@ impl FFmpegRunner {
             let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
 
             loop {
+                // Cooperative cancel: do NOT use `?` here — the packets below are
+                // bare `av_packet_alloc` pointers freed by the manual cleanup that
+                // follows the loop. An early `?`-return would leak them. Set a flag,
+                // `break`, let the cleanup run, then `bail!` before write_trailer.
+                if cancel.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    break;
+                }
                 match (have_video, have_audio) {
                     (false, false) => break,
                     (true, false) => {
@@ -340,6 +357,14 @@ impl FFmpegRunner {
             ffi::av_packet_unref(apkt);
             ffi::av_packet_free(&mut vpkt.cast());
             ffi::av_packet_free(&mut apkt.cast());
+        }
+
+        // Cancelled: the bare packets were freed by the cleanup above. The
+        // AVFormatContexts (ictx_video / ictx_audio / octx) are owned
+        // ffmpeg-the-third Input/Output values — RAII drop frees them with no
+        // leak. Skip write_trailer: do not finalize a partial, cancelled mux.
+        if cancelled {
+            anyhow::bail!("cancelled by user");
         }
 
         // Emit final 1.0 on completion
