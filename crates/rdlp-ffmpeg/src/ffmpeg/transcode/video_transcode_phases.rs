@@ -224,15 +224,30 @@ impl FFmpegRunner {
             (*enc).sample_aspect_ratio = (*dec).sample_aspect_ratio;
         }
 
-        // Set time base from frame rate (inverse of fps)
-        if video_ist_frame_rate.numerator() > 0 && video_ist_frame_rate.denominator() > 0 {
-            video_encoder.set_time_base(ffmpeg_the_third::Rational(
-                video_ist_frame_rate.denominator(),
-                video_ist_frame_rate.numerator(),
-            ));
-        } else {
-            video_encoder.set_time_base(video_ist_time_base);
-        }
+        // Encoder + output packets operate in the frame-rate tick base (1/fps).
+        // libvvenc (H.266) and libxavs2 (AVS2) compute packet `dts` in a frame-tick
+        // model (1 tick = 1 frame, driven by `framerate`, NOT `avctx->time_base`)
+        // while echoing the input `cts` (= frame->pts) verbatim. The FFmpeg CLI
+        // keeps these consistent because its buffersink delivers CFR frames already
+        // in 1/fps (fftools sets `enc->time_base = frame->time_base`, and the frame
+        // pts ARE 0,1,2,…). rdlp's buffersink emits frames in the input stream tb
+        // (e.g. 1/12800 → pts 0,512,1024,…), so feeding those as `cts` makes vvenc/
+        // xavs2 emit `dts` in a different scale than `pts` → `pts < dts` at the
+        // muxer (EINVAL). Fix: encoder tb = 1/fps, and rescale each filtered frame's
+        // pts from the buffersink tb (`video_ist_time_base`) to 1/fps before
+        // `send_frame` (see `drain_video_filter_to_encoder`). `video_enc_time_base`
+        // (defined here, = enc tb) is BOTH the frame-pts rescale target and the
+        // output-packet rescale source; `video_ist_time_base` is the frame source tb.
+        let video_enc_time_base =
+            if video_ist_frame_rate.numerator() > 0 && video_ist_frame_rate.denominator() > 0 {
+                ffmpeg_the_third::Rational(
+                    video_ist_frame_rate.denominator(),
+                    video_ist_frame_rate.numerator(),
+                )
+            } else {
+                video_ist_time_base
+            };
+        video_encoder.set_time_base(video_enc_time_base);
 
         // Set frame rate
         video_encoder.set_frame_rate(Some(video_ist_frame_rate));
@@ -259,12 +274,6 @@ impl FFmpegRunner {
             .open_as_with(video_enc_codec, enc_opts)
             .map_err(PostProcessError::from)
             .context("failed to open video encoder for transcode")?;
-
-        // The encoder's ctx->time_base is NOT the timebase of output packets.
-        // Packets inherit the timebase from the filter graph input, which is
-        // the input stream's time_base (e.g., 1/1000 for MKV). Use that for
-        // rescaling packets to the output stream's time_base.
-        let video_enc_time_base = video_ist_time_base;
 
         // Copy encoder parameters + time_base to output stream as a hint.
         // The muxer may override stream->time_base during write_header;
@@ -583,6 +592,7 @@ impl FFmpegRunner {
                     octx,
                     *video_ost_index,
                     *video_enc_time_base,
+                    *video_ist_time_base,
                 )?;
             } else if Some(ist_index) == *audio_ist_index {
                 // Audio: stream copy or transcode
@@ -646,6 +656,7 @@ impl FFmpegRunner {
             mut audio_transcode,
             video_ost_index,
             video_enc_time_base,
+            video_ist_time_base,
             audio_ist_time_base,
             mut audio_sample_counter,
             ..
@@ -660,6 +671,7 @@ impl FFmpegRunner {
             &mut octx,
             video_ost_index,
             video_enc_time_base,
+            video_ist_time_base,
         )?;
 
         // Flush video filter graph
@@ -674,6 +686,7 @@ impl FFmpegRunner {
             &mut octx,
             video_ost_index,
             video_enc_time_base,
+            video_ist_time_base,
         )?;
 
         // Flush video encoder
