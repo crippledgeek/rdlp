@@ -86,3 +86,44 @@ async fn precancelled_token_aborts_audio_extract() {
         "error should mention cancellation; got: {msg}"
     );
 }
+
+#[tokio::test]
+async fn precancelled_token_aborts_audio_copy() {
+    if !ffmpeg_available() {
+        eprintln!("[SKIP] ffmpeg not available");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Ok(src) = build_audio_fixture(dir.path()) else {
+        eprintln!("[SKIP] fixture build failed");
+        return;
+    };
+
+    let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
+
+    // copy=true (no encoder) forces the stream-COPY path (#340).
+    let out = dir.path().join("out.m4a");
+    let opts = AudioExtractOptions {
+        encoder_name: None,
+        copy: true,
+        ..Default::default()
+    };
+
+    // Pre-cancel: the copy loop must bail before processing the whole input.
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let res = runner
+        .extract_audio(&src, &out, &opts, None, Some(token))
+        .await;
+
+    assert!(
+        res.is_err(),
+        "pre-cancelled audio copy must return Err, got Ok"
+    );
+    let msg = format!("{:#}", res.unwrap_err());
+    assert!(
+        msg.to_lowercase().contains("cancel"),
+        "error should mention cancellation; got: {msg}"
+    );
+}

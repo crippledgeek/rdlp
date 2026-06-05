@@ -89,8 +89,7 @@ impl FFmpegRunner {
         cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         if opts.copy {
-            // Copy path is a fast stream-copy; not gated for cancellation.
-            Self::extract_audio_copy_sync(input, output, progress_fn)
+            Self::extract_audio_copy_sync(input, output, progress_fn, cancel)
         } else {
             Self::extract_audio_transcode_sync(input, output, opts, progress_fn, cancel)
         }
@@ -103,6 +102,7 @@ impl FFmpegRunner {
         input: &Path,
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
 
@@ -168,6 +168,7 @@ impl FFmpegRunner {
 
         // Copy only audio packets
         for result in ictx.packets() {
+            crate::ffmpeg::transcode::check_cancelled(cancel)?;
             let (stream, mut packet) = result
                 .map_err(PostProcessError::from)
                 .context("failed to read packet during audio copy extract")?;
