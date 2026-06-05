@@ -3,6 +3,35 @@
 use crate::DEFAULT_USER_AGENT;
 use rdlp_types::BrowserEmulation;
 
+/// Default idle keep-alive socket eviction timeout, in seconds.
+///
+/// Set intentionally **below** common server keep-alive timeouts (nginx default
+/// `keepalive_timeout` is 75s; many CDN edges use 60s) so the pool evicts an
+/// idle connection *before* the server silently closes it. Otherwise hyper hands
+/// back a dead socket on reuse and returns "connection closed before message
+/// completed" (`IncompleteMessage`), forcing an avoidable retry.
+///
+/// This is the common-case trigger only; it is not the sole defence. hyper-util
+/// auto-retries once when a pooled connection is found closed before any bytes
+/// are written, and rdlp's `with_retry` / `download_chunk_with_retry` layers
+/// cover residual mid-transfer truncation — those MUST stay in place. Operators
+/// can override per `Config::pool_idle_timeout` (CLI: `--pool-idle-timeout`).
+///
+/// Reference: reqwest/Go both default to 90s; lowering below the server's
+/// keep-alive is the nginx-documented client-side mitigation. PRD 2026-06-02
+/// item 3 / research §F-E.
+const DEFAULT_POOL_IDLE_TIMEOUT_SECS: u64 = 60;
+
+/// Compile-time regression guard for the stale-connection race: the default
+/// MUST stay below nginx's default `keepalive_timeout` (75s) so the pool evicts
+/// an idle socket before the server closes it. Bumping the default past a server
+/// keep-alive re-opens the "connection closed before message completed" race, so
+/// this fails the build rather than shipping the regression.
+const _: () = assert!(
+    DEFAULT_POOL_IDLE_TIMEOUT_SECS < 75,
+    "default pool-idle timeout must stay below nginx's 75s keepalive_timeout"
+);
+
 /// Configuration for HTTP client behavior
 ///
 /// This struct contains all configurable options for the HTTP client.
@@ -34,6 +63,8 @@ pub struct HttpClientConfig {
 
     /// Idle connection timeout in seconds. `None` disables idle eviction
     /// entirely (wired to `wreq::ClientBuilder::pool_idle_timeout(None)`).
+    /// Defaults to [`DEFAULT_POOL_IDLE_TIMEOUT_SECS`] (60s) — see that const for
+    /// why it sits below typical server keep-alive timeouts.
     pub pool_idle_timeout_secs: Option<u64>,
 
     /// TCP keepalive interval in seconds
@@ -54,7 +85,7 @@ impl Default for HttpClientConfig {
             connect_timeout_secs: 30,
             read_timeout_secs: 60,
             pool_max_idle_per_host: 10,
-            pool_idle_timeout_secs: Some(90),
+            pool_idle_timeout_secs: Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS),
             tcp_keepalive_secs: 60,
             tcp_nodelay: true,
             proxy: None,
@@ -212,9 +243,12 @@ mod tests {
     }
 
     #[test]
-    fn default_pool_idle_timeout_is_some_90() {
+    fn default_pool_idle_timeout_is_some_60() {
         let config = HttpClientConfig::default();
-        assert_eq!(config.pool_idle_timeout_secs, Some(90));
+        assert_eq!(
+            config.pool_idle_timeout_secs,
+            Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS)
+        );
     }
 
     #[test]
@@ -261,6 +295,9 @@ mod tests {
         let http = HttpClientConfig::from_rdlp_config(&cfg);
         assert_eq!(http.connect_timeout_secs, 30);
         assert_eq!(http.read_timeout_secs, 60);
-        assert_eq!(http.pool_idle_timeout_secs, Some(90));
+        assert_eq!(
+            http.pool_idle_timeout_secs,
+            Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS)
+        );
     }
 }

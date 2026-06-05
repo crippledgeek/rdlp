@@ -247,6 +247,14 @@ pub struct NetworkOptions {
     /// (keep idle sockets forever)"; allowed range: 0..=3600 (enforced
     /// by `Config::validate()`).
     pub pool_idle_timeout_secs: Option<u64>,
+    /// Total download timeout in seconds. Maps to `Config::download_timeout`.
+    /// `None` preserves base config. Range: 1..=86400 (enforced by
+    /// `Config::validate()`).
+    pub download_timeout_secs: Option<u64>,
+    /// Merge (mux/concat) timeout in seconds. Maps to `Config::merge_timeout`.
+    /// `None` preserves base config. Range: 1..=86400 (enforced by
+    /// `Config::validate()`).
+    pub merge_timeout_secs: Option<u64>,
     /// Number of concurrent download fragments/chunks. `None` preserves base config.
     pub concurrent_fragments: Option<u32>,
     /// Download rate limit in bytes per second.

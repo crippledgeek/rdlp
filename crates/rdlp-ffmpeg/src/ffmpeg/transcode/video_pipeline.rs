@@ -77,11 +77,18 @@ impl FFmpegRunner {
         let sar_num = sar.numerator().max(1);
         let sar_den = sar.denominator().max(1);
 
+        // pixel-format NAME, not `as i32` — ffmpeg-the-third's Pixel discriminant
+        // != C AVPixelFormat value (YUV420P is 1 in Rust, 0 in C).
+        let in_pix_fmt_name = decoder
+            .format()
+            .descriptor()
+            .map_or_else(|| "yuv420p".to_string(), |d| d.name().to_string());
+
         let args = format!(
             "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
             decoder.width(),
             decoder.height(),
-            decoder.format() as i32,
+            in_pix_fmt_name,
             ist_time_base.numerator(),
             ist_time_base.denominator(),
             sar_num,
@@ -120,6 +127,7 @@ impl FFmpegRunner {
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
         enc_time_base: ffmpeg_the_third::Rational,
+        filter_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
         let mut frame = ffmpeg_the_third::frame::Video::empty();
         while decoder.receive_frame(&mut frame).is_ok() {
@@ -129,7 +137,14 @@ impl FFmpegRunner {
                 .source()
                 .add(&frame)?;
             frame_unref_video(&mut frame);
-            Self::drain_video_filter_to_encoder(filter, encoder, octx, ost_index, enc_time_base)?;
+            Self::drain_video_filter_to_encoder(
+                filter,
+                encoder,
+                octx,
+                ost_index,
+                enc_time_base,
+                filter_time_base,
+            )?;
         }
         Ok(())
     }
@@ -141,6 +156,7 @@ impl FFmpegRunner {
         octx: &mut ffmpeg_the_third::format::context::Output,
         ost_index: usize,
         enc_time_base: ffmpeg_the_third::Rational,
+        filter_time_base: ffmpeg_the_third::Rational,
     ) -> Result<()> {
         let mut filtered = ffmpeg_the_third::frame::Video::empty();
         loop {
@@ -154,6 +170,32 @@ impl FFmpegRunner {
             // Without this, x265 warns "specified frame type is not compatible
             // with max B-frames" on every frame whose source pict_type conflicts.
             filtered.set_kind(ffmpeg_the_third::util::picture::Type::None);
+
+            // Rescale the frame pts from the buffersink/filter tb to the encoder tb
+            // (1/fps) so the `cts` fed to the encoder is in frame-tick units. This
+            // mirrors the FFmpeg CLI, whose buffersink delivers frames already in
+            // the encoder tb. Required for libvvenc/libxavs2, which derive `dts`
+            // from a frame-tick model: without this their `dts` and the passed-
+            // through `pts` land in different scales → `pts < dts` at the muxer.
+            // See the time_base rationale in `video_transcode_phases` Phase 2.
+            if let Some(pts) = filtered.pts() {
+                let src = ffmpeg_the_third::ffi::AVRational {
+                    num: filter_time_base.numerator(),
+                    den: filter_time_base.denominator(),
+                };
+                let dst = ffmpeg_the_third::ffi::AVRational {
+                    num: enc_time_base.numerator(),
+                    den: enc_time_base.denominator(),
+                };
+                // SAFETY: av_rescale_q is a pure arithmetic helper over plain
+                // values (no pointers/aliasing). On a degenerate zero-denominator
+                // tb it returns INT64_MIN (AV_NOPTS_VALUE) rather than dividing by
+                // zero; that sentinel then surfaces as a muxer error downstream,
+                // not UB. `enc_time_base` is 1/fps or a validated stream tb here.
+                let new_pts = unsafe { ffmpeg_the_third::ffi::av_rescale_q(pts, src, dst) };
+                filtered.set_pts(Some(new_pts));
+            }
+
             encoder.send_frame(&filtered)?;
             frame_unref_video(&mut filtered);
             Self::drain_video_encoder_packets(encoder, octx, ost_index, enc_time_base)?;

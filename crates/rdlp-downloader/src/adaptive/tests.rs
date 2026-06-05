@@ -87,31 +87,31 @@ fn test_slow_start_ramp_up() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 2,
         initial_chunk_level: 2, // MIN_CHUNK_LEVEL (was 0)
     };
     let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
 
-    // First interval — no prev_ewma, so it bumps +2 and +1 connection.
+    // First interval — no prev_ewma, so it bumps chunk +2 (connection count is
+    // fixed; PRD item 7).
     drive(&ctrl, 4, 10_000_000.0);
-    let (level1, conns1) = {
-        let state = ctrl.state.lock().unwrap();
-        (state.current_chunk_level, state.current_connections)
-    };
+    let level1 = ctrl.state.lock().unwrap().current_chunk_level;
     assert_eq!(
         level1, 4,
         "chunk level should have increased by 2 from floor"
     );
-    assert_eq!(conns1, 3, "connections should have increased by 1");
+    // Connection count is fixed at max_connections — the semaphore is never
+    // mutated by the controller.
+    assert_eq!(ctrl.semaphore().available_permits(), 8);
 
-    // Second interval — throughput still high (increasing) → another ramp.
+    // Second interval — throughput still high (increasing) → another chunk ramp.
     drive(&ctrl, 4, 12_000_000.0);
-    let (level2, conns2) = {
-        let state = ctrl.state.lock().unwrap();
-        (state.current_chunk_level, state.current_connections)
-    };
+    let level2 = ctrl.state.lock().unwrap().current_chunk_level;
     assert!(level2 >= level1, "chunk level should not decrease");
-    assert!(conns2 >= conns1, "connections should not decrease");
+    assert_eq!(
+        ctrl.semaphore().available_permits(),
+        8,
+        "connection count stays fixed across adjustments"
+    );
 }
 
 #[test]
@@ -119,7 +119,6 @@ fn test_slow_start_to_steady_on_decrease() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 4,
         initial_chunk_level: 4,
     };
     let ctrl = make_controller_cfg(200 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -144,7 +143,6 @@ fn test_slow_start_plateau_exit() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 2,
         initial_chunk_level: 0,
     };
     let ctrl = make_controller_cfg(200 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -185,7 +183,6 @@ fn test_steady_additive_increase() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 4,
         initial_chunk_level: 2,
     };
     let ctrl = make_controller_cfg(500 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -217,7 +214,6 @@ fn test_steady_multiplicative_decrease() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 6,
         initial_chunk_level: 5,
     };
     let ctrl = make_controller_cfg(500 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -227,7 +223,6 @@ fn test_steady_multiplicative_decrease() {
         let mut state = ctrl.state.lock().unwrap();
         state.phase = Phase::Steady;
         state.last_ewma = Some(10_000_000.0);
-        state.current_connections = 6;
         state.current_chunk_level = 5;
         for _ in 0..MAX_HISTORY {
             state.throughput_history.push_back(10_000_000.0);
@@ -238,16 +233,16 @@ fn test_steady_multiplicative_decrease() {
     drive(&ctrl, 4, 1_000_000.0);
 
     let state = ctrl.state.lock().unwrap();
-    // Connections should have halved (from 6 → 3).
-    assert!(
-        state.current_connections <= 4,
-        "MD: connections should have halved (was 6, now {})",
-        state.current_connections
-    );
-    // Chunk level should have dropped by 2.
+    // MD now only reduces chunk size (connections are fixed; PRD item 7).
     assert!(
         state.current_chunk_level <= 5,
         "MD: chunk level should have decreased"
+    );
+    drop(state);
+    assert_eq!(
+        ctrl.semaphore().available_permits(),
+        8,
+        "MD must NOT touch the (fixed) connection count"
     );
 }
 
@@ -256,7 +251,6 @@ fn test_steady_noise_tolerance() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 4,
         initial_chunk_level: 3,
     };
     let ctrl = make_controller_cfg(500 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -267,7 +261,6 @@ fn test_steady_noise_tolerance() {
         state.phase = Phase::Steady;
         state.last_ewma = Some(10_000_000.0);
         state.current_chunk_level = 3;
-        state.current_connections = 4;
         // Seed history with ~15% lower throughput to land in noise band.
         for _ in 0..MAX_HISTORY {
             state.throughput_history.push_back(8_500_000.0);
@@ -275,7 +268,6 @@ fn test_steady_noise_tolerance() {
     }
 
     let level_before = ctrl.state.lock().unwrap().current_chunk_level;
-    let conns_before = ctrl.state.lock().unwrap().current_connections;
 
     // Trigger one adjustment interval manually.
     {
@@ -284,15 +276,11 @@ fn test_steady_noise_tolerance() {
         ctrl.adjust(&mut state);
     }
 
-    let state = ctrl.state.lock().unwrap();
-    // In the noise band: hold — level and connections unchanged.
+    // In the noise band: hold — chunk level unchanged (connections always fixed).
     assert_eq!(
-        state.current_chunk_level, level_before,
+        ctrl.state.lock().unwrap().current_chunk_level,
+        level_before,
         "noise: chunk level should be held"
-    );
-    assert_eq!(
-        state.current_connections, conns_before,
-        "noise: connections should be held"
     );
 }
 
@@ -303,7 +291,6 @@ fn test_bounds_chunk_level() {
     let cfg = AdaptiveConfig {
         max_connections: 2,
         decision_interval: 1,
-        initial_connections: 1,
         initial_chunk_level: 2, // MIN_CHUNK_LEVEL (was 0)
     };
     let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
@@ -332,33 +319,31 @@ fn test_bounds_chunk_level() {
 }
 
 #[test]
-fn test_bounds_connections() {
+fn test_connection_count_is_fixed() {
+    // PRD item 7: connection-count AIMD removed. The semaphore is sized to
+    // `max_connections` and is NEVER mutated by the controller — driving
+    // through slow-start ramp-up AND multiplicative decrease leaves the permit
+    // count unchanged. (No `increase_connections`/`decrease_connections` exist.)
     let cfg = AdaptiveConfig {
         max_connections: 4,
         decision_interval: 1,
-        initial_connections: 2,
         initial_chunk_level: 0,
     };
     let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);
-
-    // Try to exceed max_connections.
-    for _ in 0..10 {
-        let mut state = ctrl.state.lock().unwrap();
-        ctrl.increase_connections(&mut state);
-    }
-    let conns = ctrl.state.lock().unwrap().current_connections;
-    assert!(
-        conns <= 4,
-        "connections must not exceed max (4), got {conns}"
+    assert_eq!(
+        ctrl.semaphore().available_permits(),
+        4,
+        "sized to max_connections"
     );
 
-    // Try to go below 1.
-    for _ in 0..10 {
-        let mut state = ctrl.state.lock().unwrap();
-        ctrl.decrease_connections(&mut state, 0);
-    }
-    let conns = ctrl.state.lock().unwrap().current_connections;
-    assert!(conns >= 1, "connections must be at least 1, got {conns}");
+    // Ramp up (rising throughput) then crash (triggers MD) — connections fixed.
+    drive(&ctrl, 4, 10_000_000.0);
+    drive(&ctrl, 4, 100_000.0);
+    assert_eq!(
+        ctrl.semaphore().available_permits(),
+        4,
+        "connection count must stay fixed across ramp + MD"
+    );
 }
 
 // ── HLS mode test ─────────────────────────────────────────────────────────
@@ -368,7 +353,6 @@ fn test_hls_mode_skips_chunk_level() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 4,
-        initial_connections: 2,
         initial_chunk_level: 0,
     };
     let ctrl = make_controller_cfg(500 * 1024 * 1024, cfg, ControllerMode::HlsSegments);
@@ -397,7 +381,6 @@ fn test_chunk_level_floor_on_multiplicative_decrease() {
     let cfg = AdaptiveConfig {
         max_connections: 8,
         decision_interval: 2,
-        initial_connections: 4,
         initial_chunk_level: 3,
     };
     let ctrl = make_controller_cfg(100 * 1024 * 1024, cfg, ControllerMode::HttpChunked);

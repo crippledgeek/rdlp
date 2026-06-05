@@ -35,6 +35,206 @@ pub fn fixup_formats(formats: &mut [Format]) {
     }
 }
 
+/// Collect quality→size mapping from `sources.download`.
+///
+/// Returns a map of quality label (e.g. `"720p"`) to byte size.
+fn collect_download_sizes(sources: &serde_json::Map<String, Value>) -> HashMap<String, f64> {
+    let mut format_sizes: HashMap<String, f64> = HashMap::new();
+    if let Some(download) = sources.get("download").and_then(|v| v.as_object()) {
+        for (quality, format_dict) in download {
+            if let Some(size) = format_dict.get("size").and_then(|v| v.as_f64()) {
+                format_sizes.insert(quality.clone(), size);
+            }
+        }
+    }
+    format_sizes
+}
+
+/// Collect HLS formats from `xplayerSettings.sources.hls` (encrypted URLs).
+///
+/// Supports two layouts:
+///   Old: `hls: {url: "...", fallback: "..."}`
+///   New: `hls: {av1: {url: "..."}, h264: {url: "...", fallback: "..."}}`
+///
+/// Top-level url/fallback are processed first (master playlists preferred during dedup).
+async fn collect_hls_formats(
+    hls: &serde_json::Map<String, Value>,
+    page_url: &str,
+    js_engine: &dyn JsEngine,
+    player_decrypt_js: Option<&str>,
+    seen_urls: &mut HashSet<String>,
+) -> Vec<Format> {
+    let mut formats = Vec::new();
+
+    // Collect all (format_id, encrypted_url) pairs from both layouts.
+    // IMPORTANT: Process top-level url/fallback FIRST (master playlists),
+    // then codec-specific URLs. This ensures master playlists are preferred
+    // during deduplication (they typically have complete segment lists).
+    let mut hls_urls: Vec<(String, String)> = Vec::new();
+
+    // First: top-level "url" and "fallback" keys (master playlists)
+    for top_key in &["url", "fallback"] {
+        if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str())
+            && !url_str.is_empty()
+        {
+            hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
+        }
+    }
+
+    // Second: codec-specific nested objects (h264, av1, etc.)
+    for (key, value) in hls {
+        // Skip top-level keys already processed
+        if key == "url" || key == "fallback" {
+            continue;
+        }
+        if let Some(codec_obj) = value.as_object() {
+            // New layout: codec-keyed objects like {url: "...", fallback: "..."}
+            for hls_key in &["url", "fallback"] {
+                if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str())
+                    && !url_str.is_empty()
+                {
+                    hls_urls.push((format!("hls-{key}-{hls_key}"), url_str.to_string()));
+                }
+            }
+        }
+    }
+
+    for (format_id, hls_url) in hls_urls {
+        let Some(deciphered) =
+            super::js_extract::decipher_url_via_boa(&hls_url, js_engine, player_decrypt_js).await
+        else {
+            debug!(format_id:?; "[XHamster] Failed to decipher HLS URL");
+            continue;
+        };
+        if !seen_urls.insert(deciphered.clone()) {
+            continue;
+        }
+        // HLS manifests will be expanded by detect_format_sizes
+        let mut format = Format::new(
+            format_id,
+            deciphered,
+            "mp4",
+            rdlp_types::DownloadProtocol::M3u8Native,
+        );
+        format.http_headers = Some(referer_headers(page_url));
+        formats.push(format);
+    }
+
+    formats
+}
+
+/// Collect standard formats from `xplayerSettings.sources.standard` (encrypted URLs).
+///
+/// Only HLS URLs (`m3u8` or `media=hls`) are kept — direct MP4 URLs are
+/// CDN-blocked (403) even after decryption.
+async fn collect_standard_formats(
+    standard: &serde_json::Map<String, Value>,
+    page_url: &str,
+    js_engine: &dyn JsEngine,
+    player_decrypt_js: Option<&str>,
+    seen_urls: &mut HashSet<String>,
+) -> Vec<Format> {
+    let mut formats = Vec::new();
+
+    for (identifier, formats_list) in standard {
+        let Some(list) = formats_list.as_array() else {
+            continue;
+        };
+        for standard_format in list {
+            let Some(std_obj) = standard_format.as_object() else {
+                continue;
+            };
+            for std_key in &["url", "fallback"] {
+                let Some(std_url) = std_obj.get(*std_key).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if std_url.is_empty() {
+                    continue;
+                }
+
+                // Extract quality as a displayable string from "quality" (string or int)
+                // or "label" as fallback.
+                let quality_str = std_obj
+                    .get("quality")
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| v.as_i64().map(|i| i.to_string()))
+                    })
+                    .or_else(|| {
+                        std_obj
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default();
+
+                let format_id = if quality_str.is_empty() {
+                    identifier.clone()
+                } else {
+                    format!("{identifier}-{quality_str}")
+                };
+
+                let Some(deciphered) =
+                    super::js_extract::decipher_url_via_boa(std_url, js_engine, player_decrypt_js)
+                        .await
+                else {
+                    debug!(format_id:?; "[XHamster] Failed to decipher standard URL");
+                    continue;
+                };
+
+                // Only keep HLS URLs from the standard section.
+                // Direct MP4 URLs (video-h.xhcdn.com/key=...) are
+                // CDN-blocked (403) even after decryption. HLS URLs
+                // that appear in the standard section (media=hls4)
+                // are the only ones that work.
+                let is_hls = deciphered.contains("m3u8") || deciphered.contains("media=hls");
+                if !is_hls {
+                    debug!(
+                        "[XHamster] Skipping standard direct URL {} (CDN-blocked)",
+                        format_id
+                    );
+                    continue;
+                }
+
+                if !seen_urls.insert(deciphered.clone()) {
+                    continue;
+                }
+
+                let mut format = Format::new(
+                    format_id,
+                    deciphered,
+                    "mp4",
+                    rdlp_types::DownloadProtocol::M3u8Native,
+                );
+                format.http_headers = Some(referer_headers(page_url));
+                formats.push(format);
+            }
+        }
+    }
+
+    formats
+}
+
+/// Propagate file sizes from `sources.download` onto extracted formats.
+///
+/// Matches by quality label in the format_id (e.g. `"720"` matches `"720p"`).
+fn propagate_download_sizes(formats: &mut [Format], format_sizes: &HashMap<String, f64>) {
+    if format_sizes.is_empty() {
+        return;
+    }
+    for format in formats.iter_mut() {
+        for (quality, &size) in format_sizes {
+            // Strip trailing 'p'/'P' from quality for numeric comparison
+            let q = quality.trim_end_matches(['p', 'P']);
+            if format.format_id.contains(q) {
+                format.filesize = Some(size as u64);
+                break;
+            }
+        }
+    }
+}
+
 /// Extract formats from `window.initials` JSON (modern layout).
 ///
 /// Processes:
@@ -64,15 +264,8 @@ pub async fn extract_from_initials(
         .and_then(|v| v.as_object())
         .unwrap_or(&empty_map);
 
-    // Collect download sizes from sources.download
-    let mut format_sizes: HashMap<String, f64> = HashMap::new();
-    if let Some(download) = sources.get("download").and_then(|v| v.as_object()) {
-        for (quality, format_dict) in download {
-            if let Some(size) = format_dict.get("size").and_then(|v| v.as_f64()) {
-                format_sizes.insert(quality.clone(), size);
-            }
-        }
-    }
+    // Phase 1: Collect download sizes from sources.download
+    let format_sizes = collect_download_sizes(sources);
 
     // Skip videoModel.sources direct URLs — XHamster CDN blocks direct
     // MP4 downloads (403 Forbidden). Only xplayerSettings.sources URLs
@@ -94,168 +287,33 @@ pub async fn extract_from_initials(
             "[XHamster] Found xplayerSettings.sources with {} keys",
             xplayer_sources.len()
         );
-        // HLS sources (encrypted)
-        // Supports two layouts:
-        //   Old: hls: {url: "...", fallback: "..."}
-        //   New: hls: {av1: {url: "..."}, h264: {url: "...", fallback: "..."}}
+
+        // Phase 2: HLS sources (encrypted)
         if let Some(hls) = xplayer_sources.get("hls").and_then(|v| v.as_object()) {
-            // Collect all (format_id, encrypted_url) pairs from both layouts
-            // IMPORTANT: Process top-level url/fallback FIRST (master playlists),
-            // then codec-specific URLs. This ensures master playlists are preferred
-            // during deduplication (they typically have complete segment lists).
-            let mut hls_urls: Vec<(String, String)> = Vec::new();
-
-            // First: top-level "url" and "fallback" keys (master playlists)
-            for top_key in &["url", "fallback"] {
-                if let Some(url_str) = hls.get(*top_key).and_then(|v| v.as_str())
-                    && !url_str.is_empty()
-                {
-                    hls_urls.push((format!("hls-{top_key}"), url_str.to_string()));
-                }
-            }
-
-            // Second: codec-specific nested objects (h264, av1, etc.)
-            for (key, value) in hls {
-                // Skip top-level keys already processed
-                if key == "url" || key == "fallback" {
-                    continue;
-                }
-                if let Some(codec_obj) = value.as_object() {
-                    // New layout: codec-keyed objects like {url: "...", fallback: "..."}
-                    for hls_key in &["url", "fallback"] {
-                        if let Some(url_str) = codec_obj.get(*hls_key).and_then(|v| v.as_str())
-                            && !url_str.is_empty()
-                        {
-                            hls_urls.push((format!("hls-{key}-{hls_key}"), url_str.to_string()));
-                        }
-                    }
-                }
-            }
-
-            for (format_id, hls_url) in hls_urls {
-                let Some(deciphered) =
-                    super::js_extract::decipher_url_via_boa(&hls_url, js_engine, player_decrypt_js)
-                        .await
-                else {
-                    debug!(format_id:?; "[XHamster] Failed to decipher HLS URL");
-                    continue;
-                };
-                if !seen_urls.insert(deciphered.clone()) {
-                    continue;
-                }
-                // HLS manifests will be expanded by detect_format_sizes
-                let mut format = Format::new(
-                    format_id,
-                    deciphered,
-                    "mp4",
-                    rdlp_types::DownloadProtocol::M3u8Native,
-                );
-                format.http_headers = Some(referer_headers(page_url));
-                formats.push(format);
-            }
+            let hls_formats =
+                collect_hls_formats(hls, page_url, js_engine, player_decrypt_js, &mut seen_urls)
+                    .await;
+            formats.extend(hls_formats);
         }
 
-        // Standard sources (encrypted)
+        // Phase 3: Standard sources (encrypted)
         if let Some(standard) = xplayer_sources.get("standard").and_then(|v| v.as_object()) {
-            for (identifier, formats_list) in standard {
-                let Some(list) = formats_list.as_array() else {
-                    continue;
-                };
-                for standard_format in list {
-                    let Some(std_obj) = standard_format.as_object() else {
-                        continue;
-                    };
-                    for std_key in &["url", "fallback"] {
-                        let Some(std_url) = std_obj.get(*std_key).and_then(|v| v.as_str()) else {
-                            continue;
-                        };
-                        if std_url.is_empty() {
-                            continue;
-                        }
-
-                        // Extract quality as a displayable string from "quality" (string or int)
-                        // or "label" as fallback.
-                        let quality_str = std_obj
-                            .get("quality")
-                            .and_then(|v| {
-                                v.as_str()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| v.as_i64().map(|i| i.to_string()))
-                            })
-                            .or_else(|| {
-                                std_obj
-                                    .get("label")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
-                            })
-                            .unwrap_or_default();
-
-                        let format_id = if quality_str.is_empty() {
-                            identifier.clone()
-                        } else {
-                            format!("{identifier}-{quality_str}")
-                        };
-
-                        let Some(deciphered) = super::js_extract::decipher_url_via_boa(
-                            std_url,
-                            js_engine,
-                            player_decrypt_js,
-                        )
-                        .await
-                        else {
-                            debug!(format_id:?; "[XHamster] Failed to decipher standard URL");
-                            continue;
-                        };
-
-                        // Only keep HLS URLs from the standard section.
-                        // Direct MP4 URLs (video-h.xhcdn.com/key=...) are
-                        // CDN-blocked (403) even after decryption. HLS URLs
-                        // that appear in the standard section (media=hls4)
-                        // are the only ones that work.
-                        let is_hls =
-                            deciphered.contains("m3u8") || deciphered.contains("media=hls");
-                        if !is_hls {
-                            debug!(
-                                "[XHamster] Skipping standard direct URL {} (CDN-blocked)",
-                                format_id
-                            );
-                            continue;
-                        }
-
-                        if !seen_urls.insert(deciphered.clone()) {
-                            continue;
-                        }
-
-                        let mut format = Format::new(
-                            format_id,
-                            deciphered,
-                            "mp4",
-                            rdlp_types::DownloadProtocol::M3u8Native,
-                        );
-                        format.http_headers = Some(referer_headers(page_url));
-                        formats.push(format);
-                    }
-                }
-            }
+            let std_formats = collect_standard_formats(
+                standard,
+                page_url,
+                js_engine,
+                player_decrypt_js,
+                &mut seen_urls,
+            )
+            .await;
+            formats.extend(std_formats);
         }
     } else {
         debug!("[XHamster] No xplayerSettings.sources found");
     }
 
-    // Propagate file sizes from sources.download to extracted formats.
-    // Match by quality label in the format_id (e.g., "720" matches "720p").
-    if !format_sizes.is_empty() {
-        for format in &mut formats {
-            for (quality, &size) in &format_sizes {
-                // Strip trailing 'p'/'P' from quality for numeric comparison
-                let q = quality.trim_end_matches(['p', 'P']);
-                if format.format_id.contains(q) {
-                    format.filesize = Some(size as u64);
-                    break;
-                }
-            }
-        }
-    }
+    // Phase 4: Propagate file sizes from sources.download to extracted formats.
+    propagate_download_sizes(&mut formats, &format_sizes);
 
     debug!("[XHamster] Total formats extracted: {}", formats.len());
     fixup_formats(&mut formats);

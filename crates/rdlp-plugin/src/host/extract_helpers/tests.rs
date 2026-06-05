@@ -1113,3 +1113,28 @@ async fn extract_mpd_returns_subtitles_via_fixture() {
         Some("vtt")
     );
 }
+
+/// Regression guard for #274 (PR D-3): the `MpdFragment` WIT record must
+/// carry `byte_range`, `init_url`, `init_byte_range` so plugins receive
+/// DASH byte-range info (init segments + ranged media segments) from the
+/// host's MPD expansion. This test constructs the bindgen type with the
+/// new fields populated and asserts the projection round-trip; the test
+/// fails to compile if the WIT contract drops any of the three fields.
+#[test]
+fn mpd_fragment_carries_byte_range_fields() {
+    use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
+    let frag = MpdFragment {
+        url: "https://cdn.example.com/seg-0.m4s".into(),
+        duration: Some(4.0),
+        byte_range: Some((0u64, 1024u64)),
+        init_url: Some("https://cdn.example.com/init.m4s".into()),
+        init_byte_range: Some((0u64, 740u64)),
+    };
+    // (start, end_exclusive) convention matches rdlp_types::Fragment.
+    assert_eq!(frag.byte_range, Some((0, 1024)));
+    assert_eq!(
+        frag.init_url.as_deref(),
+        Some("https://cdn.example.com/init.m4s")
+    );
+    assert_eq!(frag.init_byte_range, Some((0, 740)));
+}

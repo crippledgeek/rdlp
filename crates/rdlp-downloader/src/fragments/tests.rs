@@ -203,7 +203,7 @@ async fn fragment_progress_none_callback_runs_to_completion() {
 }
 
 #[tokio::test]
-async fn fragment_progress_expected_total_none_emits_none_total() {
+async fn fragment_progress_expected_total_none_uses_segment_fraction() {
     let mut server = mockito::Server::new_async().await;
     let _f1 = server
         .mock("GET", "/f1")
@@ -228,10 +228,22 @@ async fn fragment_progress_expected_total_none_emits_none_total() {
     .expect("ok");
     let evs = cb.events();
     assert!(!evs.is_empty());
+    // No byte total is known (HLS), so `total_bytes` stays None — but `progress`
+    // is now the SEGMENT fraction so progress bars animate instead of jumping
+    // 0->100 at completion.
     assert!(
-        evs.iter()
-            .all(|e| e.total_bytes.is_none() && e.progress.is_none())
+        evs.iter().all(|e| e.total_bytes.is_none()),
+        "byte total must remain unknown when expected_total is None"
     );
+    assert!(
+        evs.iter().all(|e| e.progress.is_some()),
+        "progress must be the segment-based fraction, not None"
+    );
+    let last = evs.last().expect("at least one event");
+    assert_eq!(last.segments_downloaded, Some(1));
+    assert_eq!(last.total_segments, Some(1));
+    let frac = last.progress.expect("final progress some").fraction();
+    assert!((frac - 1.0).abs() < 1e-6, "final event = 1/1 segments");
 }
 
 #[tokio::test]
@@ -605,8 +617,8 @@ async fn fragment_cancel_never_fired_runs_to_completion() {
 /// 1. `AdaptiveController::mode()` returns `HlsSegments` — verified directly
 ///    on a controller constructed with the same parameters as the production
 ///    path (additive unit test for the new `mode()` accessor).
-/// 2. The download completes correctly with AIMD-constrained concurrency
-///    (`initial_connections=1`) — a regression guard that AIMD wiring does
+/// 2. The download completes correctly with the fixed concurrency
+///    (`max_connections=2`) — a regression guard that AIMD wiring does
 ///    not break source-order writes or omit bytes.
 ///
 /// The test FAILS against Task 2's code because the `mode()` accessor did not
@@ -622,7 +634,6 @@ async fn aimd_controller_hls_segments_mode_wired_and_download_correct() {
         0,
         AdaptiveConfig {
             max_connections: 2,
-            initial_connections: 1,
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
@@ -1157,4 +1168,33 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
     )
     .await
     .expect("cross-origin fragment must not receive Referer");
+}
+
+// ── Progress fraction: byte-based when total known, segment-based otherwise ──
+//
+// HLS pre-resolved-fragment downloads pass `expected_total = None` (segment-
+// based progress), so the byte fraction is unavailable. Without a segment
+// fallback the emitted `progress` is `None` and UIs that read it (the desktop
+// bar, `events.rs`) sit at 0 then jump to 100. These guard the fallback.
+
+#[test]
+fn fragment_progress_fraction_prefers_byte_total() {
+    // Byte total known → byte-based fraction (progressive / sized HLS).
+    let p = fragment_progress_fraction(Some(1000), 500, 1, 4).expect("some");
+    assert!((p.fraction() - 0.5).abs() < 1e-6, "byte fraction 500/1000");
+}
+
+#[test]
+fn fragment_progress_fraction_falls_back_to_segments() {
+    // Byte total unknown (HLS) → segment-based fraction (the 0->100 jump fix).
+    let mid = fragment_progress_fraction(None, 0, 1, 4).expect("some");
+    assert!((mid.fraction() - 0.25).abs() < 1e-6, "segment fraction 1/4");
+    let done = fragment_progress_fraction(None, 12_345, 4, 4).expect("some");
+    assert!((done.fraction() - 1.0).abs() < 1e-6, "segment fraction 4/4");
+}
+
+#[test]
+fn fragment_progress_fraction_none_when_nothing_known() {
+    // No byte total and zero segments → no fraction to report.
+    assert!(fragment_progress_fraction(None, 0, 0, 0).is_none());
 }

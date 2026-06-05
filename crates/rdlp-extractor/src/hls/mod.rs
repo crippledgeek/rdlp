@@ -199,6 +199,52 @@ mod tests {
         assert_eq!(detector.concurrent_requests, 1);
     }
 
+    /// The `validate_hls_url` `#[cfg(test)]` loopback exemption lets
+    /// `detect_hls_variants` actually fetch + parse a mockito (`127.0.0.1`)
+    /// master instead of SSRF-rejecting it and returning an empty Vec. Guards
+    /// against the silent-no-op regression the research flagged: without the
+    /// exemption this probe is dead in tests.
+    #[tokio::test]
+    async fn detect_hls_variants_runs_against_loopback_mockito() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(crate::hls::test_support::MASTER_TWO_VARIANTS)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        // Variant media playlists (best-variant probe may fetch one); respond
+        // if hit, but don't assert call counts.
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .create_async()
+            .await;
+
+        let url = format!("{}/master.m3u8", server.url());
+        let detector = HlsSizeDetector::new(Arc::new(wreq::Client::new()), false);
+        let variants = detector
+            .detect_hls_variants(&url)
+            .await
+            .expect("detect_hls_variants must succeed");
+
+        assert_eq!(
+            variants.len(),
+            2,
+            "both master variants must be returned — an empty Vec would mean the \
+             SSRF gate silently no-op'd the loopback fetch (the gap this guards)"
+        );
+        assert!(
+            variants.iter().any(|v| v.resolution == Some((1280, 720))),
+            "the 720p variant must be present"
+        );
+    }
+
     // Note: Integration tests with real URLs are in the redtube extractor tests
     // because they require network access and are marked with #[ignore]
 

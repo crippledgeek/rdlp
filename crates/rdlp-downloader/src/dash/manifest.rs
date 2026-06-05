@@ -356,6 +356,14 @@ fn build_template_plan(
         ))
     })?;
     let init = st.initialization.clone();
+    // Initialization byte-range: prefer the `<Initialization @range>` child
+    // (ISO/IEC 23009-1 §5.3.9.4.3). `SegmentTemplate@initialization` is a
+    // URL string, not a range, so the range only comes from the child.
+    let init_byte_range = st
+        .Initialization
+        .as_ref()
+        .and_then(|i| i.range.as_deref())
+        .and_then(parse_byte_range);
     let start_number = st.startNumber.unwrap_or(1);
     let timescale = st.timescale.unwrap_or(1).max(1);
 
@@ -371,6 +379,7 @@ fn build_template_plan(
             .collect();
         return Ok(SegmentPlan::Timeline(SegmentTimelinePlan {
             init,
+            init_byte_range,
             media,
             start_number,
             timescale,
@@ -408,6 +417,7 @@ fn build_template_plan(
 
     Ok(SegmentPlan::Template(SegmentTemplatePlan {
         init,
+        init_byte_range,
         media,
         start_number,
         timescale,
@@ -420,10 +430,171 @@ fn build_template_plan(
 
 fn build_list_plan(sl: &dash_mpd::SegmentList) -> SegmentPlan {
     let init = sl.Initialization.as_ref().and_then(|i| i.sourceURL.clone());
+    let init_byte_range = sl
+        .Initialization
+        .as_ref()
+        .and_then(|i| i.range.as_deref())
+        .and_then(parse_byte_range);
     let urls = sl
         .segment_urls
         .iter()
         .filter_map(|u| u.media.clone())
         .collect();
-    SegmentPlan::List(SegmentListPlan { init, urls })
+    SegmentPlan::List(SegmentListPlan {
+        init,
+        init_byte_range,
+        urls,
+    })
+}
+
+/// Parse a DASH `<Initialization @range>` byte-range attribute into an
+/// `(start, end_exclusive)` tuple.
+///
+/// Per ISO/IEC 23009-1 §5.3.9.4.3 the attribute uses RFC 7233 `bytes-range-spec`
+/// form (`"start-end"`, inclusive). Returned tuple is `(start, end + 1)` to
+/// match rdlp's exclusive-end convention (mirrors `Fragment.byte_range`).
+///
+/// Returns `None` on any malformed input: empty string, non-numeric components,
+/// missing dash, reversed start/end, or arithmetic overflow on `end + 1`.
+#[must_use]
+pub(crate) fn parse_byte_range(s: &str) -> Option<(u64, u64)> {
+    let (start_s, end_s) = s.split_once('-')?;
+    if start_s.is_empty() || end_s.is_empty() {
+        return None;
+    }
+    let start: u64 = start_s.parse().ok()?;
+    let end: u64 = end_s.parse().ok()?;
+    if end < start {
+        return None;
+    }
+    let end_exclusive = end.checked_add(1)?;
+    Some((start, end_exclusive))
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    #[test]
+    fn parses_zero_based_range() {
+        assert_eq!(parse_byte_range("0-739"), Some((0, 740)));
+    }
+
+    #[test]
+    fn parses_single_byte_range() {
+        assert_eq!(parse_byte_range("100-100"), Some((100, 101)));
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert_eq!(parse_byte_range(""), None);
+    }
+
+    #[test]
+    fn rejects_non_numeric() {
+        assert_eq!(parse_byte_range("abc"), None);
+        assert_eq!(parse_byte_range("0-abc"), None);
+    }
+
+    #[test]
+    fn rejects_missing_component() {
+        assert_eq!(parse_byte_range("0-"), None);
+        assert_eq!(parse_byte_range("-5"), None);
+    }
+
+    #[test]
+    fn rejects_reversed() {
+        assert_eq!(parse_byte_range("5-3"), None);
+    }
+
+    #[test]
+    fn rejects_overflow_on_end_plus_one() {
+        assert_eq!(parse_byte_range(&format!("0-{}", u64::MAX)), None);
+    }
+
+    #[test]
+    fn rejects_whitespace_in_components() {
+        // RFC 7233 grammar disallows interior whitespace; Rust's u64 parser
+        // also rejects leading/trailing whitespace. Lock the contract so a
+        // future refactor doesn't silently add `trim()` and widen acceptance.
+        assert_eq!(parse_byte_range(" 0-739"), None);
+        assert_eq!(parse_byte_range("0-739 "), None);
+        assert_eq!(parse_byte_range("0 - 739"), None);
+    }
+
+    fn segment_list_mpd_with_init(init_attrs: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">
+  <Period duration="PT10S">
+    <AdaptationSet contentType="video" mimeType="video/mp4">
+      <Representation id="v1" bandwidth="1000000">
+        <BaseURL>https://example.com/video.mp4</BaseURL>
+        <SegmentList timescale="1000" duration="5000">
+          <Initialization {init_attrs}/>
+          <SegmentURL media="seg1.m4s"/>
+          <SegmentURL media="seg2.m4s"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+        )
+    }
+
+    #[test]
+    fn list_plan_range_only_no_source_url() {
+        let xml = segment_list_mpd_with_init(r#"range="0-739""#);
+        let base = Url::parse("https://example.com/manifest.mpd").unwrap();
+        let parsed = parse_mpd(&xml, &base).expect("parse");
+        match &parsed.video.plan {
+            SegmentPlan::List(p) => {
+                assert_eq!(p.init, None, "no sourceURL → init field stays None");
+                assert_eq!(p.init_byte_range, Some((0, 740)));
+            }
+            other => panic!("expected SegmentPlan::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_plan_source_url_with_range() {
+        let xml = segment_list_mpd_with_init(r#"sourceURL="init.m4s" range="0-739""#);
+        let base = Url::parse("https://example.com/manifest.mpd").unwrap();
+        let parsed = parse_mpd(&xml, &base).expect("parse");
+        match &parsed.video.plan {
+            SegmentPlan::List(p) => {
+                assert_eq!(p.init.as_deref(), Some("init.m4s"));
+                assert_eq!(p.init_byte_range, Some((0, 740)));
+            }
+            other => panic!("expected SegmentPlan::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_plan_no_init_attrs_at_all() {
+        let xml = segment_list_mpd_with_init("");
+        let base = Url::parse("https://example.com/manifest.mpd").unwrap();
+        let parsed = parse_mpd(&xml, &base).expect("parse");
+        match &parsed.video.plan {
+            SegmentPlan::List(p) => {
+                assert_eq!(p.init, None);
+                assert_eq!(p.init_byte_range, None);
+            }
+            other => panic!("expected SegmentPlan::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn init_url_falls_back_to_base_when_range_only() {
+        let xml = segment_list_mpd_with_init(r#"range="0-739""#);
+        let base = Url::parse("https://example.com/manifest.mpd").unwrap();
+        let parsed = parse_mpd(&xml, &base).expect("parse");
+        // When init field is None but init_byte_range is Some, the URL to
+        // fetch the init segment is the first BaseURL of the Representation.
+        let init = parsed.video.plan.init_url(&parsed.video.base_urls);
+        assert_eq!(
+            init.as_ref().map(Url::as_str),
+            Some("https://example.com/video.mp4")
+        );
+    }
 }

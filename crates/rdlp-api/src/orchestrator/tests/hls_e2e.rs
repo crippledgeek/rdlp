@@ -26,7 +26,9 @@
 
 use crate::events::Event;
 use crate::handle::DownloadId;
+use crate::orchestrator::errors::OrchestratorError;
 use crate::orchestrator::{DownloadPlan, Orchestrator};
+use rdlp_core::RdlpError;
 use rdlp_types::{Codec, Config, DownloadProtocol, Format, Fragment, InfoDict};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -289,4 +291,94 @@ async fn hls_bv_star_plus_ba_auto_pairs_separate_audio_rendition() {
     // Assertions B and C are enforced by mockito's `.expect(N)` guards: the
     // mock objects drop at end of scope and panic if the call count doesn't
     // match.
+}
+
+/// Regression guard — `bugfix/hls-cdn-fallback-drops-fragments`.
+///
+/// When an HLS format's PRIMARY fragment download fails and the format carries
+/// a `fallback_url`, the CDN-fallback loop in `download_with_cdn_fallback` must
+/// NOT hand a fragments-less HLS `Format` to `HlsDownloader`. The old code
+/// rebuilt the fallback via `Format::new(...)` (which leaves `fragments = None`
+/// while keeping `protocol = M3u8Native`), so the downloader hit its
+/// `"reached HlsDownloader without pre-resolved fragments"` guard — surfacing
+/// an internal-error message instead of a graceful network failure.
+///
+/// The fix re-expands the fallback playlist to repopulate CDN-specific
+/// fragments; if re-expansion fails (here: an unreachable RFC-2606 `.invalid`
+/// host), the loop falls through to an honest network error — never the
+/// internal contract-violation message.
+#[tokio::test]
+async fn hls_failed_primary_with_fallback_never_emits_fragmentless_internal_error() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+
+    // Primary segment fails (500) → primary HLS download errors → fallback path.
+    let _primary_seg = server
+        .mock("GET", "/primary_seg0.ts")
+        .with_status(500)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    // Muxed HLS format with pre-resolved fragments (loopback URLs are allowed
+    // through `validate_fragment_url_one`'s cfg(test) bypass) and a
+    // public-looking but deterministically unreachable fallback playlist URL
+    // (RFC-2606 `.invalid` → guaranteed NXDOMAIN, yet passes the loop's
+    // `validate_url_security` gate, so it reaches the fallback-resolution code).
+    // `format.url` must be a non-loopback host so the primary
+    // `validate_url_security` gate (run directly, without the fragment bypass)
+    // passes. The master URL is only used as the segment Referer, never
+    // fetched — the loopback segment URLs in `fragments` drive the download.
+    let mut fmt = Format::new(
+        "hls-h264-url-1080p",
+        "http://mock-ignored/master.m3u8",
+        "mp4",
+        DownloadProtocol::M3u8Native,
+    );
+    fmt.vcodec = Codec::from("avc1.640028".to_string());
+    fmt.acodec = Codec::from("mp4a.40.2".to_string());
+    fmt.height = Some(1080);
+    fmt.fragments = Some(vec![Fragment {
+        url: format!("{base}/primary_seg0.ts"),
+        byte_range: None,
+        init_url: None,
+        init_byte_range: None,
+        duration: Some(6.0),
+        filesize: None,
+    }]);
+    // Carry a CDN token in the fallback URL: the failure message must redact it
+    // (security review MEDIUM-2). Host is public (RFC-2606 `.invalid`) so it
+    // passes `validate_url_security` and reaches the re-expansion path.
+    fmt.fallback_urls = Some(vec![
+        "http://cdn-fallback.invalid/master.m3u8?token=s3cr3t".to_string(),
+    ]);
+
+    let orch = orchestrator_with_config(Config::default());
+    let dir = TempDir::new().expect("tempdir");
+    let out = dir.path().join("video.mp4");
+
+    let result = orch.download_with_cdn_fallback(&fmt, &out, 0).await;
+
+    let Err(err) = result else {
+        panic!("all URLs fail → download_with_cdn_fallback must be Err")
+    };
+    match &err {
+        OrchestratorError::DownloadFailed(RdlpError::Network { message, .. }) => {
+            assert!(
+                !message.contains("reached HlsDownloader without pre-resolved fragments"),
+                "CDN fallback must never hand a fragments-less HLS Format to the \
+                 downloader; expected a graceful network error, got: {message}"
+            );
+            // MEDIUM-2: the fallback CDN token must be redacted from the message.
+            assert!(
+                !message.contains("s3cr3t"),
+                "fallback CDN token must be sanitized out of the error message; got: {message}"
+            );
+            assert!(
+                message.contains("token=***"),
+                "expected the sanitized token marker in the message; got: {message}"
+            );
+        }
+        other => panic!("expected a graceful DownloadFailed(Network), got: {other:?}"),
+    }
 }

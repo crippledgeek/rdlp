@@ -10,6 +10,8 @@ import { Select, SelectTrigger, SelectValue, SelectItem, SelectPopover, SelectLi
 import {
     socketTimeoutSchema,
     readTimeoutSchema,
+    downloadTimeoutSchema,
+    mergeTimeoutSchema,
     poolIdleTimeoutSchema,
     formStateToPoolIdleTimeout,
     poolIdleTimeoutToFormState,
@@ -190,6 +192,24 @@ export function NetworkSection({ draft, onChange }: Props) {
                         placeholder="60"
                         schema={readTimeoutSchema}
                         onCommit={(v) => onChange({ read_timeout: v })}
+                    />
+                    <TimeoutField
+                        id="download-timeout"
+                        label="Download Timeout"
+                        helper="Maximum time for the entire file download."
+                        value={draft.download_timeout}
+                        placeholder="3600"
+                        schema={downloadTimeoutSchema}
+                        onCommit={(v) => onChange({ download_timeout: v })}
+                    />
+                    <TimeoutField
+                        id="merge-timeout"
+                        label="Merge Timeout"
+                        helper="Maximum time to mux/merge the downloaded parts."
+                        value={draft.merge_timeout}
+                        placeholder="1800"
+                        schema={mergeTimeoutSchema}
+                        onCommit={(v) => onChange({ merge_timeout: v })}
                     />
                     <div className="col-span-2">
                         <div className="flex items-center gap-2 flex-wrap">

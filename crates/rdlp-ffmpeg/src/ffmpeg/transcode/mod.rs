@@ -6,11 +6,14 @@
 mod audio_extract;
 mod audio_pipeline;
 mod audio_pipeline_direct;
+mod audio_recode_pipeline;
 pub mod mux_timing;
 #[cfg(test)]
 mod tests;
 mod video_convert;
 mod video_pipeline;
+mod video_transcode_context;
+mod video_transcode_phases;
 
 // Re-export public(crate) items used by normalize and other modules
 pub use mux_timing::MuxTimingState;

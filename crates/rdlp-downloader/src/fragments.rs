@@ -26,6 +26,25 @@ use crate::http::HttpDownloader;
 use crate::progress::SpeedTracker;
 use rdlp_security;
 
+/// Compute the progress fraction for a fragment download.
+///
+/// Byte-based when the total byte size is known (`expected_total`), otherwise
+/// **segment-based** (`frags_done / total_frags`). HLS pre-resolved-fragment
+/// downloads pass `expected_total = None` — without the segment fallback the
+/// emitted `progress` would be `None`, leaving UIs that read it (the desktop
+/// progress bar, `events.rs`) stuck at 0 until completion, then jumping to 100.
+/// Returns `None` only when neither a byte total nor any segments are known.
+fn fragment_progress_fraction(
+    expected_total: Option<u64>,
+    total_bytes: u64,
+    frags_done: u64,
+    total_frags: u64,
+) -> Option<Progress> {
+    expected_total
+        .map(|t| Progress::from_ratio(total_bytes, t))
+        .or_else(|| (total_frags > 0).then(|| Progress::from_ratio(frags_done, total_frags)))
+}
+
 /// Fetch a pre-resolved list of fragment URLs and concatenate them into
 /// `output` in order.
 ///
@@ -36,9 +55,9 @@ use rdlp_security;
 ///
 /// When `progress` is `Some`, emits `DownloadProgress` events on a 100ms
 /// throttle plus a forced emit at the final-fragment boundary. When
-/// `expected_total` is `None`, emitted events carry `total_bytes = None`
-/// and `progress = None`; consumers see fragment-count progress only
-/// (`segments_downloaded` / `total_segments`).
+/// `expected_total` is `None` (HLS), emitted events carry `total_bytes = None`
+/// but `progress` is the **segment-based** fraction (`segments_downloaded /
+/// total_segments`) so progress bars animate rather than jump 0->100.
 ///
 /// # Cancellation
 ///
@@ -140,7 +159,6 @@ pub async fn download_pre_resolved_fragments(
         0,
         AdaptiveConfig {
             max_connections: concurrency,
-            initial_connections: concurrency.min(2),
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
@@ -289,7 +307,12 @@ pub async fn download_pre_resolved_fragments(
             cb.on_progress(&DownloadProgress {
                 bytes_downloaded: total_bytes,
                 total_bytes: expected_total,
-                progress: expected_total.map(|t| Progress::from_ratio(total_bytes, t)),
+                progress: fragment_progress_fraction(
+                    expected_total,
+                    total_bytes,
+                    frags_done,
+                    total_frags,
+                ),
                 segments_downloaded: Some(frags_done),
                 total_segments: Some(total_frags),
                 speed: speed.bytes_per_sec(),

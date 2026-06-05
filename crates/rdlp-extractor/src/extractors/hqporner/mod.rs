@@ -227,10 +227,16 @@ impl InfoExtractor for HQPornerExtractor {
             });
         }
 
+        // Pre-resolve HLS variant playlists into per-variant Format rows with
+        // fragments populated, so the downloader's pre-resolved-fragments path
+        // is taken. MUST run before `detect_format_sizes_lazy` (issue #269/#279).
+        let formats =
+            crate::hls::expand_hls_in_place(mydaddy_result.formats, ctx.http_client.clone()).await;
+
         // Detect file sizes
         let extractor_name = InfoExtractor::name(self);
         let (formats_with_size, hls_flags) =
-            detect_format_sizes_lazy(mydaddy_result.formats, ctx, extractor_name).await;
+            detect_format_sizes_lazy(formats, ctx, extractor_name).await;
 
         let mut info = InfoDict::new(&video_id, &title, extractor_name, url);
         info.description = description;

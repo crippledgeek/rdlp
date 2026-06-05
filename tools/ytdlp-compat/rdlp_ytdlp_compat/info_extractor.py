@@ -547,6 +547,21 @@ def _mpd_fragment_to_dict(frag):
     out = {_location_key(frag.url): frag.url}
     if frag.duration is not None:
         out['duration'] = frag.duration
+    # WIT @0.4.0 (#274) — DASH byte-range fields. Translate rdlp's
+    # `(start, end_exclusive)` tuple to yt-dlp's `{'start': int, 'end': int}`
+    # dict shape (both use exclusive end semantics; yt-dlp's
+    # downloader/fragment.py builds HTTP Range headers as
+    # `bytes=%d-%d % (start, end - 1)`). Plugins ported from yt-dlp
+    # access these via `fragment['byte_range']['start']` etc.
+    byte_range = getattr(frag, 'byte_range', None)
+    if byte_range is not None:
+        out['byte_range'] = {'start': byte_range[0], 'end': byte_range[1]}
+    init_url = getattr(frag, 'init_url', None)
+    if init_url is not None:
+        out['init_url'] = init_url
+    init_byte_range = getattr(frag, 'init_byte_range', None)
+    if init_byte_range is not None:
+        out['init_byte_range'] = {'start': init_byte_range[0], 'end': init_byte_range[1]}
     return out
 
 

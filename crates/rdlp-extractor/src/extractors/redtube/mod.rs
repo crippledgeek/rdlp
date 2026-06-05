@@ -272,6 +272,11 @@ impl InfoExtractor for RedTubeExtractor {
             }
         }
 
+        // Pre-resolve HLS variant playlists into per-variant Format rows with
+        // fragments populated, so the downloader's pre-resolved-fragments path
+        // is taken. MUST run before `detect_format_sizes_lazy` (issue #269/#279).
+        let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
+
         // Fetch sizes/segments for all formats in parallel
         let (formats, hls_flags) =
             detect_format_sizes_lazy(formats, ctx, InfoExtractor::name(self)).await;

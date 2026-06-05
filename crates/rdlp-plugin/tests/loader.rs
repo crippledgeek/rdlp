@@ -53,7 +53,7 @@ fn write_signed_plugin(
         r#"
 name = "{name}"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = {priority}
 claims_override = [{claims_str}]
@@ -204,15 +204,21 @@ fn bad_signature_logged_and_skipped() {
         r#"
 name = "bad"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]
 
 [signature]
 type = "ed25519"
-pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+# Real ed25519 pubkey (derived from a fixed test seed), paired with a
+# syntactically-valid-but-cryptographically-bogus 64-byte signature
+# (all 0x01). An all-zeros pubkey hits ed25519-dalek's lax-verify
+# low-order edge case where ~24% of messages spuriously verify, and the
+# specific canonical_bytes content can tip miss-or-hit across WIT version
+# bumps (see PR D-3, issue #274).
+pubkey = "mLGicHAE7d8IhiYHhTFCUkGBtcLuwooeU+q8VENgGNM="
+signature = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=="
 "#,
     )
     .unwrap();
@@ -313,7 +319,7 @@ fn dir_without_wasm_is_skipped() {
         r#"
 name = "incomplete"
 version = "1.0.0"
-wit_version = "0.1.0"
+wit_version = "0.4.0"
 matches = ["https://example.com/*"]
 priority = 150
 capabilities = ["log"]

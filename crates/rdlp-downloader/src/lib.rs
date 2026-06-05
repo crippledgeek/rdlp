@@ -347,14 +347,21 @@ impl DownloaderRegistry {
         Self::build_registry(config, client)
     }
 
-    /// Create a new registry with custom configuration and shared cookie jar
+    /// Create a registry that **reuses an already-built HTTP client**.
     ///
-    /// The cookie jar is shared with the extraction HTTP client so that
-    /// cookies obtained during extraction (including Cloudflare clearance
-    /// and session cookies) are automatically sent during downloads.
+    /// `wreq::Client` is internally `Arc`-wrapped, so the passed client shares
+    /// its connection pool with every other clone. Passing the extraction-phase
+    /// client here lets downloads reuse the pooled keep-alive TCP/TLS connection
+    /// the extractor already opened to the same CDN host — avoiding a redundant
+    /// `BoringSSL` handshake per download. The caller is responsible for having
+    /// built the client with the desired emulation/cookie configuration
+    /// (including any shared cookie jar so extraction cookies reach downloads);
+    /// this constructor performs no client construction of its own.
+    ///
+    /// This is the orchestrator's path: it hands its single emulating client
+    /// here so a second connection pool is not created per download.
     #[must_use]
-    pub fn with_config_and_cookies(config: &Config, cookie_jar: Arc<wreq::cookie::Jar>) -> Self {
-        let client = HttpClientFactory::from_rdlp_config(config).build_with_cookies(cookie_jar);
+    pub fn with_config_and_client(config: &Config, client: wreq::Client) -> Self {
         Self::build_registry(config, client)
     }
 
@@ -371,6 +378,22 @@ impl DownloaderRegistry {
             .with_adaptive(config.adaptive_downloads);
         if let Some(threshold) = config.parallel_threshold {
             http_downloader = http_downloader.with_parallel_threshold(threshold);
+        }
+        // Item 8/9: wire the operator's download-path timeouts. All validated by
+        // Config::validate(); unset (None) keeps the DownloaderConfig default.
+        // Without this they were silently ignored. read_timeout also bounds DASH
+        // MPD + segment fetches (dash/download.rs).
+        if let Some(read_timeout_secs) = config.read_timeout {
+            http_downloader = http_downloader
+                .with_read_timeout(std::time::Duration::from_secs(read_timeout_secs));
+        }
+        if let Some(download_timeout_secs) = config.download_timeout {
+            http_downloader = http_downloader
+                .with_download_timeout(std::time::Duration::from_secs(download_timeout_secs));
+        }
+        if let Some(merge_timeout_secs) = config.merge_timeout {
+            http_downloader = http_downloader
+                .with_merge_timeout(std::time::Duration::from_secs(merge_timeout_secs));
         }
 
         // Create HLS downloader. concurrent_segments/buffer_size were no-ops on the
@@ -540,6 +563,59 @@ mod tests {
             registry.http_base.config.parallel_threshold,
             5 * 1024 * 1024,
             "Config::parallel_threshold must reach HttpDownloader via build_registry"
+        );
+    }
+
+    #[test]
+    fn registry_wires_read_timeout_from_config() {
+        // Item 9: Config::read_timeout was validated+stored but never reached
+        // DownloaderConfig (build_registry didn't call with_read_timeout).
+        let config = Config {
+            read_timeout: Some(45),
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.read_timeout,
+            std::time::Duration::from_secs(45),
+            "Config::read_timeout must reach DownloaderConfig via build_registry"
+        );
+    }
+
+    #[test]
+    fn registry_wires_download_and_merge_timeouts_from_config() {
+        // Item 8/9: download_timeout + merge_timeout must reach DownloaderConfig.
+        // Non-round seconds dodge clippy::duration_suboptimal_units.
+        let config = Config {
+            download_timeout: Some(7201),
+            merge_timeout: Some(599),
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.download_timeout,
+            std::time::Duration::from_secs(7201),
+            "Config::download_timeout must reach DownloaderConfig"
+        );
+        assert_eq!(
+            registry.http_base.config.merge_timeout,
+            std::time::Duration::from_secs(599),
+            "Config::merge_timeout must reach DownloaderConfig"
+        );
+    }
+
+    #[test]
+    fn registry_uses_http_default_read_timeout_when_none() {
+        // Unset read_timeout must not clobber the DownloaderConfig default.
+        let none_registry = DownloaderRegistry::with_config(&Config {
+            read_timeout: None,
+            ..Default::default()
+        });
+        let default_registry = DownloaderRegistry::new();
+        assert_eq!(
+            none_registry.http_base.config.read_timeout,
+            default_registry.http_base.config.read_timeout,
+            "unset read_timeout must keep the DownloaderConfig default"
         );
     }
 

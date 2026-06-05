@@ -254,17 +254,37 @@ mod tests {
                 "extractors/nine_anime/mod.rs",
                 include_str!("../extractors/nine_anime/mod.rs"),
             ),
+            (
+                "extractors/hqporner/mod.rs",
+                include_str!("../extractors/hqporner/mod.rs"),
+            ),
+            (
+                "extractors/pornhub/mod.rs",
+                include_str!("../extractors/pornhub/mod.rs"),
+            ),
+            (
+                "extractors/redtube/mod.rs",
+                include_str!("../extractors/redtube/mod.rs"),
+            ),
+            (
+                "extractors/xtits/mod.rs",
+                include_str!("../extractors/xtits/mod.rs"),
+            ),
         ];
 
         for (label, src) in cases {
-            // Restrict to the production-code prefix; the `#[cfg(test)] mod tests`
-            // block contains the helpers in a different (test-only) order.
-            let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
-
-            let expand_pos = prod
+            // Production code always precedes any test module, so the FIRST
+            // occurrence of each helper is the production call. We deliberately
+            // do NOT split on `#[cfg(test)]`: some extractors declare
+            // `#[cfg(test)] mod tests;` (an external test file) near the TOP of
+            // the module, which would wrongly truncate the production body.
+            // First-occurrence is robust to test-module placement and still
+            // fails correctly if production omits a call (the only match would
+            // then be in test code, after the other call, or absent entirely).
+            let expand_pos = src
                 .find("expand_hls_in_place(")
                 .unwrap_or_else(|| panic!("`expand_hls_in_place(` call not found in {label}"));
-            let detect_pos = prod
+            let detect_pos = src
                 .find("detect_format_sizes_lazy(")
                 .unwrap_or_else(|| panic!("`detect_format_sizes_lazy(` call not found in {label}"));
 

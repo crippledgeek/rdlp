@@ -111,6 +111,16 @@ pub struct AppSettings {
     /// Validated post-load by `Config::validate()`: must be 0..=3600.
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
+    /// Total download timeout in seconds. `None` uses default (3600).
+    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
+    /// `Config::validate()`): must be 1..=86400.
+    #[serde(default)]
+    pub download_timeout: Option<u64>,
+    /// Merge (mux/concat) timeout in seconds. `None` uses default (1800).
+    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
+    /// `Config::validate()`): must be 1..=86400.
+    #[serde(default)]
+    pub merge_timeout: Option<u64>,
 }
 
 impl AppSettings {
@@ -228,6 +238,8 @@ impl Default for AppSettings {
             socket_timeout: None,
             read_timeout: None,
             pool_idle_timeout: None,
+            download_timeout: None,
+            merge_timeout: None,
         }
     }
 }
@@ -309,6 +321,22 @@ impl AppSettings {
             return Err(SettingsValidationError::TimeoutOutOfRange {
                 field: "pool_idle_timeout",
                 reason: "must be 0..=3600 seconds (0 = disabled)",
+            });
+        }
+        if let Some(t) = self.download_timeout
+            && !(1..=86400).contains(&t)
+        {
+            return Err(SettingsValidationError::TimeoutOutOfRange {
+                field: "download_timeout",
+                reason: "must be 1..=86400 seconds",
+            });
+        }
+        if let Some(t) = self.merge_timeout
+            && !(1..=86400).contains(&t)
+        {
+            return Err(SettingsValidationError::TimeoutOutOfRange {
+                field: "merge_timeout",
+                reason: "must be 1..=86400 seconds",
             });
         }
 
@@ -573,6 +601,8 @@ mod tests {
             socket_timeout: None,
             read_timeout: None,
             pool_idle_timeout: None,
+            download_timeout: None,
+            merge_timeout: None,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");

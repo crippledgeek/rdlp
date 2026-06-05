@@ -106,6 +106,19 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
         encoders: &[("libvvenc", "VVenC (VVC/H.266)")],
     },
     CodecEntry {
+        codec: "evc",
+        display_name: "EVC / MPEG-5",
+        encoders: &[("libxeve", "xeve (MPEG-5 EVC)")],
+    },
+    CodecEntry {
+        codec: "avs2",
+        display_name: "AVS2 / IEEE 1857.4",
+        encoders: &[("libxavs2", "xavs2 (AVS2)")],
+    },
+    // NOTE: APV (liboapv) intentionally NOT registered — it rejects standard
+    // 8-bit yuv420p web video (pro 4:2:2/10-bit intra codec), so it is not a
+    // viable recode target for downloaded content.
+    CodecEntry {
         codec: "theora",
         display_name: "Theora",
         encoders: &[("libtheora", "libtheora")],
@@ -323,6 +336,22 @@ mod tests {
         // Built-in encoders are always available
         let enc = resolve_encoder("mpeg4");
         assert_eq!(enc, Some("mpeg4"));
+    }
+
+    #[test]
+    fn test_evc_avs2_resolve_when_available() {
+        // EVC + AVS2 were registered in CODEC_PREFERENCES (Task 2). They resolve
+        // only when their encoders are built into this ffmpeg; gate on
+        // availability so a build without the codecs still passes.
+        if is_encoder_available("libxeve") {
+            assert_eq!(resolve_encoder("evc"), Some("libxeve"));
+            assert_eq!(resolve_encoder("libxeve"), Some("libxeve"));
+        }
+        if is_encoder_available("libxavs2") {
+            assert_eq!(resolve_encoder("avs2"), Some("libxavs2"));
+        }
+        // APV must NOT be registered (intentionally excluded).
+        assert_eq!(resolve_encoder("apv"), None);
     }
 
     #[test]

@@ -6251,6 +6251,7 @@ dependencies = [
  "rdlp-types",
  "regex",
  "scraper",
+ "semver 1.0.27",
  "serde",
  "serde_json",
  "sha2",

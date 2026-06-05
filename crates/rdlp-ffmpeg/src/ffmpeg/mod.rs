@@ -41,6 +41,8 @@
 
 mod audio_codecs;
 pub mod audio_encoder_registry;
+mod dts_synth;
+pub(crate) use dts_synth::DtsSynthesizer;
 mod encoding_tag;
 pub use encoding_tag::encoding_tool_tag;
 mod ffi_helpers;
