@@ -541,6 +541,7 @@ async fn mux_outputs(
             encoding_tool_override: Some(rdlp_ffmpeg::encoding_tool_tag("dash")),
             ..Default::default()
         };
+        // TODO(#340): DASH mux not cancel-gated — downloader cancellation is select!-based
         match runner
             .merge(video_path, audio_path, output_path, &opts, None, None)
             .await

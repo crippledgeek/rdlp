@@ -33,6 +33,7 @@ impl FFmpegRunner {
             output,
             opts.salvage,
             progress_fn,
+            cancel,
             |inp, out, ext, resilient, pfn| {
                 let ctx = EncodeCallCtx {
                     progress_fn: pfn,
@@ -93,6 +94,7 @@ impl FFmpegRunner {
             output,
             opts.salvage,
             progress_fn,
+            cancel,
             |inp, out, ext, resilient, pfn| {
                 let ctx = EncodeCallCtx {
                     progress_fn: pfn,
@@ -143,6 +145,7 @@ impl FFmpegRunner {
         output: &Path,
         salvage: bool,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
         encode_fn: impl Fn(
             &Path,
             &Path,
@@ -198,10 +201,8 @@ impl FFmpegRunner {
                 output,
                 &super::super::RemuxOptions::default(),
                 progress_fn,
-                // The cancel-gated encode loops run before this final stream-copy
-                // merge (see normalize encode helpers); this `dispatch_normalize_sync`
-                // does not receive a cancel token. None is correct.
-                None,
+                // Cancel-gate the final stream-copy merge for large files (#340).
+                cancel,
             );
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
             #[allow(clippy::disallowed_methods)]
