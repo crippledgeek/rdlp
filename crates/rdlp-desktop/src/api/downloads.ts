@@ -34,7 +34,19 @@ export async function startDownload(
 /** Cancel a running download. */
 export async function cancelDownload(jobId: string): Promise<void> {
     await invokeTyped<void>("cancel_download", { jobId });
-    await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
+    // Optimistic terminal flip. The backend sets JobStatus::Cancelled
+    // asynchronously and confirms via the "download-cancelled" event
+    // (registerDownloadEvents). We must NOT invalidateQueries here: a
+    // refetch would race the async cancel and read stale "running".
+    queryClient.setQueryData<DownloadJob[]>(
+        queryKeys.downloads.list(),
+        (old) =>
+            old?.map((job) =>
+                job.id === jobId
+                    ? { ...job, status: "cancelled", statusMessage: null, currentUnit: null, speed: null, eta: null, progress: null }
+                    : job,
+            ),
+    );
 }
 
 /** Remove a completed/failed/cancelled job from the queue. */
