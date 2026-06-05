@@ -86,27 +86,28 @@ async fn new_codecs_recode_and_mux() {
     // Creating the runner initializes the FFmpeg libs (so is_encoder_available works).
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
 
-    // EVC (libxeve) and VVC (libvvenc) recode cleanly end-to-end into their
-    // containers — assert them. VVC was fixed by aligning the encoder time_base
-    // with the frames fed to it and rescaling each frame's pts to the encoder
-    // (1/fps) tick base before `send_frame`: libvvenc derives `dts` from a
-    // frame-tick model while echoing `cts` (= frame->pts) verbatim, so feeding
-    // buffersink-tb pts produced `pts < dts` at the muxer. See the time_base
-    // rationale in `video_transcode_phases` Phase 2 / `drain_video_filter_to_encoder`.
+    // EVC (libxeve), VVC (libvvenc), and AVS2 (libxavs2) all recode cleanly
+    // end-to-end into their containers — assert them.
     //
-    // AVS2 (libxavs2) still FAILS with non-monotonic DTS — a SEPARATE, independent
-    // defect: the AVS2 codec descriptor lacks AV_CODEC_PROP_REORDER, so FFmpeg's
-    // encode path forces `dts = pts` (encode.c) even though libxavs2 emits a
-    // B-frame-reordered stream (bf=7 default). Packets then carry dts==pts in
-    // coding order → non-monotonic DTS at the muxer. Not fixable from rdlp's side
-    // without an FFmpeg patch adding the prop; tracked as a known-issue.
+    // VVC/AVS2 needed a two-part fix. (1) rdlp side: libvvenc/libxavs2 derive
+    // packet `dts` from a frame-tick model (driven by `framerate`) while echoing
+    // `cts` (= frame->pts) verbatim, so feeding buffersink-tb pts produced
+    // `pts < dts` at the muxer — fixed by rescaling each frame's pts to the
+    // encoder's 1/fps tick base before `send_frame` (see `video_transcode_phases`
+    // Phase 2 / `drain_video_filter_to_encoder`). (2) AVS2 also needed an FFmpeg
+    // patch: the AVS2 codec descriptor upstream lacks AV_CODEC_PROP_REORDER, so
+    // FFmpeg's encode path forced `dts = pts` on libxavs2's B-frame-reordered
+    // stream (bf=7) → non-monotonic DTS. The linked mediaforge FFmpeg carries a
+    // one-line `codec_desc.c` patch adding the prop. Both are required for AVS2.
+    // (AVS2 here is 8-bit yuv420p, decodable by libdavs2; 10-bit AVS2 is a
+    // libdavs2 decode dead-end and must be gated upstream of recode.)
     let assert_cases = [
         ("libxeve", "mkv", "evc"),
         ("libxeve", "mp4", "evc"),
         ("libvvenc", "mkv", "vvc"),
         ("libvvenc", "mp4", "vvc"),
+        ("libxavs2", "mkv", "avs2"),
     ];
-    let log_cases = [("libxavs2", "mkv")];
 
     let mut asserted = 0;
     for (enc, cont, expected) in assert_cases {
@@ -132,28 +133,7 @@ async fn new_codecs_recode_and_mux() {
         asserted += 1;
     }
 
-    // Informational: document the known AVS2 non-monotonic-DTS failure
-    // (missing AV_CODEC_PROP_REORDER → FFmpeg forces dts=pts on a reordered stream).
-    for (enc, cont) in log_cases {
-        if !is_encoder_available(enc) {
-            continue;
-        }
-        let out = dir.path().join(format!("known_{enc}.{cont}"));
-        let opts = VideoConvertOptions {
-            remux_only: false,
-            video_codec: Some(enc.to_string()),
-            audio_copy: false,
-            ..Default::default()
-        };
-        match runner.convert_video(&src, &out, &opts, None, None).await {
-            Ok(()) => eprintln!(
-                "NOTE {enc} -> {cont}: now succeeds — the transcode-timestamp follow-up may be fixed; promote to a hard assert."
-            ),
-            Err(e) => eprintln!("KNOWN-ISSUE {enc} -> {cont}: {e:?}"),
-        }
-    }
-
     if asserted == 0 {
-        eprintln!("[SKIP] no asserted encoder (libxeve/libvvenc) built into this FFmpeg");
+        eprintln!("[SKIP] no next-gen encoder (libxeve/libvvenc/libxavs2) built into this FFmpeg");
     }
 }
