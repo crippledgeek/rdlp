@@ -372,7 +372,7 @@ async fn download_representation(
             total += len;
             debug!("DASH repr {repr_id}: init resumed ({len} bytes)");
         } else {
-            let bytes = download_one(http, retry, &u, mpd_origin).await?;
+            let bytes = download_one(http, retry, &u, mpd_origin, cancel).await?;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
@@ -449,10 +449,11 @@ async fn download_representation(
             // fetch task, mirroring the fragment downloader's per-iteration
             // gate (fragments.rs:329). A cancel that fires mid-download stops
             // in-flight segment tasks from issuing further network round-trips.
-            // Checks before enqueueing each fetch; an in-flight segment body is
-            // not interrupted mid-read (no fetch_with_optional_cancel equivalent
-            // for DASH yet — new fetches stop on cancel, which covers the
-            // common case).
+            // The check below short-circuits a segment whose task starts after
+            // cancel; an in-flight segment body is ALSO interrupted mid-read by
+            // the `biased` select! inside `download_one` (this PR — matches the
+            // fragment downloader's `fetch_with_optional_cancel` fidelity), so a
+            // stalled CDN body no longer blocks until `read_timeout` fires.
             if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
                 return Err(RdlpError::Cancelled);
             }
@@ -465,7 +466,7 @@ async fn download_representation(
             })?;
 
             let fetch_start = Instant::now();
-            let bytes = download_one(&http, &retry, &u, &mpd_origin).await?;
+            let bytes = download_one(&http, &retry, &u, &mpd_origin, cancel.as_ref()).await?;
             let len = bytes.len() as u64;
             let elapsed = fetch_start.elapsed();
 
@@ -644,6 +645,7 @@ async fn download_one(
     retry: &Arc<RetryConfig>,
     url: &Url,
     mpd_origin: &url::Origin,
+    cancel: Option<&CancellationToken>,
 ) -> Result<Vec<u8>> {
     let client = http.client().clone();
     // Same-origin header gate (issue #319). When the segment URL's origin
@@ -657,7 +659,10 @@ async fn download_one(
     };
     let backoff = retry.to_backoff();
     let url_str = url.to_string();
-    (|| {
+    // The retried fetch future (send + status check + body read, with backoff).
+    // All existing retry/backoff/header-gate/timeout logic is preserved inside
+    // it unchanged.
+    let fetch = (|| {
         let client = client.clone();
         let headers = headers.clone();
         let url_str = url_str.clone();
@@ -691,8 +696,24 @@ async fn download_one(
     .when(is_retryable_error)
     .notify(|err, dur| {
         warn!("DASH segment fetch retry after {dur:?}: {err}");
-    })
-    .await
+    });
+
+    // Mid-read cancel: race the retried fetch against the cancel token so an
+    // in-flight `send()`/`bytes()` (or a stalled CDN body) aborts immediately
+    // instead of blocking until `read_timeout` fires. Mirrors the fragment
+    // downloader's `fetch_with_optional_cancel` (fragments.rs:396) — `biased`
+    // gives the cancel arm priority. When no token is supplied, await the
+    // fetch directly.
+    match cancel {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => Err(RdlpError::Cancelled),
+                res = fetch => res,
+            }
+        }
+        None => fetch.await,
+    }
 }
 
 #[cfg(test)]
@@ -771,6 +792,69 @@ mod cancel_tests {
             "expected Cancelled on a pre-cancelled token, got: {res:?}"
         );
     }
+
+    /// Generous ceiling over the ~100ms expected cancel latency; must stay far
+    /// below the 30s mock body-stall so a regressed (non-interrupting) read trips it.
+    const MID_READ_CANCEL_TIMEOUT_SECS: u64 = 5;
+
+    /// Negative (mid-read interrupt, this PR): a cancel that fires while a
+    /// segment body is IN-FLIGHT must abort `download_one` immediately via the
+    /// `biased` select! wrapper — NOT wait for the body to finish or for the
+    /// `read_timeout` to fire. The mockito mock writes one chunk then sleeps
+    /// 30s inside `with_chunked_body`, stalling the body read. We cancel the
+    /// token ~100ms after spawning the fetch and assert it returns `Cancelled`
+    /// well under the 30s stall (the whole test is wrapped in a 5s timeout —
+    /// if the select! were absent, the read would block on the stalled chunk
+    /// and the test-level timeout would elapse instead of `Cancelled`).
+    #[tokio::test]
+    async fn download_one_cancel_interrupts_in_flight_read() {
+        let mut server = mockito::Server::new_async().await;
+        // Write the first byte, then stall for 30s before completing the body.
+        // This holds the connection open mid-read so the `resp.bytes()` future
+        // inside `download_one` is parked when the cancel fires.
+        let _mock = server
+            .mock("GET", "/seg.m4s")
+            .with_chunked_body(|w| {
+                w.write_all(b"x")?;
+                w.flush()?;
+                std::thread::sleep(Duration::from_secs(30));
+                w.write_all(b"y")
+            })
+            .create_async()
+            .await;
+
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let retry = fast_retry();
+        let mpd_url = format!("{}/manifest.mpd", server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
+
+        let token = CancellationToken::new();
+        let token_for_fetch = token.clone();
+
+        let fetch = tokio::spawn(async move {
+            download_one(&http, &retry, &seg_url, &mpd_origin, Some(&token_for_fetch)).await
+        });
+
+        // Let the request reach the server and park on the stalled body, then
+        // cancel.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+
+        // The fetch must resolve to `Cancelled` quickly — well under the 30s
+        // server stall and the read_timeout. A 5s ceiling generously bounds
+        // scheduling jitter while still failing loudly if the in-flight read
+        // is NOT interrupted.
+        let res = tokio::time::timeout(Duration::from_secs(MID_READ_CANCEL_TIMEOUT_SECS), fetch)
+            .await
+            .expect("download_one did not return within MID_READ_CANCEL_TIMEOUT_SECS s — in-flight read was not interrupted")
+            .expect("fetch task panicked");
+
+        assert!(
+            matches!(res, Err(RdlpError::Cancelled)),
+            "expected Cancelled on mid-read cancel, got: {res:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -821,7 +905,7 @@ mod same_origin_gate_tests {
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin)
+        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin, None)
             .await
             .expect("same-origin segment fetch must succeed");
         assert_eq!(&bytes[..], b"abcd");
@@ -860,7 +944,7 @@ mod same_origin_gate_tests {
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", cdn_server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin)
+        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin, None)
             .await
             .expect("cross-origin segment fetch must succeed without leaking headers");
         assert_eq!(&bytes[..], b"abcd");
@@ -901,7 +985,7 @@ mod same_origin_gate_tests {
         );
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &opaque_origin)
+        let bytes = download_one(&http, &retry, &seg_url, &opaque_origin, None)
             .await
             .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
         assert_eq!(&bytes[..], b"abcd");
