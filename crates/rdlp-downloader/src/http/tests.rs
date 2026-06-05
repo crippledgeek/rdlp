@@ -74,7 +74,13 @@ async fn test_resume_fails_when_server_returns_200() {
 
     // Try to resume - should fail with error, NOT overwrite the file
     let result = downloader
-        .download_with_resume(&format!("{}/video.mp4", server.url()), path, 1000, None)
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
         .await;
 
     mock.assert_async().await;
@@ -551,7 +557,7 @@ async fn test_parallel_resume() {
 
     // Resume download - should use parallel resume
     let result = downloader
-        .download_with_resume(&url, &output, already_downloaded, None)
+        .download_with_resume(&url, &output, already_downloaded, None, None)
         .await;
 
     // Verify success

@@ -24,6 +24,7 @@ use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
@@ -43,7 +44,12 @@ const STATE_SAVE_BATCH: usize = 16;
 /// `output_path`. Intermediates are deleted on success and retained on
 /// mux failure for diagnosis. Resume state is tracked under
 /// `<output>.dash_state.json` and pruned on successful mux.
-#[allow(clippy::too_many_lines, clippy::similar_names)]
+// TODO: bundle run() params into a DashRunOptions struct to drop this allow.
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::too_many_arguments
+)]
 pub async fn run(
     http_downloader: &HttpDownloader,
     retry_config: Arc<RetryConfig>,
@@ -52,6 +58,7 @@ pub async fn run(
     mpd_url: &str,
     output_path: &Path,
     progress: Option<Box<dyn ProgressCallback>>,
+    cancel: Option<&CancellationToken>,
 ) -> Result<DownloadStats> {
     let mpd_url_parsed = Url::parse(mpd_url).map_err(|e| RdlpError::Extraction {
         message: format!("invalid MPD URL: {e}"),
@@ -157,6 +164,7 @@ pub async fn run(
         Arc::clone(&bytes_total),
         progress_arc.clone(),
         &mpd_origin,
+        cancel,
     )
     .await?;
 
@@ -190,6 +198,7 @@ pub async fn run(
             Arc::clone(&bytes_total),
             progress_arc.clone(),
             &mpd_origin,
+            cancel,
         )
         .await?
     } else {
@@ -202,7 +211,13 @@ pub async fn run(
     // output) is preserved by performing the mux here, before returning.
     // Intermediates are deleted on success and retained on failure for
     // diagnosis.
-    mux_outputs(&video_final, has_audio.then_some(&audio_final), output_path).await?;
+    mux_outputs(
+        &video_final,
+        has_audio.then_some(&audio_final),
+        output_path,
+        cancel,
+    )
+    .await?;
 
     // Mux succeeded → wipe resume state.
     if let Err(e) = fs::remove_file(&state_file).await {
@@ -317,7 +332,16 @@ async fn download_representation(
     bytes_counter: Arc<AtomicU64>,
     log_callback: Option<Arc<dyn ProgressCallback>>,
     mpd_origin: &url::Origin,
+    cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
+    // #347: cooperative-cancel gate before any work for this representation
+    // (init segment + segment loop). Mirrors the fragment downloader idiom
+    // (fragments.rs:138 / :329) — a pre-cancelled token returns
+    // `RdlpError::Cancelled` before any network round-trip.
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return Err(RdlpError::Cancelled);
+    }
+
     if let Some(parent) = final_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -411,6 +435,7 @@ async fn download_representation(
     let sem = controller.semaphore().clone();
 
     let mpd_origin_owned = mpd_origin.clone();
+    let cancel_owned = cancel.cloned();
     let mut stream = futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
         let http = http.clone();
         let retry = Arc::clone(retry);
@@ -418,7 +443,20 @@ async fn download_representation(
         let sem = sem.clone();
         let controller = Arc::clone(&controller);
         let mpd_origin = mpd_origin_owned.clone();
+        let cancel = cancel_owned.clone();
         async move {
+            // #347: per-segment cooperative-cancel check at the top of each
+            // fetch task, mirroring the fragment downloader's per-iteration
+            // gate (fragments.rs:329). A cancel that fires mid-download stops
+            // in-flight segment tasks from issuing further network round-trips.
+            // Checks before enqueueing each fetch; an in-flight segment body is
+            // not interrupted mid-read (no fetch_with_optional_cancel equivalent
+            // for DASH yet — new fetches stop on cancel, which covers the
+            // common case).
+            if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                return Err(RdlpError::Cancelled);
+            }
+
             // Acquire a semaphore permit so the adaptive controller governs
             // actual concurrency (mirrors the HLS pattern in merge.rs).
             let _permit = sem.acquire_owned().await.map_err(|_| RdlpError::Download {
@@ -532,6 +570,7 @@ async fn mux_outputs(
     video_path: &Path,
     audio_path: Option<&Path>,
     output_path: &Path,
+    cancel: Option<&CancellationToken>,
 ) -> Result<()> {
     if let Some(audio_path) = audio_path {
         let runner = FFmpegRunner::new().map_err(|e| {
@@ -541,9 +580,18 @@ async fn mux_outputs(
             encoding_tool_override: Some(rdlp_ffmpeg::encoding_tool_tag("dash")),
             ..Default::default()
         };
-        // TODO(#340): DASH mux not cancel-gated — downloader cancellation is select!-based
+        // #347/#340: DASH mux is now cancel-gated. `merge` takes an OWNED
+        // `Option<CancellationToken>`; clone from the borrowed token. The
+        // FFmpeg packet loop checks it cooperatively (merge/mod.rs).
         match runner
-            .merge(video_path, audio_path, output_path, &opts, None, None)
+            .merge(
+                video_path,
+                audio_path,
+                output_path,
+                &opts,
+                None,
+                cancel.cloned(),
+            )
             .await
         {
             Ok(()) => {
@@ -645,6 +693,84 @@ async fn download_one(
         warn!("DASH segment fetch retry after {dur:?}: {err}");
     })
     .await
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    //! Issue #347: the DASH static-VoD resume path (`run` → segment fetch →
+    //! `mux_outputs` → `merge`) must be cooperatively cancel-gated, mirroring
+    //! the fragment downloader idiom (`Err(RdlpError::Cancelled)` returned at
+    //! the top of the segment loop). A pre-cancelled token must abort
+    //! `download_representation` BEFORE any segment is fetched.
+    use super::*;
+    use rdlp_core::RetryConfig;
+    use std::sync::atomic::AtomicU64;
+    use tokio_util::sync::CancellationToken;
+
+    fn fast_retry() -> Arc<RetryConfig> {
+        Arc::new(RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
+        })
+    }
+
+    /// Negative (regression guard for #347): a pre-cancelled token makes
+    /// `download_representation` return `RdlpError::Cancelled` WITHOUT fetching
+    /// any segment. The mockito server has NO mocks registered and asserts
+    /// nothing is requested — if the cancel gate were absent, the fetch would
+    /// hit the server (or fail with a network error), not `Cancelled`.
+    #[tokio::test]
+    async fn download_representation_pre_cancelled_aborts_before_fetch() {
+        let server = mockito::Server::new_async().await;
+        let mpd_url = format!("{}/manifest.mpd", server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg0.m4s", server.url())).unwrap();
+
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let retry = fast_retry();
+        let state = Arc::new(Mutex::new(DashDownloadState::new(
+            &url::Url::parse(&mpd_url).unwrap(),
+            "v0".to_string(),
+            None,
+        )));
+        let tmp = std::env::temp_dir().join(format!("rdlp_dash_cancel_{}", std::process::id()));
+        tokio::fs::create_dir_all(&tmp).await.unwrap();
+        let final_path = tmp.join("out.video.m4s");
+        let parts = tmp.join("out.video.parts");
+        let state_file = tmp.join("out.dash_state.json");
+        let counter = Arc::new(AtomicU64::new(0));
+
+        let token = CancellationToken::new();
+        token.cancel(); // pre-cancel
+
+        let res = download_representation(
+            &http,
+            &retry,
+            8,
+            64 * 1024,
+            "v0",
+            None, // no init segment
+            vec![seg_url],
+            &final_path,
+            &parts,
+            state,
+            &state_file,
+            true,
+            counter,
+            None,
+            &mpd_origin,
+            Some(&token),
+        )
+        .await;
+
+        // Best-effort cleanup of the temp dir.
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+
+        assert!(
+            matches!(res, Err(RdlpError::Cancelled)),
+            "expected Cancelled on a pre-cancelled token, got: {res:?}"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -165,6 +165,9 @@ impl Downloader for DashDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
+        // No cancel token at this entry point (the trait method has no cancel
+        // slot); the cancel-aware path is `download_with_resume`, which the
+        // orchestrator uses for the resume case (#347).
         download::run(
             &self.http_downloader,
             Arc::clone(&self.retry_config),
@@ -173,6 +176,34 @@ impl Downloader for DashDownloader {
             url,
             path,
             progress,
+            None,
+        )
+        .await
+    }
+
+    /// DASH resume entry point. The legacy MPD-URL path does not support byte
+    /// offset resume (it resumes per-segment via `<output>.dash_state.json`),
+    /// so `resume_from` is ignored. The override exists to thread `cancel`
+    /// into `download::run` so the segment loop and final mux are
+    /// cooperatively cancel-gated rather than relying solely on the
+    /// orchestrator's outer `select!` (#347).
+    async fn download_with_resume(
+        &self,
+        url: &str,
+        path: &Path,
+        _resume_from: u64,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<DownloadStats> {
+        download::run(
+            &self.http_downloader,
+            Arc::clone(&self.retry_config),
+            self.concurrent_segments,
+            self.buffer_size,
+            url,
+            path,
+            progress,
+            cancel,
         )
         .await
     }
