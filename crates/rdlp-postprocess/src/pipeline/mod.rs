@@ -245,7 +245,11 @@ impl Pipeline {
         let current_files = tokio::task::spawn_blocking(move || {
             let mut tracker = final_msg.tracker;
             tracker.cleanup();
-            tracker.current_files
+            // `cleanup()` set `committed = true`, disarming the cancel-cleanup
+            // `Drop`. `FileTracker` now implements `Drop`, so the renamed final
+            // files can't be moved out of the field directly — take them,
+            // leaving the dropped tracker empty (and already committed).
+            std::mem::take(&mut tracker.current_files)
         })
         .await
         .map_err(|e| anyhow::anyhow!("pipeline cleanup task join failed: {e}"))?;
