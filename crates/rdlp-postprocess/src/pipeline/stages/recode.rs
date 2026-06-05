@@ -93,9 +93,14 @@ impl RecodeStage {
     /// FFmpeg-shipped defaults.
     fn default_preset_crf_for_codec(target_codec: &str) -> (Option<String>, Option<u32>) {
         match target_codec {
-            "h264" | "h265" | "hevc" | "vvc" | "h266" => (Some("medium".to_string()), Some(23)),
+            "h264" => (Some("medium".to_string()), Some(23)),
+            // x265's native default is 28; reusing x264's 23 on x265 is ~5 CRF
+            // points too low and yields oversized HEVC output.
+            "h265" | "hevc" => (Some("medium".to_string()), Some(28)),
             "vp9" | "vp8" => (None, Some(30)),
             "av1" => (None, Some(28)),
+            // VVC/EVC/AVS/APV are not x264-style-CRF encoders (libvvenc/libxavs2
+            // take qp+preset; libxeve needs rc_mode=CRF) — defer to encoder defaults.
             _ => (None, None),
         }
     }
@@ -147,18 +152,17 @@ impl RecodeStage {
     }
 
     fn default_preset_crf(encoder: &str) -> (Option<String>, Option<u32>) {
-        if encoder.contains("264") || encoder.contains("265") || encoder.contains("kvazaar") {
-            (Some("medium".to_string()), Some(23))
-        } else if encoder.contains("vpx") {
-            (None, Some(30))
-        } else if encoder.contains("av1")
-            || encoder.contains("svt")
-            || encoder.contains("aom")
-            || encoder.contains("rav1e")
-        {
-            (None, Some(28))
-        } else {
-            (None, None)
+        // Explicit per-encoder match (not substring): x265's default crf is 28,
+        // not x264's 23; and libopenh264/kvazaar (substring "264"/"kvazaar") are
+        // NOT x264-style-CRF encoders, so they must NOT inherit crf 23.
+        match encoder {
+            "libx264" | "libx264rgb" => (Some("medium".to_string()), Some(23)),
+            "libx265" => (Some("medium".to_string()), Some(28)),
+            "libvpx-vp9" | "libvpx" => (None, Some(30)),
+            "libsvtav1" | "libaom-av1" | "librav1e" => (None, Some(28)),
+            // libvvenc/libxeve/libxavs2/liboapv/libkvazaar/libopenh264/… defer to
+            // the encoder's own rate control.
+            _ => (None, None),
         }
     }
 }
@@ -389,6 +393,49 @@ mod tests {
     use rdlp_types::PostProcess;
 
     use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
+
+    #[test]
+    fn hevc_default_crf_is_28_not_23() {
+        assert_eq!(
+            RecodeStage::default_preset_crf_for_codec("h265"),
+            (Some("medium".into()), Some(28))
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf_for_codec("hevc"),
+            (Some("medium".into()), Some(28))
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf("libx265"),
+            (Some("medium".into()), Some(28))
+        );
+    }
+
+    #[test]
+    fn h264_default_crf_stays_23() {
+        assert_eq!(
+            RecodeStage::default_preset_crf_for_codec("h264"),
+            (Some("medium".into()), Some(23))
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf("libx264"),
+            (Some("medium".into()), Some(23))
+        );
+    }
+
+    #[test]
+    fn new_codecs_get_no_forced_crf() {
+        assert_eq!(RecodeStage::default_preset_crf("libvvenc"), (None, None));
+        assert_eq!(RecodeStage::default_preset_crf("libxeve"), (None, None));
+        assert_eq!(RecodeStage::default_preset_crf("libxavs2"), (None, None));
+        assert_eq!(
+            RecodeStage::default_preset_crf_for_codec("vvc"),
+            (None, None)
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf_for_codec("h266"),
+            (None, None)
+        );
+    }
 
     fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
