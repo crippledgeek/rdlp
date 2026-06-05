@@ -105,6 +105,14 @@ impl RecodeStage {
         }
     }
 
+    /// Whether `encoder` can be muxed into `target`. AVS2 (`libxavs2`) only
+    /// muxes into Matroska — `libxavs2 -> MP4` writes nothing — so a recode to
+    /// any other container must be refused with a clear reason rather than
+    /// producing an empty file.
+    fn encoder_container_compatible(encoder: &str, target: ContainerFormat) -> bool {
+        encoder != "libxavs2" || matches!(target, ContainerFormat::Mkv)
+    }
+
     /// Build video conversion options.
     ///
     /// Returns `None` when an explicit encoder override is requested but not
@@ -124,16 +132,6 @@ impl RecodeStage {
 
         if let Some(ref requested) = params.encoder_override {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
-            // AVS2 only muxes into Matroska (verified: libxavs2 -> MP4 writes
-            // nothing). Reject other containers up front instead of producing an
-            // empty output file.
-            if encoder_name == "libxavs2" && params.target != ContainerFormat::Mkv {
-                warn!(
-                    "AVS2 (libxavs2) is only supported in MKV; requested container {:?} — skipping recode",
-                    params.target
-                );
-                return None;
-            }
             let (preset, crf) = Self::default_preset_crf(encoder_name);
             return Some(VideoConvertOptions {
                 remux_only: false,
@@ -288,6 +286,21 @@ impl PipelineStage for RecodeStage {
         };
 
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
+
+        // Refuse a container-incompatible encoder up front with a TRUTHFUL error
+        // (distinct from the generic "encoder not available" below) — e.g. AVS2
+        // into MP4. Only relevant when actually transcoding (not remuxing).
+        if !can_remux
+            && let Some(req) = msg.config.video_encoder.as_deref()
+            && let Some(enc) = video_codecs::resolve_encoder(req)
+            && !Self::encoder_container_compatible(enc, target)
+        {
+            return Err(PostProcessError::UnsupportedFormat {
+                format: enc.to_string(),
+                operation: format!("{enc} only muxes into MKV; requested container {target:?}"),
+            }
+            .into());
+        }
 
         let Some(mut opts) = Self::build_convert_options(
             &RecodeParams {
@@ -546,33 +559,31 @@ mod tests {
     }
 
     #[test]
-    fn avs2_recode_rejected_for_non_mkv_allowed_for_mkv() {
-        // AVS2 only muxes into Matroska. Gate on availability so a build without
-        // libxavs2 (where resolve_encoder returns None for an unrelated reason)
-        // doesn't produce a misleading result.
-        if !video_codecs::is_encoder_available("libxavs2") {
-            return;
-        }
-        let mkv = RecodeParams {
-            target: ContainerFormat::Mkv,
-            encoder_override: Some("libxavs2".to_string()),
-            audio_copy: true,
-            audio_codec: None,
-        };
-        assert!(
-            RecodeStage::build_convert_options(&mkv, false).is_some(),
-            "AVS2 -> MKV must be allowed"
-        );
-        let mp4 = RecodeParams {
-            target: ContainerFormat::Mp4,
-            encoder_override: Some("libxavs2".to_string()),
-            audio_copy: true,
-            audio_codec: None,
-        };
-        assert!(
-            RecodeStage::build_convert_options(&mp4, false).is_none(),
-            "AVS2 -> MP4 must be rejected (no AVS2 mapping in MP4)"
-        );
+    fn avs2_only_muxes_into_mkv() {
+        // AVS2 (libxavs2) recode is refused for non-MKV containers (the caller
+        // turns this into a truthful "only muxes into MKV" error). Pure helper,
+        // no FFmpeg needed.
+        assert!(!RecodeStage::encoder_container_compatible(
+            "libxavs2",
+            ContainerFormat::Mp4
+        ));
+        assert!(!RecodeStage::encoder_container_compatible(
+            "libxavs2",
+            ContainerFormat::WebM
+        ));
+        assert!(RecodeStage::encoder_container_compatible(
+            "libxavs2",
+            ContainerFormat::Mkv
+        ));
+        // Other encoders are unaffected by the AVS2-specific guard.
+        assert!(RecodeStage::encoder_container_compatible(
+            "libx265",
+            ContainerFormat::Mp4
+        ));
+        assert!(RecodeStage::encoder_container_compatible(
+            "libvvenc",
+            ContainerFormat::Mp4
+        ));
     }
 
     #[test]
