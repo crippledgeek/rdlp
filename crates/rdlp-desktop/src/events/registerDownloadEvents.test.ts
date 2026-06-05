@@ -46,6 +46,29 @@ describe("registerDownloadEvents", () => {
         qc.clear();
     });
 
+    it("transitions a running job to cancelled on download-cancelled", async () => {
+        const job = makeJob({
+            id: "j1",
+            status: "running",
+            statusMessage: "Video — 47%",
+            progress: 0.47,
+            speed: "4.2 MB/s",
+            eta: "0:12",
+            currentUnit: { unitTitle: "Video", unitIndex: 1, unitTotal: 2 },
+        });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        await mockEmit("download-cancelled", { jobId: "j1" });
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        expect(jobs[0]!.status).toBe("cancelled");
+        expect(jobs[0]!.statusMessage).toBeNull();
+        expect(jobs[0]!.currentUnit).toBeNull();
+        expect(jobs[0]!.speed).toBeNull();
+        expect(jobs[0]!.eta).toBeNull();
+        expect(jobs[0]!.progress).toBeNull();
+    });
+
     it("appends a log message to logMessages on download-log event", async () => {
         const job = makeJob({ id: "job-42" });
         qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);

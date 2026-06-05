@@ -12,6 +12,7 @@ import {
     onDownloadProgress,
     onDownloadComplete,
     onDownloadError,
+    onDownloadCancelled,
     onDownloadLog,
     onFormatSelected,
     onPostProcessProgress,
@@ -133,6 +134,30 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                                   status: "failed" as const,
                                   error: p.error,
                                   retryable: p.retryable,
+                              }
+                            : job,
+                    ),
+            );
+        }),
+    );
+
+    unlisteners.push(
+        onDownloadCancelled((p) => {
+            if (!mounted) return;
+            pending.delete(p.jobId);
+            qc.setQueryData<DownloadJob[]>(
+                queryKeys.downloads.list(),
+                (old) =>
+                    old?.map((job) =>
+                        job.id === p.jobId
+                            ? {
+                                  ...job,
+                                  status: "cancelled" as const,
+                                  statusMessage: null,
+                                  currentUnit: null,
+                                  speed: null,
+                                  eta: null,
+                                  progress: null,
                               }
                             : job,
                     ),
