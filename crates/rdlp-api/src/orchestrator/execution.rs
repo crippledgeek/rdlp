@@ -119,11 +119,24 @@ impl Orchestrator {
         // The outer `cancelled()` arm remains as a fallback for pre-start
         // cancellation, the cancel-less trait methods (download_to_writer,
         // download_with_resume), and third-party Downloader impls that
-        // ignore the cancel parameter. Both arms produce Ok(None);
-        // whichever fires is acceptable.
+        // ignore the cancel parameter.
+        //
+        // Both arms produce Ok(None) on user-cancellation: the `cancelled()`
+        // arm directly, and the `download_future` arm by mapping a cooperative
+        // `RdlpError::Cancelled` (which the downloader returns when its own
+        // cancel gate wins the race) to Ok(None). Any OTHER error from the
+        // download future is mapped to `OrchestratorError::DownloadFailed`.
         let stats = tokio::select! {
             result = download_future => {
-                result.map_err(OrchestratorError::DownloadFailed)?
+                match result {
+                    Ok(stats) => stats,
+                    Err(rdlp_core::RdlpError::Cancelled) => {
+                        debug!("Download cancelled cooperatively");
+                        info!("Progress saved. Run the same command again to resume.");
+                        return Ok(None);
+                    }
+                    Err(e) => return Err(OrchestratorError::DownloadFailed(e)),
+                }
             }
             () = self.cancel_token.cancelled() => {
                 debug!("Download interrupted by cancellation");
@@ -167,9 +180,19 @@ impl Orchestrator {
 
         let download_future = downloader.download_to_writer(url, writer, progress_callback);
 
+        // As in `execute_download`: a cooperative `RdlpError::Cancelled` from
+        // the download future is user-cancellation (Ok(None)); other errors map
+        // to `OrchestratorError::DownloadFailed`.
         let stats = tokio::select! {
             result = download_future => {
-                result.map_err(OrchestratorError::DownloadFailed)?
+                match result {
+                    Ok(stats) => stats,
+                    Err(rdlp_core::RdlpError::Cancelled) => {
+                        debug!("Download to stdout cancelled cooperatively");
+                        return Ok(None);
+                    }
+                    Err(e) => return Err(OrchestratorError::DownloadFailed(e)),
+                }
             }
             () = self.cancel_token.cancelled() => {
                 debug!("Download to stdout interrupted by cancellation");
@@ -178,5 +201,202 @@ impl Orchestrator {
         };
 
         Ok(Some(stats))
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::missing_docs_in_private_items,
+    clippy::unnecessary_literal_bound
+)]
+mod tests {
+    use super::*;
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use async_trait::async_trait;
+    use rdlp_core::{DownloadStats, RdlpError, Result as CoreResult};
+    use rdlp_types::{Config, DownloadProtocol, Format};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    /// Downloader stub whose download methods return `RdlpError::Cancelled`
+    /// cooperatively (mirrors the fragment/HTTP/DASH downloaders' behaviour
+    /// when their cancel gate wins the race against the `cancelled()` arm).
+    struct CancellingDownloader;
+
+    #[async_trait]
+    impl Downloader for CancellingDownloader {
+        fn protocol(&self) -> &str {
+            "stub-cancel"
+        }
+
+        async fn download_to_file(
+            &self,
+            _url: &str,
+            _path: &Path,
+            _progress: Option<Box<dyn ProgressCallback>>,
+        ) -> CoreResult<DownloadStats> {
+            Err(RdlpError::Cancelled)
+        }
+
+        fn supports(&self, _url: &str) -> bool {
+            true
+        }
+
+        async fn download_with_resume(
+            &self,
+            _url: &str,
+            _path: &Path,
+            _resume_from: u64,
+            _progress: Option<Box<dyn ProgressCallback>>,
+            _cancel: Option<&tokio_util::sync::CancellationToken>,
+        ) -> CoreResult<DownloadStats> {
+            Err(RdlpError::Cancelled)
+        }
+
+        async fn download_to_writer(
+            &self,
+            _url: &str,
+            _writer: Box<dyn AsyncWrite + Unpin + Send>,
+            _progress: Option<Box<dyn ProgressCallback>>,
+        ) -> CoreResult<DownloadStats> {
+            Err(RdlpError::Cancelled)
+        }
+    }
+
+    /// Downloader stub whose download methods return a non-cancellation error
+    /// (must still be classified as `DownloadFailed`).
+    struct FailingDownloader;
+
+    #[async_trait]
+    impl Downloader for FailingDownloader {
+        fn protocol(&self) -> &str {
+            "stub-fail"
+        }
+
+        async fn download_to_file(
+            &self,
+            _url: &str,
+            _path: &Path,
+            _progress: Option<Box<dyn ProgressCallback>>,
+        ) -> CoreResult<DownloadStats> {
+            Err(RdlpError::Other("boom".to_string()))
+        }
+
+        fn supports(&self, _url: &str) -> bool {
+            true
+        }
+
+        async fn download_to_writer(
+            &self,
+            _url: &str,
+            _writer: Box<dyn AsyncWrite + Unpin + Send>,
+            _progress: Option<Box<dyn ProgressCallback>>,
+        ) -> CoreResult<DownloadStats> {
+            Err(RdlpError::Other("boom".to_string()))
+        }
+    }
+
+    fn test_orchestrator() -> Orchestrator {
+        let config = Arc::new(Config::default());
+        let (tx, _rx) = mpsc::channel::<Event>(64);
+        let id = DownloadId::next();
+        // A live (uncancelled) token: the download_future arm must win the race
+        // by returning RdlpError::Cancelled, not the cancelled() arm.
+        let token = CancellationToken::new();
+        Orchestrator::new(config, tx, id, token, None)
+    }
+
+    fn test_format() -> Format {
+        Format::new(
+            "f1",
+            "https://example.com/video.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        )
+    }
+
+    #[tokio::test]
+    async fn execute_download_classifies_cooperative_cancelled_as_cancelled() {
+        let orch = test_orchestrator();
+        let downloader: Arc<dyn Downloader> = Arc::new(CancellingDownloader);
+        let path = Path::new("/tmp/rdlp-test-cancel-output.mp4");
+
+        // resume_from = 0 → download_format path.
+        let result = orch
+            .execute_download(&downloader, &test_format(), path, 0, None)
+            .await;
+
+        assert!(
+            matches!(result, Ok(None)),
+            "cooperative RdlpError::Cancelled must be classified as cancelled (Ok(None)), got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_download_resume_classifies_cooperative_cancelled_as_cancelled() {
+        let orch = test_orchestrator();
+        let downloader: Arc<dyn Downloader> = Arc::new(CancellingDownloader);
+        let path = Path::new("/tmp/rdlp-test-cancel-resume.mp4");
+
+        // resume_from > 0 → download_with_resume path.
+        let result = orch
+            .execute_download(&downloader, &test_format(), path, 1024, None)
+            .await;
+
+        assert!(
+            matches!(result, Ok(None)),
+            "cooperative RdlpError::Cancelled on resume path must be Ok(None), got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_download_other_error_still_fails() {
+        let orch = test_orchestrator();
+        let downloader: Arc<dyn Downloader> = Arc::new(FailingDownloader);
+        let path = Path::new("/tmp/rdlp-test-fail-output.mp4");
+
+        let result = orch
+            .execute_download(&downloader, &test_format(), path, 0, None)
+            .await;
+
+        assert!(
+            matches!(result, Err(OrchestratorError::DownloadFailed(_))),
+            "non-cancellation errors must still be DownloadFailed, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_download_to_writer_classifies_cooperative_cancelled_as_cancelled() {
+        let orch = test_orchestrator();
+        let downloader: Arc<dyn Downloader> = Arc::new(CancellingDownloader);
+        let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Vec::<u8>::new());
+
+        let result = orch
+            .execute_download_to_writer(&downloader, "https://example.com/video.mp4", writer)
+            .await;
+
+        assert!(
+            matches!(result, Ok(None)),
+            "cooperative RdlpError::Cancelled (writer path) must be Ok(None), got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_download_to_writer_other_error_still_fails() {
+        let orch = test_orchestrator();
+        let downloader: Arc<dyn Downloader> = Arc::new(FailingDownloader);
+        let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(Vec::<u8>::new());
+
+        let result = orch
+            .execute_download_to_writer(&downloader, "https://example.com/video.mp4", writer)
+            .await;
+
+        assert!(
+            matches!(result, Err(OrchestratorError::DownloadFailed(_))),
+            "non-cancellation errors (writer path) must still be DownloadFailed, got: {result:?}"
+        );
     }
 }
