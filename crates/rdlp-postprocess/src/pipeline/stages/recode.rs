@@ -124,6 +124,16 @@ impl RecodeStage {
 
         if let Some(ref requested) = params.encoder_override {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
+            // AVS2 only muxes into Matroska (verified: libxavs2 -> MP4 writes
+            // nothing). Reject other containers up front instead of producing an
+            // empty output file.
+            if encoder_name == "libxavs2" && params.target != ContainerFormat::Mkv {
+                warn!(
+                    "AVS2 (libxavs2) is only supported in MKV; requested container {:?} — skipping recode",
+                    params.target
+                );
+                return None;
+            }
             let (preset, crf) = Self::default_preset_crf(encoder_name);
             return Some(VideoConvertOptions {
                 remux_only: false,
@@ -533,6 +543,36 @@ mod tests {
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
+    }
+
+    #[test]
+    fn avs2_recode_rejected_for_non_mkv_allowed_for_mkv() {
+        // AVS2 only muxes into Matroska. Gate on availability so a build without
+        // libxavs2 (where resolve_encoder returns None for an unrelated reason)
+        // doesn't produce a misleading result.
+        if !video_codecs::is_encoder_available("libxavs2") {
+            return;
+        }
+        let mkv = RecodeParams {
+            target: ContainerFormat::Mkv,
+            encoder_override: Some("libxavs2".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+        };
+        assert!(
+            RecodeStage::build_convert_options(&mkv, false).is_some(),
+            "AVS2 -> MKV must be allowed"
+        );
+        let mp4 = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: Some("libxavs2".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+        };
+        assert!(
+            RecodeStage::build_convert_options(&mp4, false).is_none(),
+            "AVS2 -> MP4 must be rejected (no AVS2 mapping in MP4)"
+        );
     }
 
     #[test]
