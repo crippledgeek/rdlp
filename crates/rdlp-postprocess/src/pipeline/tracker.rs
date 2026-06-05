@@ -11,6 +11,20 @@ use uuid::Uuid;
 
 use crate::pipeline::registry::TempRegistry;
 
+/// The marker substring embedded in every temp file name handed out by
+/// [`FileTracker::temp_path`] (`{stem}.rdlp-tmp-{uuid}.{ext}`).
+const TEMP_MARKER: &str = ".rdlp-tmp-";
+
+/// Returns whether `path`'s file name contains the temp marker
+/// ([`TEMP_MARKER`]) that [`FileTracker::temp_path`] embeds. Used by `Drop`
+/// to detect (and warn about) deletion of a file that is NOT temp-namespaced —
+/// the cancel-cleanup contract expects every deletable path to be temp-named.
+fn is_temp_named(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.contains(TEMP_MARKER))
+}
+
 /// Tracks current and temporary file paths for a single post-processing job.
 ///
 /// After each stage produces output, the stage calls [`replace`] to promote
@@ -39,6 +53,17 @@ pub struct FileTracker {
 
 impl FileTracker {
     /// Create a new tracker with the given initial files.
+    ///
+    /// # Precondition
+    ///
+    /// Callers MUST pass temp-namespaced (`*.rdlp-tmp-*`) paths as the initial
+    /// `files`. On a cancel/uncommitted [`Drop`], every path in `current_files`
+    /// is deleted; a non-temp path (e.g. a user's original file) would be
+    /// deleted too. Such deletions are still performed (the cancel intent is to
+    /// clear the working set), but a [`log::warn!`] is emitted naming the path,
+    /// since it signals a caller-contract violation. The orchestrator satisfies
+    /// this precondition by UUID-renaming inputs to `*.rdlp-tmp-*` before
+    /// constructing the tracker.
     pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
         Self {
             current_files: files,
@@ -71,9 +96,9 @@ impl FileTracker {
         let dir = base.parent().unwrap_or_else(|| Path::new("."));
         let raw_stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
         // Strip any existing .rdlp-tmp-{uuid} suffixes to prevent stacking
-        let stem = raw_stem.split(".rdlp-tmp-").next().unwrap_or(raw_stem);
+        let stem = raw_stem.split(TEMP_MARKER).next().unwrap_or(raw_stem);
         let id = Uuid::new_v4().simple().to_string();
-        let filename = format!("{stem}.rdlp-tmp-{id}.{ext}");
+        let filename = format!("{stem}{TEMP_MARKER}{id}.{ext}");
         let path = dir.join(filename);
         self.temp_registry.register(&path);
         // Record the issued path so an uncommitted Drop deletes it (#335).
@@ -166,6 +191,17 @@ impl Drop for FileTracker {
             .cloned()
             .collect();
         for path in to_delete {
+            // Visible guard (#339): every deletable path SHOULD be
+            // temp-namespaced. If a caller violated the `new()` precondition by
+            // passing a non-temp file, warn (but still delete — the cancel
+            // intent is to clear the working set). Drop never panics.
+            if !is_temp_named(&path) {
+                log::warn!(
+                    "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
+                     current_files should be temp-namespaced",
+                    path.display(),
+                );
+            }
             // The issued and current sets may overlap (mark_temp re-files
             // issued paths); the exists() guard + idempotent release make this
             // safe to run per path.
@@ -192,6 +228,15 @@ mod tests {
 
     fn test_registry() -> Arc<TempRegistry> {
         Arc::new(TempRegistry::new())
+    }
+
+    #[test]
+    fn is_temp_named_detects_marker() {
+        assert!(is_temp_named(Path::new("video.rdlp-tmp-abc123.mkv")));
+        assert!(!is_temp_named(Path::new("video.mkv")));
+        assert!(!is_temp_named(Path::new("/home/u/My Video.mp4")));
+        // marker only in a parent dir component must NOT match (file_name-only check)
+        assert!(!is_temp_named(Path::new("/home/u/.rdlp-tmp-abc/video.mkv")));
     }
 
     #[test]
