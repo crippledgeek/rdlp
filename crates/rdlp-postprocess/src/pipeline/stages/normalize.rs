@@ -116,7 +116,13 @@ impl PipelineStage for NormalizeStage {
         });
 
         self.ffmpeg
-            .normalize_audio(&input_file, &output_path, &opts, callback)
+            .normalize_audio(
+                &input_file,
+                &output_path,
+                &opts,
+                callback,
+                Some(msg.cancel.clone()),
+            )
             .await
             .context("normalize stage failed")?;
 
