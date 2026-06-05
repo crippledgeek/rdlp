@@ -10,6 +10,7 @@ description = "FFmpeg library bindings wrapper for rdlp (probing, remuxing, tran
 rdlp-core = { path = "../rdlp-core" }
 rdlp-types = { path = "../rdlp-types" }
 tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio-util = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
