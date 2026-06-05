@@ -17,6 +17,5 @@ mod video_transcode_context;
 mod video_transcode_phases;
 
 // Re-export public(crate) items used by normalize and other modules
-#[allow(unused_imports)]
 pub use cancel::check_cancelled;
 pub use mux_timing::MuxTimingState;

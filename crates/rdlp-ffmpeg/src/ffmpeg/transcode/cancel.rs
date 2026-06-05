@@ -3,7 +3,6 @@ use tokio_util::sync::CancellationToken;
 
 /// Returns `Err` if `cancel` is present and cancelled; otherwise `Ok(())`.
 /// Safe to call from a `spawn_blocking` closure (`is_cancelled()` is synchronous).
-#[allow(dead_code)]
 pub fn check_cancelled(cancel: Option<&CancellationToken>) -> anyhow::Result<()> {
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         anyhow::bail!("cancelled by user");

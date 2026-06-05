@@ -107,7 +107,7 @@ async fn recode_buffersrc_has_no_frame_property_mismatch() {
 
     let runner = FFmpegRunner::new().expect("create FFmpegRunner");
     match runner
-        .convert_video(&src, &out, &opts, None, Some(log_fn))
+        .convert_video(&src, &out, &opts, None, Some(log_fn), None)
         .await
     {
         Ok(()) => {}

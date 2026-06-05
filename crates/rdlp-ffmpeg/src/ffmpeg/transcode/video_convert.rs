@@ -11,6 +11,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::error::{PostProcessError, Result};
 
 use super::super::salvage::prepare_input_with_salvage;
@@ -41,6 +43,7 @@ impl FFmpegRunner {
         opts: &VideoConvertOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
         log_fn: Option<LogFn>,
+        cancel: Option<CancellationToken>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -55,8 +58,13 @@ impl FFmpegRunner {
                 None
             };
 
-            let result =
-                Self::convert_video_sync(&effective_input, &output, &opts, progress_fn.as_deref());
+            let result = Self::convert_video_sync(
+                &effective_input,
+                &output,
+                &opts,
+                progress_fn.as_deref(),
+                cancel.as_ref(),
+            );
 
             // Drain captured logs and forward to the UI log viewer.
             if let Some(ref guard) = log_guard
@@ -88,6 +96,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &VideoConvertOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         if opts.remux_only {
             // Determine if output is MP4/MOV for faststart
@@ -99,7 +108,7 @@ impl FFmpegRunner {
             Ok(Self::remux_sync(input, output, &remux_opts, progress_fn)
                 .map_err(|e| PostProcessError::ffmpeg_failed(format!("{e:#}")))?)
         } else {
-            Self::convert_video_transcode_sync(input, output, opts, progress_fn)
+            Self::convert_video_transcode_sync(input, output, opts, progress_fn, cancel)
         }
     }
 
@@ -113,13 +122,14 @@ impl FFmpegRunner {
         output: &Path,
         opts: &VideoConvertOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
         let phase1 = Self::open_input_and_decoder(input)?;
         let mut ctx = Self::configure_video_encoder(phase1, opts, output)?;
         Self::setup_audio_pipeline(&mut ctx)?;
         Self::write_header_and_build_filter(&mut ctx)?;
-        Self::run_encode_loop(&mut ctx, progress_fn)?;
+        Self::run_encode_loop(&mut ctx, progress_fn, cancel)?;
         Self::finalize_transcode(ctx)
     }
 }

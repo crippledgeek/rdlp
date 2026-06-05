@@ -371,6 +371,7 @@ impl PipelineStage for RecodeStage {
                 &opts,
                 progress_callback,
                 log_callback,
+                Some(msg.cancel.clone()),
             )
             .await
             .context("recode stage failed")?;
