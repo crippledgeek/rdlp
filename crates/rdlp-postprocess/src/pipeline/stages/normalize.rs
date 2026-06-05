@@ -165,6 +165,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 

@@ -156,6 +156,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -235,6 +236,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         assert!(RemuxStage::target_ext(&msg, "mp4").is_none());
     }
@@ -259,6 +261,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         };
         assert_eq!(RemuxStage::target_ext(&msg, "ts"), Some("mp4"));
     }
