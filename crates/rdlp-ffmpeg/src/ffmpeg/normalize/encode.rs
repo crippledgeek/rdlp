@@ -41,6 +41,18 @@ use super::helpers::{
 };
 use super::io_diag::validate_mux_header_state;
 
+/// Recurring plumbing passed through the normalize encode helpers.
+///
+/// Bundles the progress callback and cancel token that thread unchanged
+/// from `dispatch_normalize_sync` down into `encode_audio_only_sync`,
+/// keeping each helper's data-param list within the clippy argument limit.
+pub(super) struct EncodeCallCtx<'a> {
+    /// Optional 0.0–1.0 progress callback (PTS-based + final 1.0 on completion).
+    pub progress_fn: Option<&'a (dyn Fn(f64) + Send + Sync)>,
+    /// Optional cooperative-cancellation token checked per input packet.
+    pub cancel: Option<&'a CancellationToken>,
+}
+
 impl FFmpegRunner {
     /// Unified audio-only encode: decode → filter → encode → mux.
     ///
@@ -55,23 +67,24 @@ impl FFmpegRunner {
     /// When `resilient` is true, the input is opened with
     /// `discardcorrupt+genpts` format flags to recover from corrupt
     /// containers. This is used as Tier 3 recovery in `with_mux_retry`.
-    // The cancel token pushes the unified encode helper to 8 params; the
-    // build_filter closure + cancel are both load-bearing per-call inputs.
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     pub(super) fn encode_audio_only_sync(
         input: &Path,
         output: &Path,
         final_output_ext: &str,
         label: &str,
         resilient: bool,
-        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-        cancel: Option<&CancellationToken>,
+        ctx: &EncodeCallCtx<'_>,
         build_filter: impl FnOnce(
             /*fmt:*/ &str,
             /*rate:*/ u32,
             /*ch_layout:*/ &str,
         ) -> String,
     ) -> anyhow::Result<()> {
+        let EncodeCallCtx {
+            progress_fn,
+            cancel,
+        } = *ctx;
         crate::ffmpeg::ensure_init()?;
 
         let mut ictx = if resilient {
