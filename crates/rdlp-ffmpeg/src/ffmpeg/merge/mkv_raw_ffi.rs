@@ -529,16 +529,26 @@ impl FFmpegRunner {
             // 14. Write trailer and cleanup (always runs, even on merge error)
             //
             // Note the asymmetry with the non-MKV path (mod.rs), which skips
-            // write_trailer on cancel to avoid finalizing a partial mux. Here
-            // av_write_trailer runs unconditionally — including when the IIFE
-            // returned Err (e.g. cooperative cancel) — because it is part of the
-            // raw-FFI teardown that must run before avio_closep/avformat_free to
-            // keep the AVIO + context state consistent. Finalizing the trailer on
-            // a cancelled MKV is harmless: the partial output file is reaped by
-            // FileTracker (#335), so it never reaches the user. Restructuring the
-            // teardown to conditionally skip the trailer would risk the ordering
-            // of the AVIO/context cleanup, so the symmetry is deliberately not
-            // pursued here.
+            // write_trailer on cancel. Here av_write_trailer runs unconditionally
+            // — including when the IIFE returned Err (e.g. cooperative cancel).
+            // Both choices are safe:
+            //   * Calling it on a partial Matroska mux does NOT crash — once
+            //     avformat_write_header has run, mkv_write_trailer guards its
+            //     partial-state paths (cluster_pos starts at -1; the duration
+            //     back-fill is `if (mkv->info.bc)`-gated; the asserts are only on
+            //     cue-assembly reached when cues.num_entries > 0). It writes a
+            //     valid-but-truncated trailer or returns a negative code (ignored).
+            //   * Skipping it would ALSO be safe — av_write_trailer is NOT required
+            //     before avio_closep/avformat_free_context; the only real ordering
+            //     rule is avio_closep before the free (done below). FFmpeg's own
+            //     doc/examples/transcode.c skips av_write_trailer on every error
+            //     path and frees regardless.
+            // The unconditional call is kept because it is simpler and more
+            // portable across FFmpeg versions (pre-6.0 lacked the fci->initialized
+            // double-deinit guard, making the unconditional call the safer default;
+            // on 6.x+/8.x both are equivalent). A finalized-but-truncated partial
+            // is harmless regardless: FileTracker (#335) reaps it on cancel, so it
+            // never reaches the user.
             ffi::av_write_trailer(ofmt_ctx);
 
             if !(*ofmt_ctx).pb.is_null() {
